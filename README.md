@@ -1,6 +1,6 @@
 # TRIPOS sources
 
-These are the sources for TRIPOS, an operating developed between 1976 and 1982, headed by [Dr Martin Richards](https://en.wikipedia.org/wiki/Martin_Richards_(computer_scientist)) and others between the University of Cambridge and later University Bath (origin of the MC68000 port, used as the foundation of AmigaDOS). You can find more out about the history of this operating system on [its Wikipedia entry](https://en.wikipedia.org/wiki/TRIPOS)
+These are the sources for TRIPOS, an operating developed between 1976 and 1982, headed by [Dr Martin Richards](https://en.wikipedia.org/wiki/Martin_Richards_(computer_scientist)) and others between the University of Cambridge and later University Bath (origin of the MC68000 port, used as the foundation of AmigaDOS). You can find more out about the history of this operating system on [its Wikipedia entry](https://en.wikipedia.org/wiki/TRIPOS).
 
 The license is unclear, but permission was given from Tim King to share the source publicly. I offer my thanks for this generosity.
 
@@ -8,7 +8,7 @@ I am not familiar with build procedures; almost certainly, a BCPL compiler is re
 
 The source code contains ports for the Data General Nova, DEC PDP-11, Computer Automation LSI4 and Motorola 68000-based systems.
 
-I am _not_ the author. But I can be contacted via my GitHub account.
+**I am _not_ the author.** But I can be contacted via my GitHub account.
 
 ## Distribution permission
 
