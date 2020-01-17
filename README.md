@@ -14,26 +14,28 @@ I am _not_ the author. But I can be contacted via my GitHub account.
 
 I received the following email from Tim King regarding the sources during a communication back in 2017. Should anyone dispute this please contact me immediately and I will be happy to deactivate this repository.
 
-> Date: Thu, 15 Jun 2017 16:42:56 +0100
-> From: Tim King <redacted>
-> To: Rob Andrews <redacted>
-> Subject: Re: Unusual request: Some old MetaComCo software for the Sinclair QL
-> 
-> Yes the s/w is public. If you have a BCPL compiler for AmigaOS you might 
-> well also have asm.
-> 
-> > Rob Andrews <redacted>
-> > 15 June 2017 14:55
-> > Hello again,
-> >
-> > Thanks for your response - do you mind if I share the source with the 
-> > people I'm working with on this? I assume the archive shouldn't be 
-> > shared onwards?
-> >
-> > Thank you again for your help - we have a BCPL compiler for AmigaOS so 
-> > we'll try to see about building the assembler for that host system.
-> >
-> > Kind regards,
-> > Rob Andrews.
-> 
-> [rest of email trimmed for brevity]
+```
+Date: Thu, 15 Jun 2017 16:42:56 +0100
+From: Tim King <redacted>
+To: Rob Andrews <redacted>
+Subject: Re: Unusual request: Some old MetaComCo software for the Sinclair QL
+
+Yes the s/w is public. If you have a BCPL compiler for AmigaOS you might 
+well also have asm.
+
+> Rob Andrews <redacted>
+> 15 June 2017 14:55
+> Hello again,
+>
+> Thanks for your response - do you mind if I share the source with the 
+> people I'm working with on this? I assume the archive shouldn't be 
+> shared onwards?
+>
+> Thank you again for your help - we have a BCPL compiler for AmigaOS so 
+> we'll try to see about building the assembler for that host system.
+>
+> Kind regards,
+> Rob Andrews.
+
+[rest of email trimmed for brevity]
+```
