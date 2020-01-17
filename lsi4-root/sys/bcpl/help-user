@@ -1,0 +1,360 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+ ##    ##  ########  ##        #######             ##    ##    ####    #######  
+ ##    ##  ########  ##        ########            ###  ###   ######   ######## 
+ ##    ##  ##        ##        ##    ##            ########  ##    ##  ##    ## 
+ ########  ######    ##        #######             ## ## ##  ########  #######  
+ ##    ##  ##        ##        ##                  ##    ##  ##    ##  ##       
+ ##    ##  ##        ##        ##                  ##    ##  ##    ##  ##       
+ ##    ##  ########  ########  ##                  ##    ##  ##    ##  ##       
+ ##    ##  ########  ########  ##                  ##    ##  ##    ##  ##       
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   16/09/85             *
+\*****************************************************************************/
+
+
+
+//                                 HELP MAP
+//
+//  General HELP program to retrieve information from the MAP service.  This
+//  file deals with the functions "help user", "help puid" and "help mail",
+//  and the object code produced is controlled by three conditional compilation
+//  flags:
+//
+//      USER          Generate code for HELP USER
+//      PUID          Generate code for HELP PUID
+//      MAIL          Generate code for HELP MAIL
+
+
+
+SECTION "HELPMAP"
+
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+GET "BCPL.RINGMAP"
+GET "BCPL.MAPPUID"
+
+
+
+MANIFEST
+$(
+    l.puid             =  16
+    l.pname            =  16
+    l.world            =  32
+    l.cap              =  16
+    l.cs               =  16
+    l.triposdir        =  32
+    l.status           =  16
+    l.unix             =  16
+    l.mail             =  64
+$)
+
+
+
+LET start( vector, number, all )  =  VALOF
+$(
+//  This is the main routine of the "help mapinfo" program, which handles
+//  the functions:
+//
+//      help user xxxx
+//      help puid xxxx
+//      help mail xxxx
+
+    LET coargs     =  VEC 2
+    LET coroutine  =  createco( costart, 500 )
+    LET result     =  0
+
+    TEST  coroutine = 0  THEN  result  :=  FALSE
+    ELSE
+    $(
+        //  We managed to create the coroutine, and so we should now be able to
+        //  call it with the original arguments.
+    
+        coargs!0  :=  vector
+        coargs!1  :=  number
+        coargs!2  :=  all
+
+        result    :=  callco( coroutine, coargs )
+    $)
+
+    deleteco( coroutine )
+
+    result2  :=  result
+
+    RESULTIS  result
+$)
+
+
+
+AND costart( coargs )  =  VALOF
+$(
+//  Coroutine which handles the HELP function.  This is to avoid stack
+//  overflow on the original stack.
+
+    LET vector   =  coargs!0
+    LET number   =  coargs!1
+    LET all      =  coargs!2
+    LET matched  =  vector!0
+    LET success  =  TRUE
+    
+    LET userid   =  VEC l.pname/bytesperword
+
+    UNLESS  mappuid( "pname", userid, l.pname )  DO  userid  :=  0
+
+$<USER  RESULTIS  do.mapuser( userid, vector, number, matched )  $>USER
+$<PUID  RESULTIS  do.mappuid( userid, vector, number, matched )  $>PUID
+$<MAIL  RESULTIS  do.mapmail( userid, vector, number, matched )  $>MAIL
+$)
+
+
+
+AND do.mapuser( userid, vector, number, matched )  =  VALOF
+$(
+//  Map the items into user information.  We do this for each item which has
+//  not already been mapped.
+
+    LET total    =  0
+    LET success  =  TRUE
+
+    FOR  i = 1  TO  number  DO
+    $(
+        LET bit  =  1 << (i - 1)
+        
+        IF  (matched & bit) = 0  THEN
+        $(
+            LET ok  =  userinfo( vector!i )
+            
+            total    :=  total + 1
+            success  :=  success & ok
+            
+            IF  ok  THEN  vector!0  :=  vector!0  |  bit
+        $)
+    $)
+    
+    IF  total = 0  THEN
+
+        //  We were not given any users to find out about, so print out the
+        //  information about the logged on user.
+        
+        success  :=  userid = 0  ->  FALSE,  userinfo( userid )
+
+    //  When we reach this point in the proceedings, nothing else can be
+    //  done, and so we should return with an indication of whether we
+    //  succeeded or not.
+
+    RESULTIS  success
+$)
+
+
+
+AND do.mappuid( userid, vector, number, matched )  =  VALOF
+$(
+//  Map the items into puid information.  We do this for each item which has
+//  not already been mapped.
+
+    LET total    =  0
+    LET success  =  TRUE
+
+    FOR  i = 1  TO  number  DO
+    $(
+        LET bit  =  1 << (i - 1)
+        
+        IF  (matched & bit) = 0  THEN
+        $(
+            LET ok  =  puidinfo( vector!i )
+            
+            total    :=  total + 1
+            success  :=  success & ok
+            
+            IF  ok  THEN  vector!0  :=  vector!0  |  bit
+        $)
+    $)
+    
+    IF  total = 0  THEN
+
+        //  We were not given any users to find out about, so print out the
+        //  information about the logged on user.
+        
+        success  :=  userid = 0  ->  FALSE,  puidinfo( userid )
+
+    //  When we reach this point in the proceedings, nothing else can be
+    //  done, and so we should return with an indication of whether we
+    //  succeeded or not.
+
+    RESULTIS  success
+$)
+
+
+
+AND do.mapmail( userid, vector, number, matched )  =  VALOF
+$(
+//  Map the items into mail information.  We do this for each item which has
+//  not already been mapped.
+
+    LET total    =  0
+    LET success  =  TRUE
+
+    FOR  i = 1  TO  number  DO
+    $(
+        LET bit  =  1 << (i - 1)
+        
+        IF  (matched & bit) = 0  THEN
+        $(
+            LET ok  =  mailinfo( vector!i )
+            
+            total    :=  total + 1
+            success  :=  success & ok
+            
+            IF  ok  THEN  vector!0  :=  vector!0  |  bit
+        $)
+    $)
+    
+    IF  total = 0  THEN
+
+        //  We were not given any users to find out about, so print out the
+        //  information about the logged on user.
+        
+        success  :=  userid = 0  ->  FALSE,  mailinfo( userid )
+
+    //  When we reach this point in the proceedings, nothing else can be
+    //  done, and so we should return with an indication of whether we
+    //  succeeded or not.
+
+    RESULTIS  success
+$)
+
+
+
+AND userinfo( name )  =  VALOF
+$(
+//  Get all the user info about the given name, and then print it out.
+
+    LET m.puid       =  VEC l.puid/bytesperword
+    LET m.pname      =  VEC l.pname/bytesperword
+    LET m.world      =  VEC l.world/bytesperword
+    LET m.cap        =  VEC l.cap/bytesperword
+    LET m.cs         =  VEC l.cs/bytesperword
+    LET m.triposdir  =  VEC l.triposdir/bytesperword
+    LET m.status     =  VEC l.status/bytesperword
+    LET m.unix       =  VEC l.unix/bytesperword
+    LET m.mail       =  VEC l.mail/bytesperword
+            
+    LET r.puid       =  ringmap( name, "any", "puid", m.puid, l.puid )
+    LET r.pname      =  ringmap( m.puid, "puid", "pname", m.pname, l.pname )
+    LET r.world      =  ringmap( m.puid, "puid", "world", m.world, l.world )
+    LET r.cap        =  ringmap( m.puid, "puid", "cap", m.cap, l.cap )
+    LET r.cs         =  ringmap( m.puid, "puid", "cs", m.cs, l.cs )
+    LET r.triposdir  =  ringmap( m.puid, "puid", "triposdir", m.triposdir, l.triposdir )
+    LET r.status     =  ringmap( m.puid, "puid", "status", m.status, l.status )
+    LET r.unix       =  ringmap( m.puid, "puid", "unix", m.unix, l.unix )
+    LET r.mail       =  ringmap( m.puid, "puid", "mail", m.mail, l.mail )
+
+    //  We have now done all the mappings.  It depends whether the
+    //  first one succeeded as to whether the others are OK or not.
+            
+    UNLESS  r.puid & r.pname  DO  
+    $(
+        writef( "Unknown user: %S*N", name )
+        
+        RESULTIS  FALSE
+    $)
+
+    newline()
+
+    writef( "PUID %S is user %S", m.puid, m.pname )
+                
+    IF  r.world   THEN  writef( " (%S)", m.world )
+    IF  r.status  THEN  writef( " status %S", m.status )
+                
+    newline()
+                
+    IF  r.cap        THEN  writef( "CAP userid:        %S*N", m.cap )
+    IF  r.cs         THEN  writef( "PHOENIX userid:    %S*N", m.cs )
+    IF  r.unix       THEN  writef( "UNIX userid:       %S*N", m.unix )
+    IF  r.triposdir  THEN  writef( "TRIPOS directory:  %S*N", m.triposdir )
+    IF  r.mail       THEN  writef( "MAIL address:      %S*N", m.mail )
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND puidinfo( name )  =  VALOF
+$(
+//  Get all the user info about the given name, and then print it out.
+
+    LET m.puid       =  VEC l.puid/bytesperword
+    LET m.pname      =  VEC l.pname/bytesperword
+    LET m.world      =  VEC l.world/bytesperword
+            
+    LET r.puid       =  ringmap( name, "any", "puid", m.puid, l.puid )
+    LET r.pname      =  ringmap( m.puid, "puid", "pname", m.pname, l.pname )
+    LET r.world      =  ringmap( m.puid, "puid", "world", m.world, l.world )
+
+    //  We have now done all the mappings.  It depends whether the
+    //  first one succeeded as to whether the others are OK or not.
+            
+    UNLESS  r.puid & r.pname  DO  
+    $(
+        writef( "Unknown user: %S*N", name )
+        
+        RESULTIS  FALSE
+    $)
+
+    writef( "PUID %S is user %S", m.puid, m.pname )
+                
+    IF  r.world   THEN  writef( " (%S)", m.world )
+                
+    newline()
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND mailinfo( name )  =  VALOF
+$(
+//  Get all the user info about the given name, and then print it out.
+
+    LET m.puid       =  VEC l.puid/bytesperword
+    LET m.pname      =  VEC l.pname/bytesperword
+    LET m.world      =  VEC l.world/bytesperword
+    LET m.mail       =  VEC l.mail/bytesperword
+            
+    LET r.puid       =  ringmap( name, "any", "puid", m.puid, l.puid )
+    LET r.pname      =  ringmap( m.puid, "puid", "pname", m.pname, l.pname )
+    LET r.world      =  ringmap( m.puid, "puid", "world", m.world, l.world )
+    LET r.mail       =  ringmap( m.puid, "puid", "mail", m.mail, l.mail )
+
+    //  We have now done all the mappings.  It depends whether the
+    //  first one succeeded as to whether the others are OK or not.
+            
+    UNLESS  r.puid & r.pname  DO  
+    $(
+        writef( "Unknown user: %S*N", name )
+        
+        RESULTIS  FALSE
+    $)
+
+    writef( "User %S", m.pname )
+                
+    IF  r.world   THEN  writef( " (%S)", m.world )
+    
+    TEST  r.mail
+        THEN  writef( " has MAIL address %S", m.mail )
+        ELSE  writes( " - unknown MAIL address" )
+                
+    newline()
+
+    RESULTIS  TRUE
+$)
+
+

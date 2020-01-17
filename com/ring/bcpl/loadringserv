@@ -1,0 +1,65 @@
+// Loads ring devices and handler
+
+SECTION "LoadRingServ"
+GET "LIBHDR"
+GET "RINGHDR"
+
+
+MANIFEST
+    $(
+    ringserv.stsize = 240 + 100 // WAS 210 but needs 240 on LSI4 (231 on m68k)
+    ringserv.pri    = 3500
+    $)
+
+
+GLOBAL
+    $(
+    ringserv.seg     : ug + 4
+    ringserv.task    : ug + 5
+    $)
+
+
+
+LET start() BE
+    $(
+    LET ringserv.filename = "sys:L.ringserv"
+    LET pri              = ringserv.pri
+    LET seglist          = tcb ! tcb.seglist
+    LET newseglist       = VEC 3
+
+    ringserv.seg  := loadseg(ringserv.filename)
+    ringserv.task := 0
+
+    IF ringserv.seg = 0 THEN error("failed to load %s*N", ringserv.filename)
+
+    newseglist ! 0 := 3
+    newseglist ! 1 := seglist ! 1
+    newseglist ! 2 := seglist ! 2
+    newseglist ! 3 := ringserv.seg
+
+      $( // Loop to change priority if necessary
+      ringserv.task := createtask(newseglist, ringserv.stsize, pri)
+
+      UNLESS (ringserv.task=0) & (result2=102) THEN BREAK
+
+      // Failed due to unavailable priority: try again
+      pri := pri+1
+      $) REPEAT
+
+    IF ringserv.TASK = 0
+    THEN error("failed to create ring service task*n")
+
+    // Start up service
+
+    sendpkt(notinuse, ringserv.task)
+    $)
+
+
+AND error(f,a,b,c) BE
+    $(
+    writef(f,a,b,c)
+    deletetask(ringserv.task); unloadseg(ringserv.seg)
+    stop(20)
+    $)
+
+

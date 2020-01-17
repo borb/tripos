@@ -1,0 +1,105 @@
+SECTION "ARGS"
+
+GET "TCGHDR"
+
+LET start() = VALOF
+ $( LET argv = VEC 80
+    LET args = "FROM=OCODE/A,TO/A,VER/K,OPT/K"
+    LET ocodelen = 0
+    LET cgname = ":PERG.COMPILER.OBJ.BCPL-CG"
+    LET errarg = "Bad args*N"
+    LET errstr = "Run out of store*N"
+    LET errfil = "Can't open %S*N"
+    LET VECsize = 10000
+    LET V       = 0
+    LET d1      = VEC 20
+    LET D2      = VEC 20
+    LET R1      = 0
+    LET R2      = 99
+
+    DATEVEC := d1
+    OCODEFILE := d2
+
+    SYSOUT      := output()
+    LISTOUT     := SYSOUT
+    NUMERIC     := TRUE
+    QUIET       := TRUE
+    IF rdargs(args, argv, 80)=0 DO $( writes(errarg); GOTO fail $)
+
+    UNLESS argv!2=0 DO
+    $( LISTOUT := findoutput(argv!2)
+       IF LISTOUT=0 DO $( writef(errfil,argv!2); GOTO fail $)
+       selectoutput(LISTOUT)
+    $)
+
+    $( LET from = argv!0
+       FOR i = 0 TO from%0 DO OCODEFILE%i := from%i
+       OCODE := findinput(from)
+       IF OCODE=0 DO $( writef(errfil,from); GOTO fail $)
+    $)
+
+    CODEOUT := findoutput(argv!1)
+    IF CODEOUT=0 DO $( writef(errfil,argv!1); GOTO fail $)
+
+    CGFLAGS := CGFLAGS | cgf.Sectnaming
+
+    IF datstring(DATEVEC)=0 DO FOR i = 0 TO 9 DO DATEVEC%i := "         "%i
+
+    UNLESS argv!3=0 DO
+    $( LET opts,i = argv!3, 0
+       LET rdn(opts,lvi) = VALOF
+        $( LET n, i = 0, !lvi+1
+           LET ch = opts%i
+           WHILE i<=opts%0 & '0'<=ch<='9' $( n:=n*10+ch-'0';i:=i+1;ch:=opts%i $)
+           !lvi := i-1
+           RESULTIS n
+        $)
+
+       WHILE i<=opts%0 DO
+       $( SWITCHON capitalch(opts%i) INTO
+          $( CASE 'L': CGFLAGS  := CGFLAGS | cgf.Cglisting;     ENDCASE
+             CASE 'O': altobj   := TRUE;                        ENDCASE
+             CASE 'C': CGFLAGS  := CGFLAGS | cgf.Stkchking;     ENDCASE
+             CASE 'N': CGFLAGS  := CGFLAGS | cgf.Sectnaming;    ENDCASE
+             CASE 'P': profcounting     := TRUE
+             CASE 'K': CGFLAGS  := CGFLAGS | cgf.Callcounting;  ENDCASE
+             CASE 'V': QUIET    := FALSE;                       ENDCASE
+          $)
+          i := i+1
+       $)
+    $)
+
+    v := getvec(VECsize)
+    IF V=0 DO $( writes("Can't get work space*N"); GOTO fail $)
+
+    selectinput(sourcestream)
+    linecount := 1
+    reportcount := 0
+
+    r1 := CALLSEG(CGNAME, V, VECsize)
+    r2 := RESULT2
+    IF r1=0 WRITEF("Callseg '%S'at %S gave %N,%N*N", CGNAME, DATEVEC, R1, r2)
+
+
+fail:
+//  selectoutput(sysout)
+    closeoutput(OCODE)
+    closeoutput(CODEOUT)
+    UNLESS LISTOUT=SYSOUT DO closeoutput(LISTOUT)
+    FREEVEC(V)
+    RESULT2 := R2
+    STOP( r1=0 -> 20, 0)
+ $)
+
+AND closeoutput(s)      BE UNLESS s=0 DO endstream(s)
+AND closeinput(s)       BE UNLESS s=0 DO endstream(s)
+
+LET DEB(s, a,b,c) BE
+$( LET O = OUTPUT()
+   UNLESS SYSOUT=0 SELECTOUTPUT(SYSOUT)
+   WRITEF(s, a,b,c)
+   WRCH("*E")
+   SELECTOUTPUT(O)
+$)
+
+

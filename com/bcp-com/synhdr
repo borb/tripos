@@ -1,0 +1,103 @@
+$<SYNHDR'
+$<COMHDR'       GET "COMHDR"    $>COMHDR'
+$<AEHDR'        GET "AEHDR"     $>AEHDR'
+$<AEOCHDR'      GET "AEOCHDR"   $>AEOCHDR'
+$<STHDR'        GET "STHDR"     $>STHDR'
+//$<MIPMANHDR'  GET "MIPMANHDR" $>MIPMANHDR'
+
+GLOBAL
+$(
+nextsymb        :SYN+ 0
+
+lookupword      :SYN+ 1
+declsyswords    :SYN+ 2
+
+rch             :SYN+ 3
+rdtag           :SYN+ 4
+performget      :SYN+ 5
+readnumb        :SYN+ 6
+rdstrch         :SYN+ 7
+
+newvec          :SYN+ 8
+list1           :SYN+ 9
+list2           :SYN+10
+list3           :SYN+11
+list4           :SYN+12
+list5           :SYN+13
+list6           :SYN+14
+listn           :SYN+15
+synreport       :SYN+16
+
+rdblockbody     :SYN+17
+rdseq           :SYN+18
+rdcdefs         :SYN+19
+rdsect          :SYN+20
+rnamelist       :SYN+21
+rname           :SYN+22
+ignore          :SYN+23
+checkfor        :SYN+24
+
+rbexp           :SYN+25
+rexp            :SYN+26
+rexplist        :SYN+27
+rdef            :SYN+28
+
+//rbcom         :SYN+29
+rcom            :SYN+30
+makelist        :SYN+31
+
+symb            :SYN+32
+decval          :SYN+33
+wordnode        :SYN+34
+wordv           :SYN+35
+chbuf           :SYN+36
+chcount         :SYN+37
+nlpending       :SYN+38
+nulltag         :SYN+39
+getv            :SYN+40
+getp            :SYN+41
+nametable       :SYN+42
+ch              :SYN+43
+skipping        :SYN+44
+intag           :SYN+45
+treeq           :SYN+46
+zeronode        :SYN+47
+setdollarname   :SYN+48
+prline          :SYN+49
+rdollarcom      :SYN+50
+extraheap       :SYN+51
+$<NOEE
+$>NOEE
+$<NOEE'
+earlyeval       :SYN+52
+decvec          :SYN+53
+DECPTR          :SYN+54
+MANEVAL         :SYN+55
+$>NOEE'
+PRINTING        :SYN+56 // DO I PRINT ?
+$)
+
+MANIFEST $(
+nametablesize   = 73
+get.name        =  0
+get.stream      =  1
+get.line        =  2
+get.ch          =  3
+get.inc         =  4
+getmax          = 10*get.inc + get.name + 1
+wordmax         = 255/bytesperword+1
+//becomesbit    = 512
+def.reportmax   = 10
+eval.def        = -MAXINT
+
+s.be            = 89; s.end     = 90; s.lsect   = 91; s.rsect   = 92;
+s.get           = 93;
+s.into          = 98; s.to      = 99; s.by      = 100;
+s.do            = 101; s.or     = 102; s.vec    = 103;
+s.lparen        = 105; s.rparen = 106
+s.dollarname    = 109
+$)
+$>SYNHDR'
+$$SYNHDR := TRUE
+
+

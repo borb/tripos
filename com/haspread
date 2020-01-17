@@ -1,0 +1,239 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+ ##    ##    ####     ######   #######   #######   ########    ####    ######   
+ ##    ##   ######   ########  ########  ########  ########   ######   #######  
+ ##    ##  ##    ##  ##        ##    ##  ##    ##  ##        ##    ##  ##    ## 
+ ########  ########  #######   #######   ########  ######    ########  ##    ## 
+ ##    ##  ##    ##        ##  ##        #######   ##        ##    ##  ##    ## 
+ ##    ##  ##    ##        ##  ##        ##  ##    ##        ##    ##  ##    ## 
+ ##    ##  ##    ##  ########  ##        ##   ##   ########  ##    ##  #######  
+ ##    ##  ##    ##   ######   ##        ##    ##  ########  ##    ##  ######   
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   02/05/85             *
+\*****************************************************************************/
+
+
+
+SECTION "HASPREAD"
+
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "IOHDR"
+GET "UIDHDR"
+GET "BCPL.SSPLIB"
+GET "BCPL.TSPARM"
+GET "BCPL.CR82LIB"
+
+
+
+GLOBAL
+$(
+    sysout               :  ug + 0
+    bs.in                :  ug + 1
+    bs.out               :  ug + 2
+$)
+
+
+
+MANIFEST
+$(
+    type.connect         =  ts.parm.msgtype.connect
+    type.accept          =  ts.parm.msgtype.accept
+    type.disconnect      =  ts.parm.msgtype.disconnect
+    type.authentication  =  ts.parm.msgtype.auth
+
+    arg.called           =  1
+    arg.calling          =  2
+    arg.quality          =  3
+    arg.explanation      =  4
+
+    rbuffsize            =  100
+$)
+
+
+LET start( pkt )  BE
+$(
+//  This routine is started from the ring services task, and is called
+//  whenever a file must be despooled from HASP/JES2.  We should be given
+//  an OPEN block with the TS bit set.  If not, then we moan.
+
+    LET buff    =  pkt!rhpkt.buff
+    LET size    =  pkt!rhpkt.size
+    LET source  =  pkt!rhpkt.station
+    LET type    =  get2bytes( buff, bb.ssp.type )
+    LET code    =  type & codemask
+    LET flag    =  type & bsp.flags.ts.bit
+
+    qpkt( pkt )
+
+    initio()
+
+    sysout  :=  findoutput( "**" )
+    
+    selectoutput( sysout )
+
+    //  Check the flags to see whether this is a TSopen, and if not, winge
+    //  loudly about it.
+    
+    TEST  code \= code.open  |  flag = 0  THEN  
+    $(
+        freevec( buff )
+
+        winge( "Bad TS OPEN header #X%X4", type )
+    $)
+    ELSE
+    $(
+        //  This is a TS Open, and so we should attempt to decode the arguments
+        //  in the open block.
+        
+        LET called       =  VEC rbuffsize/bytesperword
+        LET calling      =  VEC rbuffsize/bytesperword
+        LET quality      =  VEC rbuffsize/bytesperword
+        LET explanation  =  VEC rbuffsize/bytesperword
+        LET bufdesc      =  VEC ts.parm.bufdesc.order
+
+        LET dummy        =  0
+        LET ok           =  TRUE
+
+        //  Now decode the TS parameters, and pick out the relevant ones.
+
+        bufdesc!ts.parm.bufdesc.buffer    :=  buff
+        bufdesc!ts.parm.bufdesc.start     :=  0
+        bufdesc!ts.parm.bufdesc.lastused  :=  size*bytesperringword
+        bufdesc!ts.parm.bufdesc.upb       :=  size*bytesperringword
+        bufdesc!ts.parm.bufdesc.order     :=  FALSE
+        
+        //  We read the BSP parameters into dummy variables, since this will
+        //  set up the TS PARM descriptor properly for us.
+
+        bsp.read.bsp.parms( bufdesc, @dummy, @dummy, @dummy, @dummy )
+        
+        ok  :=  ok  &  ts.parm.read( bufdesc, type.connect, arg.called,      called,      rbuffsize )
+        ok  :=  ok  &  ts.parm.read( bufdesc, type.connect, arg.calling,     calling,     rbuffsize )
+        ok  :=  ok  &  ts.parm.read( bufdesc, type.connect, arg.quality,     quality,     rbuffsize )
+        ok  :=  ok  &  ts.parm.read( bufdesc, type.connect, arg.explanation, explanation, rbuffsize )
+
+// /* DEBUG */  winge( "Called:       '%S'", called )
+// /* DEBUG */  winge( "Calling:      '%S'", calling )
+// /* DEBUG */  winge( "Quality:      '%S'", quality )
+// /* DEBUG */  winge( "Explanation:  '%S'", explanation )
+
+        //  Of, and only if all that succeeded, will the flag "ok" still be
+        //  true.  If all has gone well, then we should continue with the
+        //  next stage.
+        
+        TEST  NOT ok  THEN
+        $(
+            freevec( buff )
+
+            winge( "Cannot decode TS parms" )
+        $)
+        ELSE
+
+        //  Decoding successful, so we should make the connection and
+        //  read the file from the byte stream.
+
+        bufdesc!ts.parm.bufdesc.start  :=  0
+
+        TEST  NOT bsp.openack( bufdesc, source, "OK", @bs.in, @bs.out )  THEN
+              winge( "OPENACK failed, RC=%N", result2 )
+
+        //  We have successfully sent the OPENACK, and so we can now start
+        //  drooling data from the byte stream, and put it into the file
+        //  name (given as the "called" address).
+
+        ELSE
+        $(
+            LET lock    =  locateobj( "HOME:" )
+            LET stream  =  0
+            
+            currentdir  :=  lock
+            stream      :=  findoutput( called )
+            
+            freeobj( lock )
+            
+            //  Check to see that the stream was opened correctly, and then
+            //  read the file down into it.
+            
+            TEST  stream = 0  THEN
+                  winge( "Cannot open *"%S*", RC=%N", called, result2 )
+                  
+            ELSE
+            $(
+                //  Cooer!  All systems go. We have not only opened the
+                //  byte stream, but have also opened the file.  The first
+                //  two lines of the file are irrelevant, so skip those
+                //  first.
+                
+                LET lines  =  0
+                
+                winge( "Transfer of %S starting", called )
+
+                selectinput( bs.in )
+
+                UNTIL  lines = 2  DO
+                $(
+                    LET ch  =  rdch()
+                    
+                    IF  ch = endstreamch  THEN  BREAK
+                    IF  ch = emptybuffch  THEN  LOOP
+                    
+                    IF ch = '*N'  THEN  lines  :=  lines + 1
+                $)
+
+                //  Now, select the main file as the output stream, and
+                //  spool the rest of the file down into it.
+                
+                selectoutput( stream )
+                
+                $(  //  Repeat loop to take characters from the byte stream,
+                    //  and put them in the file.
+                    
+                    LET ch  =  rdch()
+                    
+                    IF  ch = endstreamch  THEN  BREAK
+                    IF  ch = emptybuffch  THEN  LOOP
+                    
+                    wrch( ch )
+                $)
+                REPEAT
+
+                endwrite()
+
+                selectoutput( sysout )
+
+                winge( "Transfer of %S complete", called )
+            $)
+            
+            endstream( bs.in )
+        $)
+    $)
+
+    endstream( sysout )
+
+    endtask( tcb!tcb.seglist!3 )
+$)
+
+
+
+AND winge( format, arg1, arg2 )  BE
+$(
+    LET o  =  output()
+
+    selectoutput( sysout )
+
+    writes( "****** HASPREAD:  " )
+    writef( format, arg1, arg2 )
+    newline()
+    
+    selectoutput( o )
+$)
+
+

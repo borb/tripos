@@ -1,0 +1,315 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+   ######   ########  ##    ##  ########  ########  ########  ##
+  ########  ########  ##    ##  ########  ########  ########  ##
+  ##           ##     ##    ##  ##        ##           ##     ##
+  ##  ####     ##     ##    ##  ######    ######       ##     ##
+  ##    ##     ##     ##    ##  ##        ##           ##     ##
+  ##    ##     ##      ##  ##   ##        ##           ##     ##
+  ########  ########    ####    ########  ##        ########  ########
+   ######   ########     ##     ########  ##        ########  ########
+
+************************************************************************
+**    Author:   Brian Knight                           July 1979      **
+***********************************************************************/
+
+
+// Modifications:
+//
+// 19 Feb 81 by BJK: Use of authenticated byte streams by default;
+//                   NOTAUTH keyword.
+// 20 Jul 83 by CGG: Use of Project Universe type machine names allowed
+
+// GIVEFILE [FROM] filename [TO] machine [AS] filename [NOTAUTH]
+
+// Transfers a file via the ring using BSP
+
+/***********************************************************************
+*                                                                      *
+*               GIVEFILE/TAKEFILE File Transfer Protocol               *
+*               ----------------------------------------               *
+*                                                                      *
+*    The GIVEFILE and TAKEFILE commands and their corresponding        *
+* services transfer files by superimposing a simple record structure   *
+* on a byte stream pair.  The protocol is based on FTP-B as described  *
+* in "A Network Independent File Transfer Protocol" prepared by the    *
+* High Level Protocol Group.                                           *
+*                                                                      *
+*    The contents of the file are sent in records, each of which       *
+* contains one or more sub-records.  Each sub-record is preceded by a  *
+* header byte with the following format:                               *
+*                                                                      *
+*  Bit  10000000: If set, then this sub-record is the last in the      *
+*                 current record.                                      *
+*                                                                      *
+*  Bit  01000000: If set, then this sub-record is a compressed sequence*
+*                 (see below)                                          *
+*                                                                      *
+*  Bits 00111111: A binary count (0 - 63)                              *
+*                                                                      *
+*    If the compression bit (01000000) is zero, then the sub-record    *
+* consists of the next COUNT bytes after the header.  If this bit is   *
+* one, then the sub-record consists of the single byte following the   *
+* header inserted COUNT times.                                         *
+*                                                                      *
+*    A header byte of zero is used to introduce control sequences in   *
+* the data stream, so a null record must be represented as the header  *
+* byte 10000000.                                                       *
+*                                                                      *
+*    Only two character codes are used for transferring data:          *
+* IA5 with any parity, and binary.  The initial default is IA5.        *
+* Binary is selected by the three-byte control sequence                *
+* #X00 #X42 #X01, and IA5 by the sequence #X00 #X42 #X00. The code     *
+* should not be changed between sub-records of a multi-part record.    *
+*                                                                      *
+*    When IA5 is selected, each record corresponds to a text line,     *
+* and the first character of each record is an ANSI control character  *
+* (' ', '+', '0', '-' or '1').  No other character within a record     *
+* has any formatting significance.                                     *
+*                                                                      *
+*    When binary code is in use, the record boundaries have no         *
+* significance, and the data is regarded as a stream of bytes.         *
+*                                                                      *
+*    The maximum record length (before compression or division into    *
+* sub-records) is 252 bytes.                                           *
+*                                                                      *
+*    The first record sent from the command to the service is          *
+* interpreted as an IA5 string (without a control character), and      *
+* is used as the stream name of the 'file' to be transferred.          *
+* For TRIPOS, this string is used as the argument to FINDINPUT         *
+* or FINDOUTPUT.                                                       *
+*                                                                      *
+*    At the end of the file, the control sequence #X00 #X43 #X00       *
+* should be sent, and transmission forced.                             *
+*                                                                      *
+*    At some time during (if an error occurs) or immediately after     *
+* the transfer, the service end should send the command end a single   *
+* record and force transmission.  A null record sent after the         *
+* transfer indicates success; otherwise, the record should be an       *
+* error message sent as an IA5 string, which the command end can       *
+* display.                                                             *
+*                                                                      *
+***********************************************************************/
+
+SECTION "GIVEFILE"
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "RINGHDR"
+GET "BCPL.BSPLIB"
+GET "BCPL.U-SVC-NM"
+
+
+MANIFEST
+    $(
+    max.sr.bytes = 62 // To allow for cc
+    eor          = #X80  // End of record marker
+    initial.pos  =  8    // Last char in constant part for AUTHBSP:
+                         // output name string
+    notauth.pos  =  4    // Ditto for BSP: string
+    srvname.size =  40   // max. number of characters in stream name
+    $)
+
+LET start() BE
+    $(
+    LET sr.buff = VEC 31
+    LET fromname = ?
+    LET mc.name = ?
+    LET service.prefix  = "takefile"
+    LET service.name    = VEC srvname.size/bytesperword
+    LET output.name     = "AUTHBSP:123456789012345678901234567890"
+    LET notauth.name    = "BSP:123456789012345678901234567890"
+    LET auth.opt        = ?  // Whether to use authenticated streams
+    LET as.name         = ?
+    LET argv            = VEC 40
+    LET pos             = initial.pos
+    LET last.cc         = ' '
+    LET cc              = ' '
+    LET binary          = ?
+    LET instr, bsp.outstr, bsp.instr = 0, 0, 0
+    LET constr          = output()
+    LET first.sr        = TRUE
+    LET record.ended    = FALSE
+    LET file.ended      = FALSE
+    LET rdargs.string   = "FROM/A,TO=MACHINE,AS/A,BINARY/S,NOTAUTH/S"
+
+    IF rdargs(rdargs.string, argv, 40) = 0
+    THEN
+      $(
+      writef("Bad args for key string *"%S*"*n", rdargs.string)
+      stop(20)
+      $)
+
+    fromname := argv!0
+    mc.name  := argv!1
+    as.name  := argv!2
+    binary      := argv!3 \= 0
+    auth.opt    := argv!4 = 0
+
+    // Use AUTHBSP: by default; BSP: if NOTAUTH specified.
+
+    IF NOT auth.opt
+    THEN
+      $( // NOTAUTH specified
+      output.name       := notauth.name
+      pos               := notauth.pos
+      $)
+
+    service.name%0 := srvname.size
+    IF NOT u.svc.nm(service.name, mc.name, service.prefix) |
+       (service.name%0 + pos) > output.name%0 THEN
+    $( writef("Machine or service name (*"%S...*") too long*N", service.name)
+       stop(20)
+    $)
+
+    instr := findinput(fromname)
+    IF instr=0
+    THEN $( writef("Can't open %s for input*n", fromname); stop(20) $)
+    selectinput(instr)
+
+    // Contruct full name for findoutput: "AUTHBSP:<service>"
+
+    FOR i=1 TO service.name%0
+    DO $( pos := pos+1; output.name%pos := service.name%i $)
+
+    output.name%0 := pos
+
+    bsp.outstr := findoutput(output.name)
+    IF bsp.outstr = 0
+    THEN $( writef("Can't open %s for output*n", output.name)
+            endread()
+            stop(20)
+         $)
+    bsp.instr := result2
+    selectoutput(bsp.outstr)
+
+    // Away we go
+    // Send a control sequence to select binary or IA5 code
+
+    wrch(#X00); wrch(#X42)
+    TEST binary THEN wrch(#X01) ELSE wrch(#X00)
+
+    // Send the filename - special record with no cc
+    wrch(eor | as.name%0)
+    writes(as.name)
+
+    // See if other end is trying to say something
+    selectinput(bsp.instr)
+    IF bsp.test.input() THEN GOTO getreply
+    selectinput(instr)
+
+    bsp.forceout()
+
+
+      $( // Main subrecord loop
+      LET bytecount = 0
+      LET len = ?
+
+      // See if other end is trying to say something
+      selectinput(bsp.instr)
+      IF bsp.test.input() THEN GOTO getreply
+      selectinput(instr)
+
+      UNTIL (bytecount = max.sr.bytes)
+      DO $(
+         LET c = rdch()
+
+         IF c = endstreamch
+         THEN $( file.ended := TRUE; record.ended := TRUE; BREAK $)
+
+         TEST binary
+         THEN
+           $( // Insert uninspected character in buffer
+           sr.buff%bytecount    := c
+           bytecount            := bytecount + 1
+           $)
+         ELSE
+           $( // IA5 - must notice record terminators
+           SWITCHON c
+           INTO
+             $(
+             DEFAULT: // put in buffer
+                  sr.buff%bytecount := c
+                  bytecount := bytecount + 1
+                  ENDCASE
+
+             // Format characters
+             CASE '*n': cc := ' '; record.ended := TRUE; BREAK
+             CASE '*p': cc := '1'; record.ended := TRUE; BREAK
+             CASE '*c': cc := '+'; record.ended := TRUE; BREAK
+             CASE '*e': cc := 'e'; record.ended := TRUE; BREAK // !!
+             $)
+           $)
+         $)
+
+      // Avoid sending blank record at end
+      IF first.sr & file.ended & (bytecount=0) THEN BREAK
+
+      // Write sub record
+
+      TEST binary
+      THEN $( len := bytecount; record.ended := TRUE $)
+      ELSE len := first.sr -> bytecount+1, bytecount
+
+      TEST record.ended THEN wrch(eor | len) ELSE wrch(len)
+
+      // Put out cc if first sub record of record in IA5 mode
+      IF first.sr & NOT binary
+      THEN $( wrch(last.cc); first.sr := FALSE $)
+
+      FOR i=0 TO bytecount-1 DO wrch(sr.buff%i)
+      IF record.ended
+      THEN $( record.ended := FALSE; last.cc := cc; first.sr := TRUE $)
+
+      IF testflags(1)
+      THEN
+        $( // Abort transfer
+        selectoutput(constr); writes("****** BREAK*N")
+        endread() // Close file being sent
+        GOTO exit
+        $)
+      $) REPEATUNTIL file.ended
+
+    // Finished
+    wrch(#X00) // Control
+    wrch(#X43); wrch(#X00)  // End of file
+    bsp.forceout()
+
+getreply:
+    // Wait for reply
+    // Null string -> success, error message
+    selectinput(instr)  // In case we jumped here
+    endread() // Close file being sent
+    selectinput(bsp.instr)
+    selectoutput(constr)
+
+    $(
+    LET c       = rdch()
+
+    TEST c=endstreamch
+    THEN writes("Byte stream failure*n")
+    ELSE
+      $(
+      LET n = c & #X3F
+
+      IF n \= 0
+      THEN writef("Error at %s - ", mc.name)
+
+      // Read on for error message or just to give 'close request'
+      // a chance.
+      $( LET c = rdch()
+         UNTIL c = endstreamch
+         DO $( wrch(c); c := rdch() $)
+      $)
+      IF n \= 0 THEN newline()
+      $)
+    $)
+exit:
+    selectoutput(bsp.outstr)
+    endwrite() // Close byte streams
+    $)
+
+

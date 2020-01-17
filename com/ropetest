@@ -1,0 +1,30 @@
+SECTION "ROPETEST"
+
+
+
+GET "LIBHDR"
+GET "MANHDR"
+GET "BCPL.ROPES"
+
+
+
+LET start()  BE
+$(
+    LET rope1  =  rope.getrope()
+    LET rope2  =  rope.getrope()
+    
+    FOR  ch = 'a'  TO  'z'  DO  rope.addbyte( rope1, ch )
+
+    rope.write( rope1 )
+    writef( "  (length is %N)*N", rope.length( rope1 ) )
+
+    FOR  i = 1  TO  100  DO  rope.addrope( rope2, rope1 )
+
+    rope.write( rope2 )
+    writef( "  (length is %N)*N", rope.length( rope2 ) )
+
+    rope.freerope( rope1 )
+    rope.freerope( rope2 )
+$)
+
+

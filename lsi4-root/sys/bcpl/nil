@@ -1,0 +1,33 @@
+// (C) Copyright 1979 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "NIL"
+
+GET "LIBHDR"
+
+GET "IOHDR"
+
+LET start(dummy, action, scb, string) = VALOF
+$( scb!scb.type := 0
+   TEST action=act.findinput
+   THEN
+   $( scb!scb.pos, scb!scb.end := 1, 0
+      scb!scb.func3 := 0
+      RESULTIS scb
+   $)
+   ELSE TEST action=act.findoutput
+   THEN
+   $( LET s = getvec(scb.upb+50)
+      IF s=0 RESULTIS 0
+      FOR i = 0 TO scb.upb DO s!i := scb!i
+      freevec(scb)
+      s!scb.buf := s+scb.upb+1
+      s!scb.pos, s!scb.end := 0, 50*bytesperword
+      s!scb.func3 := 0
+      RESULTIS s
+   $)
+   ELSE RESULTIS 0
+$)
+
+

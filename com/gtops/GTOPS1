@@ -1,0 +1,1310 @@
+/*************************************************
+*         GCODE-to-PostScript Converter          *
+**************************************************
+*                                                *
+*  Copyright (c) 1986                            *
+*    University of Cambridge Computing Service   *
+*                                                *
+* Philip Hazel, April 1986.                      *
+*************************************************/
+
+/* This program converts GCODE as produced by GCAL into
+PostScript. All output is buffered in store, so that
+pages can be output in arbitrary order. An 'a4' style is
+assumed in the PostScript interpreter. Various options
+exist to control the form of the output. All errors are
+fatal. */
+
+
+// Part I: Entry, exit, error messages,
+//         and system-specific code.
+
+
+GET "LIBHDR"
+GET "GTOPSHDR"
+$<ARM
+GET "EVHEADER"
+$>ARM
+
+
+/*************************************************
+*     Entry point & general initialization       *
+*************************************************/
+
+LET start(parm) BE
+$(proc
+
+  // Set flags in table from string
+  LET setchars(tabptr, string, flag) BE
+  $(1
+  FOR i = 1 TO string%0 DO
+    $(2
+    LET c = string%i
+    tabptr%c := flag
+    $)2
+  $)1
+
+// Start of START proper
+
+LET ucletters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+LET lcletters = "abcdefghijklmnopqrstuvwxyz"
+LET digits    = "0123456789"
+LET t1 = TABLE 128, 64, 32, 16, 8, 4, 2, 1
+
+// This MUST be done before any store is allocated
+
+$<TRIPOS  getvec.chain := 0  $>TRIPOS
+
+bits := t1
+word := getstore(wordsize)
+libstring := getstore(wordsize)
+currentdate := getstore(datesize)
+
+pageindex := getstore(maxpage+1)
+FOR i = 0 TO maxpage DO pageindex!i := 0
+pagemap := getstore(pagemapsize)
+FOR i = 0 TO pagemapsize-1 DO pagemap!i := 0
+tstack := getstore(tstacksize)
+tptr := 0
+
+chartable := getstore(256)
+FOR i = 0 TO 255 DO chartable%i := ch.rest
+setchars(chartable, ucletters, ch.letter)
+setchars(chartable, lcletters, ch.letter)
+setchars(chartable, digits, ch.digit)
+
+uctable := getstore(256)
+FOR i = 0 TO 255 DO uctable%i := i
+FOR i = 1 TO lcletters%0 DO
+  $(1
+  LET c = lcletters%i
+  uctable%c := ucletters%i
+  $)1
+
+error.output := output()
+sysrdch := rdch; syswrch  := wrch
+
+eof  := FALSE; verbose   := TRUE;  reverse  := FALSE
+logo := FALSE; landscape := FALSE; A4needed := FALSE
+
+A5onA4needed     := FALSE; A6onA4needed  := FALSE
+extendfontneeded := FALSE; optinputstyle := FALSE
+
+returncode := 0; pamphlet       := -1; copies := 1
+glinecount := 1; lastwantedpage := 0;  pages := 0
+head.input := 0; tail.input     := 0
+pageformat := pf.A4
+escape.pressed := FALSE
+
+inputpagecount := 0;  outputpagecount := 0
+
+sysinitialize(parm)    // system-specific initialization
+
+// Set requests for optional header material
+
+IF pageformat = pf.A5 | pageformat = pf.A4toA5 THEN
+  A5onA4needed := TRUE
+IF pageformat = pf.A4toA6 | pageformat = pf.A5toA6 |
+  pageformat = pf.A6 THEN A6onA4needed := TRUE
+
+rdch := grdch          // set for reading GCODE
+initialcomment()       // checks for GCODE and comments
+readpages()            // do the job
+rdch := sysrdch        // tidiness
+outputpages()
+finalcomment()         // say what's been done
+systerminate()         // system-specific tidying
+stop(returncode)
+$)proc
+
+
+/*************************************************
+*            Print Logo                          *
+*************************************************/
+
+AND writelogo() BE
+$(
+UNLESS logo DO writef("GTOPS (%n)*n", version)
+logo := TRUE
+$)
+
+
+
+/*************************************************
+*      Dummy for Mapstore & non-saved pages      *
+*************************************************/
+
+AND null() BE RETURN
+
+
+//
+// ****** System-specific Initialize/Terminate
+//
+
+/* The initialization routine must open and select
+the main input and open the output. It must also open
+any header and trailer files, if present. Other options
+can be decoded directly (e.g. Panos), or, if there
+is an options string, it can be passed to the routine
+AnalyzeStringArg for decoding (e.g. MVS).
+If one of the page format options is set
+from the command line, OPTINPUTSTYLE should be set
+TRUE, to cause it to over-ride similar options in
+the GCODE. */
+
+$<PANOS
+/*************************************************
+*         HELP Procedure for Panos               *
+*************************************************/
+
+AND givehelp() BE
+$(proc
+writelogo()
+writes("*n      KEYWORDS*n*n")
+writes("-FROM            input*n")
+writes("-TO              output*n")
+writes("-HEADer          header file*n")
+writes("-TRAILer         trailer file*n")
+writes("-PAGE(S) <list>  page selection*n")
+writes("-FORMat <name>   force input format*n")
+writes("-REVerse         reverse order*n")
+writes("-Pamphlet [n]    A5/A6 pamphlet order*n")
+writes("-Copies n        multiple copies*n")
+writes("-LANDscape       force landscape orientation*n")
+writes("-NOVerbose       suppress comments*n")
+
+writes("*nFormats are: A4, A5, A6, A4TOA5, A4TOA6, *
+        *A5TOA6*n")
+
+writes("*nDefaults for the header and trailer are taken *
+        *from global variables*n*
+        *GTOPS$Header & GTOPS$Trailer (unset for none).*
+        **n")
+
+writes("*n     EXAMPLES*n*n")
+writes("-> gtops myfile*n")
+writes("-> gtops myfile -pages 4-7,10 -reverse*n")
+writes("-> gtops myfile -format a5 -pamphlet 12*n")
+$)proc
+
+
+
+/*************************************************
+*        Initialize for Panos                    *
+*************************************************/
+
+AND sysinitialize(parm) BE
+$(proc
+
+  // Find last minus in a string
+
+  LET lastminus(s) = VALOF
+  $(1
+  LET p = s%0
+  UNTIL p = 0 DO
+    $(2
+    IF s%p = '-' RESULTIS p
+    p -:= 1
+    $)2
+  RESULTIS 0
+  $)1
+
+
+  // Add extension to string
+
+  LET addextension(s, p, e) BE
+  $(1
+  FOR i = 1 TO e%0 DO
+    $(2
+    s%p := e%i
+    p +:= 1
+    $)2
+  s%0 := p-1
+  $)1
+
+
+// Start of initialize proper
+
+LET idrequest = FALSE
+LET s = VEC 20
+LET rc = DecodeInit("FROM=INput,TO=OUTput/K,Verbose/S,*
+  *HEADer/K,TRAILer/K,*
+  *PAGE=PAGES/K/L[1-**],REVerse/P,FORMat/K,*
+  *LANDscape/P,Copies/C[1],Pamphlet/P/I[0],*
+  *HELP/S,IDentify/S", argument.string)
+LET handle = result2
+
+IF HelpRequired(handle, rc) THEN $( givehelp(); stop(0) $)
+IF IdentifyRequired(handle, rc) THEN
+  $(1
+  idrequest := TRUE
+  writelogo()
+  UNLESS rc >= 0 DO stop(0)
+  $)1
+UNLESS rc >= 0 DO moan(moan.local + 1, rc, "DecodeInit")
+
+rc := GetNumberOfValues("FROM", handle)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc,
+  "GetNumberOfValues")
+TEST result2 = 0 & idrequest THEN stop(0)
+  ELSE UNLESS result2 = 1 DO moan(moan.local + 4)
+
+rc := GetStringArg("FROM", 1, handle, s, 80)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc, "GetStringArg")
+IF lastminus(s) = 0 THEN
+  addextension(s, s%0+1, "-gout")
+main.input := findinput(s)
+IF main.input = 0 THEN moan(moan.local + 2, s)
+selectinput(main.input)
+
+rc := GetNumberOfValues("TO", handle)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc,
+  "GetNumberOfValues")
+TEST result2 = 0 THEN
+  $(1
+  LET g = VEC 20
+  rc := GetGlobalString("GTOPS$ToDefault", g, 80)
+  TEST rc >= 0 THEN
+    FOR i = 0 TO g%0 DO s%i := g%i
+  ELSE
+    $(2
+    LET p = lastminus(s)
+    IF p = 0 THEN p := s%0+1
+    addextension(s, p, "-ps")
+    $)2
+  $)1
+ELSE
+  $(1
+  rc := GetStringArg("TO", 1, handle, s, 80)
+  UNLESS rc >= 0 DO moan(moan.local + 1, rc,
+    "GetStringArg")
+  IF (lastminus(s) = 0) & (s%(s%0) ~= ':') THEN
+    addextension(s, s%0+1, "-ps")
+  $)1
+main.output := findoutput(s)
+IF main.output = 0 THEN moan(moan.local + 3, s)
+
+/* Header and trailer files are taken from Global
+variables if not given in the command. It is not
+an error to miss them out completely. */
+
+rc := GetNumberOfValues("HEADER", handle)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc,
+  "GetNumberOfValues")
+TEST result2 = 0 THEN
+  $(1
+  rc := GetGlobalString("GTOPS$Header", s, 80)
+  IF rc >= 0 THEN
+    $(2
+    head.input := findinput(s)
+    IF head.input = 0 THEN moan(moan.local + 5, s)
+    $)2
+  $)1
+ELSE
+  $(1
+  rc := GetStringArg("HEADER", 1, handle, s, 80)
+  UNLESS rc >= 0 DO moan(moan.local + 1, rc,
+    "GetStringArg")
+  head.input := findinput(s)
+  IF head.input = 0 THEN moan(moan.local + 5, s)
+  $)1
+
+rc := GetNumberOfValues("TRAILER", handle)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc,
+  "GetNumberOfValues")
+TEST result2 = 0 THEN
+  $(1
+  rc := GetGlobalString("GTOPS$Trailer", s, 80)
+  IF rc >= 0 THEN
+    $(2
+    tail.input := findinput(s)
+    IF tail.input = 0 THEN moan(moan.local + 5, s)
+    $)2
+  $)1
+ELSE
+  $(1
+  rc := GetStringArg("TRAILER", 1, handle, s, 80)
+  UNLESS rc >= 0 DO moan(moan.local + 1, rc,
+    "GetStringArg")
+  tail.input := findinput(s)
+  IF tail.input = 0 THEN moan(moan.local + 5, s)
+  $)1
+
+rc := GetNumberOfValues("FORMAT", handle)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc,
+  "GetNumberOfValues")
+UNLESS result2 = 0 DO
+  $(1
+  rc := GetStringArg("FORMAT", 1, handle,
+    word, wordsize*bytesperword)
+  UNLESS rc >= 0 DO moan(moan.local + 1, rc,
+    "GetStringArg")
+  TEST isword("A5") THEN pageformat := pf.A5
+  ELSE TEST isword("A6") THEN pageformat := pf.A6
+  ELSE TEST isword("A4TOA5") THEN pageformat := pf.A4toA5
+  ELSE TEST isword("A4TOA6") THEN pageformat := pf.A4toA6
+  ELSE TEST isword("A5TOA6") THEN pageformat := pf.A5toA6
+  ELSE UNLESS isword("A4") DO moan(14, word)
+  optinputstyle := TRUE
+  $)1
+
+rc := GetPresence("REVERSE", handle)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc, "GetPresence")
+reverse := result2
+
+rc := GetPresence("LANDSCAPE", handle)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc, "GetPresence")
+landscape := result2
+
+rc := GetPresence("VERBOSE", handle)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc, "GetPresence")
+IF result2 THEN
+  $(1
+  rc := GetStateArg("VERBOSE", handle)
+  UNLESS rc >= 0 DO moan(moan.local + 1,rc,"GetStateArg")
+  verbose := result2
+  $)1
+
+IF verbose THEN writelogo()
+
+rc := GetPresence("PAMPHLET", handle)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc, "GetPresence")
+TEST result2 THEN
+  $(1
+  rc := GetIntegerArg("PAMPHLET", 1, handle)
+  UNLESS rc >= 0 DO moan(moan.local + 1, rc,
+    "GetIntegerArg")
+  pamphlet := result2
+  $)1
+ELSE pamphlet := -1
+
+rc := GetCardinalArg("COPIES", 1, handle)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc,
+  "GetCardinalArg")
+copies := result2
+
+rc := GetStringArg("PAGES", 1, handle, s, 80)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc, "GetStringArg")
+str := s; sptr := 1; send := s%0+1
+AnalyzePagesArg(allstring)
+
+rc := DecodeEnd(handle)
+UNLESS rc >= 0 DO moan(moan.local + 1, rc, "DecodeEnd")
+
+rc := TimeAndDate(currentdate, datesize*bytesperword)
+rc := GetGlobalString("Gtops$GetLib", libstring,
+  wordsize*bytesperword)
+UNLESS rc >= 0 DO libstring%0 := 0
+
+A4needed := TRUE    // include A4 definition
+mapstore := null
+$)proc
+
+
+
+/*************************************************
+*           Terminate for Panos                  *
+*************************************************/
+
+AND systerminate() BE RETURN
+$>PANOS
+
+
+
+$<MVS
+/*************************************************
+*       Initialize for MVS                       *
+*************************************************/
+
+AND sysinitialize(parm) BE
+$(proc
+LET n = 0
+LET today = date()
+
+FOR i = 3 TO today%0 DO
+  $(1
+  n +:= 1
+  currentdate%n := today%i
+  $)1
+FOR i = 1 TO result2%0    // time
+  $(1
+  n +:= 1
+  currentdate%n := result2%i
+  $)1
+currentdate%0 := n
+
+main.input := findinput("GCODE")
+IF main.input = 0 THEN moan(moan.local + 1)
+selectinput(main.input)
+main.output := findoutput("PSOUT")
+IF main.output = 0 THEN moan(moan.local + 2)
+head.input := findinput("PSHDR")
+IF head.input = 0 THEN moan(moan.local + 3)
+
+tail.input := 0    // PSOUT does tails for MVS
+copies := 1
+pamphlet := -1
+AnalyzeStringArg(parm, isopt)
+mapstore := null
+$)proc
+
+
+/*************************************************
+*          Terminate for MVS                     *
+*************************************************/
+
+AND systerminate() BE RETURN
+$>MVS
+
+
+
+$<ARM
+/************************************************
+*           Initialize for ARM                  *
+************************************************/
+
+/* The default header file name is screwed in. It
+is $.gcallib._ps.gpshead. If the input is specified
+via -from, a search is first made for _gout.from.
+If this is found, a timestamp interlock is tried.
+If -file is used, the name is used asis, and
+no interlock happens. */
+
+AND sysinitialize(parm) BE
+$(proc
+
+  MANIFEST $(
+  argv.upb = 100
+  argv.from   = 0; argv.file    = 1; argv.to  = 2
+  argv.header = 3; argv.trailer = 4; argv.opt = 5
+  $)
+
+LET n = 0
+LET tofile = VEC argv.upb
+LET today = date()
+LET now = TimeOfDay()
+LET rdargs.string=
+  "from,file/k,to,header,trailer,opt"
+LET argv = getstore(argv.upb+1)
+IF rdargs(rdargs.string,argv,argv.upb) = 0
+  THEN moan(moan.local + 1,rdargs.string)
+
+// Set up date/time string
+
+FOR i = 1 TO today%0 DO
+  $(1
+  n +:= 1
+  currentdate%n := today%i
+  $)1
+n +:= 1
+currentdate%n := ' '
+FOR i = 1 TO now%0    // time
+  $(1
+  n +:= 1
+  currentdate%n := now%i
+  $)1
+currentdate%0 := n
+
+// Deal with -from and -file
+
+TEST argv!argv.from=0 THEN
+  $(1
+  IF argv!argv.file=0 THEN moan(moan.local + 2,
+    "<not given>")
+  main.input := findinput(argv!argv.file)
+  IF main.input = 0 THEN
+    moan(moan.local + 2, argv!argv.file)
+  selectinput(main.input)
+  $)1
+
+ELSE
+  $(1
+  LET gfile = VEC 32
+  LET fromfile = argv!argv.from
+  LET n = fromfile%0
+  LET m = ?
+  FOR i = fromfile%0 TO 1 BY -1 DO
+    $(2
+    IF fromfile%i='.' BREAK
+    n -:= 1
+    $)2
+  m := fromfile%0 - n
+
+  FOR i = 1 TO n DO gfile%i := fromfile%i
+  FOR i = 1 TO 6 DO gfile%(i+n) := "_gout."%i
+  FOR i = 1 TO m DO gfile%(i+n+6) := fromfile%(i+n)
+  gfile%0 := n+m+6
+  main.input := findinput(gfile)
+  TEST main.input ~= 0 THEN
+    $(2
+
+    /* Check that the _gout file is not stamped
+    earlier than the input, if it exists. */
+
+    LET gcaldate = VEC 4
+    LET goutdate = VEC 4
+    LET b1 = #XFF
+    LET b3 = #XFFFFFF00
+    LET rc = OSFile(5, gfile, goutdate)
+    IF result2 = 0 THEN
+      $(3
+      rc := OSFile(5, fromfile, gcaldate)
+      IF (result2 = 0) &
+         ((gcaldate!0 & b3) = b3) &
+         ((goutdate!0 & b3) = b3) &
+         ((gcaldate!0 & b1) >= #X3F) &
+         ((goutdate!0 & b1) >= #X3F)
+      THEN UNLESS VALOF
+        $(4
+        IF gcaldate%0 > goutdate%0 RESULTIS FALSE
+        IF gcaldate%0 < goutdate%0 RESULTIS TRUE
+        RESULTIS gcaldate!1 <= goutdate!1
+        $)4
+      DO moan(moan.local + 7, gfile, fromfile)
+      $)3
+    $)2
+
+  ELSE
+    $(2
+    main.input := findinput(argv!argv.from)
+    IF main.input=0 THEN moan(moan.local + 2,
+      argv!argv.from)
+    $)2
+  selectinput(main.input)
+  $)1
+
+TEST argv!argv.to=0 THEN
+  $(1
+
+// This cut out section of code makes an
+// output file with name _ps.<from>. It
+// is left in here in case it is wanted
+// in the future; for now, the default
+// output is to PRINTER:
+
+//  LET fromfile = argv!argv.from
+//  LET n = fromfile%0
+//  LET m = ?
+//  FOR i = fromfile%0 TO 1 BY -1 DO
+//    $(2
+//    IF fromfile%i='.' BREAK
+//    n -:= 1
+//    $)2
+//  m := fromfile%0 - n
+//
+//  FOR i = 1 TO n DO tofile%i := fromfile%i
+//  FOR i = 1 TO 4 DO tofile%(i+n) := "_ps."%i
+//  FOR i = 1 TO m DO tofile%(i+n+4) := fromfile%(i+n)
+//  tofile%0 := n+m+4
+//  main.output := findoutput(tofile)
+//  IF main.output = 0 THEN
+//    $(2  // try to create directory
+//    LET cmd = VEC argv.upb
+//    FOR i = 1 TO 5 DO cmd%i := "CDIR "%i
+//    FOR i = 1 TO n+3 DO cmd%(5+i) := tofile%i
+//    cmd%0 := n+8
+//    TEST oscli(cmd) THEN
+//      $(3
+//      tofile%0 := n+3
+//      writef("Directory %s created*N", tofile)
+//      tofile%0 := n+m+4
+//      main.output := findoutput(tofile)
+//      IF main.output=0 THEN moan(moan.local + 3,tofile)
+//      $)3
+//    ELSE moan(moan.local + 3,tofile)
+//    $)2
+
+  // If no -to supplied, default to printer
+
+  tofile := "printer:"
+  main.output := findoutput(tofile)
+  IF main.output = 0 THEN moan(moan.local + 3, tofile)
+  $)1
+
+ELSE
+  $(1
+  tofile := argv!argv.to
+  main.output := findoutput(tofile)
+  IF main.output = 0 THEN moan(moan.local + 3, tofile)
+  $)1
+
+// Timestamp output file
+
+UNLESS tofile%(tofile%0) = ':' DO
+  $(1
+  LET block = VEC 4
+  LET tod = VEC 2
+  osword(1, tod) // read time
+  IF tod%4 >= #X3F THEN
+    $(2
+    block!0 := #XFFFFFF00 | tod!1
+    osfile(2, tofile, block)
+    block!1 := tod!0
+    osfile(3, tofile, block)
+    $)2
+  $)1
+
+IF argv!argv.header = 0 THEN
+  argv!argv.header := "$.gcallib._ps.gpshead"
+head.input := findinput(argv!argv.header)
+IF head.input = 0 THEN moan(moan.local + 4,
+  argv!argv.header)
+
+UNLESS argv!argv.trailer = 0 DO
+  $(1
+  tail.input := findinput(argv!argv.trailer)
+  IF tail.input = 0 THEN moan(moan.local + 5,
+    argv!argv.trailer)
+  $)1
+
+copies := 1
+pamphlet := -1
+A4needed := TRUE    // include A4 definition
+UNLESS argv!argv.opt = 0 DO
+  AnalyzeStringArg(argv!argv.opt, isopt)
+
+SetEventHandler(-1,@escape.pressed,evh.SetFlag)
+escape.pressed := FALSE
+mapstore := null
+$)proc
+
+
+
+/*************************************************
+*       Terminate for ARM                        *
+*************************************************/
+
+AND systerminate() BE RETURN
+$>ARM
+
+
+$<VAXUNIX
+/*************************************************
+*        Initialize for VAX UNIX                 *
+*************************************************/
+
+AND sysinitialize(parm) BE
+$(proc
+LET argp = 1
+LET from = "-"
+LET dest = "-"
+LET head = "/usr/lib/gcal/gtops.pshdr"
+LET tail = ""
+LET opt  = ""
+
+// Error and message output is sent to stderr
+
+error.output := JOURNAL
+selectoutput(error.output)
+
+// date(vect)
+timeofday(currentdate)
+WHILE argp <= ARGC & (ARGV!argp)%1 = '-'
+$( LET key = ARGV!argp
+   SWITCHON key%2 INTO
+   $(
+   CASE 'h': argp := argp + 1
+             IF (argp > ARGC) moan(moan.local + 1)
+             head := ARGV!argp;  ENDCASE
+   CASE 'o': argp := argp + 1
+             IF (argp > ARGC) moan(moan.local + 2)
+             dest := ARGV!argp;  ENDCASE
+   CASE 'O': argp := argp + 1
+             IF (argp > ARGC) moan(moan.local + 3)
+             opt := ARGV!argp;   ENDCASE
+   CASE 't': argp := argp + 1
+             IF (argp > ARGC) moan(moan.local + 4)
+             tail := ARGV!argp;  ENDCASE
+   DEFAULT:  moan(moan.local + 5, key)
+   CASE 0:   BREAK
+   $)
+   argp := argp + 1
+$)
+
+/* If there is an unused argument, it must be the
+input file name. */
+
+IF ARGC >= argp
+TEST (ARGC > argp)
+THEN moan(moan.local + 6)
+ELSE from := argv!argp
+
+// Now open the input, output & header files
+
+main.input := (from%0 = 1 & from%1 = '-') ->
+  SYSIN, findinput(from)
+IF main.input=0 THEN moan(moan.local + 7, from)
+selectinput(main.input)
+
+main.output := (dest%0 = 1 & dest%1 = '-') ->
+  SYSOUT, findoutput(dest)
+IF main.output=0 THEN moan(moan.local + 8, dest)
+
+UNLESS head%0 = 0
+$(  head.input := (head%0 = 1 & head%1 = '-') ->
+      SYSIN, findinput(head)
+    IF head.input=0 THEN moan(moan.local + 9, head)
+$)
+
+UNLESS tail%0 = 0
+$(  tail.input := (tail%0 = 1 & tail%1 = '-') ->
+      SYSIN, findinput(tail)
+    IF tail.input=0 THEN moan(moan.local + 10, tail)
+$)
+
+A4needed := TRUE    // include A4 definition
+
+UNLESS opt%0 = 0
+DO AnalyzeStringArg(opt, isopt)
+mapstore := null
+$)proc
+
+
+
+/*************************************************
+*           Terminate for VAX UNIX               *
+*************************************************/
+
+AND systerminate() BE RETURN
+$>VAXUNIX
+
+
+
+$<TRIPOS
+/*************************************************
+*        Initialize for TRIPOS                   *
+*************************************************/
+
+AND sysinitialize(parm) BE
+$(proc
+
+MANIFEST
+$(
+a.from    = 0
+a.to      = 1
+a.header  = 2
+a.trailer = 3
+a.opt     = 4
+argv.upb  = a.opt + (160/BYTESPERWORD)
+$)
+
+LET rdargs.string = "from/a,to/k,header/k,trailer/k,opt/k"
+LET argv = getstore(argv.upb)
+
+// Lest we fail for some reason .....
+
+head.input, main.input, tail.input, main.output := 0,0,0,0
+sys.initialized := @sys.initialized
+
+IF rdargs(rdargs.string, argv, argv.upb) = 0
+THEN moan(moan.local + 1, rdargs.string)
+
+UNLESS argv!a.to DO argv!a.to := "OMS:gtops"
+UNLESS argv!a.header DO
+  argv!a.header := "sys:gcal.gtops-pshdr"
+
+head.input := findinput(argv!a.header)
+IF head.input = 0 THEN moan(moan.local + 2, argv!a.header)
+
+main.input := findinput(argv!a.from)
+IF main.input=0 THEN moan(moan.local + 3, argv!a.from)
+selectinput(main.input)
+
+IF argv!a.trailer THEN
+  $(1
+  tail.input := findinput(argv!a.trailer)
+  IF tail.input = 0 THEN
+    moan(moan.local + 4, argv!a.trailer)
+  $)1
+
+main.output := findoutput(argv!a.to)
+IF main.output=0 THEN moan(moan.local + 5, argv!a.to)
+
+  $(1
+  LET V = VEC 15
+  datstring(V)
+  FOR I = 1 TO V%0 DO currentdate%i := v%i
+  currentdate%(v%0+1) := ' '
+  FOR I = 1 TO (v+5)%0 DO currentdate%(v%0+i) := (v+5)%i
+  currentdate%0 := v%0 + (v+5)%0
+  $)1
+
+A4needed := TRUE    // include A4 definition
+IF argv!a.opt
+  AnalyzeStringArg(argv!a.opt, isopt)
+$)proc
+
+
+
+/*************************************************
+*           Terminate for TRIPOS                 *
+*************************************************/
+
+AND systerminate() BE
+$(proc
+TEST sys.initialized = @sys.initialized THEN
+  $(1
+  endstream(head.input)
+  endstream(main.input)
+  endstream(tail.input)
+  endstream(main.output)
+  $)1
+ELSE WRITEF("****** SYSTERMINATE called *
+  * before SYSINITIALIZE*N")
+
+UNLOADSEG(getvec.chain)
+$)proc
+$>TRIPOS
+
+
+
+/*************************************************
+*           Test for interupt                    *
+*************************************************/
+
+$<FLAGGED.BREAK
+AND interupted() = escape.pressed
+$>FLAGGED.BREAK
+
+$<TRIPOS
+AND interupted() = testflags(1)
+$>TRIPOS
+
+//
+// ****** Store handling procedures *****
+//
+
+
+/*************************************************
+*            Get Store                           *
+*************************************************/
+
+$<STDSTORE
+AND getstore(n) = VALOF
+$(proc
+LET r = getvec(n)
+IF r = 0 THEN moan(1)
+RESULTIS r
+$)proc
+$>STDSTORE
+
+$<TRIPOS
+AND getstore(n) = VALOF
+$(proc
+LET r = getvec(n+1)
+IF r = 0 THEN moan(1)
+!r := getvec.chain
+getvec.chain := r
+RESULTIS r+1
+$)proc
+$>TRIPOS
+
+//
+// ****** Other System-Specific Procedures
+//
+
+
+/*************************************************
+*          Open Get File                         *
+*************************************************/
+
+AND openget(name) = VALOF
+$(proc
+LET file = ?
+
+$<MVS
+file := inputmember("PICTURES", name)
+IF file = 0 THEN file := findinput(name)
+IF file = 0 THEN moan(moan.local + 4, name)
+$>MVS
+
+$<PANOS
+LET copyname = VEC wordsize
+LET ext = FALSE
+LET trylib = TRUE
+LET n = name%0
+
+FOR i = 1 TO n DO
+  $(1
+  LET c = name%i
+  copyname%i := c
+  IF c = '-' THEN ext := TRUE
+  IF c = '$' | c = '@' | c = '^' THEN
+    trylib := FALSE
+  $)1
+
+UNLESS ext DO
+  FOR i = 1 TO 3 DO
+    $( n +:= 1; copyname%n := "-ps"%i $)
+copyname%0 := n
+
+file := findinput(copyname)
+IF file = 0 & trylib & libstring%0 \= 0 THEN
+  $(1
+  n := 0
+  FOR i = 1 TO libstring%0 DO
+    $( n +:= 1; copyname%n := libstring%i $)
+  UNLESS copyname%n = '.' DO
+    $( n +:= 1; copyname%n := '.' $)
+  FOR i = 1 TO name%0 DO
+    $( n +:= 1; copyname%n := name%i $)
+  UNLESS ext DO
+    FOR i = 1 TO 3 DO
+      $( n +:= 1; copyname%n := "-ps"%i $)
+  copyname%0 := n
+  file := findinput(copyname)
+  $)1
+
+IF file = 0 THEN moan(moan.local + 7, name)
+$>PANOS
+
+$<ARM
+file := findinput(name)
+IF file = 0 THEN moan(moan.local + 6, name)
+$>ARM
+
+$<VAXUNIX
+file := findinput(name)
+IF file = 0 THEN moan(moan.local + 11, name)
+$>VAXUNIX
+
+$<TRIPOS
+file := findinput(name)
+IF file = 0 THEN moan(moan.local + 6, name)
+$>TRIPOS
+
+RESULTIS file
+$)proc
+
+
+//
+// ****** End of system-specific procedures
+//
+
+
+
+/*************************************************
+*              Fatal Errors                      *
+*************************************************/
+
+AND moan(code, a1, a2) BE
+$(proc
+selectoutput(error.output)
+wrch := syswrch
+writelogo()
+writes("Error: ")
+SWITCHON code INTO
+  $(1
+  CASE 1:
+  writes("Insufficient store*n")
+  ENDCASE
+
+  CASE 2:
+  writes("Input is not a GCODE file*N")
+  ENDCASE
+
+  CASE 3:
+  writes("Word expected*N")
+  showstring(str, sptr)
+  ENDCASE
+
+  CASE 4:
+  writes("Number expected*N")
+  showstring(str, sptr)
+  ENDCASE
+
+  CASE 5:
+  writef("Unknown options word *"%s*"*N", word)
+  showstring(str, sptr)
+  ENDCASE
+
+  CASE 6:
+  writes("Semicolon or space expected*N")
+  showstring(str, sptr)
+  ENDCASE
+
+  CASE 7:
+  writes("Comma expected*N")
+  showstring(str, sptr)
+  ENDCASE
+
+  CASE 8:
+  writef("Error in GCODE file: *'%C*'*
+         * command unknown*N", ch)
+  writef("In line %n of GCODE file*N", glinecount)
+  gline()
+  ENDCASE
+
+  CASE 9:
+  writes("Error in GCODE file: \B does not follow*
+         * printing character*N")
+  gline()
+  ENDCASE
+
+  CASE 10:
+  writef("Error in GCODE file: Unknown escaped*
+         * character *'%C*' in DCS or APC string*N",ch)
+  gline()
+  ENDCASE
+
+  CASE 11:
+  writef("Error in GCODE file: Illegal non-integral*
+         * argument for \'%C' command (%N.%N)*N",
+         ch, a1, a2)
+  gline()
+  ENDCASE
+
+  CASE 12:
+  writef("Error in GCODE file: Bad value for SSU*
+         * command (%N)*N", a1)
+  gline()
+  ENDCASE
+
+  CASE 13:
+  writef("Error in GCODE file: Bad syntax for font*
+         * binding*N")
+  gline()
+  ENDCASE
+
+  CASE 14:
+  writef("Unknown input format %S*N", a1)
+  ENDCASE
+
+  CASE 15:
+  writef("Option %S not allowed embedded in GCODE*N", a1)
+  ENDCASE
+
+  CASE 16:
+  writef("Option %S is only allowed *
+   *embedded in GCODE*N", a1)
+  ENDCASE
+
+  CASE 17:
+  writes("All output pages must be the same size when *
+    *the PAMPHLET option is used,*Nbut both ")
+  showform(a1)
+  writes(" and ")
+  showform(a2)
+  writes(" sized pages are present.*N")
+  gline()
+  ENDCASE
+
+  CASE 18:
+  // systems which don't catch signals
+  writes("Interupted*N")
+  ENDCASE
+
+
+// System-specific error messages
+
+$<PANOS
+  CASE moan.local + 1:
+  writef("Fault detected by PANOS routine %s*n", a2)
+  fault.message(a1)
+  wrch('*n')
+  ENDCASE
+
+  CASE moan.local + 2:
+  writef("Failed to open input file *'%s*'*n", a1)
+  fault.message(result2)
+  wrch('*n')
+  ENDCASE
+
+  CASE moan.local + 3:
+  writef("Failed to open output file *'%s*'*n", a1)
+  fault.message(result2)
+  wrch('*n')
+  ENDCASE
+
+  CASE moan.local + 4:
+  writes("No input file given*n")
+  ENDCASE
+
+  CASE moan.local + 5:
+  writef("Failed to open header file *'%s*'*n", a1)
+  fault.message(result2)
+  wrch('*n')
+  ENDCASE
+
+  CASE moan.local + 6:
+  writef("Failed to open trailer file *'%s*'*n", a1)
+  fault.message(result2)
+  wrch('*n')
+  ENDCASE
+
+  CASE moan.local + 7:
+  writef("Failed to open included file *'%s*'*n", a1)
+  fault.message(result2)
+  wrch('*n')
+  ENDCASE
+$>PANOS
+
+$<MVS
+  CASE moan.local + 1:
+  writes("Failed to open main input (FROM)*n")
+  ENDCASE
+
+  CASE moan.local + 2:
+  writes("Failed to open main output(TO)*n")
+  ENDCASE
+
+  CASE moan.local + 3:
+  writes("Failed to open header input (HEADER)*N")
+  ENDCASE
+
+  CASE moan.local + 4:
+  writef("Failed to open included file %S (tried as*N*
+    *a member of PICTURES and as a DDname)*N", a1)
+  ENDCASE
+$>MVS
+
+$<ARM
+  CASE moan.local + 1:
+  writef("Bad arguments for keys *"%S*"*N", a1)
+  ENDCASE
+
+  CASE moan.local + 2:
+  writef("Failed to open input file *'%s*'*n", a1)
+  ENDCASE
+
+  CASE moan.local + 3:
+  writef("Failed to open output file *'%s*'*n", a1)
+  ENDCASE
+
+  CASE moan.local + 4:
+  writef("Failed to open header file *'%s*'*n", a1)
+  ENDCASE
+
+  CASE moan.local + 5:
+  writef("Failed to open trailer file *'%s*'*n", a1)
+  ENDCASE
+
+  CASE moan.local + 6:
+  writef("Failed to open included file *'%s*'*n", a1)
+  ENDCASE
+
+  CASE moan.local + 7:
+  writef("Timestamp on *'%s*' is earlier than that *
+         *on *'%s*'.*N(Use the -file keyword if you *
+         *really want to force it.)*N", a1, a2)
+  ENDCASE
+$>ARM
+
+$<VAXUNIX
+  CASE moan.local + 1:
+  writef("header file missing after -h*N")
+  ENDCASE
+
+  CASE moan.local + 2:
+  writef("output file missing after -o*N")
+  ENDCASE
+
+  CASE moan.local + 3:
+  writef("option string missing after -O*N")
+  ENDCASE
+
+  CASE moan.local + 4:
+  writef("trailer file missing after -t*N")
+  ENDCASE
+
+  CASE moan.local + 5:
+  writef("Unknown option `%s'*N*
+   *Usage: [-h header] [-o ouputfile] [-O options] *
+   *[-t tailer] [inputfile]*N", a1)
+  ENDCASE
+
+  CASE moan.local + 6:
+  writef("too many unflagged items.*N")
+  ENDCASE
+
+  CASE moan.local + 7:
+  writef("Failed to open `%s' as main input*N", a1)
+  ENDCASE
+
+  CASE moan.local + 8:
+  writef("Failed to open `%s' as output*N", a1)
+  ENDCASE
+
+  CASE moan.local + 9:
+  writef("Failed to open `%s' as header input*N", a1)
+  ENDCASE
+
+  CASE moan.local + 10:
+  writef("Failed to open `%s' as trailer input*N", a1)
+  ENDCASE
+
+  CASE moan.local + 11:
+  writef("Failed to open `%s' as picture input*N", a1)
+  ENDCASE
+$>VAXUNIX
+
+$<TRIPOS
+  CASE moan.local + 1:
+  writef("Bad arg for `%s'*N", a1)
+  ENDCASE
+
+  CASE moan.local + 2:
+  writef("Failed to open `%s' as header file*N", a1)
+  ENDCASE
+
+  CASE moan.local + 3:
+  writef("Failed to open `%s' as main input file*N", a1)
+  writef("option string missing after -O*N")
+  ENDCASE
+
+  CASE moan.local + 4:
+  writef("Failed to open `%s' as trailer file*N", a1)
+  writef("trailer file missing after -t*N")
+  ENDCASE
+
+  CASE moan.local + 5:
+  writef("Failed to open `%s' as output file*N", a1)
+  ENDCASE
+
+  CASE moan.local + 6:
+  writef("Failed to open `%s' as picture file*N", a1)
+  ENDCASE
+$>TRIPOS
+
+  // Trap for the unexpected
+
+  DEFAULT:
+  writef("Unknown error number %n*n", code)
+  ENDCASE
+  $)1
+
+writes("GTOPS abandoned*N")
+returncode := rc.serious
+systerminate()
+stop(returncode)
+$)proc
+
+
+
+/*************************************************
+*           auxiliary error routines             *
+*************************************************/
+
+AND showstring(s, p) BE
+$(proc
+writes(s)
+wrch('*n')
+FOR i = 1 TO p-2 DO wrch(' ')
+writes("^*n")
+$)proc
+
+AND gline() BE
+  writef("Detected in line %N of GCODE file*N",
+    glinecount)
+
+AND showform(a) BE
+  TEST a = pf.A5 | a = pf.A4toA5 THEN writes("A5")
+    ELSE TEST a = pf.A6 | a = pf.A4toA6 | a = pf.A5toA6
+      THEN writes("A6")
+        ELSE writes("A4")
+
+
+
+// End of GTOPS part I
+
+

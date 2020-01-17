@@ -1,0 +1,48 @@
+
+SECTION "HERE-FIND"
+GET     "LIBHDR"
+GET     "IOHDR"
+GET     "CLIHDR"
+
+GLOBAL $( save1 : 1 ; save2 : 2 $) ; MANIFEST $( scb.arg3 = scb.arg2 + 1 $)
+
+LET start ( dummy, action, oldscb, string ) = VALOF
+$(
+   LET codeseg, scb, buf    = ?, ?, ?
+   LET loc.save1, loc.save2 = save1, save2      // save globals 1 and 2 so we
+                                                // can use globin later safely
+   result2 := 0
+
+   UNLESS action = act.findinput DO RESULTIS 0  // only valid for this action
+   UNLESS string % 0 = 6         DO RESULTIS 0  // bad terminator
+
+   codeseg := loadseg ( "sys:l.here" )          // load replenish and close
+   scb     := getvec  ( scb.arg3 + 51 )         // new SCB and buffer combined
+
+   IF [ codeseg = 0 ] | [ scb = 0 ] THEN        // check things were got OK
+   $(
+      freevec   ( scb  )
+      unloadseg ( codeseg )
+      RESULTIS 0
+   $)
+
+   freevec  ( oldscb )                          // ditch the old SCB
+   globin   ( codeseg )                         // get out the addresses
+
+   scb ! scb.link  := -1
+   scb ! scb.id    := id.inscb
+   scb ! scb.pos   := -1
+   scb ! scb.end   := -1
+   scb ! scb.func1 := save1 ; save1 := loc.save1        // note the routines
+   scb ! scb.func2 := 0
+   scb ! scb.func3 := save2 ; save2 := loc.save2        // and restore globals
+   scb ! scb.buf   := scb + scb.arg3 + 1
+
+   scb ! scb.arg1  := cli.currentinput  // save for subsequent use
+   scb ! scb.arg2  := string % 6        // terminator character
+   scb ! scb.arg3  := codeseg           // for when we unload it
+
+   RESULTIS scb
+$)
+
+

@@ -1,0 +1,207 @@
+MANIFEST
+$(
+//      Instruction Opcodes
+//
+//    opcodemask          =  #B1111000000000000  // Opcode is in the top 4 bits.
+//
+//      #B0000   // Bit Manipulation/MOVEP/Immediate
+//      #B0001   // Move Byte
+//      #B0010   // Move Long
+//      #B0011   // Move Word
+//      #B0100   // Miscellaneous (?)
+//      #B0101   // ADDQ/SUBQ/Scc/DBcc
+//      #B0110   // Bcc
+//      #B0111   // MOVEQ
+//      #B1000   // OR/DIV/SBCD
+//      #B1001   // SUB/SUBX
+//      #B1010   // *** Unassigned ***
+//      #B1011   // CMP/EOR
+//      #B1100   // AND/MUL/ABCD/EXG
+//      #B1101   // ADD/ADDX
+//      #B1110   // Shift/Rotate
+//      #B1111   // *** Unassigned ***
+
+
+    //  Bit Type Codes
+    //  ==============
+
+    b.tst         =  #B00          // TEST bit
+    b.chg         =  #B01          // CHANGE bit
+    b.clr         =  #B10          // CLEAR bit
+    b.set         =  #B11          // SET bit
+
+
+    //  Operand Size Codes
+    //  ==================
+
+    sizemask      =  #B11          // Two bit size field
+    s.byte        =  #B00          // BYTE operation
+    s.word        =  #B01          // WORD operation
+    s.long        =  #B10          // LONG operation
+
+
+    //  Operand MODE Codes
+    //  ==================
+
+    registermask  =  #B111         // 3 bit register field
+
+    am.Dr         =  #B000         // DATA register direct
+    am.Ar         =  #B001         // ADDRESS register direct
+    am.Ar.ind     =  #B010         // ADDRESS register indirect
+    am.Ar.pi      =  #B011         // ADDRESS register indirect
+    am.Ar.pd      =  #B100         // ADDRESS register indirect pre decrement
+    am.Ar.disp    =  #B101         // ADDRESS register indirect + displacement
+    am.Ar.index   =  #B110         // ADDRESS register indirect + index
+
+
+    //  All the rest assume a register field of #B111
+    //  =============================================
+
+    am.abs16      =  #B000         // Absolute SHORT
+    am.abs32      =  #B001         // Absolute Long
+    am.PC.disp    =  #B010         // PC + displacement
+    am.PC.index   =  #B011         // PC + index
+    am.imm        =  #B100         // Immediate or SR
+
+
+    //  Internal representation for decoded instructions
+    //  ================================================
+
+    i.move.byte =   1;  i.move.long     =   2;  i.move.word     =   3
+    i.DBcc      =   4;  i.Scc           =   5;  i.addq          =   6
+    i.subq      =   7;  i.Bcc           =   8;  i.moveq         =   9
+    i.divu      =  10;  i.mulu          =  11;  i.divs          =  12
+    i.muls      =  13;  i.sbcd          =  14;  i.or            =  15
+    i.subx      =  16;  i.sub           =  17;  i.cmpm          =  18
+    i.eor       =  19
+    i.cmp       =  20;  i.abcd          =  21;  i.exg           =  22
+    i.and       =  23;  i.addx          =  24;  i.add           =  25
+    i.chk       =  26;  i.lea           =  27;  i.move.from.sr  =  28
+    i.negx      =  29
+    i.move.to.sr=  30;  i.not           =  31;  i.clr           =  32
+    i.move.to.ccr= 33;  i.neg           =  34;  i.nbcd          =  35
+    i.swap      =  36;  i.pea           =  37;  i.extw          =  38
+    i.extl      =  39
+    i.movem.from.reg=40;i.movem.to.reg  =  41;  i.jmp           =  42
+    i.jsr       =  43;  i.trap          =  44;  i.link          =  45
+    i.unlk      =  46;  i.move.to.usp   =  47;  i.move.from.usp =  48
+    i.reset     =  49
+    i.nop       =  50;  i.stop          =  51;  i.rte           =  52
+    i.rts       =  53;  i.trapv         =  54;  i.rtr           =  55
+    i.movep     =  56;  i.bit.dynamic   =  57;  i.ori           =  58
+    i.andi      =  59
+    i.subi      =  60;  i.addi          =  61;  i.eori          =  62
+    i.cmpi      =  63;  i.bit.static    =  64;  i.tas           =  65
+    i.tst       =  66
+
+    t.hunk            =  1000
+    t.reloc16         =  1010;    t.reloc32         =  1001
+    t.end             =  1002
+    t.abshunk         =  1003
+    t.absrel16        =  1011;    t.absrel32        =  1004
+
+    state.unknown               = 0
+    state.beforecode            = state.unknown         +1
+    state.incode                = state.beforecode      +1
+    state.inswitch              = state.incode          +1
+    state.aftercode             = state.inswitch        +1
+    state.instatics             = state.aftercode       +1
+    state.incodeorstrings       = state.instatics       +1
+    state.instrings             = state.incodeorstrings +1
+    state.inglobals             = state.instrings       +1
+
+    p.d.addr            = 1
+    p.d.first.word      = 2
+    p.d.all.words       = 4
+
+    argv.upb            = 5 + 40/BYTESPERWORD
+    A.file              = 0
+    A.start             = 1
+    A.end               = 2
+    A.small             = 3
+    A.rel               = 4
+
+    size.w              = 2
+    size.b              = 1
+    max.words           = 3             // max no. of dibytes for an instruction
+
+    size.addr           = 8
+    size.op             = 8
+    size.arg            = 18
+    size.chars          = 3 + max.words*2       // 'cccccc'.
+    size.hex            =     max.words*5       // XXXX.XXXX.XXXX.
+    bcpl.no.names       = 1             // not TRUE or FALSE
+
+    buff.bytes          = 160
+$)
+
+STATIC $( disasmlabel   = 0; l.return   = 0
+$<STATICS
+        SYSwrch         = 0;    out.stream      = 0;    in.stream       = 0;
+        SYSout          = 0;    SYSin           = 0;
+        p.return        = 0;    word            = 0;    print.data      = 0;
+        progaddress     = 0;    currentloc      = 0;    disasmlevel     = 0;
+        base.addr       = 0;    state           = 0;    switch.upb      = 0;
+        ind1off         = 0;    ind2off         = 0;    llen            = 0;
+        lpos            = 0;    lbuff           = 0;    otidyup         = 0;
+        load.seg        = 0;    size            = 0;    loc.addr        = 0;
+        loc.op          = 0;    loc.arg         = 0;    loc.chars       = 0;
+        loc.hex         = 0;    loc.comment     = 0;    reg1            = 0;
+        reg2            = 0;    bit8            = 0;    bits54          = 0;
+        reg             = 0;    opm             = 0;    A4              = 0;
+        ind1reg         = 0;    ind2reg         = 0;    start.globals   = 0;
+        start.statics   = 0;    relative        = 0;    upb             = 0;
+        state.bcpl      = 0
+$)
+GLOBAL $( entrypoint : 103 $)
+$>STATICS
+$<STATICS'
+$)
+
+GLOBAL
+$(      SYSwrch         : ug + 01
+        out.stream      : ug + 02
+        in.stream       : ug + 03
+        SYSout          : ug + 04
+        SYSin           : ug + 05
+        switch.upb      : ug + 06
+        p.return        : ug + 07
+        word            : ug + 08
+        print.data      : ug + 09
+        progaddress     : ug + 10
+        currentloc      : ug + 11
+        disasmlevel     : ug + 12
+        upb             : ug + 13
+        base.addr       : ug + 14
+        state           : ug + 15
+        ind1off         : ug + 16
+        ind2off         : ug + 17
+        llen            : ug + 18
+        lpos            : ug + 19
+        lbuff           : ug + 20
+        otidyup         : ug + 21
+        load.seg        : ug + 22
+        size            : ug + 23
+        loc.addr        : ug + 24
+        loc.op          : ug + 25
+        loc.arg         : ug + 26
+        loc.chars       : ug + 27
+        loc.hex         : ug + 28
+        loc.comment     : ug + 29
+        reg1            : ug + 30
+        reg2            : ug + 31
+        bit8            : ug + 32
+        bits54          : ug + 33
+        reg             : ug + 34
+        opm             : ug + 35
+        A4              : ug + 36
+        ind1reg         : ug + 37
+        ind2reg         : ug + 38
+        start.globals   : ug + 39
+        start.statics   : ug + 40
+        relative        : ug + 41
+        state.bcpl      : ug + 42
+$)
+$>STATICS'
+
+

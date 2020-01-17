@@ -1,0 +1,243 @@
+// Modifications:
+// 20 Jan 84 by BJK: Now initialises COMMPOINT to zero to prevent
+//                   huge numbers of spaces before first error message.
+
+SECTION "ZED1"
+
+GET "HDR"
+GET "IOHDR"
+
+LET start() BE
+ $( LET argv = VEC amax
+    LET cvec = VEC cfmax
+    LET gvec = VEC 5*gmax
+    LET iovec = VEC 2*fmin
+    LET oldoutput = output()
+    LET oldinput = input()
+
+    rc := 0
+    opened := FALSE
+    quitlevel := level()
+    zerolevel := 0
+    verout := oldoutput
+    edits := oldinput
+    commlinel := 0
+    commpoint := 0
+    veclist := 0
+    filelist := 0
+    cfsp := 0
+
+    IF rdargs("FROM/A,TO,WITH/K,VER/K,OPT/K",argv,amax)=0
+       DO error(err.arg)
+
+    e.from := argv!0
+    e.to := argv!1
+    e.work := e.to
+    e.with := argv!2
+    e.ver := argv!3
+    e.workin := tempname("T:Z00-WK1")
+    e.workout := tempname("T:Z00-WK2")
+    e.backup := "T:ZED-BACKUP"
+    IF e.to=0 DO
+    $( e.to := e.from
+       e.work := e.workin
+       e.workin := e.workout
+       e.workout := e.work $)
+    UNLESS e.ver=0 DO
+    $( LET s = findoutput(e.ver)
+       IF s=0 DO error(err.ffa,e.ver)
+       verout := s $)
+    UNLESS e.with=0 DO
+    $( LET s = findinput(e.with)
+       IF s=0 DO error(err.ffa,e.with)
+       edits := s $)
+
+    maxlinel := lmax
+    maxplines := pmax
+    UNLESS argv!4=0 DO
+    $( LET opts = argv!4
+       LET i = 1
+       LET rdn(opts, lvi) = VALOF
+       $( LET n = 0
+          LET i = !lvi+1
+          LET c = opts%i
+          WHILE i<=opts%0 & '0'<=c<='9' DO
+          $( n := n*10+c-'0'
+             i := i+1
+             c := opts%i $)
+          !lvi := i-1
+          RESULTIS n
+       $)
+
+       WHILE i<=opts%0 DO
+       $( SWITCHON capitalch(opts%i) INTO
+          $( CASE 'W': maxlinel := rdn(opts, @i)
+                       ENDCASE
+
+             CASE 'P': maxplines := rdn(opts, @i)
+                       ENDCASE
+
+          $)
+          i := i+1
+       $)
+
+       UNLESS maxlinel>0 & maxplines>0 DO
+          error(err.opt)
+    $)
+
+    freelines := newvec((1+l.buf+maxlinel)*(maxplines+2))
+    freelines!l.next := 0
+    FOR i = 1 TO maxplines+1 DO
+    $( LET l = freelines+(1+l.buf+maxlinel)*i
+       LET n = freelines!l.next
+       freelines!l.next := l
+       l!l.next := n
+    $)
+
+    commbuf := newvec(maxlinel/bytesperword)
+    str.match := newvec(smax)
+    str.repl := newvec(smax)
+    svec := newvec(smax)
+    f.match := newvec(smax)
+    z.match := newvec(smax)
+
+    g.match := gvec
+    g.repl := gvec+gmax
+    g.qual  := gvec+2*gmax
+    g.type  := gvec+3*gmax
+    g.count := gvec+4*gmax
+    cfstack := cvec
+    primaryoutput := iovec
+    primaryinput := iovec+fmin
+
+    cfstack!0 := edits
+    verifying := isinteractive(edits)
+    selectoutput(verout)
+    trailing := FALSE
+    str.comm, f.qual := c.nc, c.nc
+   str.qual := c.nc
+    z.match!0, z.match!1 := 1, 'Z'
+
+    openstreams()
+    IF verifying DO writes("BCPL Zed (4 April 80)*N")
+    edit(0)
+
+quitlab:
+    UNLESS verout=oldoutput DO closeout(verout)
+    UNLESS edits=oldinput DO closein(edits)
+    UNTIL filelist=0 DO losefilespec(filelist)
+    UNTIL veclist=0 DO discardvec(veclist+1)
+    stop(rc)
+ $)
+
+
+AND tempname(string) = VALOF
+ $( LET n = string%0/bytesperword
+    LET s = newvec(n)
+    FOR i = 0 TO n DO s!i := string!i
+    s%4 := (taskid/10) REM 10 + '0'
+    s%5 := taskid REM 10 + '0'
+    RESULTIS s
+ $)
+
+
+AND isinteractive(s) = s!scb.type<0
+
+
+AND openstreams() BE
+ $( textin := findinput(e.from)
+    IF textin=0 DO error(err.ffa,e.from)
+    textout := findoutput(e.work)
+    IF textout=0 DO
+    $( closein(textin)
+       error(err.ffa,e.work) $)
+    primaryoutput!f.sp := textout
+    primaryinput!f.sp := textin
+    primaryinput!f.lc := 1
+    currentoutput := primaryoutput
+    currentinput := primaryinput
+    currentline := freelines
+    freelines := currentline!l.next
+    oldestline := currentline
+    currentline!l.next := 0
+    currentline!l.prev := 0
+    selectinput( textin )
+    readline()  // Into currentline+l.buf
+    exhausted := cch=endstreamch
+    currentinput!f.ex := exhausted
+    unchanged, pointer, current := TRUE, 0, 1
+    globcount := 0
+    ceiling := maxint
+    opened := TRUE
+ $)
+
+
+AND closestreams() BE
+ $( opened := FALSE
+    UNTIL oldestline=0 DO writeline()
+    UNLESS currentoutput=primaryoutput DO
+       losefilespec(currentoutput)
+    UNLESS currentinput=primaryinput DO
+       losefilespec(currentinput)
+    closeout(primaryoutput!f.sp)
+    closein(primaryinput!f.sp)
+ $)
+
+
+AND rewind() BE
+ $( e.from := e.work
+    e.work := e.workin
+    e.workin := e.workout
+    e.workout := e.work
+ $)
+
+
+AND windup() BE
+    UNLESS e.work=e.to DO
+    $( renameobj(e.to,e.backup)
+       IF renameobj(e.work,e.to)=0 DO
+          error(err.rn,e.work,e.to)
+       deleteobj(e.workin)
+    $)
+
+
+AND closeout(s) BE UNLESS s=0 DO
+ $( LET o = output()
+    selectoutput(s)
+    endwrite()
+    UNLESS o=s DO selectoutput(o)
+ $)
+
+
+AND closein(s) BE UNLESS s=0 DO
+ $( LET i = input()
+    selectinput(s)
+    endread()
+    UNLESS i=s DO selectinput(i)
+ $)
+
+
+AND newvec(n) = VALOF
+ $( LET v = getvec(n+1)
+    IF v=0 DO error(err.gv)
+    !v := veclist
+    veclist := v
+    RESULTIS v+1
+ $)
+
+
+AND discardvec(v) BE
+ $( LET p = @veclist
+    UNTIL !p=0 DO
+    $( LET t = !p
+       IF t=v-1 DO
+       $( !p := !t
+          freevec(t)
+          BREAK
+       $)
+       p := t
+    $)
+ $)
+
+
+

@@ -1,0 +1,198 @@
+/*<IBM:
+MANIFEST $( ug=fg $)
+/*IBM>*/
+
+
+
+
+
+
+//
+//                        GLOBALS
+//
+
+
+
+
+
+GLOBAL $(
+// memory:
+    mem.blocks               : ug+0
+    memory                   : ug+1
+    init.memory              : ug+2
+    simplegetvec             : ug+3
+    clear.memory             : ug+4
+// lists:
+    new                      : ug+5
+    append                   : ug+6
+    clear.list               : ug+7
+// files list:
+    files                    : ug+8
+    this.file                : ug+9
+    rec                      : ug+10
+    this.rec                 : ug+11
+    eof                      : ug+12
+    ch                       : ug+13
+    deal.with.option         : ug+14
+    open.next.file           : ug+15
+    ascii                    : ug+16
+    make.byte                : ug+17
+    get.rec                  : ug+18
+    comp.name                : ug+19
+    delete.unused.files      : ug+20
+    clear.files              : ug+21
+// hex output:
+    hexout                   : ug+22
+    mapfile                  : ug+23
+    expand.escapes           : ug+24
+    cambridge.hex            : ug+25
+    cmp16                    : ug+26
+// dictionary:
+    dic                      : ug+27
+    get.val                  : ug+28
+    store                    : ug+29
+    store.from.str           : ug+30
+    relocate.externals       : ug+31
+    generate.externals       : ug+32
+    display.externals        : ug+33
+    clear.dictionary         : ug+34
+// module records:
+    mod                      : ug+35
+    this.mod                 : ug+36
+    max.module.size          : ug+37
+    max.store.ref            : ug+38
+    min.store.ref            : ug+39
+    calculate.rel.bases      : ug+40
+    delete.unused.modules    : ug+41
+    new.module               : ug+42
+    size.of.module           : ug+43
+    write.module.name        : ug+44
+    module.exists            : ug+45
+    calculate.statistics     : ug+46
+    display.modules          : ug+47
+    clear.modules            : ug+48
+// main linker:
+    pass1                    : ug+49
+    pass2                    : ug+50
+// parameter options:
+    option.string            : ug+51
+    get.opt                  : ug+52
+    decodeopt                : ug+53
+    out                      : ug+54
+    pw                       : ug+55
+    hexoutwidth              : ug+56
+    min.addr                 : ug+57
+    max.addr                 : ug+58
+    entry.point              : ug+59
+    map.only                 : ug+60
+    cautions                 : ug+61
+    allocate.downwards       : ug+62
+    no.of.files              : ug+63
+    no.of.modules            : ug+64
+    ref.info                 : ug+65
+    pure.intel               : ug+66
+    input.incomplete         : ug+67
+    ignore.unused.refs       : ug+68
+    default.memory           : ug+69
+    undefined.reference      : ug+70
+// Code description information
+    code.type                : ug+71
+    bytes.per.asm.word       : ug+72
+    bytes.per.address        : ug+73
+    msb.first                : ug+74
+// system dependant procedures:
+    get.time                 : ug+75
+    findlinkin               : ug+76
+$)
+
+
+
+
+
+
+
+
+//
+//                      M A N I F E S T S
+//
+
+
+
+
+
+MANIFEST $(
+    byte1 = #X00FF
+    byte2 = #XFF00
+// memory:
+    block.size = 255
+// lists:
+    l.next = 0
+    l.data = 1
+    null=0
+// files list:
+    max.hexwidth=64             // max number of hex data bytes per record
+    ft.normal  = 0              // normal file
+    ft.resident= 1              // file not to be used in hex generation
+    ft.library = 2              // file to be included only if referenced
+    f.type     = 0
+    f.used     = 1              // true if any modules in file used!
+    f.maxmod   = 2              // greatest module number in file
+    f.str      = 3
+    rec.datalen= 0
+    rec.name   = 1              // 6 chars packed into three words
+    rec.len    = 1              // number of bytes of data
+    rec.start  = 2              // start address in two words (two bytes)
+    rec.type   = 4              // one of the following...
+    rec.info   = 5              // start of data bytes following record def'n
+    rec.size   = rec.info+max.hexwidth+1
+    t.data     = #X00
+    t.eof      = #X01
+    t.def      = #X02
+    t.ref      = #X03
+    t.rel      = #X04
+    t.mod      = #X05
+    t.code     = #X10
+    t.opt      = #X11
+    t.absint   = #X12
+    t.wref     = #X13
+    t.prag     = #X15
+// Hex output:
+    cd.newpc      = -1          // changes pc in 'intel.hex'
+    cd.data       = t.data      // to output a byte
+    cd.eof        = t.eof       // to mark the end of all the hex output
+    cd.int        = t.def       // to generate external refs in part link
+    cd.ext        = t.ref       // to access external refs in part link
+    cd.module     = t.mod       // to name the hex produced
+    cd.code       = t.code      // to name machine that the code is for
+    cd.opt        = t.opt       // to give linker options
+    cd.absint     = t.absint    // to generate absolute refs in part link
+    cd.wext       = t.wref      // to access ext ref if defined
+    cd.prag       = t.prag      // to generate pragmat record
+// dictionary:
+    d.left        = 0
+    d.right       = 1
+    d.name        = 2           //  and 3 and 4
+    d.modno       = 5
+    d.rel         = 6
+    d.value       = 7
+// module records:
+    mod.name         = 0        // 6 char name of module
+    mod.rel          = 4        // TRUE if module relocatable
+    mod.used         = 5        // TRUE = module to be included
+    mod.visited      = 6
+    mod.minaddr      = 7        // least address in module
+    mod.maxaddr      = 8        // greatest address in module
+    mod.base         = 9        // real address of relative address 0
+    mod.refs         = 10       // list of reference symbols
+    mod.asmed        = 11       // date and time assembled
+    mod.compiled     = 12       // date and time compiled
+    mod.linked       = 13       // date and time linked
+    mod.title        = 14       // module's title
+    refs.name        = l.data+0
+    refs.addr        = l.data+3
+    refs.type        = l.data+4
+    mod.size         = mod.title+1
+$)
+
+
+

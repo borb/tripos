@@ -1,0 +1,123 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+// DISCCOPY command for the LSI4 big discs
+
+SECTION "DISCCOPY"
+
+GET "LIBHDR"
+GET "IOHDR"
+
+MANIFEST
+$(
+dkdev   = -5
+tracksize = 256*32
+nsurs = 5
+cyloffset = 23  // Where first logical disc starts
+log.disc.size = 200  // Cylinders in logical disc
+n.log.discs = 4 // no. of logical discs per pack
+$)
+
+LET start() BE
+ $( LET v = VEC 50
+    LET date = VEC 14
+    LET stamp = VEC 2
+    LET rc = 0
+    LET dstr = "DP0-BOOT:,DP0-0:,DP0-1:,DP0-2:,DP0-3:,*
+               *DP1-BOOT:,DP1-0:,DP1-1:,DP1-2:,DP1-3:"
+    LET Seg = LoadSeg("SYS:L.DAT-TO-STRINGS")
+    LET fromdev, todev = ?, ?
+    LET fromdev.cylbase, todev.cylbase, n.cyls.to.copy = ?, ?, ?
+    LET fromdrive, todrive = ?, ?
+    LET cylbuf = ?
+
+    IF rdargs("FROM/A,TO/A/K", v, 50)=0 DO
+       error("bad args*N")
+
+    // Check loading of date string overlay
+    IF Seg=0 DO Error("Cannot load SYS:L.DAT-TO-STRINGS*N")
+    Globin(Seg)
+    // make a date string
+    Start(DatStamp(Stamp), Date)
+    UnloadSeg(seg)
+
+    fromdev := findarg(dstr, v!0)
+    IF fromdev=-1 DO
+       error("unrecognised device FROM %S*N", v!0)
+    todev := findarg(dstr, v!1)
+    IF todev=-1 DO
+       error("unrecognised device TO %S*N", v!1)
+
+    fromdrive := fromdev/(n.log.discs+1)
+    todrive   := todev/(n.log.discs+1)
+    fromdev := fromdev REM (n.log.discs+1)
+    todev   := todev REM (n.log.discs+1)
+
+    IF (fromdev=0 & todev\=0) | (todev=0 & fromdev\=0) |
+       (fromdrive=todrive & fromdev=todev) DO
+       error("incompatible FROM and TO areas*n")
+
+    fromdev.cylbase := fromdev=0 -> 0, cyloffset+(fromdev-1)*log.disc.size
+    todev.cylbase   := todev=0   -> 0, cyloffset+(todev-1)*log.disc.size
+    n.cyls.to.copy      := fromdev=0 -> cyloffset, log.disc.size
+
+    cylbuf := getvec(tracksize-1)
+    IF cylbuf=0 DO
+       error("can*'t get buffer space*N")
+
+    $( FOR relcyl = 0 TO n.cyls.to.copy-1 DO
+         FOR sur = 0 TO nsurs-1 DO
+         $( LET n = 1
+            UNTIL sendpkt(-1, dkdev, act.read, 0, 0,
+                      cylbuf, tracksize, fromdrive,
+                      fromdev.cylbase+relcyl, sur, 0)=0 DO
+            $( n := n+1
+               IF n>=10 DO
+               $( writef("Read from drive %n cyl %N, sur %N failed*N",
+                    fromdrive, fromdev.cylbase+relcyl, sur)
+                  rc := 10
+                  GOTO L $)
+            $)
+            IF n>1 DO
+            $( writef("Read from drive %n cyl %N, sur %N took %N tries*N",
+                      fromdrive, fromdev.cylbase+relcyl, sur, n)
+               IF rc<5 DO rc := 5 $)
+            IF testflags(1) DO
+            $( writes("****BREAK*N")
+               rc := 10
+               GOTO L $)
+            n := 1
+            // Write in date string to identify backup.
+            IF relcyl=0 & sur=0 DO
+               FOR i = 0 TO 14 DO
+                  cylbuf![todev.cylbase=0 -> i+256, i] := date!i
+
+            UNTIL sendpkt(-1, dkdev, act.write, 0, 0,
+                      cylbuf, tracksize, todrive,
+                      todev.cylbase+relcyl, sur, 0)=0 DO
+            $( n := n+1
+               IF n>=10 DO
+               $( writef("Write to drive %n cyl %N, sur %N failed*N",
+                  todrive, todev.cylbase+relcyl, sur)
+                  rc := 10
+                  GOTO L $)
+            $)
+            IF n>1 DO
+            $( writef("Write to drive %n cyl %N, sur %N took %N tries*N",
+                      todrive, todev.cylbase+relcyl, sur, n)
+               IF rc<5 DO rc := 5 $)
+         $)
+ L: $)
+    freevec(cylbuf)
+    stop(rc)
+ $)
+
+
+AND error(f, a) BE
+ $( writes("DISCCOPY: ")
+    writef(f, a)
+    stop(20)
+ $)
+
+

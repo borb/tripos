@@ -1,0 +1,240 @@
+// Source file "find" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+// Version 2.0, May 1983
+   // minor bugfix - ^L on a backwards search hops back a bit before starting
+   //                thus vars repeat.backward.search, repeat.search
+
+SECTION "FIND"
+GET "libhdr"
+GET "wrshdr"
+
+LET find(ty) BE $(
+  // ty = 1 -> find, ty = 2 -> replace, ty = 3 -> repeat find/replace.
+  // This routine will be rather slow at first.
+  LET repeat.backward.search, repeat.search = no, no
+  LET v = getvec(60) // generous save vector for splurge
+  LET answ = ?
+  LET found = no
+  LET intcnt = 0  // for interrupt checking during find.
+  LET inbuf1, inbuf2, inbuf3, inbuf4 =
+    getvec(80/bytesperword), getvec(80/bytesperword), getvec(80/bytesperword),
+      getvec(80/bytesperword)
+  LET fstr, flen = getvec(80/bytesperword), 0 // buffer for processed find string
+  IF fstr = 0 THEN $( error("System Space Error!!!"); GOTO inter $)
+  TEST ty = 3 THEN $(
+    repeat.search := yes
+    IF find.lastop ~= 1 & find.lastop ~= 2 THEN $(
+      error("^L with no previous Find(^QF) or Replace(^QA) commmand to repeat")
+      GOTO inter $)
+    ty := find.lastop $)
+  ELSE $(
+    cmd.init(v)
+    IF ty = 1 THEN $( // find
+      cmd.simple(3, "This command will find a given string.*n")
+      cmd.simple(3, "Simply enter the string and press return twice*n") // unless replace...
+      cmd.simple(3, "For more info use ^JF (the HELP command about the Find instruction).*n") $)
+    answ := cmd.query(inbuf1, 78, qbuf.find, "Find? ", 3)
+    IF answ = (ctl&'U') THEN GOTO inter1
+    TEST answ = escape THEN $(
+      IF ty = 2 THEN qbuf.repl%0 := ch.line
+      qbuf.opt%0 := ch.line $)
+    ELSE $(
+      IF ty = 2 THEN $(  // replace
+        answ := cmd.query(inbuf2, 78, qbuf.repl, "Replace with? ", 3)
+        IF answ = (ctl&'U') THEN GOTO inter1 $)
+      TEST answ = escape THEN qbuf.opt%0 := ch.line ELSE $(
+        answ := cmd.query(inbuf3, 78, qbuf.opt, "Options (? for info)? ", 3)
+        IF qbuf.opt%0 = '?' THEN $(
+          TEST ty = 2 THEN $(
+            cmd.simple(0, "number - find and replace n times*n")
+            cmd.simple(0, "G      - global - replace all, from beginning of file*n")
+            cmd.simple(0, "N      - automatic replace, without asking*n") $)
+          ELSE $(
+            cmd.simple(0, "number - find Nth occurence of string*n") $)
+          cmd.simple(0,   "B      - search backwards*n")
+          cmd.simple(0,   "U      - ignore upper/lower case differences*n")
+          cmd.simple(0,   "W      - find whole words only*n")
+          cmd.simple(0,   "       ^JF for details of wild cards, newlines etc. in search strings*n")
+          answ := cmd.query(inbuf4, 78, qbuf.opt, "Options? ", 3) $)
+        IF answ = (ctl&'U') THEN GOTO inter1 $) $)
+    cmd.finish() $)
+  find.lastop := ty
+
+// Now the option and find strings must be parsed.
+  $( // for declarations
+  LET opt.rpt, opt.g, opt.n, opt.b, opt.u, opt.w = 1, no, no, no, no, no
+  LET i = 0
+  $( LET c = qbuf.opt%i
+     i := i + 1
+     SWITCHON c INTO $(
+       DEFAULT: error("Illegel item *'%c*' in option string - command ignored", c); GOTO inter
+       CASE 'G': CASE 'g': opt.g := yes; LOOP
+       CASE 'N': CASE 'n': opt.n := yes; LOOP
+       CASE 'B': CASE 'b': 
+         $( opt.b := yes; repeat.backward.search := repeat.search; LOOP $)
+       CASE 'U': CASE 'u': opt.u := yes; LOOP
+       CASE 'W': CASE 'w': opt.w := yes; LOOP
+       CASE ch.line: BREAK
+       CASE '0': CASE '1': CASE '2': CASE '3': CASE '4':
+       CASE '5': CASE '6': CASE '7': CASE '8': CASE '9':
+         $( opt.rpt := c - '0'
+         l: c := qbuf.opt%i
+            IF c >= '0' & c <= '9' THEN $(
+              TEST opt.rpt > 3276 THEN opt.rpt := maxint //bodge
+              ELSE opt.rpt := opt.rpt * 10 + c - '0'
+              i := i + 1; GOTO l $) $) $) $) REPEAT
+
+  IF (opt.g | opt.n) & ty ~= 2 THEN $(
+    error("G and N options meaningless without *'replace*' - command cancelled")
+    GOTO inter $)
+  IF (opt.g & opt.b) THEN $(
+    error("G and B options cannot be used together - command cancelled")
+    GOTO inter $)
+
+// Various chars in the find string are special:
+// ^A is wild, ^S matches any non-alphanum, ^N matches ch.line,
+// and ^Ox matches anything other than x.
+// In the last case, the ^O is removed and bit 7 of the x set.
+// opt.w is equivalent to a ^S at each end of the find string.
+
+  // word is done by surrounding with non-letters (^Ss).
+  // this is not right for the start of the file.
+  IF opt.w THEN $( fstr%0 := (ctl&'S'); flen := 1 $)
+  $( LET fptr = 0
+    $( LET c = qbuf.find%fptr
+       IF c = ch.line THEN BREAK
+       IF c = (ctl&'N') THEN c := ch.line
+       IF c = (ctl&'O') THEN $(
+         fptr := fptr + 1; c := qbuf.find%fptr
+         TEST c = ch.line THEN BREAK ELSE c := c | 128 $)
+       IF opt.u & c >= 'a' & c <= 'z' THEN c := (c - 'a') + 'A'
+       fstr%flen := c; flen := flen + 1; fptr := fptr + 1 $) REPEAT $)
+
+  // this must be done before the cur.left() below
+  marker.x!13 := filecol; marker.y!13 := fileline; marker.alternate!13 := no
+
+  IF opt.w THEN $( fstr%flen := (ctl&'S'); flen := flen + 1; cur.left() $)
+
+  IF opt.g & cur.moveto(0, 0, "  Moving to top of text*N") THEN GOTO inter
+
+  IF repeat.backward.search THEN FOR i = 1 TO (opt.w -> flen, flen + 1) DO cur.left()
+
+next.find.occurence:
+  IF opt.rpt <= 0 & (~opt.g) THEN GOTO no.more.match
+
+  message("  Searching ...*n")
+
+next.ch.loop:
+  $(
+  LET offs = textcur + filecol
+  LET ch = ?
+  LET chpat = ?
+  LET fptr = fileline = 0 & opt.w & filecol = 0 -> 1, 0 // fix w peculiarity
+  LET firstc = textspace%offs
+
+  intcnt := intcnt + 1; IF intcnt = 400 THEN $(
+    sys.keywaiting()
+    IF checkint() THEN GOTO inter; intcnt := 0 $)
+
+match.ch.loop:
+  IF fptr >= flen THEN GOTO match.found
+  chpat := fstr%fptr
+  ch := textspace%offs
+  TEST
+    ch = chpat |
+    chpat = (ctl&'A') |
+    (chpat = (ctl&'S') & (ch < '0' | ch > '9') &
+                         (ch < 'A' | ch > 'Z') &
+                         (ch < 'a' | ch > 'z')) |
+    (chpat > 127 & ch ~= (chpat & 127)) |
+    (opt.u & ch >= 'a' & ch <= 'z' & (ch + ('A' - 'a') = chpat))
+  THEN $(
+    offs := offs + 1
+    fptr := fptr + 1
+    GOTO match.ch.loop $)
+  ELSE $(
+    TEST opt.b THEN $(
+      IF fileline = 0 & filecol = 0 THEN $(
+        IF ~found THEN message("  String not found*n"); sys.keywait(350)
+        GOTO no.more.match $)
+      cur.left() $)
+    ELSE $(
+      IF firstc = ch.eof THEN GOTO not.found
+      // duplication of 'cur.right' in 'text' (for speed)
+      TEST firstc = ch.line | firstc >= ch.lineend THEN $( filecol := 0; cur.down() $)
+      ELSE filecol := filecol + 1 $)
+    GOTO next.ch.loop $) $)
+
+not.found:
+    IF ~found THEN $( message("  String not found*n"); sys.keywait(350) $)
+    GOTO no.more.match
+
+match.found:
+  found := yes
+  FOR i = 1 TO flen DO cur.right() // step over it.
+  IF opt.w THEN $(
+    cur.left() // ignore ^S that I inserted
+    IF fileline = 0 & filecol < flen THEN cur.left() $) // begin of file bug
+//    flen := flen - 2 $)
+  sys.keywaiting(); IF checkint() THEN GOTO inter
+  IF ty = 2 THEN $( // replace it
+    LET c = 'Y'
+    IF ~opt.n THEN $(
+      text.update()
+      $(
+         scr.updateline(0, "  Update (Y/N):*n", 1, cmdline)
+         scr.dolineupdates()
+         WHILE text.update.info ~= 0 & (~sys.keywaiting()) DO $( // horiz scroll
+           text.update(); scr.dolineupdates() $)
+         IF sys.keywait(100) THEN BREAK
+         scr.updateline(0, "  Update (Y/N):*n", 1, queryline) // flash cursor
+         scr.dolineupdates()
+         IF sys.keywait(100) THEN BREAK $) REPEAT
+      c := sys.rdch() $)
+    IF c = (ctl&'U') THEN GOTO no.more.match
+    IF c = 'Y' | c = 'y' | c = (ctl&'Y') THEN $(
+      LET j = 0
+      LET obeyvec = getvec(100/bytesperword)
+      textpush(0)
+      FOR i = 1 TO (opt.w -> flen - 2, flen) DO $( cur.left(); cur.delchar() $)
+      textpush(0) // allows undeletion of this as a chunk
+      // 27 July super  CGG - idea: obey the replace string V2.04
+      // second attempt 19 August 1983
+      $( c := qbuf.repl%j
+         IF c = ch.line THEN BREAK
+         obeyvec%j := c
+         // aaagh! minor illogicality here, oh well...
+         // ^N in replace string should be like ^N in find string...
+         IF c = (ctl&'N') THEN obeyvec%j := ctl&'M'
+         j := j + 1 $) REPEAT
+      $( LET repl = t.insertmode
+         LET lev = ?
+         // intercept and ignore hardscroll hints - dreadful I know..
+         // otherwise replace ^N.. with ^N.. looks rediculous
+         LET savescr = scr.hardscroll.hint
+         LET replacement() BE RETURN
+         scr.hardscroll.hint := replacement
+         t.insertmode := yes
+         meta.chars(obeyvec, 0, j, 0)
+         lev := sys.inlevel()
+         WHILE sys.keywaiting() & lev = sys.inlevel() DO edit.obey.main(sys.rdch())
+         scr.hardscroll.hint := savescr
+         t.insertmode := repl $)
+      freevec(obeyvec)
+//      $( c := qbuf.repl%j
+//         j := j + 1
+//         if c = ch.line then break
+//         if c = (ctl&'N') then c := ch.line
+//         cur.inschar(c); cur.right() $) repeat
+$) $)
+
+  opt.rpt := opt.rpt - 1; GOTO next.find.occurence
+$)
+inter1: cmd.finish() // command aborted prematurely
+no.more.match:
+inter:
+  freevec(inbuf1); freevec(inbuf2); freevec(inbuf3); freevec(inbuf4)
+  freevec(v); freevec(fstr) $)
+
+

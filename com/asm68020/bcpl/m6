@@ -1,0 +1,1216 @@
+//****************************************************************************
+//*                                                                          *
+//*        M68KASM  -  Assembler for the MC68000 family  -  Section 6        *
+//*                                                                          *
+//*                         Simple Directive Handling                        *
+//*                                                                          *
+//****************************************************************************
+//*     I. D. Wilson    -    Last Modified    -    IDW    -    18/11/86      *
+//****************************************************************************
+
+
+
+SECTION "M6"
+
+
+
+GET "LIBHDR"
+GET "M68KHDR"
+
+
+
+LET dodir()  BE
+$(
+//  Deal with the assembler directives.
+
+    LET ressize  =  0
+    LET skip     =  0
+    LET base     =  0
+    LET offset   =  0
+    LET tempvec  =  VEC 256/bytesperword
+
+    instr.size  :=  tagsize.given
+    directive   :=  symbtype!st.value
+
+    UNLESS  directive = d.org     |
+            directive = d.dorg    |
+            directive = d.dc      |
+            directive = d.dcb     |
+            directive = d.ds      DO  checktagsize()
+
+    UNLESS  directive = d.org     |
+            directive = d.dorg    DO  checkinstrsize()
+
+    SWITCHON  directive  INTO
+    $(
+        CASE d.set    :
+        CASE d.equ    :
+        CASE d.equr   :
+        CASE d.reg    : checklabel( TRUE )
+                        nextsymb()
+
+                        TEST  directive = d.reg  THEN
+                        $(
+                            //  This does not take a simple expression, but
+                            //  a set of registers.
+
+                            exp      :=  readregisters()
+                            exptype  :=  result2
+                        $)
+                        ELSE
+                        $(
+                            //  Just a simple expression, so we can read it
+                            //  and look at its data type.
+
+                            effective.address()
+
+                            checkexpression( exptype, TRUE )
+                        $)
+
+                        setlabel( exptype, exp,  directive = d.set )
+
+                        IF  pass2  &  (listing | error.found)  THEN
+                        $(
+                            clearbuffer()
+
+                            linepos  :=  10
+                            writechar( directive = d.set  ->  '>', '=' )
+
+                            linepos  :=  11
+
+                            IF  exptype = s.Dr   THEN  writechar( 'D' )
+                            IF  exptype = s.Ar   THEN  writechar( 'A' )
+                            IF  exptype = s.FPr  THEN  writestring( "FP" )
+
+                            writehexvalue( exp, (exptype = s.abs32  ->  8,
+                                                 exptype = s.Ar  |
+                                                 exptype = s.Dr  |
+                                                 exptype = s.FPr    ->  1,
+                                       /* s.rel, s.abs16 or s.reg */    4) )
+
+                            IF  exptype = s.rel  THEN  writechar( '*'' )
+
+                            IF  exptype = s.reg     |
+                                exptype = s.FPgreg  |
+                                exptype = s.FPcreg  THEN  writechar( 'R' )
+
+                            IF  error.found  THEN
+                            $(
+                                linepos  :=  36
+                                writechar( 'E' )
+
+                                error.found  :=  FALSE
+                            $)
+
+                            linepos  :=  38
+                            writenumber( linenumber, 5 )
+
+                            IF  macrodepth > 0  &  NOT inmacro  THEN
+                            $(
+                                linepos  :=  43
+                                writechar( '+' )
+                            $)
+
+                            linepos  :=  44
+                            FOR  i = 0  TO length-1  DO  writechar( inputbuff % i )
+
+                            printbuffer()
+
+                            listed  :=  TRUE
+                        $)
+
+                        ENDCASE
+
+
+        CASE d.org    :
+        CASE d.dorg   : ressize  :=  VALOF
+
+                            SWITCHON  instr.size  INTO
+                            $(
+                                CASE ts.long    : RESULTIS s.abs32
+
+                                CASE ts.none    :
+                                CASE ts.short   :
+                                CASE ts.word    : RESULTIS s.abs16
+
+                                DEFAULT         : complain( 46 )
+                            $)
+
+                        nextsymb()
+                        effective.address()
+
+                        checkexpression( exptype, TRUE )
+
+                        UNLESS  (exp & addressmask) = 0  DO  complain( 138 )
+
+                        //  If we were in a dummy section before, then we
+                        //  should restore the absolute parameters.
+
+                        IF  dummysection  THEN
+                        $(
+                            minloc        :=  dummyminloc
+                            maxloc        :=  dummymaxloc
+                            location      :=  dummylocation
+
+                            dummysection  :=  FALSE
+                        $)
+
+                        changemode( s.abs )
+
+                        forwardreftype  :=  ressize
+
+                        //  If we are about to enter a dummy section, then
+                        //  save the absolute parameters.
+
+                        IF  directive = d.dorg  THEN
+                        $(
+                            dummyminloc    :=  minloc
+                            dummymaxloc    :=  maxloc
+                            dummylocation  :=  location
+
+                            dummysection   :=  TRUE
+                        $)
+
+                        setloc( exp )
+
+                        IF  labelset  THEN  setlabel( locmode, location, FALSE )
+
+                        ENDCASE
+
+
+        CASE d.rorg   : nextsymb()
+                        effective.address()
+
+                        checkexpression( exptype, TRUE )
+
+                        //  If we were in a dummy section before, then we
+                        //  should restore the absolute parameters.
+
+                        IF  dummysection  THEN
+                        $(
+                            minloc        :=  dummyminloc
+                            maxloc        :=  dummymaxloc
+                            location      :=  dummylocation
+
+                            dummysection  :=  FALSE
+                        $)
+
+                        changemode( s.rel )
+
+                        forwardreftype  :=  s.abs16
+
+                        setloc( exp )
+
+                        IF  labelset  THEN  setlabel( locmode, location, FALSE )
+
+                        ENDCASE
+
+
+        CASE d.dc     : defineconstants( instr.size )
+
+                        ENDCASE
+
+
+        CASE d.ds     : definestorage( instr.size )
+
+                        ENDCASE
+
+
+        CASE d.dcb    : defineblock( instr.size )
+
+                        ENDCASE
+
+
+        CASE d.list   : checklabel( FALSE )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        listing  :=  parmlisting
+                        listed   :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.nolist : checklabel( FALSE )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        listing  :=  FALSE
+                        listed   :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.spc    : checklabel( FALSE )
+
+                        nextsymb()
+                        effective.address()
+
+                        checkexpression( exptype, TRUE )
+
+                        spacelines( exp )
+
+                        listed  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.page   : checklabel( FALSE )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        onpage  :=  0
+                        listed  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.nopage : checklabel( FALSE )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        paging       :=  FALSE
+                        commentline  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.plen   :
+        CASE d.llen   : checklabel( FALSE )
+
+                        nextsymb()
+                        effective.address()
+
+                        checkexpression( exptype, TRUE )
+
+                        TEST  directive = d.plen  THEN
+
+                              TEST  plenfixed   THEN  complain( 124 )
+                              ELSE
+
+                              TEST  minplen <= exp <= maxplen  THEN
+                              $(
+                                  linesperpage  :=  exp
+                                  plenfixed     :=  TRUE
+                              $)
+                              ELSE  complain( 100 )
+
+                        ELSE  TEST  llenfixed  THEN  complain( 125 )
+                              ELSE
+
+                              TEST  minllen <= exp <= maxllen  THEN
+                              $(
+                                  charsperline  :=  exp
+                                  llenfixed     :=  TRUE
+                              $)
+                              ELSE  complain( 101 )
+
+                        listed  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.ttl    : checklabel( FALSE )
+                        skiplayout()
+
+                        ressize  :=  1
+
+                        UNTIL  ressize > titlecharsmax  |  ch = '*N'  DO
+                        $(
+                            tempvec % ressize  :=  ch
+                            ressize            :=  ressize + 1
+
+                            rch()
+                        $)
+
+                        tempvec % 0  :=  ressize - 1
+
+                        UNLESS  ch = '*N'  DO   warning( 49 )
+
+                        settitle( tempvec )
+
+                        listed  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.noobj  : checklabel( FALSE )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        noobj        :=  TRUE
+                        commentline  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.ifdef  :
+        CASE d.ifndef : //  Skip code depending on the definition (or not)
+                        //  of a symbol.  We read the next item, but do
+                        //  not use the standard mechanism for looking it
+                        //  up, since this would cause a bum entry in the
+                        //  symbol table.
+
+                        checklabel( FALSE )
+                        skiplayout()
+
+                        TEST  findsymbol()
+                            THEN  skip  :=  directive = d.ifndef
+                            ELSE  skip  :=  directive = d.ifdef
+
+                        skipping  :=  skipping + 1
+
+                        UNLESS  skiplevel > 0  DO
+                            IF  skip  THEN
+                                skiplevel  :=  skipping
+
+                        commentline  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.ifeq   :
+        CASE d.ifne   :
+        CASE d.iflt   :
+        CASE d.ifle   :
+        CASE d.ifgt   :
+        CASE d.ifge   : checklabel( FALSE )
+
+                        //  There are two possibilities here.  There is:
+                        //
+                        //          IFxx  <expression>
+                        //      or  IFxx  '<string1>','<string2>'
+                        //
+                        //  We must look at the first character of the operand
+                        //  to see which case it is.
+
+                        skiplayout()
+
+                        TEST  ch = '*''
+                            THEN  skip  :=  do.ifstrings()
+                            ELSE  skip  :=  do.ifvalue()
+
+                        skipping  :=  skipping + 1
+
+                        UNLESS  skiplevel > 0  DO
+                            IF  skip  THEN
+                                skiplevel  :=  skipping
+
+                        commentline  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.endc   : checklabel( FALSE )
+                        readsymb()
+
+                        TEST  symb \= s.none  THEN  complain( 47 )        ELSE
+                        TEST  skipping = 0    THEN  complain( 107 )       ELSE
+
+                              skipping  :=  skipping - 1
+
+                        IF  skipping < skiplevel  THEN  skiplevel  :=  0
+
+                        commentline  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.macro  : checklabel( TRUE )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        IF  inmacro  THEN   complain( 110 )
+
+                        IF  macrodepth > 0  THEN  complain( 121 )
+
+                        FOR  i = 0  TO  tagsize-1  DO  macroname!i  :=  labelvec!i
+
+                        macrobase    :=  pass1  ->  heap3( 0, 0, 0 ),  0
+                        macroend     :=  macrobase
+                        macrodepth   :=  macrodepth + 1
+                        inmacro      :=  TRUE
+
+                        commentline  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.endm   : checklabel( FALSE )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        TEST  inmacro
+                            THEN  macrodepth  :=  macrodepth - 1
+                            ELSE  complain( macrodepth = 0  ->  111, 120 )
+
+                        FOR  i =  0  TO  tagsize-1  DO  labelvec!i  :=  macroname!i
+
+                        inmacro  :=  FALSE
+
+                        setlabel( s.macro, macrobase, FALSE )
+
+                        commentline  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.mexit  : checklabel( FALSE )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        TEST  macrodepth = 0
+                            THEN  complain( 112 )
+                            ELSE  macrodepth  :=  macrodepth - 1
+
+                        listed  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.end    : IF  labelset  THEN  setlabel( locmode, location, FALSE )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        IF  macrodepth > 0  THEN  complain( 119 )
+                        IF  getlevel   > 0  THEN  complain( 126 )
+
+                        ended        :=  TRUE
+                        commentline  :=  NOT  labelset
+
+                        ENDCASE
+
+
+        CASE d.get    : checklabel( FALSE )
+                        skiplayout()
+
+                        TEST  ch = '*''  |  ch = '*"'  THEN
+                        $(
+                            LET quote  =  ch
+
+                            rch()
+                            ressize  :=  0
+
+                            UNTIL  ch = quote  |  ch = '*N'  DO
+                            $(
+                                ressize            :=  ressize + 1
+                                tempvec % ressize  :=  ch
+
+                                rch()
+                            $)
+
+                            IF  ch = '*N'  THEN  complain( 127 )
+
+                            //  The following line used to be in the assembler,
+                            //  but for no readily apparent reason.  It should
+                            //  be reinstated if the (now forgotten) problem
+                            //  comes to light again!
+                            //
+                            //  IF  macrodepth > 0  THEN  complain( 133 )
+
+                            tempvec % 0  :=  ressize
+
+                            rch()
+                            readsymb()
+                            checkfor( s.none, 47 )
+
+$<IBM370.CAP1
+                            UNLESS  doget( tempvec )  DO
+                            $(
+                                selectoutput( sysout )
+                                writef( "******  Cannot open %S*N", tempvec )
+                                selectoutput( liststream )
+
+                                error( 128 )
+                            $)
+$>IBM370.CAP1
+
+
+$<TRIPOS.MINOS.PANOS
+                            UNLESS  doget( tempvec )  DO
+                            $(
+                                LET r2  =  result2
+
+                                selectoutput( sysout )
+                                writef( "******  Cannot open %S: ", tempvec )
+
+$<TRIPOS                        fault( r2 )                      $>TRIPOS
+$<MINOS.PANOS                   fault.message( r2 ) ; newline()  $>MINOS.PANOS
+
+                                newline()
+
+                                selectoutput( liststream )
+
+                                error( 128 )
+                            $)
+$>TRIPOS.MINOS.PANOS
+
+                            listed  :=  NOT  error.found
+                        $)
+                        ELSE  complain( 129 )
+
+                        ENDCASE
+
+
+        CASE d.cnop   : nextsymb()
+                        effective.address()
+
+                        checkexpression( exptype, FALSE )
+
+                        offset  :=  exp
+
+                        effective.address()
+
+                        checkexpression( exptype, TRUE )
+
+                        base  :=  exp
+
+                        TEST  base = 0  THEN  complain( 150 )
+                        ELSE
+                        $(
+                            LET loc  =  location
+
+                            align( base )
+
+                            UNLESS  offset = 0  DO
+                            $(
+                                setloc( location + offset )
+
+                                UNLESS  (location - loc)  <  base  DO
+                                    setloc( location - base )
+                            $)
+                        $)
+
+                        IF  labelset  THEN  setlabel( locmode, location, FALSE )
+
+                        ENDCASE
+
+
+        CASE d.entry  : //  Define a symbol to be internal to the current
+                        //  section.  We ignore this line in the first pass,
+                        //  and wait until all the symbols on the line are
+                        //  (Hopefully) defined.
+
+                        IF  pass2  THEN
+                        $(
+                            checklabel( FALSE )
+                            nextsymb()
+
+                            $(  //  Now the loop to read a list of names
+                                //  valid data types are:
+                                //
+                                //      abs32
+                                //      abs16
+                                //      rel
+
+                                TEST  symb = s.abs32  |  symb = s.abs16  |  symb = s.rel  THEN
+                                    entrysymbols  :=  heap2( entrysymbols, symbtype )
+
+
+                                ELSE
+
+                                    complain( symb = s.new  ->  153,
+                                              symb = s.ext  ->  154, 155 )
+
+                                readsymb()
+
+                                TEST  symb = s.comma
+                                    THEN  readsymb()
+                                    ELSE  BREAK
+                            $)
+                            REPEAT
+
+                            checkfor( s.none, 156 )
+                        $)
+
+                        commentline  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.extrn  : //  Symbols defined as external.  These must NOT exist
+                        //  when we look them up, and if they do, then this is
+                        //  an error.
+
+                        checklabel( FALSE )
+                        nextsymb()
+
+                        $(  //  Loop to read a list of symbols.
+                            //  On the first pass, the symbols MUST be new,
+                            //  and on the second pass, they must be EXT.
+
+                            LET correct  =  pass1  ->  s.new,  s.ext
+                            LET type     =  symbtype!st.type
+                            LET flags    =  symbtype!st.flags
+
+                            TEST  symb = correct  THEN
+
+                                IF  pass1  THEN
+                                $(
+                                    LET space  =  getstore( e.size )
+
+                                    type              :=  s.ext
+                                    flags             :=  stb.setever
+                                    space!e.link      :=  extrnsymbols
+                                    space!e.symbol    :=  symbtype
+                                    space!e.countr    :=  0
+                                    space!e.refsr     :=  0
+                                    space!e.counta    :=  0
+                                    space!e.refsa     :=  0
+                                    extrnsymbols      :=  space
+                                $)
+
+                            ELSE  complain( (symb = s.abs16  |
+                                             symb = s.abs32  |
+                                             symb = s.rel)    ->  157, 158 )
+
+                            symbtype!st.type   :=  type
+                            symbtype!st.flags  :=  flags | stb.setnow
+
+                            readsymb()
+
+                            TEST  symb = s.comma
+                                THEN  readsymb()
+                                ELSE  BREAK
+                        $)
+                        REPEAT
+
+                        checkfor( s.none, 159 )
+
+                        commentline  :=  TRUE
+
+                        ENDCASE
+
+
+        CASE d.fail   : complain( 122 )
+
+                        ENDCASE
+
+
+        DEFAULT       : complain( 0 )
+    $)
+
+    skiprest()
+$)
+
+
+
+AND do.ifstrings()  =  VALOF
+$(
+//  Read the two strings, and compare them for lexical equality.  Only the
+//  IFEQ and IFNE directives have a meaning with strings ...
+
+    LET buff1  =  VEC maxllen/bytesperword
+    LET buff2  =  VEC maxllen/bytesperword
+    LET len1   =  0
+    LET len2   =  0
+    LET equal  =  TRUE
+
+    len1  :=  readstring( buff1 )
+
+    UNLESS  ch = ','  DO  complain( 10 )
+
+    rch()
+
+    len2  :=  readstring( buff2 )
+
+    readsymb()
+    checkfor( s.none, 47 )
+
+    //  Having read the strings into the two buffers, we should compare the
+    //  lengths, and if equal, compare the characters.
+
+    TEST  len1 = len2  THEN
+
+        //  The lengths are equal, and so we should compare the rest of the
+        //  buffers.
+
+        FOR  i = 0  TO  len1-1  DO
+            UNLESS  buff1 % i  =  buff2 % i  DO
+                equal  :=  FALSE
+
+    ELSE  equal  :=  FALSE
+
+    //  Having decided whether the strings are equal or not, we should
+    //  set the variable "exp" so it can be printed out, and return a boolean
+    //  saying whether we should skip or not.
+
+    exp  :=  equal  ->  0,  (NOT 0)
+
+    RESULTIS  NOT(  directive = d.ifeq  ->  equal,
+                    directive = d.ifne  ->  NOT equal,
+                 /* Anything else ... */    complain( 186 )  )
+$)
+
+
+
+AND readstring( buffer )  =  VALOF
+$(
+//  Read a quoted string into a buffer, and return the length of the buffer.
+
+    LET length  =  0
+
+    UNLESS  ch = '*''  DO  complain( 187 )
+
+    $(  //  Repeat loop to read the string into the buffer.  We break when we
+        //  find a quote which is not followed by another quote.
+
+        rch()
+
+        IF  ch = '*N'  THEN  complain( 188 )
+
+        IF  ch = '*''  THEN
+        $(
+            rch()
+
+            UNLESS  ch = '*''  DO  BREAK
+        $)
+
+        buffer % length  :=  ch
+        length           :=  length + 1
+    $)
+    REPEAT
+
+    RESULTIS  length
+$)
+
+
+
+AND do.ifvalue()  =  VALOF
+$(
+//  Look at the expression given, and return a boolean saying whether,
+//  depending on the value read, the following items should be skipped.
+
+    readsymb()
+    effective.address()
+
+    checkexpression( exptype, TRUE )
+
+    RESULTIS  NOT(  directive = d.ifeq  ->  exp =  0,
+                    directive = d.ifne  ->  exp \= 0,
+                    directive = d.iflt  ->  exp <  0,
+                    directive = d.ifle  ->  exp <= 0,
+                    directive = d.ifgt  ->  exp >  0,
+                 /* directive = d.ifge  */  exp >= 0  )
+$)
+
+
+
+AND doget( file )  =  VALOF
+$(
+    LET buffer  =  VEC 256/bytesperword
+    LET stream  =  0
+
+    //  First, try the file name looked up in the include file list.
+
+    IF  lookupinclude( file, buffer )  THEN  stream  :=  findinput( buffer )
+
+    //  Now, if that failed, look in the current directory.
+
+    IF  stream = 0  THEN
+        stream  :=  findinput( file )
+
+$<TRIPOS
+    //  If that failed, then look in the default directory.
+
+    IF  stream = 0  THEN
+    $(
+        //  Can't open the file, so look in the default place.
+
+        LET lock  =  locateobj( "sys:g.asm" )
+
+        UNLESS  lock = 0  DO
+        $(
+            LET olddir  =  currentdir
+
+            currentdir  :=  lock
+            stream      :=  findinput( file )
+            currentdir  :=  olddir
+
+            freeobj( lock )
+        $)
+    $)
+$>TRIPOS
+
+    RESULTIS  streamget( file, stream )
+$)
+
+
+
+AND streamget( filename, inputstream )  =   inputstream = 0  ->  FALSE,  VALOF
+$(
+    LET oldinput  =  input()
+    LET oldgl     =  getlevel
+    LET oldln     =  linenumber
+    LET oldcf     =  currentfile
+
+    LET oldflab   =  fatalerrorlabel
+    LET oldflev   =  fatalerrorlevel
+
+    IF  getlevel = maxgetlevel  THEN
+    $(
+        selectinput( inputstream )
+        endread()
+        selectinput( oldinput )
+
+        warning( 130 )
+
+        RESULTIS  TRUE
+    $)
+
+    commentline  :=  TRUE
+    currentfile  :=  makefile( filename )
+
+    listline()
+
+    getlevel     :=  getlevel + 1
+    linenumber   :=  0
+
+    selectinput( inputstream )
+
+    fatalerrorlabel  :=  label
+    fatalerrorlevel  :=  level()
+
+    UNTIL  getlevel = oldgl  |  ended  DO
+    $(
+        resetflags()
+
+        doline()
+    $)
+
+    fatalerrorlabel  :=  oldflab
+    fatalerrorlevel  :=  oldflev
+
+    endread()
+    selectinput( oldinput )
+
+    linenumber   :=  oldln
+    currentfile  :=  oldcf
+
+    IF  inmacro  THEN
+    $(
+        inmacro  :=  FALSE
+
+        warning( 132 )
+    $)
+
+    RESULTIS  TRUE
+
+
+    //  Fatal error return.  We come here if we hit a fatal error while
+    //  handling an include file.  Close the file, and jump to the previous
+    //  level.
+
+label:
+
+    endread()
+    selectinput( oldinput )
+
+    fatalerrorlabel  :=  oldflab
+    fatalerrorlevel  :=  oldflev
+
+    longjump( fatalerrorlevel, fatalerrorlabel )
+$)
+
+
+
+AND lookupinclude( file, buffer )  =  includefiles = 0  ->  FALSE,  VALOF
+$(
+//  Scan the list of include files, looking for the entry for "file".  If it
+//  exists, then copy the entry into "buffer" and return TRUE.  Otherwise
+//  return FALSE.
+//
+//  The format if the include file string is:
+//
+//      G1=F1,G2=F2,....Gn=Fn
+//
+//  This code is courtesy of RDE.
+
+    LET hupb  =  includefiles % 0
+    LET slen  =  file % 0
+    LET hpos  =  1
+    LET fpos  =  0
+
+    //  Search through the INCLUDE string to find the name.
+
+    FOR  i = 1  TO  hupb  DO
+    $(
+        LET c  =  includefiles % i
+
+        //  A comma indicates the start of an INCLUDE name, an equals sign
+        //  the end of one.
+
+        TEST  c = ','  THEN  hpos  :=  i + 1
+        ELSE
+
+            IF  c = '='  THEN
+
+                //  Does the current INCLUDE name match the one being saught?
+
+                IF  i - hpos  =  slen  THEN
+                $(
+                    LET same  =  TRUE
+
+                    FOR  j = 1  TO  slen  DO
+                    $(
+                        LET c1  =  uppercase( includefiles % (j + hpos - 1) )
+                        LET c2  =  uppercase( file % j )
+
+                        UNLESS  c1 = c2  DO
+                        $(
+                            same  :=  FALSE
+
+                            BREAK
+                        $)
+                    $)
+
+                    //  If found, then remember the position at which the file
+                    //  name starts.
+
+                    IF  same  THEN
+                    $(
+                        fpos  :=  i + 1
+
+                        BREAK
+                    $)
+                $)
+    $)
+
+    //  Was the name found?
+
+    UNLESS  fpos = 0  DO
+    $(
+        LET flen  =  0
+
+        //  Copy the file name into the buffer given.
+
+        FOR  i = fpos  TO  hupb  DO
+        $(
+            LET c  =  includefiles % i
+
+            IF  c = ','  THEN  BREAK
+
+            flen           :=  flen + 1
+            buffer % flen  :=  c
+        $)
+
+        buffer % 0  :=  flen
+
+        RESULTIS  TRUE
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND settitle( string )  BE
+$(
+    LET l  =  string % 0
+    LET m  =  (titlecharsmax - l)/2 - 1
+
+    FOR  i = 0  TO  titlecharsmax-1  DO  titlevec % i      :=  '*S'
+    FOR  i = 1  TO  l                DO  titlevec % (m+i)  :=  string % i
+$)
+
+
+
+AND setlabel( labtype, value, alterable )  BE
+$(
+//  Set the label held in "labelvec" if the flag "labelset" is set to
+//  TRUE.
+
+    LET savesymb  =  symb
+    LET savest    =  symbtype
+    LET muldef    =  FALSE
+
+    LET type      =  labtype
+    LET tagtable  =  labtype = s.macro  ->  tagtable1, tagtable2
+
+    undefined  :=  FALSE
+
+    //  We must first translate all "s.abs" into "s.abs16" or "s.abs32"
+
+    IF  labtype = s.abs  THEN
+        type  :=  wordsized( value )  ->  s.abs16, s.abs32
+
+    //  Look this label up in the relevant symbol table, so that we can update
+    //  the symbol table entry.
+
+    lookup( labelvec, tagtable )
+
+    //  Having done that, we had better check that all is in order.  The only
+    //  likely error is that we are redefining a symbol.
+
+    UNLESS  symb = s.new  DO
+
+        //  Check to see that the definition is compatible with
+        //  what has gone before.
+
+        TEST  alterable
+              THEN  UNLESS  (symbtype!st.flags & stb.equ) = 0  DO
+                             complain( 104 )
+
+              ELSE  UNLESS  (symbtype!st.flags & stb.set) = 0  DO
+                             complain( 105 )
+
+    SWITCHON  alterable  ->  s.new, symb  INTO
+    $(
+        CASE s.Ar           :
+        CASE s.Dr           :
+        CASE s.FPr          :
+        CASE s.reg          :
+        CASE s.FPgreg       :
+        CASE s.FPcreg       :
+        CASE s.abs16        :
+        CASE s.abs32        :
+        CASE s.rel          :  //  An "EQU" directive is being used.  This is only
+                               //  valid if it is pass2, and the symbol this
+                               //  time has the same value as last time.
+
+                               IF  symb = s.Ar  |  symb = s.Dr  |  symb = s.FPr  THEN
+                                   UNLESS  directive = d.equr  DO
+                                       complain( 52 )
+
+                               IF  symb = s.reg  |  symb = s.FPgreg  |  symb = s.FPcreg  THEN
+                                   UNLESS  directive = d.reg  DO
+                                       complain( 184 )
+
+                               TEST  pass2  THEN
+                               $(
+                                   LET otype   =  symbtype!st.type
+                                   LET ovalue  =  symbtype!st.value
+
+                                   UNLESS  otype = type  &  ovalue = value  DO
+                                   $(
+                                       //  Some sort of phasing error, we
+                                       //  report this, resetting the location
+                                       //  counter if it has got out of step.
+                                       
+                                       TEST  labtype = locmode  &  value = location  THEN
+                                       $(
+                                           //  We were setting a label to the
+                                           //  program counter value, so alter
+                                           //  it to what it was in the first
+                                           //  pass.
+
+                                           IF  errors = 0  THEN  complain( 51 )
+
+                                           location  :=  ovalue
+                                       $)
+
+                                       //  If this is not a label being set,
+                                       //  then we should always complain if
+                                       //  we hit a phasing error.
+
+                                       ELSE  complain( 51 )
+                                   $)
+
+                                   symbtype!st.flags  :=  symbtype!st.flags  |
+                                                          stb.setnow
+                               $)
+                               ELSE
+                               $(
+                                   //  Is he just redefining the system
+                                   //  parameters given to him (e.g. SP) ?
+                                   //  Allow this, providing that he is
+                                   //  defining it to the value it used
+                                   //  to be.
+
+                                   LET otype   =  symbtype!st.type
+                                   LET ovalue  =  symbtype!st.value
+
+                                   UNLESS  otype  = type    &
+                                           ovalue = value   &
+                                           symbtype!st.definition = 0  DO
+                                   $(
+                                       symbtype!st.flags  :=  symbtype!st.flags |
+                                                              stb.muldef
+
+                                       muldef             :=  TRUE
+                                   $)
+                               $)
+
+                               ENDCASE
+
+
+        CASE s.macro        :  TEST  pass2  THEN
+                                   symbtype!st.flags  :=  symbtype!st.flags  |
+                                                          stb.setnow
+
+                               ELSE
+                               $(
+                                   symbtype!st.flags  :=  symbtype!st.flags  |
+                                                          stb.muldef
+
+                                   muldef             :=  TRUE
+                               $)
+                               ENDCASE
+
+
+        CASE s.new          :  symbtype!st.type   :=  type
+                               symbtype!st.flags  :=  symbtype!st.flags          |
+                                                      (stb.setnow + stb.setever) |
+                                                      (alterable  ->  stb.set,
+                                                                      stb.equ)
+
+                               symbtype!st.value  :=  value
+
+                               ENDCASE
+
+
+        CASE s.ext          :  complain( 160 )
+        CASE s.instr        :  complain( 53 )
+        CASE s.dir          :  complain( 54 )
+
+        DEFAULT             :  complain( 55 )
+    $)
+
+    IF  undefined  &  pass2  THEN  complain( 95 )
+
+    IF  pass1  &  NOT systemwords  THEN
+    $(
+        symbtype!st.file        :=  currentfile
+
+        symbtype!st.definition  :=  muldef     ->  cr.multiple,
+                                    alterable  ->  cr.setsymbol,
+                                                   linenumber
+    $)
+
+    symb      :=  savesymb
+    symbtype  :=  savest
+$)
+
+
+
+AND resetflags()  BE
+$(
+//  Reset all pointers, etc. at the beginning of a line.
+
+    error.found      :=  FALSE
+    listed           :=  FALSE
+    commentline      :=  FALSE
+    undefined        :=  FALSE
+    forwardref       :=  FALSE
+    externalref      :=  FALSE
+    op1.externalref  :=  FALSE
+
+    expvecp          :=  expvec + expsize
+
+    codewords        :=  0
+    bytesonline      :=  0
+    nitems           :=  0
+    op.ea            :=  0
+    op1.ea           :=  0
+$)
+
+

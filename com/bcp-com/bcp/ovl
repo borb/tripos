@@ -1,0 +1,159 @@
+SECTION "OVL"
+
+$<PDPRSX NEEDS "OVRLAY" $>PDPRSX
+
+//GET "ROOTHDR"
+GET "COMHDR"
+$<TRIPOS
+MANIFEST
+$( notinuse =-1; pkt.type = 2; pkt.res1 = 3; pkt.res2 = 4
+   pkt.arg1 = 5; pkt.arg2 = 6; pkt.arg3 = 7;
+   pkt.arg4 = 8; pkt.arg5 = 9; pkt.arg6 =10
+   obj.version. = 3
+   t.end        = 1002; t.hunk  = 1000; t.reloc =1001   //GET "IOHDR"
+$)
+$>TRIPOS
+
+LET LOADOVERLAY(S) BE $<RESIDENT RETURN $>RESIDENT
+$<RESIDENT'
+$<PDPRSX
+$(G LET E = OVERLAY(S)
+    IF E < 0
+$>PDPRSX
+$<TRIPOS
+$(G
+    STATIC
+    $(  Res.String      = 0;
+        obj.version     = obj.version.
+        name.base       = 0
+    $)
+ LET E = ?
+ LET Load.ov.file(end) = VALOF
+ $(Load.ov.file
+    LET ptr     = OVBASE        //
+    LET ovtop   = OVBASE!(-1)+OVBASE
+    LET list    = 0
+    LET liste   = @list
+    LET oldinput = input()
+    LET newinput = ?
+
+    $(  LET file        = VEC 20
+        FOR I = 1 TO name.base%0 DO file%i := name.base%i
+        FOR I = 1 TO end%0   DO file%(i+name.base%0) := end%i
+        file%0 := name.base%0 + end%0
+        newinput := findinput(file)
+    $)
+    IF newinput=0               RESULTIS 0
+    selectinput(newinput)
+
+    $(Each.section
+       LET base = 0
+       LET limit = -1
+
+       $(Each.bit
+          LET type = T.end
+          LET space = ?
+          LET n     = ?
+
+//$<SPARE deb("<B%N>", type) $>SPARE
+
+          IF readwords(@type, 1)=0
+            $(  $<SPARE UNLESS type=t.end
+                        DO DEB("[[BCP OVL: type=%N at end]]*N", type)
+                $>SPARE
+                GOTO ok //null section -> end
+            $)
+//$<SPARE deb("<T%N>", type) $>SPARE
+          IF type = t.end BREAK
+          UNLESS type=T.hunk | type=t.reloc
+          $( DEB("[type %N]", type);
+$<SPARE //  abort(121, @type);
+//          UNLESS type=99
+//          $(  WRITEF("Extras: ")
+//              UNTIL readwords(@type, 1) = 0 | testflags(1)
+//              DO WRITEF("%X8 ", type)
+//              WRITEF(":*N")
+//          $)
+$>SPARE     GOTO error121
+          $)
+          readwords(@n, 1)
+          space := ptr; ptr := ptr+n+1
+          IF ptr>ovtop
+          TEST type=t.reloc
+          $( space := GETVEC(n)-1;
+                $<SPARE deb("[GETVEC(%N) gave %N]", n, space+1) $>SPARE
+             IF space=-1
+             $( DEB("Failed to get a vector for relocation information -*
+                * More free space needed*N")
+                GOTO err
+             $)
+          $)
+          ELSE
+          $( DEB("Too big (%N>%N)", ptr-OVBASE, ovtop-OVBASE); GOTO error121 $)
+          readwords(space+1, n)
+
+          TEST type = t.hunk
+          $( space!0 := 0
+             !liste := space
+             liste := space
+             limit := n
+             base  := space+1
+          $)
+          ELSE // t.reloc
+          $( FOR i=1 TO n DO
+             $( LET a = space!i
+                UNLESS 0<=a<=limit THEN $( DEB("[reloc]"); GOTO error121 $)
+                base!a := base!a+base*mcaddrinc
+             $)
+              IF ptr>ovtop FREEVEC(space+1)
+                $<SPARE <> deb("[Free %N]", space+1) $>SPARE
+             ptr := ptr-n-1
+          $)
+       $)Each.bit REPEAT
+    $)Each.section REPEAT
+error121:
+    RESULT2 := 121
+err:list := 0
+ok: endread()
+$<SPARE deb("[%S uses %N words, %N free] ", end, ptr-ovbase, ovtop-ptr)
+$>SPARE
+    selectinput(oldinput)
+    RESULTIS list
+$)Load.ov.file
+
+
+    IF name.base = 0 THEN name.base := (devicetask("BCP-COMPILER:") > 0) ->
+                        "BCP-COMPILER:bcp-",
+                $<H     "SYS:l.bcp-h-"  $>H
+                $<I     "SYS:l.bcp-i-"  $>I
+                $<J     "SYS:l.bcp-j-"  $>J
+                $<K     "SYS:l.bcp-k-"  $>K
+
+    IF 0 < s < 10 THEN s := VALOF SWITCHON s INTO
+    $(  DEFAULT:RESULTIS "??"
+        CASE 1: RESULTIS "ERR"
+        CASE 2: RESULTIS "SYN"
+        CASE 3: RESULTIS "TRN"
+        CASE 4: RESULTIS "CG"
+    $)
+
+    IF s=0 | Res.String=s RETURN // Nothing to do!
+
+    UNLESS VALID.POINTER(@s)
+    $( deb("BCP- Invalid overlay string @ %X8*N", s); GOTO crash $)
+
+    E := Load.ov.file(s)
+    UNLESS E=0 | globin(OVBASE)=0 $( Res.String := s; RETURN $)
+err:
+    E := RESULT2
+$>TRIPOS
+    $(  SELECTOUTPUT(SYSOUT)
+        WRITEF("BCP -- Overlay failure (%N) on %S*N", E, S)
+crash:
+       $<TRIPOS REPORTCOUNT := 1000; longjump(RST.P, RST.L) $>TRIPOS
+       FINISH
+    $)
+$)G
+$>RESIDENT'
+
+

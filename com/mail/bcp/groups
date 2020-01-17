@@ -1,0 +1,1080 @@
+SECTION "Groups"
+
+GET "header"
+GET "bcp.convertpuid"
+//GET "bcp.z80send"     // GOT by MISCSER if needed !!
+LET bcp.z80send(        stamp, tuid, puid, to.string, subject,
+                        tripos.file, cap.file,
+                        h,i,j,k,l,m,n,
+                        header.file) BE
+pp.z80send(stamp, tuid, puid,
+                to.string, subject,
+                (tripos.file=0) -> 0, tripos.file-uid,
+                (   cap.file=0) -> 0,    cap.file-uid,
+                h,i,j,k,l,m,n,
+                (header.file=0) -> 0, header.file-uid,
+                -1)
+
+LET puid.already.used (heap.file,puid) = VALOF
+$(  // Return TRUE or false depending on whether the UID "puid" has already
+    // been written to the file "heap.file".
+
+    LET next.puid       = VEC 4
+    LET old.sob         = heap.file!start.of.block
+    LET old.position    = old.sob + (heap.file!next.write)/2
+    LET result          = FALSE
+    LET match           = ?
+
+    IF old.position=0 THEN RESULTIS FALSE
+
+    rewind.file(heap.file)
+
+    UNTIL (heap.file!next.read)/2 + heap.file!start.of.block = old.position
+    $(  bytes.from.file(heap.file,next.puid,8)
+
+        match := TRUE
+        FOR i=0 TO 7/BYTESPERWORD UNLESS next.puid!i = puid!i DO match := FALSE
+
+        IF match $( result := TRUE; BREAK $)
+    $)
+
+    // Reset "heap.file" cache for next.write
+    UNLESS (old.position >= heap.file!start.of.block) &
+         (old.position <= (heap.file!start.of.block + heap.file!cache.size))
+         THEN read.cache(heap.file,old.position)
+
+    heap.file!next.write := (old.position - heap.file!start.of.block)*2
+
+    RESULTIS result
+$)
+
+$<SMALL
+.
+GET "header"
+$<SMALL
+$>SMALL
+
+//*****************************************************************************
+//         Routines to support mail server distribution groups               //
+//*****************************************************************************
+
+MANIFEST
+$(
+    // Manfests for group directory entries (all in ringwords)
+    gd.name             =  0                    // Group name string
+    gd.name.bytes       = 13
+    gd.owner.puid       = gd.name.bytes/bprw    // PUID of group's owner
+    gd.list.uid         = 11                    // PUID of file containing
+                                                // group's expansion
+    gd.element.size     = 15
+
+    gd1.version         =  0                    // Vesrion number ....
+    gd1.name            = gd1.version   + 1     // Group name string
+    gd1.name.bytes      = 20
+    gd1.owner.puid      = gd1.name      + gd1.name.bytes/bprw
+                                                // PUID of group's owner
+    gd1.list.uid        = gd1.owner.puid+ 4     // PUID of file containing
+                                                // group's expansion
+    gd1.element.size    = gd1.list.uid  + 4
+$)
+
+//=============================================================================
+
+LET upper.case (s,upper)  BE
+$(
+    // The string "upper" (which may be "s" itself) is set to the upper case
+    // equivalent of the string "s".
+    upper%0 := s%0
+    FOR i=1 TO s%0 DO upper%i := capitalch(s%i)
+$)
+
+//=============================================================================
+
+LET find.name.in.group.directory(directory, name, expansion.file, owner.puid) =
+VALOF $(
+    // Routine to obtain the expansion file for a given name in a group.
+    // The result is true and the "expansion.file" is valid if the name is
+    // found in the directory.
+    // RESULT2 = the offset!
+
+    LET upper.name      = VEC 100/BYTESPERWORD
+    LET cache           = directory!cache.address
+    LET size            = name%0
+
+    IF size=0           RESULTIS FALSE
+
+    // Obtain an upper case version of the given name:
+    upper.case(name,upper.name)
+
+    FOR i=0 TO 30000 BY gd.element.size
+    $(  LET byte.offset = address.offset(directory, i, gd.element.size) * bprw
+        LET len = cache%byte.offset
+        TEST len = size                         // Possible ??
+        $(  LET match = TRUE
+            FOR j=1 TO size
+            DO UNLESS upper.name%j = capitalch( cache%(byte.offset +j) )
+               THEN $( match := FALSE; BREAK $)
+
+            IF match
+            $(  copy.uid(cache, byte.offset/bprw+gd.list.uid,
+                                                        expansion.file+uid, 0)
+                UNLESS owner.puid=0
+                DO copy.uid(cache, byte.offset/bprw+gd.owner.puid, owner.puid,0)
+
+                RESULT2 := i/gd.element.size
+                RESULTIS TRUE
+            $)
+        $)
+        ELSE
+        $(
+            IF len = #Xff THEN BREAK  // End of directory
+        $)
+    $)
+
+    RESULTIS FALSE
+$)
+
+$<SMALL'
+//=============================================================================
+LET list.group.directory(directory) = VALOF
+$(
+    // Routine to list the names in a directory
+    // The result is true and the "expansion.file" is valid if the name is
+    // found in the directory.
+
+    LET cache           = directory!cache.address
+    LET first           = TRUE
+
+    FOR i=0 TO 30000 BY gd.element.size
+    $(  LET byte.offset = address.offset(directory, i, gd.element.size) * bprw
+        LET len = cache%byte.offset
+
+        UNLESS len=0
+        DO  TEST len > gd.name.bytes
+            THEN BREAK  // End of directory
+            ELSE
+            $(  writes(first -> "Distribution lists are: ", ", ")
+                FOR I = 1 TO len DO WRCH(cache%(byte.offset+i))
+                First   := FALSE
+            $)
+    $)
+
+    WRITES(first -> "No distribution lists*N", "*N")
+    RESULTIS FALSE
+$)
+
+//=============================================================================
+$>SMALL'
+
+//      Remove (text...)
+LET remove.braket(given, result) BE
+$(      LET t.pos       = 0
+        LET in.bra      = FALSE
+        LET in.sp       = FALSE
+
+        FOR i = 1 TO given%0
+        $(      LET ch = given%i
+                TEST in.bra
+                THEN IF ch=')'  in.bra := FALSE
+                ELSE TEST ch = '('
+                     THEN in.bra := TRUE
+                     ELSE
+                     $( TEST ch = ' ' | ch = '*T'
+                        $(      IF in.sp THEN LOOP
+                                in.sp := TRUE
+                                ch := ' '
+                        $)
+                        ELSE
+                        $(      IF in.sp & t.pos=1 t.pos -:= 1
+                                in.sp := FALSE
+                        $)
+                        t.pos +:= 1
+                        result%t.pos := ch
+                     $)
+        $)
+        IF in.sp THEN t.pos -:= 1
+        result%0 := t.pos
+$)
+
+LET findname(given, result) BE
+$(      remove.braket(given, result)
+        FOR bra = 1 TO result%0 IF result%bra = '<'
+        $(      bra +:= 1
+                FOR i = bra TO result%0
+                $(      LET ch = result%i
+                        TEST ch = '>'
+                        THEN result%0 := i-bra <> RETURN
+                        ELSE result%(i-bra+1) := result%i
+                $)
+                //      Fallen throught -> '<fred'
+                result%0 := result%0 - bra +1
+                RETURN
+        $)
+$)
+
+//=============================================================================
+
+LET check.and.record.name(name, depth, file, remote.file, header.file, end) =
+VALOF
+$(  // Routine to process a mail consignee name.
+    // Check if the name is a valid user name and if it is put the user's PUID
+    // in the file "recipients.puid.file".  Otherwise search for the name in
+    // the client's Group Directory and then in the Public Group Directory and
+    // if it is found insert the uid of the expansion list file in "expanded.
+    // groups.file" and call this routine recursively for each of the names in
+    // the group's expansion list.
+    //
+    // If any name is of the form <any text>@<mc> then write it to remote.file.
+    // (if it is not zero)
+    //
+    // The result is "convert.ok" if the name is a user's name or a group name,
+    // "convert.no.map" if PS.MAP cannot be reached, or "convert.bad.name" if
+    // the name cannot be found or recursion exceeds five levels.
+
+    // DEPTH starts at one and increases, if expansion is wanted
+    // If it starts zero, then just check that the top level exists!
+
+    // FILE is the file being sent : -1 (OR -2) -> interactive!
+
+    LET group.list.file         = VEC file.desc.size
+    LET new.ptr                 = 0
+    LET rc                      = ?
+    LET char                    = ?
+    LET len                     = ?
+    LET went.too.deep           = FALSE
+
+$(NO.RECURSE
+    LET rc.reason               = ?
+    LET AT                      = ?
+    LET new.name                = VEC 100/bytesperword
+    LET puid                    = VEC 4
+    LET owner.puid              = VEC 8/bpw
+    LET machine                 = VEC 100/BYTESPERWORD
+
+    // End of argument list is marked with -1 for future expansion.
+    FOR i = @header.file to @end
+                IF !I = -1 $( FOR ptr = I TO @end DO !ptr := 0; BREAK $)
+
+    zap.file(group.list.file)
+
+    IF trace THEN writef("Entered (%n) with '%S', hf=%N -- ",
+                        depth, name, header.file)
+$<DEMON <> flush.cache(report.file) $>DEMON
+    findname(name, new.name)
+scan.for.at:
+    AT := 0
+    IF trace THEN writef("Checking name '%S'='%S' at level %N*N",
+                                name, new.name, depth)
+
+    // Is the name a user name?
+    rc := convert.name.to.puid(new.name, puid)
+    IF rc = convert.no.map THEN RESULTIS convert.no.map
+
+    IF rc = convert.ok & find.puid.in.user.map(puid, group.list.file) > 0
+    $(
+        UNLESS depth<=0 | puid.already.used(recipients.puids.file, puid) DO
+                                bytes.to.file(recipients.puids.file,puid,8)
+        IF trace THEN writef("'%S' is a puid at level %N*N", new.name, depth)
+$<DEMON <> flush.cache(report.file) $>DEMON
+        RESULTIS convert.ok
+    $)
+
+    rc.reason := (rc = convert.ok) -> 1, 0
+    zap.file(group.list.file)
+
+    FOR i = 1 TO new.name%0 IF new.name%i = '@' THEN at := i
+
+    TEST AT ~= 0
+    //--------------------------------------------------------------------------
+    //  OK, it's not a user. Try looking for <text>@<mc>
+    //--------------------------------------------------------------------------
+    $(          LET use.at      = TRUE
+        LET bit         = 0
+        LET mc.name     = 0
+        LET SERC.name   = "CAGA"
+        LET Cagr.name   = "CAGR"
+        LET Camjenny.name="CAMJENNY"
+        LET Phx.name    = "CAMPHX"
+        LET Camsteve.name="CAMSTEVE"
+        LET Cuedvax.name= "CUEDVAX"
+        LET TRIPOS.name = "TRIPOS"
+        LET ARPA.name   = "UCL-CS@CAGA"
+        LET UCL.name    = ARPA.name
+        LET mc.len      = new.name%0 - at
+        LET mc.start    = at+1
+        LET name.end    = at-1
+        MANIFEST $(
+        dom.name        = 0
+        dom.prefix      = 1
+        dom.suffix      = 2
+        dom.bit         = 3
+        dom.step        = 4
+        $)
+        LET dom.start   = "UK.AC"
+        LET p           = 0
+        LET s           = SERC.name
+        LET b           = remote.machine.serc
+
+        LET pre         = "AC.UK"
+        LET p           = 0
+        LET s           = SERC.name
+        LET b           = remote.machine.serc
+
+        LET pre         = "AC"
+        LET p           = 0
+        LET s           = SERC.name
+        LET b           = remote.machine.serc
+
+        LET pre         = "ARPA"
+        LET p           = 0
+        LET s           = UCL.name
+        LET b           = remote.machine.serc
+
+        LET pre         = "MAILNET"
+        LET p           = "MAILNET."
+        LET s           = UCL.name
+        LET b           = remote.machine.serc
+
+        LET pre         = "UUCP"
+        LET p           = "UUCP."
+        LET s           = UCL.name
+        LET b           = remote.machine.serc
+
+        LET pre         = "USENET"
+        LET p           = "USENET."
+        LET s           = UCL.name
+        LET b           = remote.machine.serc
+
+        LET dom.end     = "BITNET"
+        LET p           = "BITNET."
+        LET s           = UCL.name
+        LET b           = remote.machine.serc
+
+$<TRACE
+IF trace WRITEF("From %n'%S' -> %n'%s' @=%n, mc.len=%n - ",
+                        name%0, name, new.name%0, new.name, at, mc.len)
+$<DEMON <> flush.cache(report.file) $>DEMON
+$>TRACE
+
+        FOR pos = mc.start TO new.name%0
+        DO TEST (new.name%pos=' ' | new.name%pos='*T' | new.name%pos = '*N')
+           THEN mc.start, mc.len := mc.start+1, mc.len-1
+           ELSE BREAK
+
+        FOR pos = name.end TO 1 BY -1
+        DO TEST (new.name%pos=' ' | new.name%pos='*T' | new.name%pos = '*N')
+           THEN name.end -:= 1
+           ELSE BREAK
+
+        FOR pos = 1 TO mc.len DO machine%pos := new.name%(mc.start-1+pos)
+        machine%0       := mc.len
+$<TRACE
+IF trace WRITEF("Got %N'%S' @ %N'%S'*N", name.end, new.name, machine%0, machine)
+$>TRACE
+remove.braket(machine,machine)
+$<TRACE
+$>TRACE
+IF trace WRITEF("Got %N'%S' @ %N'%S'*N", name.end, new.name, machine%0, machine)
+$<DEMON <> flush.cache(report.file) $>DEMON
+
+        TEST            compstring(machine, "CAMRING")  =0      |
+                        compstring(machine, "RING")=0
+        $(      new.name%0      := name.end
+                FOR i = new.name%0 TO 1 BY -1
+                $(      LET ch = new.name%i
+                        TEST ch = '@' THEN BREAK
+                        ELSE IF ch = '%' THEN new.name%i := '@' <> BREAK
+                $)
+                GOTO scan.for.at
+        $)
+        ELSE TEST       compstring(machine, Cagr.name)  =0
+        THEN    bit, mc.name := remote.machine.cagr, Cagr.name
+        ELSE TEST       compstring(machine, Camjenny.name)      =0
+        THEN    bit, mc.name := remote.machine.camjenny, Camjenny.name
+        ELSE TEST       compstring(machine, Camsteve.name)      =0
+        THEN    bit, mc.name := remote.machine.camsteve, Camsteve.name
+        ELSE TEST       compstring(machine, Cuedvax.name)       =0
+        THEN    bit, mc.name := remote.machine.cuedvax, Cuedvax.name
+        ELSE TEST       compstring(machine, Tripos.name)        =0
+        THEN    bit, mc.name := remote.machine.TRIPOS, Tripos.name
+        ELSE TEST       compstring(machine, "SERC")     =0      |
+                        compstring(machine, SERC.name)  =0
+        THEN    bit, mc.name := remote.machine.serc, SERC.name
+        ELSE TEST       compstring(machine, Phx.name)   =0      |
+                        compstring(machine, "PHX")      =0      |
+                        compstring(machine, "PHOENIX")  =0
+        THEN    bit, mc.name := remote.machine.phx, Phx.name
+        ELSE TEST       compstring(machine, "ARPA")     =0      |
+                        compstring(machine, "UCL")      =0      |
+                        compstring(machine, "UCL-CS")   =0
+        THEN    bit, mc.name := remote.machine.serc, ARPA.name
+//      Hmmmmmmm......  Now try looking for UK.AC.xxxxx or ARPA.xxxxx,
+//      or EVEN xxxx.ARPA
+
+        ELSE    FOR i = @dom.start TO @dom.end BY dom.step
+        $(SCAN.DOMAINS
+
+                LET prefix(string, patt) = (string%0 < patt%0) -> FALSE, VALOF
+                $(      FOR i = 1 TO patt%0 UNLESS compch(string%i, patt%i) = 0
+                        THEN RESULTIS FALSE
+                        RESULTIS (string % [(patt%0) +1]) = '.'
+                $)
+        
+                LET suffix(string, patt) = (string%0 < patt%0) -> FALSE, VALOF
+                $(      LET offset = string%0-patt%0
+                        FOR i = 1 TO patt%0 UNLESS compch(string%(offset+i), patt%i) = 0
+                        THEN RESULTIS FALSE
+                        RESULTIS (string % offset) = '.'
+                $)
+                LET strip(string, n) BE
+                $(      LET len = string%0
+                        FOR i = n+1 TO len DO string%[i-n] := string%i
+                        string%0 := len-n
+                $)
+                LET strcat.at(string, suffix) BE
+                $(      LET len = (string%0) +1
+                        LET add = suffix%0
+                        string%len := '@'
+                        FOR i = 1 TO add
+                        $(      string%[len+i] := suffix%i
+                                IF suffix%i = '@' THEN string%len := '%'
+                        $)
+                        string%0 := len + add
+                $)
+                LET insert.prefix(string, prefix) BE
+                $(      LET len = string%0
+                        LET add = prefix%0
+                        FOR i = len TO 1 BY -1 DO string%[add+i] := string%i
+                        FOR i = 1 TO add DO string%i := prefix%i
+                        string%0 := len+add
+                $)
+
+                LET type=0
+
+                TEST (prefix(machine, I!dom.name))
+                THEN type := 1
+                ELSE TEST (suffix(machine, I!dom.name))
+                THEN type := -1
+                ELSE LOOP
+
+                //      OK, found one !! Now process .....
+                //      Got PRE.xx OR xx.PRE
+                //      Generate aa+xx+bb
+                //      .......
+                
+                //      Strip 'PRE.' or '.PRE'.
+                TEST type = 1
+                THEN strip(machine, [(I!dom.name)%0] +1)
+                ELSE machine%0 := (machine%0) - [(I!dom.name)%0] -1
+
+                UNLESS (I!dom.prefix) = 0
+                DO insert.prefix(machine, I!dom.prefix)
+
+                strcat.at(machine, I!dom.suffix)
+                mc.name := machine
+
+                bit := I!dom.bit
+$<TRACE
+IF trace WRITEF("Domain: %N'%S', %X4*N", mc.name%0, mc.name, bit)
+$>TRACE
+                BREAK
+        $)SCAN.DOMAINS
+
+        UNLESS bit=0
+        $(      LET use.at = TRUE
+                FOR i = 1 TO mc.name%0 IF mc.name%i = '@' THEN use.at := FALSE
+                remote.machines.bits    |:= bit
+                new.name%(name.end+1) := (use.at) -> '@', '%'
+                FOR i=1 TO mc.name%0
+                DO new.name%(name.end+1+i) := mc.name%i
+                new.name%0 := name.end+1+mc.name%0
+                IF trace THEN writef("'%S' is a machine at level %N*N",
+                                                                new.name, depth)
+$<DEMON <> flush.cache(report.file) $>DEMON
+
+                UNLESS depth<=0 | remote.file=0
+                $(
+                        write.string.to.file(remote.file, new.name)
+                        write.string.to.file(remote.file, ",*N ")
+                $)
+                RESULTIS convert.ok
+        $)
+$<TRACE
+IF trace WRITEF("Oh dear %N'%s' is not known*N", machine%0, machine)
+$>TRACE
+        rc.reason       := 2
+        rc := FALSE             // Failed to find it !!
+/*????????????????????????????????????????????????????????????????????????*/
+        RESULTIS convert.bad.name
+    $)
+    ELSE
+    //--------------------------------------------------------------------------
+    //  Try looking in the user's distribution list first.
+    //--------------------------------------------------------------------------
+    $(
+$<TRACE
+IF TRACE WRITEF("No @: %N'%S' -> %N'%S'*N", name%0, name, new.name%0, new.name)
+$>TRACE
+        TEST client.puid!0 = 0                  // Private ....................
+        THEN RC := FALSE
+        ELSE                                    // Standard insert ............
+        $(      LET r = 1
+                IF client.group.directory!uid = 0
+                $(  r := find.puid.in.user.map(client.puid, client.index,
+                                                                client.md)
+                    TEST r <= 0
+                    THEN rc := FALSE
+                    ELSE retrieve.entry(master.index,(r*master.index.slot.size)+
+                                master.index.group.dir, client.group.directory)
+                $)
+
+                // Now see if the name is a public or private distribution list
+                IF r > 0
+                rc := find.name.in.group.directory(client.group.directory,
+                                        new.name, group.list.file, owner.puid)
+        $)
+
+        IF public.group.directory!uid = 0
+        THEN retrieve.entry(root, root.dir.public.group,        public.group.directory)
+        UNLESS rc DO rc := find.name.in.group.directory(public.group.directory,
+                                        new.name, group.list.file,owner.puid)
+    $)
+
+
+/* ****************************************************************************
+                        SHOULD BE HERE
+** ****************************************************************************
+    // Is the name a user name?
+    rc := convert.name.to.puid(new.name, puid)
+    IF rc = convert.no.map THEN RESULTIS convert.no.map
+
+    IF rc = convert.ok & find.puid.in.user.map(puid, group.list.file) > 0
+    $(
+        UNLESS depth<=0 | puid.already.used(recipients.puids.file, puid) DO
+                                bytes.to.file(recipients.puids.file,puid,8)
+        IF trace THEN writef("'%S' is a puid at level %N*N", new.name, depth)
+$<DEMON <> flush.cache(report.file) $>DEMON
+
+        RESULTIS convert.ok
+    $)
+** ****************************************************************************/
+
+$<DEMON
+    UNLESS rc
+    $(UNKNOWN.USER
+        LET message     = "Mail Demon: "
+        LET subject     = VEC 40/bytesperword
+        LET len         = message%0
+        LET rs.0        = "Unknown user"
+        LET rs.1        = "Mailbox disabled for"
+        LET rs.2        = "Unknown machine"
+
+        IF depth = 1 & file ~= -1 & file ~= -2
+        $(  LET reason = (@rs.0)!rc.reason
+            LET object  = (rc.reason = 2) -> machine, new.name
+            LET len2    = reason%0
+            LET len3    = object%0
+
+            FOR I = 1 TO len    DO subject%i := message%i
+            FOR I = 1 TO len2   DO subject%(i+len) := reason%i
+            len +:= len2
+            subject%(len+1) := ' '
+            subject%(len+2) := '*''
+            len +:= 2
+            IF len + len3 > (40-1) THEN len3 := (40-1)-len
+            FOR I = 1 TO len3   DO subject%(i+len) := object%i
+            len         +:= len3+1
+            subject%0   := len
+            subject%len := '*''
+
+            // Only post the report off if the group's owner can be found
+            // and the sender is not a demon (to avoid some infinite
+            // recursion problems).
+            // IF (client.name%0 ~= 0 & client.puid!0~=0)
+            $(
+                pp.z80send(0,0,0, (client.name%0 = 0) ->
+                  (convert..puid.to.name(client.puid, 0, new.name)=convert.ok)->
+                        new.name, "Postman", client.name,
+                        subject, file, 0,
+                        0,0,0,
+                        0,      /* Mode         */
+                        "Postmaster",   /* replyto      */
+                        0,      /* forward      */
+                        0,      /* Bits         */
+                        0,      /* in repl      */
+                        header.file,    /* The header itself, if one exists !!*/
+                        -1)
+//              UNLESS puid.already.used(recipients.puids.file, client.puid)
+//              DO bytes.to.file(recipients.puids.file, client.puid, 8)
+            $)
+        $)
+        RESULTIS convert.bad.name
+    $)UNKNOWN.USER
+$>DEMON
+
+    IF depth = 0 THEN RESULTIS convert.ok       // Just looking !
+    // If the group has already been expanded then no further work is necessary
+    IF puid.already.used(expanded.groups.file, group.list.file+uid) THEN
+                                                        RESULTIS convert.ok
+
+    IF depth = 5
+    $(  writes ("RECURSING TOO DEEPLY*N")
+        RESULTIS convert.too.deep
+    $)
+    bytes.to.file(expanded.groups.file, group.list.file+uid, 8)
+$)NO.RECURSE
+
+$(RECURSE
+    LET group.list.cache        = VEC 256/bpw
+    LET new.name                = VEC 80/bytesperword
+    // Now expand the distribution list
+    group.list.file!cache.size          := 256/bprw
+    group.list.file!cache.address       := group.list.cache
+    read.cache(group.list.file, 0)
+    len := group.list.cache%0
+    //--------------------------------------------------------------------------
+    //--------------------------------------------------------------------------
+    // Note the assumption that distribution lists are less than 255 characters
+    //--------------------------------------------------------------------------
+    //--------------------------------------------------------------------------
+
+
+    FOR i= 1 TO len +1
+    $(EACH.CHAR
+        char := group.list.cache%i
+        IF ((char = ',') | (i > len)) & (new.ptr ~= 0)
+        $(EACH.ITEM
+            new.name%0 := new.ptr
+
+            // RECURSE!!!
+            rc := check.and.record.name(new.name, depth+1, file, remote.file)
+
+$<DEMON
+            IF (rc=convert.bad.name) | ((rc=convert.too.deep)&(depth=1))
+            $(US.ITEM
+                // If the distribution group is faulty send a report to its
+                // owner.
+                LET report.file = VEC file.desc.size
+                LET cache       = VEC 100/rwpw
+
+                zap.file(report.file)
+                create.file(root, workfile.base+workfile.report.slot,
+                                                                 report.file)
+                report.file!start.of.block      := 0
+                report.file!cache.address       := cache
+                report.file!cache.size          := 100
+                report.file!next.write          := 50
+
+                write.string.to.file(report.file,"Your distribution group '")
+                write.string.to.file(report.file,name)
+                write.string.to.file(report.file,"' ")
+
+                TEST rc=convert.too.deep
+                $(
+                  write.string.to.file(report.file,
+                                        "has nested groups within it to a *
+
+                                        *depth of greater than four.*n")
+                $) ELSE $(
+                  write.string.to.file(report.file,"contains an unknown name '")
+                  write.string.to.file(report.file,new.name)
+                  write.string.to.file(report.file,"'.*N")
+                $)
+
+                // Only post the report off if the group's owner can be found
+                // and the sender is not a demon (to avoid some infinite
+                // recursion problems).
+                IF (client.puid!0~=0)
+                THEN post.to.z80(report.file,
+                                "Mail Demon Report: Faulty group.",
+                   (convert..puid.to.name(owner.puid, 0, new.name)=convert.ok)->
+                                new.name, "PostMan")
+            $)US.ITEM
+$>DEMON
+            IF rc = convert.too.deep THEN went.too.deep := TRUE
+            IF rc = convert.no.map THEN RESULTIS convert.no.map
+            new.ptr := 0
+        $)EACH.ITEM
+
+        IF char = 255 THEN BREAK     // End of list is marked by -1
+
+        UNLESS char = ','
+        $(
+            new.ptr := new.ptr+1
+            new.name%new.ptr := char
+        $)
+    $)EACH.CHAR
+$)RECURSE
+
+    TEST went.too.deep
+    THEN RESULTIS convert.too.deep
+    ELSE RESULTIS convert.ok
+$)
+
+$<SMALL'
+//=============================================================================
+
+LET create.group(group.directory, group.index, name) = VALOF
+$(
+    // Add a new distribution list (initially empty) into the given directory
+    // and index.  The first two parameters are file descriptors.
+
+    LET new.list.file   = VEC file.desc.size
+    LET cache           = group.directory!cache.address
+    LET entry.disp      = ?
+    zap.file(new.list.file)
+
+    IF name%0>12
+    $(  writef("'%S'is too long for a distribution group name*N", name);
+        Resultis FALSE
+    $)
+
+//----------------------------------------------------------------------------//
+    IF find.name.in.group.directory(group.directory,name,new.list.file, 0)
+    $(
+        writef("There is already a group '%S'*n", name)
+        RESULTIS FALSE
+    $)
+
+    open.file(group.directory)
+//    read.cache(group.directory,0)        // Just a precaution .....
+
+    FOR i=0 TO 30000 BY gd.element.size
+    $(
+        entry.disp := address.offset(group.directory,i,gd.element.size)
+        IF (cache%%entry.disp = 0) | (cache%%entry.disp = #xffff)
+        $(
+            // A gap has now been found in the directory
+            create.file(group.index, i/gd.element.size, new.list.file, FALSE)
+            copy.uid(new.list.file+uid,0,cache,entry.disp+gd.list.uid)
+            copy.uid(client.puid, 0, cache,entry.disp+gd.owner.puid)
+            FOR j=0 TO name%0 DO cache%(entry.disp*bprw +j) := name%j
+            write.tiny.block(new.list.file, #X00FF, 0)
+
+            flush.cache(group.directory)
+            close.file(group.directory)
+            RESULTIS TRUE
+        $)
+    $)
+
+    writes("Why do you have over 1000 distribution groups?*N")
+    RESULTIS FALSE
+$)
+
+//=============================================================================
+
+LET delete.group(group.directory, group.index, name) = VALOF
+$(
+    // The first two parameters are file descriptors.
+
+    LET new.list.file   = VEC file.desc.size
+    LET offset          = ?
+    zap.file(new.list.file)
+
+    // Convert the name to upper case
+    upper.case(name,name)
+
+//----------------------------------------------------------------------------//
+    UNLESS find.name.in.group.directory(group.directory,name,new.list.file, 0)
+    $(
+        writef("There is no group '%S'*n", name)
+        RESULTIS FALSE
+    $)
+    offset := RESULT2
+
+    delete(group.index, offset)
+    Write.tiny.block(group.directory, 0, offset * gd.element.size)
+    RESULTIS TRUE
+$)
+
+//=============================================================================
+
+LET edit.group(group.directory, name, list, system) = VALOF
+$(
+    LET list.file       = VEC file.desc.size
+    LET cache           = VEC 280/bpw
+    LET command         = VEC 12
+    LET owner.puid      = VEC 8/BYTESPERWORD
+    LET res             = ?
+    LET next.free       = ?
+    LET char            = ?
+    LET typeout(file, name, system) BE
+    $(  LET cache = file ! cache.address
+        Writef("%SDistribution group '%S', '",
+                                        system -> "System ", "", name, cache%0)
+        FOR i=1 TO cache%0 DO $(
+            IF cache%i = 255 THEN $( cache%0 := i-1; BREAK $)
+            wrch(cache%i)
+        $)
+        writes("'*N")
+    $)
+
+    LET offset(file, name) = VALOF
+    $(  LET cache = file ! cache.address
+        LET match = TRUE
+        LET pos   = 0
+
+        FOR i = 1 TO cache%0+1 DO
+        $(  LET ended = i>cache%0 | cache%i = #XFF
+            TEST cache%i = ',' | ended
+            THEN TEST match & pos ~= i-1 & (name%0+1) = (i-pos)
+                 THEN RESULT2 := i-pos <> RESULTIS pos
+                 ELSE TEST ended THEN BREAK
+                      ELSE match, pos := TRUE, i
+            ELSE UNLESS compch((cache%i), name%(i-pos)) = 0
+                         DO match := FALSE
+        $)
+        RESULTIS -1
+    $)
+
+    zap.file(list.file)
+
+    upper.case(name,name)
+
+//----------------------------------------------------------------------------//
+    UNLESS find.name.in.group.directory(group.directory, name, list.file, owner.puid)
+    $(
+        writes("Unknown distribution group name*N")
+        RESULTIS FALSE
+    $)
+
+    list.file!cache.address     := cache
+    list.file!cache.size        := 280/bprw
+
+    IF list
+    $(  read.cache(list.file,0);
+        typeout(list.file, name, system);
+        RESULTIS FALSE
+    $)
+
+    UNLESS compare.uid(Owner.puid, 0, Client.puid, 0)
+        $(  WRITEF("Owner's puid is %X4 %X4 %X4 %X4*N",
+                owner.puid%%0, owner.puid%%1, owner.puid%%2, owner.puid%%3)
+            RESULTIS FALSE
+        $)
+
+    open.file(list.file)        // NB:  Open it first ...
+    read.cache(list.file,0)
+
+    RDCH()                      // UNRDCH() has been done .....
+
+    $(  // Main loop for reading edit commands.
+        NEWLINE()       //writes("*NEdit ")
+        typeout(list.file, name, system)
+        writes(">*E")
+        break.test()
+
+        readline(TRUE)
+        char:=rdch()
+        IF char='*N' THEN LOOP
+        IF char=endstreamch
+        $(  //Refurbish input stream
+            WRITES("Type RETURN to continue ...*E")
+/*
+refurbish(@norm.input)
+            ENDREAD()
+            norm.input := findinput("**")
+            SELECTINPUT(norm.input)             // Shouldn't be needed .........
+*/
+            cis!4, cis!5 := -1, -1
+            close.file(list.file)
+            RESULTIS TRUE
+        $)
+
+        unrdch()
+        res := rditem(command,12)
+        UNLESS res=1
+        $(
+            writef("Invalid command '%S' -- Try Help*N", command)
+            char := rdch() REPEATUNTIL (char='*N') | (char=endstreamch)
+            LOOP
+        $)
+
+        res := findarg("?=h=help,q=quit,w=f=finish,a=add,,delete",command)
+        SWITCHON res INTO
+        $(
+        DEFAULT:
+            writef("*NUnknown edit command '%S' -- try help*N", command)
+            ENDCASE
+
+        CASE 0:
+            writes("Current commands for editing distribution groups are:*n")
+            writes("ADD <name>*N")
+            writes("DELETE <name>*N")
+            writes("FINISH       - leave editor and update group*N")
+            writes("QUIT         - abandon edit and don't update group*N")
+            writes("A break in 'B' will cause the edit to be abandonded*N*N")
+            ENDCASE
+
+        CASE 2:         // Finish
+IF trace THEN trace.file(list.file, "Close list")
+            flush.cache(list.file)
+IF trace THEN writef("That's OK")
+        CASE 1:         // Quit
+            close.file(list.file)
+            RESULTIS TRUE
+
+        CASE 3:         // Add
+            res := rdargs("name/a",command,12)
+            unrdch()
+            TEST res=0
+            THEN writes("Bad args*N")
+            ELSE TEST offset(list.file, command!0)=-1
+            $(
+                // N.B. this code only allows distribution groups of 255
+                // characters.
+
+                LET name        = command!0
+                LET next.free   = cache%0
+
+                UNLESS next.free=0 DO next.free := next.free+1
+
+                TEST name%0+next.free > 255
+                THEN writes("Add fails - new name would make list > 255 chars")
+                ELSE $(
+                    cache%next.free := ','              // If it's zero, OK
+                    FOR i=1 TO name%0 DO cache%(i+next.free) := name%i
+                    cache%0 := next.free+name%0
+                $)
+            $)
+            ELSE WRITEF("The name '%S' is already in this distribution list*N",
+                                command!0)
+            ENDCASE
+
+        CASE 5: //delete
+            $(  LET pos         = ?
+                LET string      = list.file ! cache.address
+                LET res         = rdargs("name/a",command,12)
+                LET name        = command!0
+
+                unrdch()
+                IF res=0        $( writes("Bad args*N"); ENDCASE $)
+
+                upper.case(name, name)
+                pos := offset(list.file, name)
+                IF pos<0 $( WRITEF("entry '%S' not found*N", name); ENDCASE $)
+
+                //      Pos points to the start of the name
+                //      May be ...,ABC  OR ABC,....     OR ABC
+                UNLESS pos=0
+                THEN IF RESULT2>string%0 DO pos, RESULT2 := pos+1, RESULT2-1
+
+                FOR i = pos TO string%0 DO string%i := string%(i+RESULT2)
+
+                string%0 := string%0 - RESULT2
+            $)
+        $)
+
+        // Tidy up any debris left by an invalid command
+        char := rdch() REPEATUNTIL (char='*n') | (char=endstreamch) | char='*C'
+
+    $) REPEAT    // Command loop
+$)
+
+//=============================================================================
+
+LET group.edit() = VALOF
+$(
+    MANIFEST
+    $(  A.group         = 0
+        A.create        = A.group       + 1
+        A.delete        = A.create      + 1
+        A.edit          = A.delete      + 1
+        A.list          = A.edit        + 1
+        A.help          = A.list        + 1
+        A.system        = A.help        + 1
+    $)
+
+    // Command to edit a private distribution group.
+
+    LET argv.string     ="Group,Create/s,Delete/s,Edit/s,List/s,Help/s,System/s"
+    LET reason          = 0
+    LET dir             = ?
+    LET r               = ?
+    LET argv            = VEC 30/bpw + 7
+
+    r := rdargs(argv.string, argv, 30/bpw + 7)
+    unrdch()
+    IF r=0 $( writef("Bad args for '%S'*N", argv.string); RESULTIS FALSE $)
+
+    FOR I = A.create TO A.help
+    DO  UNLESS argv!I = 0
+        DO  TEST reason  = 0
+            THEN reason := I
+            ELSE
+            $(  WRITES(
+        "You can only specify one of CREATE, DELETE, EDIT, LIST or HELP*N")
+                RESULTIS FALSE
+            $)
+
+    IF reason = 0 THEN reason := A.help
+
+    UNLESS argv!A.system=0 | trusted | reason=A.list | reason=A.help | reason=A.edit
+    $( Writes(
+"You can only list the system groups, or edit them if you are the manager*N"
+                ); RESULTIS FALSE $)
+
+    r := find.puid.in.user.map(client.puid, client.index, client.md)
+    // Interim way of getting group directory:
+    IF client.group.directory!uid = 0
+    $(  retrieve.entry(master.index,(r*master.index.slot.size)+
+                                master.index.group.dir,client.group.directory)
+    $)
+
+    TEST argv!A.system=0
+    THEN dir := client.group.directory
+    ELSE
+    $(  IF public.group.directory!uid = 0
+        THEN retrieve.entry(root, root.dir.public.group, public.group.directory)
+        dir     := public.group.directory
+    $)
+
+    SWITCHON reason INTO
+    $(  DEFAULT:        WRITES("Internal error - !!!*N");       RESULTIS FALSE
+        CASE A.create:
+                        IF argv!A.group = 0
+                        $(  WRITES("You must give a group name to create*N");
+                                                                RESULTIS FALSE
+                        $)
+                        TEST argv!A.system=0
+                        THEN retrieve.entry(master.index,
+                                                (r*master.index.slot.size)+
+                                                master.index.group.index, md)
+                        ELSE retrieve.entry(root, root.index.public.group, md)
+                        RESULTIS        create.group(dir, md, argv!0)
+        CASE A.delete:
+                        IF argv!A.group = 0
+                        $( WRITES("You must give a group name to delete*N");
+                                                                RESULTIS FALSE
+                        $)
+                        TEST argv!A.system=0
+                        THEN retrieve.entry(master.index,
+                                                (r*master.index.slot.size)+
+                                                master.index.group.index, md)
+                        ELSE retrieve.entry(root, root.index.public.group, md)
+                        RESULTIS        delete.group(dir, md, argv!A.group)
+        CASE A.edit:
+                        IF argv!A.group = 0
+                        $(  WRITES("You must give a group name to edit*N");
+                                                                RESULTIS FALSE
+                        $)
+                        read.cache(dir,0)
+                        RESULTIS edit.group(dir, argv!A.group, FALSE, argv!A.system)
+
+        CASE A.list:
+                        IF argv!A.group = 0 RESULTIS List.group.directory(dir)
+                        read.cache(dir,0)
+                        RESULTIS edit.group(dir, argv!A.group, TRUE, argv!A.system)
+
+        CASE A.help:    WRITES(
+"The GROUP command allows one the switches CREATE, DELETE, EDIT and LIST.*N*
+*It also takes a group, and may take the switch SYSTEM*N*
+*For help on the EDIT command, type 'GROUP EDIT <group>' then 'HELP'*N"
+                              );                                RESULTIS FALSE
+    $)
+$)
+
+//=============================================================================
+$>SMALL'
+
+

@@ -1,0 +1,133 @@
+SECTION "ToPDP"
+
+GET "libhdr"
+
+GLOBAL
+$(
+    input.file          : ug
+    terminal.input      : ug+1
+    pon                 : ug+2
+$)
+
+MANIFEST
+$(
+    ack.char            = '+'
+    nack.char           = '-'
+
+    argv.upb            = 80/bytesperword // argument vector size
+$)
+
+
+LET start() BE
+$(  LET rc = 0
+    LET argv = VEC argv.upb
+    LET rdargs.string = "NAME/A,FROM/K,DIR/S,SWAP/S"
+    LET arg.name, arg.from, arg.dir, arg.swap = ?, ?, ?, ?
+    LET original.input = input()
+    terminal.input := findinput("**")
+    input.file := 0
+    pon := FALSE
+
+    // Read command line arguments
+
+    IF rdargs (rdargs.string, argv, argv.upb) = 0 THEN
+    $(  writef ("bad arguments for RDARGS string *"%S*"*N", rdargs.string)
+        rc := 8
+        GOTO exit
+    $)
+
+    arg.name := argv!0
+    arg.from := argv!1
+    arg.dir  := argv!2
+    arg.swap := argv!3
+
+    IF arg.dir -> (arg.from ~= 0), (arg.from = 0) THEN
+    $(  writef ("incompatible arguments*N")
+        rc := 8
+        GOTO exit
+    $)
+
+    IF NOT arg.dir THEN
+    $(  input.file := findinput(arg.from)
+        IF input.file = 0 THEN
+        $( LET reason = result2
+           writef("Failed to open input file %S - ", arg.from)
+           fault(reason)
+           GOTO exit
+        $)
+    $)
+
+    selectinput(terminal.input)
+
+    out.byte(arg.dir -> 1, 2)
+    FOR i = 0 TO arg.name%0 DO out.byte(arg.name%i)
+    IF NOT ack() THEN GOTO exit
+
+    IF NOT arg.dir THEN
+    $(  LET buffer = VEC 256/bytesperword
+        LET count = 0
+        selectinput(input.file)
+        $(  LET ch = rdch()
+            IF ch = endstreamch THEN BREAK
+            buffer%count := ch
+            count := count + 1
+        $)  REPEATUNTIL count = 254
+        selectinput(terminal.input)
+        IF arg.swap THEN
+        $(  FOR i = 0 TO count-2 BY 2 DO
+            $(  LET a = buffer%i
+                buffer%i := buffer%(i+1)
+                buffer%(i+1) := a
+            $)
+        $)
+        out.byte(count)
+        FOR i = 0 TO count-1 DO out.byte(buffer%i)
+        IF NOT ack() THEN GOTO exit
+        IF count=0 THEN BREAK
+    $)  REPEAT
+
+exit:
+
+    p.off()
+    IF input.file ~= 0 THEN
+    $(  selectinput(input.file)
+        endread()
+        selectinput(terminal.input)
+        endread()
+        selectinput(original.input)
+    $)
+$)
+
+
+AND out.byte(b) BE
+$(  p.on()
+    wrch ('0' + (b>>4))
+    wrch ('0' + (b&15))
+$)
+
+AND ack() = VALOF
+$(  newline()
+    p.off()
+    $(  SWITCHON rdch() INTO
+        $(  CASE ack.char:      RESULTIS TRUE
+            CASE nack.char:     writes("NACK received*N")
+                                RESULTIS FALSE
+        $)
+    $)  REPEAT
+$)
+
+AND p.on() BE
+    IF NOT pon THEN
+    $(  wrch(128+27)
+        wrch('(')
+        pon := TRUE
+    $)
+
+AND p.off() BE
+    IF pon THEN
+    $(  wrch(128+27)
+        wrch(')')
+        pon := FALSE
+    $)
+
+

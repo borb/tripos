@@ -1,0 +1,132 @@
+/*******************************************************************************
+**              (C) Copyright  Tripos Research Group 1980                     **
+**             University of Cambridge Computer Laboratory                    **
+********************************************************************************
+
+ ######    ########   ######     #####   ########  ##    ##  ########   ######
+ #######   ########  ########   #######  ########  ###   ##  ########  ########
+ ##    ##     ##     ##        ##           ##     ####  ##  ##        ##    ##
+ ##    ##     ##     #######   ##           ##     ## ## ##  ######    ##    ##
+ ##    ##     ##           ##  ##           ##     ##  ####  ##        ##    ##
+ ##    ##     ##           ##  ##           ##     ##  ####  ##        ##    ##
+ #######   ########  ########   #######  ########  ##   ###  ##        ########
+ ######    ########   ######     #####   ########  ##    ##  ##         ######
+
+********************************************************************************
+**      Author : Mike Richardson                                     1980     **
+*******************************************************************************/
+
+
+SECTION "DISCINFO"
+GET     "LIBHDR"
+GET     "MANHDR"
+GET     "IOHDR"
+GET     "FILEHDR"
+
+LET start () BE
+$(
+   LET fhtask, lvfhtask = ?, ?
+   AND   argv           = VEC 20
+   AND prefix           = VEC 30 / bytesperword
+
+   LET device, unit     = ?, ?
+   AND devok            = ?
+   AND infovec          = VEC discinfo.alloc
+
+   LET res              = rdargs ( "device", argv, 20 )
+   AND task             = currentdir = 0 -> task.filehandler,
+                                            currentdir ! lock.task
+
+   UNLESS ( res = 0 ) | ( argv ! 0 = 0 ) DO
+            res := splitname ( prefix, ':', argv ! 0, 1 )
+
+
+
+   fhtask := argv ! 0 = 0 -> task, devicetask ( argv ! 0 )
+
+   IF fhtask = 0 THEN
+   $(
+      writef ( "*"%S*" is not a mounted device*N", argv ! 0 )
+      stop   ( 20 )
+   $)
+
+   res := sendpkt ( notinuse, fhtask, action.discinfo, ?, ?, infovec )
+
+   UNLESS res DO
+   $(
+      writef ( "error in reply to *"discinfo*" request - discinfo failed*N" )
+      stop   ( 20 )
+   $)
+
+   device := infovec ! discinfo.type
+   devok  := ( device = disctype.floppy ) |
+             ( device = disctype.cart   ) |
+             ( device = disctype.big    ) |
+             ( device = disctype.real   ) |
+             ( device = disctype.FS     ) |
+             ( device = disctype.FM     ) |
+             ( device = disctype.core   ) |
+             ( device = disctype.tape   ) |
+             ( device = disctype.FH5    )
+
+
+   unit   := infovec ! discinfo.unit
+
+
+   TEST NOT devok
+   THEN
+        writef ( "Disc is of unrecognised type (code %N) unit %N*N",
+                  device, unit
+               )
+   ELSE
+        writef ( "Filing system is *"%S:*" (%S)*N",
+                  VALOF
+                     $(
+                        LET ass = rootnode ! rtn.info ! info.assignments
+
+                        UNTIL ( ass = 0 ) |
+                              ( ass ! ass.task = fhtask &
+                                ass ! ass.dir  = 0 )
+                                                     DO ass := ass ! ass.link
+
+                        RESULTIS ass = 0 -> "???", ass + ass.name
+                     $),
+                  device = disctype.floppy -> "floppy disc",
+                  device = disctype.cart   -> "cartridge drive",
+                  device = disctype.big    -> "big disc pack",
+                  device = disctype.FS     -> "fileserver filing system",
+                  device = disctype.FM     -> "FM/FH4 filing system",
+                  device = disctype.core   -> "core filing system",
+                  device = disctype.tape   -> "tape filing system",
+                  device = disctype.FH5    -> "FH5 filing system",
+                                              "unspecified real drive"    )
+
+   SWITCHON infovec ! discinfo.state INTO
+   $(
+      CASE discstate.writeprotected    : writes ( "Disc is write protected*N" )
+                                         ENDCASE
+
+      CASE discstate.notvalidated      : writes ( "Disc is not validated*N" )
+                                         ENDCASE
+
+      CASE discstate.validated         : ENDCASE
+
+      DEFAULT                 : writef ( "Unrecognised disc state code %N*N",
+                                          infovec ! discinfo.state )
+   $)
+
+   IF [ device \= disctype.fs ] & [ infovec ! discinfo.space \= 0 ] THEN
+     $(
+        IF infovec ! discinfo.state = discstate.validated THEN
+           writef ( "Total %N blocks  =  %N used + %N free  (%N%% free)*N",
+                     infovec ! discinfo.space , infovec ! discinfo.used,
+                     infovec ! discinfo.space - infovec ! discinfo.used,
+           muldiv (  infovec ! discinfo.space - infovec ! discinfo.used, 100,
+                     infovec ! discinfo.space
+                  ) )
+
+        writef ( "Block size is %N bytes*N", infovec ! discinfo.alloc )
+     $)
+$)
+
+

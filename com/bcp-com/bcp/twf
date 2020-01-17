@@ -1,0 +1,20 @@
+$<TRIPOS'
+        SECTION "BCPTWF"
+
+        GET "ERRHDR"
+$>TRIPOS'
+$<TRIPOS
+        GET "CLIHDR"
+$>TRIPOS
+
+LET TASKWRITEF(S, A,B,C,D) BE
+$(1     // output S(A, B) preceeded by TASKNAME --
+$<PDPRSX   IF ISTERMINAL(OUTPUT()) DO
+      WRITEF("%S -- ", TASKNAME)
+$>PDPRSX
+   $<TRIPOS WRITEF("%S- ", cli.commandname) $>TRIPOS
+   WRITEF(S, A,B,C,D)
+//   $<TRIPOS NEWLINE() $>TRIPOS
+$)1
+
+

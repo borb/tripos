@@ -1,0 +1,205 @@
+SECTION "Jobmsg"
+GET "LIBHDR"
+GET "CLIHDR"
+GET "RINGHDR"
+GET "TERMHDR"
+GET "BCPL.SYNFIND"
+GET "BCPL.READTERMVEC"
+
+
+
+
+
+LET p.write(thisfile,str) = VALOF
+$(  LET p=1
+    LET ans=FALSE
+    LET info = rootnode!rtn.info
+    WHILE p<=str%0 DO
+    $(  LET ch=str%p
+        LET dat.vec = TABLE 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0
+        STATIC
+        $(  dat.set = FALSE
+            users.name = -1
+        $)
+        p:=p+1
+        TEST ch\='%' THEN wrch(ch) ELSE
+        $(  LET key = capitalch(str%p)
+            SWITCHON key INTO
+            $(  CASE 'F':
+                     writes(thisfile)
+                     ENDCASE
+                CASE 'I':
+                     writen(taskid)
+                     ENDCASE
+                CASE 'T':
+                     UNLESS dat.set THEN
+                     $(  datstring(dat.vec)
+                         dat.set := TRUE
+                     $)
+                     writes(dat.vec+5)
+                     ENDCASE
+                CASE 'D':
+                     UNLESS dat.set THEN
+                     $(  datstring(dat.vec)
+                         dat.set := TRUE
+                     $)
+                     writes(dat.vec+0)
+                     ENDCASE
+                CASE 'W':
+                     UNLESS dat.set THEN
+                     $(  datstring(dat.vec)
+                         dat.set := TRUE
+                     $)
+                     writes(dat.vec+10)
+                     ENDCASE
+                CASE 'K':
+                     $(  LET mckind=info!0
+                         UNLESS mckind=0 THEN writes(mckind)
+                     $)
+                     ENDCASE
+                CASE 'M':
+                     $(  LET mcname=info!rtninfo.ring!ri.myname
+                         UNLESS mcname=0 THEN writes(mcname)
+                     $)
+                     ENDCASE
+                CASE 'L':
+                     $(  LET loader = info!rtninfo.ring!ri.loaders.name
+                         IF loader\=0 THEN writes(loader)
+                     $)
+                     ENDCASE
+                CASE 'C':
+                     $(  LET revcon = info!rtninfo.ring!ri.term.revconn.name
+                         IF revcon\=0 THEN writes(revcon)
+                     $)
+                     ENDCASE
+                CASE 'U':
+                CASE 'P':
+                     $(  LET uidset=rootnode!rtn.info!rtninfo.ring!ri.uidset
+                         UNLESS uidset=0 THEN
+                         $(  LET puid = (uidset+1)+24/bytesperword
+                             IF key='U' & users.name=-1 THEN
+                             users.name := synfind(puid, to.name.domain, 0)
+                             TEST key='P' | (key='U' & users.name=0) THEN
+                                 writef("%X4%X4%X4%X4",
+                                     get2bytes(puid, 0), get2bytes(puid, 1),
+                                     get2bytes(puid, 2), get2bytes(puid, 3) )
+                             ELSE writes(users.name)
+                         $)
+                     $)
+                     ENDCASE
+                CASE 'V':
+                     $(  LET termvec = readtermvec()
+                         TEST termvec=0 THEN writes("unset") ELSE
+                         writes(termvec!term.string)
+                     $)
+                     ENDCASE
+                CASE '=':
+                     synfind(0)
+                     users.name := -1
+                     dat.set := FALSE
+                     ENDCASE
+                CASE '%':
+                DEFAULT:
+                     wrch(str%p)
+            $)
+            p:=p+1
+        $)
+     $)
+     RESULTIS ans
+$)
+
+
+
+LET start() BE
+$(  MANIFEST $( argsize = 128 $)
+    LET arg=VEC argsize
+    LET rdargs.string = "From/S,String=file,To,Term/K"
+    LET rc = 5
+    FOR i=1 TO cli.commandname%0 DO
+    cli.commandname%i := capitalch(cli.commandname%i)
+    TEST 0=rdargs(rdargs.string, arg, argsize) THEN
+    writef("Arguments for %S do not match *"%S*"*N",
+            cli.commandname, rdargs.string) ELSE
+    TEST arg!0=0 & arg!1=0 THEN
+    writef("%S: a string or a file to read must be given*N", cli.commandname)
+    ELSE
+    $(  LET term = (arg!3=0 -> "/**", arg!3)
+        LET outfile=arg!2
+        LET str=arg!1
+        LET from.a.file = (arg!0~=0)
+        LET out=0
+        LET in=0
+        LET saveout = output()
+        LET savein  = input()
+        rc := 0
+        IF from.a.file & ~(str=0 | str%0=0) THEN
+        $(  in := findinput(str)
+            IF in=0 THEN
+            $(  writef("%S: can't open %S for input*N",
+                        cli.commandname, outfile)
+                rc := 20
+            $)
+        $)
+        UNLESS rc~=0 | outfile=0 | outfile%0=0 THEN
+        $(  out:=findoutput(outfile)
+            IF out=0 THEN
+            $(  writef("%S: can't open %S for output*N",
+                        cli.commandname, outfile)
+                rc := 20
+            $)
+        $)
+        IF rc=0 THEN
+        $(  LET this.file = (outfile=0 | outfile%0=0 -> "**", outfile)
+            LET save.space = getvec(2+(outfile%0+term%0)/bytesperword)
+            LET save.this.file.name = save.space
+            LET save.term = save.space + this.file%0/bytesperword + 1
+            // If we are reading from a file we are going to use ARG
+            // to buffer strings in - so we must copy information that
+            // we need out of it now!
+            TEST save.this.file.name=0 THEN
+            $(  writef("%S: no memory*N", cli.commandname)
+                rc := 20
+            $) ELSE
+            $(  FOR i=0 TO this.file%0 DO save.this.file.name%i := this.file%i
+                FOR i=0 TO term%0 DO save.term%i := term%i
+                UNLESS out=0 THEN selectoutput(out)
+                UNLESS in=0 THEN selectinput(in)
+                TEST from.a.file THEN
+                $(  LET chno=?
+                    LET ch=?
+                    $(rpt
+                        ch := rdch()
+                        chno := 1
+                        WHILE chno < argsize*bytesperword-1 &
+                              ch~='*E' & ch~='*N' & ch~=endstreamch DO
+                        $(  arg%chno := ch
+                            chno := chno + 1
+                            ch := rdch()
+                        $)
+                        arg%0 := chno-1
+                        TEST 0=compstring(save.term, arg)
+                            THEN ch:=endstreamch
+                            ELSE p.write(save.this.file.name, arg)
+                        UNLESS ch=endstreamch THEN wrch(ch)
+                    $)rpt REPEATUNTIL ch=endstreamch
+                $) ELSE
+                $(  p.write(save.this.file.name, str)
+                    newline()
+                $)
+                freevec(save.space)
+            $)
+        $)
+        UNLESS out=0 THEN
+        $(  endwrite()
+            selectoutput(saveout)
+        $)
+        UNLESS in=0 THEN
+        $(  endread()
+            selectinput(savein)
+        $)
+    $)
+    synfind(0)   // clear up in-core data
+    UNLESS rc=0 THEN stop(rc)
+$)
+   
+

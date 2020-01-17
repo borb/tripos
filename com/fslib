@@ -1,0 +1,1105 @@
+/***********************************************************************
+**             (C) Copyright 1981  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+*                                                                      *
+*           ########   ######   ##        ########  #######            *
+*           ########  ########  ##        ########  ########           *
+*           ##        ##        ##           ##     ##    ##           *
+*           ######    #######   ##           ##     #######            *
+*           ##              ##  ##           ##     ##    ##           *
+*           ##              ##  ##           ##     ##    ##           *
+*           ##        ########  ########  ########  ########           *
+*           ##         ######   ########  ########  #######            *
+*                                                                      *
+************************************************************************
+**    Author:  Brian Knight                          November 1981    **
+***********************************************************************/
+
+
+
+SECTION "FSLIB"
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "MANHDR"
+GET "BCPL.SSPLIB"
+GET ":idw.bcpl.fshdr"
+
+
+//Modifications:
+//   18/05/82 by IDW:   Potential infinite recursion in "fs.close" removed
+//
+//   08/10/82 by IDW:   FS.READ.FILE.SIZE added
+//   12/01/83 by IDW:   Protocol change for Bridge
+//   16/02/83 by IDW:   FSLIB.INITIALIZE changed to task string argument
+//                      of the file server it has to use.
+
+
+
+
+/***********************************************************************
+*                                                                      *
+*                       Fileserver Command Routines                    *
+*                                                                      *
+***********************************************************************/
+
+
+LET fslib.initialize( fileserve ) = VALOF
+    $(
+    // TRUE iff OK
+    LET nsvec = VEC 3
+
+    rhtaskid  := rootnode ! rtn.info ! rtninfo.ring ! ri.rhtaskid
+    IF rhtaskid=0 THEN $( result2 := 400; RESULTIS FALSE $)
+
+    UNLESS lookup.name( fileserve, nsvec) THEN RESULTIS FALSE
+
+    fs.mc.id       := nsvec ! nsv.machine.id
+    fs.comm.port   := nsvec ! nsv.port
+    global.tag     := 0
+    fileserver.deaf        := FALSE
+    fileserver.really.deaf := FALSE
+    RESULTIS TRUE
+    $)
+
+
+
+AND fs.retrieve(uid, slot, result.puid) = VALOF
+    $(
+    // Retrieve the PUID retained at offset SLOT in the index
+    // referred to by UID (which may be a PUID or a TUID).
+    // Copy the puid into the supplied vector.
+    // Result is TRUE if the retrieve works, FALSE otherwise.
+    // If the index slot is empty, then the result PUID will be all zero.
+
+    LET reply.buff       = VEC retrieve.reply.size-1
+
+    TEST fs.command(reply.buff, retrieve.reply.size, fs.op.retrieve, 6,
+                    uid!0, uid!1, uid!2, uid!3, 0, slot)
+    THEN
+      $( // Successful retrieve
+      FOR i=0 TO wordupb.uid
+      DO result.puid!i := get2bytes(reply.buff, fsbb.args+i)
+      RESULTIS TRUE
+      $)
+    ELSE RESULTIS FALSE // Retrieve failed
+    $)
+
+
+AND fs.ensure(tuid) = VALOF
+    $(
+    // Ensure that all updates done under TUID are written to disc
+
+    LET reply.buff      = VEC fsbb.args
+
+    RESULTIS fs.command(reply.buff, fsbb.args, fs.op.ensure, 5,
+                        tuid!0, tuid!1, tuid!2, tuid!3, TRUE)
+    $)
+
+
+
+AND fs.retain(uid, slot, puid) = VALOF
+    $(
+    // Retain PUID at offset SLOT in index PUID
+
+    LET reply.buff      = VEC fsbb.args-1
+
+    RESULTIS fs.command(reply.buff, fsbb.args, fs.op.retain, 10,
+                        uid!0, uid!1, uid!2, uid!3,
+                        0, slot,
+                        puid!0, puid!1, puid!2, puid!3)
+    $)
+
+
+
+
+AND fs.create.index(uid, slot, reply.puid) = VALOF
+    $(
+    // Create a new index at offset SLOT in the index UID,
+    // returning its puid in REPLY.PUID.
+
+    LET reply.buff      = VEC fsbb.args+3
+
+    TEST fs.command(reply.buff, fsbb.args+4, fs.op.ci, 8,
+                    uid!0, uid!1, uid!2, uid!3,
+                    0, slot,
+                    0, 1000)  // 1000 slots
+    THEN
+      $(
+      // Successful creation
+      FOR i=0 TO wordupb.uid
+      DO reply.puid!i := get2bytes(reply.buff, fsbb.args+i)
+
+      RESULTIS TRUE
+      $)
+    ELSE RESULTIS FALSE
+    $)
+
+
+
+
+AND fs.open(puid, for.writing, tuid.vec, wait.until.free) = VALOF
+    $(
+    // Get a lock in the fileserver by calling the fileserver OPEN
+    // function on PUID.
+    // ACCESS can be SHARED.LOCK or EXCLUSIVE.LOCK, indicating whether
+    // the open should be for reading or writing.
+    // If WAIT.UNTIL.FREE is TRUE then the routine make several attempts
+    // to get the lock.  This is used for directories, which should be
+    // locked for short periods only.
+    // On return, if the lock has been granted, then the result is TRUE
+    // and the new temporary uid is passed back in TUID.VEC.
+    // If it fails, the result is FALSE.
+
+    LET reply.buff = VEC open.reply.size-1
+
+
+    FOR try=1 TO max.lock.tries
+    DO $(
+       IF fs.command(reply.buff, open.reply.size, fs.op.open, 5,
+                     puid!0, puid!1, puid!2, puid!3,
+                     for.writing )
+       THEN
+         $( // Successful OPEN
+         FOR i=0 TO wordupb.uid
+         DO tuid.vec!i := get2bytes(reply.buff, fsbb.args+i)
+
+         RESULTIS TRUE
+         $)
+
+
+       // OPEN failed - wait and try again if that's what is wanted
+
+       IF (NOT wait.until.free) | (try = max.lock.tries) THEN RESULTIS FALSE
+
+//     mess("Waiting for object to be free*n")
+       delay(lock.wait.time)
+       $)
+    $)
+
+
+
+AND fs.close(tuid, do.updates) = VALOF
+    $(
+    // Free a fileserver lock by calling CLOSE on the tuid.
+    // If DO.UPDATES is TRUE, then all the changes made to a special
+    // file while it was open should be committed.  This is done
+    // by calling ENSURE before closing; this is better than just
+    // closing, as ENSURE is a repeatable operation, while CLOSE is not.
+    //
+    // If it succeeds: result is TRUE, RESULT2 on entry is preserved.
+    // If it fails:   result is FALSE, RESULT2 is the error code.
+
+    LET res     = ?
+    LET r2      = result2
+
+    TEST do.updates
+    THEN
+      $(
+      res       := fs.ensure(tuid)
+
+      TEST res
+      THEN
+        $(
+        res     := fs.raw.close(tuid, TRUE)
+        IF NOT res THEN r2 := result2
+        $)
+      ELSE fs.raw.close(tuid, FALSE) // Already failed so ignore rc here
+      $)
+    ELSE
+      $(
+      res       := fs.raw.close(tuid, do.updates)
+      IF NOT res THEN r2 := result2
+      $)
+
+    result2     := r2 // Error code or original result2
+    RESULTIS res
+    $)
+
+
+
+AND fs.raw.close(tuid, do.updates)  = VALOF
+    $(
+    // Free a fileserver lock by calling CLOSE on the tuid.
+    // DO.UPDATES specifies whether or not the updates should be done
+    // (on a fileserver special file).
+    // Preserves RESULT2
+
+    LET reply.buff = VEC close.reply.size
+    LET r2         = result2
+    LET res        = ?
+
+    res := fs.command(reply.buff, close.reply.size, fs.op.close, 5,
+                      tuid!0, tuid!1, tuid!2, tuid!3,
+                      do.updates)
+//    ELSE mess("failed to free fs lock (rc %x4)*n", result2)
+
+    result2     := r2
+    RESULTIS res
+    $)
+
+
+
+AND fs.read(uid, buff, bytesize, offsetv) = VALOF
+    $(
+    // Do an SSP read or a full read, depending on the transfer size.
+
+    IF bytesize=0 THEN RESULTIS TRUE // Nothing to do
+
+//    RESULTIS [(bytesize <= max.ssp.transfer.bytes) ->
+//              fs.ssp.read, fs.full.read]   (uid, buff, bytesize, offsetv)
+
+    // Always do full read to avoid the problem of finding temporary
+    // workspace for an SSP read.
+    RESULTIS fs.full.read(uid, buff, bytesize, offsetv)
+    $)
+
+
+
+
+
+//AND fs.ssp.read(uid, buff, bytesize, offsetv) = VALOF
+//    $(
+//    // Read BYTESIZE bytes into BUFF from the 32 bit offset OFFSETV from
+//    // the file UID, using the SSP read mechanism.
+//
+//    LET reply.buff      = find.cache.slot(cs.inuse, nopromote)
+//    LET res             = ?
+//    LET dibytesize      = bytesize / bytesperringword
+//
+//
+//    res := fs.command(reply.buff, fsbb.args+2+dibytesize, fs.op.ssp.read, 8,
+//                      uid!0, uid!1, uid!2, uid!3,
+//                      offsetv!0, offsetv!1,
+//                      0, dibytesize)
+//
+//    reply.buff!cache.status     := cs.available // Free the cache slot
+//
+//    TEST res
+//    THEN
+//      $(
+//      // Transfer worked - copy data into user's buffer
+//
+//      blockcopydibytes(reply.buff, fsbb.args+2, buff, 0, dibytesize)
+//      RESULTIS TRUE
+//      $)
+//    ELSE RESULTIS FALSE
+//    $)
+
+
+
+
+AND fs.full.read(uid, buff, bytesize, offsetv) = VALOF
+    $(
+    // Read BYTESIZE bytes starting at the (32 bit) offset in OFFSETV from
+    // the file specified by UID into BUFF, using the full read mechanism.
+    // Result is TRUE for success, FALSE for failure.
+    // The read is retried indefinitely for all failure reasons except
+    // a non-zero return code from the fileserver.
+
+    LET reply.pkt       = VEC rhpkt.lifetime
+    LET read.pkt        = VEC rhpkt.lifetime
+    LET reply.buff      = VEC read.reply.size-1
+    LET tx.buff         = VEC read.req.size-1
+    LET reply.port      = findport()
+    LET read.port       = reply.port | #X1000 // Works across bridges
+    LET tag             = nexttag()
+    LET tx.status       = ?
+    LET time1           = ?
+    LET dibytesize      = bytesize / bytesperringword
+
+//    log.full.reads      := log.full.reads + 1
+
+    set.wordvec(reply.pkt, rhpkt.lifetime+1,
+                notinuse, rhtaskid, act.rx.bb, ?, ?,
+                reply.buff, read.reply.size, fs.mc.id, reply.port, fs.wait.time)
+
+    set.wordvec(read.pkt, rhpkt.lifetime+1,
+                notinuse, rhtaskid, act.rx.chain, ?, ?,
+                buff, dibytesize, fs.mc.id, read.port, fs.wait.time)
+
+    set.dibytevec(tx.buff, read.req.size,
+                  code.sspreq, reply.port, fs.op.read, tag,
+                  uid!0, uid!1, uid!2, uid!3, offsetv!0, offsetv!1,
+                  (dibytesize >> 16) & #XFFFF, dibytesize & #XFFFF)
+
+
+    // Issue reception requests
+
+    qpkt(read.pkt); qpkt(reply.pkt)
+
+    // and transmit the command
+
+    tx.status := transmit(tx.buff, read.req.size, fs.comm.port)
+    time1     := rootnode ! rtn.ticks // Record start time
+
+
+    // Wait for reception packets to return.
+    // If they come back in the wrong order, then pktwait sorts them out
+
+    pktwait(rhtaskid, read.pkt)
+    pktwait(rhtaskid, reply.pkt)
+
+
+    // Packets all back: see if the operation worked.
+    // Retry indefinitely on failure unless the fileserver gives a
+    // return code implying that retrying is not worthwhile
+
+    UNLESS check.fs.call(tx.status, reply.pkt, tag)
+    THEN TEST result2=0 THEN GOTO retry ELSE RESULTIS FALSE
+
+    // Did the data arrive?
+
+    IF read.pkt ! pkt.res1 = 0
+    THEN $(
+//         log.timeouts := log.timeouts+1
+           GOTO retry
+         $)
+
+
+    // It worked
+
+//    record.time.taken(time1) // Update delay histogram
+    freeport(reply.port); freeport(read.port)
+    RESULTIS TRUE
+
+retry:
+    freeport(reply.port); freeport(read.port)
+    $) REPEAT
+
+
+
+AND fs.write(uid, buff, bytesize, offsetv) =
+//    // Do an SSP write or normal write, depending on the transfer size.
+//
+//    [(bytesize <= max.ssp.transfer.bytes) ->
+//                    fs.ssp.write, fs.full.write] (uid, buff, bytesize, offsetv)
+//
+// Always use full write, to avoid problems of finding workspace for an
+// SSP write.
+    fs.full.write(uid, buff, bytesize, offsetv)
+
+
+
+
+
+//AND fs.ssp.write(uid, buff, bytesize, offsetv) = VALOF
+//    $(
+//    // Write SIZE words from BUFF to offset OFFSETV in file UID,
+//    // using the SSP write mechanism.
+//
+//    LET reply.pkt       = VEC rhpkt.lifetime
+//    LET tx.buff         = find.cache.slot(cs.inuse, nopromote)
+//    LET reply.buff      = VEC fsbb.args+1
+//    LET reply.port      = findport()
+//    LET tag             = nexttag()
+//    LET tx.status       = ?
+//    LET dibytesize      = bytesize / bytesperringword
+//
+//
+//    set.wordvec(reply.pkt, rhpkt.lifetime+1, notinuse, rhtaskid, act.rx.bb,
+//                ?, ?, reply.buff, fsbb.args+2, fs.mc.id, reply.port,
+//                fs.wait.time)
+//
+//    set.dibytevec(tx.buff, 10, code.sspreq, reply.port, fs.op.ssp.write, tag,
+//                  uid!0, uid!1, uid!2, uid!3, offsetv!0, offsetv!1)
+//    blockcopydibytes(buff, 0, tx.buff, fsbb.args+6, dibytesize)
+//
+//    qpkt(reply.pkt)
+//
+//    tx.status   := transmit(tx.buff, fsbb.args+6+dibytesize, fs.comm.port)
+//
+//    pktwait(rhtaskid, reply.pkt)
+//
+//    tx.buff!cache.status        := cs.available // Free the cache slot
+//
+//    UNLESS check.fs.call(tx.status, reply.pkt, tag)
+//    THEN TEST result2=0 THEN GOTO retry ELSE RESULTIS FALSE
+//
+//    freeport(reply.port)
+//    RESULTIS TRUE
+//
+//retry:
+//    // Operation didn't work, but is worth retrying
+//
+//    freeport(reply.port)
+//    $) REPEAT
+
+
+
+
+AND fs.full.write(uid, buff, bytesize, offsetv) = VALOF
+    $(
+    // Write SIZE words from BUFF to the fileserver file represented by UID.
+    // The offset to which it should be written is given as a 32 bit value
+    // in the vector OFFSETV.
+    //
+    // Returns TRUE if successful, FALSE if not.
+    // Retries indefinitely on all faults except those fileserver return
+    // codes which imply that retrying is futile.
+
+    LET reply.pkt       = VEC rhpkt.lifetime
+    LET tx.buff         = VEC write.req.size-1
+    LET reply.buff      = VEC write.reply.size-1
+    LET reply.port      = findport()
+    LET writer.port     = ?
+    LET tag             = nexttag()
+    LET tx.status       = ?
+    LET time1           = ?
+    LET dibytesize      = bytesize / bytesperringword
+
+//    log.full.writes     := log.full.writes + 1
+
+    // Make the reply packet
+
+    set.wordvec(reply.pkt, rhpkt.lifetime+1,
+                notinuse, rhtaskid, act.rx.bb, ?, ?,
+                reply.buff, write.reply.size, fs.mc.id, reply.port, fs.wait.time)
+
+    // Make the request for permission to write
+    // Note that this is an OPEN block (not SSPREQ) so that a bridge
+    // channel may be set up.
+
+    set.dibytevec(tx.buff, write.req.size,
+                  code.open, reply.port, fs.op.write, tag,
+                  uid!0, uid!1, uid!2, uid!3,
+                  offsetv!0, offsetv!1,
+                  (dibytesize >> 16) & #XFFFF, dibytesize & #XFFFF)
+
+
+    // Ask for permission to write
+
+    qpkt(reply.pkt)
+
+    tx.status := transmit(tx.buff, write.req.size, fs.comm.port)
+    time1     := rootnode ! rtn.ticks
+
+    pktwait(rhtaskid, reply.pkt)
+
+    // See if the transfer worked, and, if not, whether it is worth retrying
+
+    UNLESS check.fs.call(tx.status, reply.pkt, tag)
+    THEN TEST result2=0 THEN GOTO retry ELSE RESULTIS FALSE
+
+    // Permission to write has been granted.
+
+//    record.time.taken(time1)
+    writer.port := get2bytes(reply.buff, bb.ssp.replyport)
+    qpkt(reply.pkt)
+
+    tx.status := transmit(buff, dibytesize, writer.port)
+    time1     := rootnode ! rtn.ticks
+
+    pktwait(rhtaskid, reply.pkt)
+
+    // See if the write worked, and, if not, whether it is worth retrying
+
+    UNLESS check.fs.call(tx.status, reply.pkt, tag)
+    THEN TEST result2=0 THEN GOTO retry ELSE RESULTIS FALSE
+
+    // The write operation worked
+
+//    record.time.taken(time1)
+    freeport(reply.port)
+    RESULTIS TRUE
+
+retry:
+    // Operation didn't work, but is worth retrying
+
+    freeport(reply.port)
+    $) REPEAT
+
+
+
+AND fs.create.file(uid, slot, special, reply.puid) = VALOF
+    $(
+    // Create a fileserver file at offset SLOT in index UID.
+    // Make it a special file iff SPECIAL is TRUE.
+    // Success -> result TRUE, PUID of new file in vector REPLY.PUID.
+    // Failure -> result FALSE
+    //
+    // The file is created with very large size, and uninitialized value -1.
+
+    LET reply.buff      = VEC createfile.reply.size-1
+
+    TEST fs.command(reply.buff, createfile.reply.size, fs.op.createfile, 10,
+                    uid!0, uid!1, uid!2, uid!3,   // Index uid
+                    0, slot,                      // Offset
+                    #X00D9, #X6C00,               // Maximum file size
+                    uninitialized.file.value,     // Uninitialized value
+                    special)
+    THEN
+      $(
+      FOR i=0 TO wordupb.uid
+      DO reply.puid!i := get2bytes(reply.buff, fsbb.args+i)
+
+      RESULTIS TRUE
+      $)
+    ELSE RESULTIS FALSE
+    $)
+
+
+
+AND fs.delete(index.puid, slot) = VALOF
+    $(
+    // Delete the entry at offset SLOT in the index INDEX.UID.
+
+    LET reply.buff      = VEC delete.reply.size-1
+
+    RESULTIS fs.command(reply.buff, delete.reply.size, fs.op.delete, 6,
+                        index.puid!0, index.puid!1, index.puid!2, index.puid!3,
+                        0, slot)
+    $)
+
+
+
+
+AND fs.read.file.size(file.puid, resvec) = VALOF
+    $(
+    // Read the size of the file.
+    // Result is TRUE iff it works, HWM in RESVEC
+
+    LET reply.buff      = VEC hwm.reply.size-1
+    LET res             = fs.command(reply.buff, hwm.reply.size, fs.op.rfs, 4,
+                          file.puid!0, file.puid!1, file.puid!2, file.puid!3)
+    LET hwm.ls          = get2bytes(reply.buff, fsbb.args+1) // LS word only
+    LET hwm.ms          = get2bytes(reply.buff, fsbb.args+0)
+
+    IF NOT res THEN RESULTIS res // Failed
+
+    resvec!0  :=  hwm.ms
+    resvec!1  :=  hwm.ls
+
+    RESULTIS  res
+    $)
+
+
+
+
+AND fs.read.index.size(index.puid, resvec) = VALOF
+    $(
+    // Read the size of the index.
+    // Result is TRUE iff it works, HWM in RESVEC
+
+    LET reply.buff      = VEC hwm.reply.size-1
+    LET res             = fs.command(reply.buff, hwm.reply.size, fs.op.ris, 4,
+                          index.puid!0, index.puid!1, index.puid!2, index.puid!3)
+    LET hwm.ls          = get2bytes(reply.buff, fsbb.args+1) // LS word only
+    LET hwm.ms          = get2bytes(reply.buff, fsbb.args+0)
+
+    IF NOT res THEN RESULTIS res // Failed
+
+    resvec!0  :=  hwm.ms
+    resvec!1  :=  hwm.ls
+
+    RESULTIS  res
+    $)
+
+
+
+
+AND fs.read.file.hwm(file.puid, resvec) = VALOF
+    $(
+    // Read the high water mark of the file.
+    // Result is TRUE iff it works, HWM in RESVEC
+
+    LET reply.buff      = VEC hwm.reply.size-1
+    LET res             = fs.command(reply.buff, hwm.reply.size, fs.op.rfhwm, 4,
+                          file.puid!0, file.puid!1, file.puid!2, file.puid!3)
+    LET hwm.ls          = get2bytes(reply.buff, fsbb.args+1) // LS word only
+    LET hwm.ms          = get2bytes(reply.buff, fsbb.args+0)
+
+    IF NOT res THEN RESULTIS res // Failed
+
+    resvec!0  :=  hwm.ms
+    resvec!1  :=  hwm.ls
+
+    RESULTIS  res
+    $)
+
+
+
+
+
+AND fs.command(reply.buff, reply.buff.size, operation, num.args,
+               a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) = VALOF
+    $(
+    // Do a fileserver command, putting the reply in the supplied vector.
+    // REPLY.BUFF.SIZE is the number of dibytes in the reply vector.
+    // OPERATION is the fileserver operation code.
+    // NUM.ARGS is the number of 16-bit argument words to send; these are
+    // given in A1 onwards.
+
+    LET reply.pkt       = VEC rhpkt.lifetime
+    LET tx.status       = ?
+    LET tx.buff         = VEC tx.buff.upb
+    LET reply.port      = findport()
+    LET tag             = nexttag()
+    LET time1           = ?
+
+
+    set.wordvec(reply.pkt, rhpkt.lifetime+1, notinuse, rhtaskid,
+                act.rx.bb, ?, ?, reply.buff, reply.buff.size, fs.mc.id,
+                reply.port, fs.wait.time)
+
+    set.dibytevec(tx.buff, tx.buff.upb, code.sspreq, reply.port, operation,
+                  tag, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10)
+
+    // Issue reception request
+
+    qpkt(reply.pkt)
+
+    // Transmit request
+
+    tx.status := transmit(tx.buff, num.args+fsbb.args, fs.comm.port)
+    time1     := rootnode ! rtn.ticks // Record start time
+
+    // Wait for reply
+
+    pktwait(rhtaskid, reply.pkt)
+
+    // See whether the operation worked, and if it didn't whether it
+    // is worth retrying.
+
+    UNLESS check.fs.call(tx.status, reply.pkt, tag)
+    THEN TEST result2=0 THEN GOTO retry ELSE RESULTIS FALSE
+
+    // The operation has worked
+
+    freeport(reply.port)
+    RESULTIS TRUE
+
+retry:
+    // Operation didn't work, but is worth retrying
+
+    freeport(reply.port)
+    $) REPEAT
+
+
+
+//AND record.time.taken(start.time) BE
+//    $(
+//    // Log the time taken by an FS command in a histogram.
+//    // Each histogram slot is 100ms wide.
+//
+//    LET duration        = rootnode ! rtn.ticks - start.time
+//    LET hist.slot       = ?
+//
+//    IF duration < 0 THEN duration := duration + tickspersecond*60
+//    hist.slot   := duration / (tickspersecond/10)
+//    IF hist.slot > 29 THEN hist.slot := 29
+//
+//    fs.call.delay.histogram!hist.slot := fs.call.delay.histogram!hist.slot + 1
+//    IF duration > fs.call.max.delay THEN fs.call.max.delay := duration
+//    $)
+
+
+
+//*<EXPLAIN
+AND explain(returncode) BE
+    $(
+    // Call the fileserver to get a text explanation of one of its
+    // return codes.
+    // This routine does nothing if the global flag FS.RC.MESSAGES.ON
+    // is FALSE.
+
+    LET reply.buff = VEC ex.reply.size-1
+
+    mess("fileserver rc %x4: ", returncode)
+
+    TEST fs.command(reply.buff, ex.reply.size, fs.op.explain, 1, returncode)
+    THEN FOR i=1 TO byteget(reply.buff, fsbb.args*bytesperringword + 0)
+         DO wrch( byteget(reply.buff, fsbb.args*bytesperringword + i) )
+    ELSE writes("EXPLAIN failed")
+
+    newline()
+    $)
+/*EXPLAIN>*/
+
+
+
+AND check.fs.call(tx.status, reply.pkt, tag) = VALOF
+    $(
+    // Checks the results of a call of the fileserver.
+    // Returns TRUE if the operation was successful.
+    // If the operation failed, then the result is FALSE and
+    //   RESULT2 = 0  -> Communication error, worth retrying
+    //   RESULT2 \= 0 -> Hard error - not worth retrying
+    //                   The fileserver return code is converted to
+    //                   a TRIPOS return code by the addition of
+    //                   a base number.
+
+    LET reply.buff      = reply.pkt ! rhpkt.buff
+    LET fs.rc           = get2bytes(reply.buff, bb.ssp.rc)
+
+    result2             := 0
+
+    IF tx.status \= txst.accepted THEN RESULTIS FALSE // Transmission failed
+
+    IF reply.pkt ! pkt.res1 = 0 THEN RESULTIS FALSE // No reply
+
+    IF get2bytes(reply.buff, fsbb.tag) \= tag
+    THEN $( mess("bad tag*n"); RESULTIS FALSE $)
+
+    IF fs.rc \= 0
+    THEN
+      $(
+//*<EXPLAIN
+      explain(fs.rc)
+/*EXPLAIN>*/
+
+      // If the return code is of the form #XFxxx, then the error
+      // is a communication error, and a retry is worthwhile.
+      // Wait a bit before retrying to avoid a flood of messages
+      // when the fileserver is not in service.
+
+      TEST (fs.rc & #XF000) = #XF000
+      THEN
+        $(
+        delay(tickspersecond)
+        result2                 := 0
+        $)
+      ELSE result2 := (fs.rc>>8) + fs.rc.base // Remove module no.
+
+      RESULTIS FALSE
+      $)
+
+    // The operation worked
+
+    RESULTIS TRUE
+    $)
+
+
+AND nexttag() = VALOF
+    $( // Allocate the next 16 bit tag
+    global.tag := (global.tag+1) & #XFFFF
+    RESULTIS global.tag
+    $)
+
+
+
+
+/***********************************************************************
+*                                                                      *
+*                       Ring Routines                                  *
+*                                                                      *
+*    Routines for port allocation and ring transmission                *
+*                                                                      *
+***********************************************************************/
+
+
+
+// Allocate the next port number
+AND findport() = sendpkt(notinuse, rhtaskid, act.findfreeport)
+
+AND freeport(port) BE sendpkt(notinuse, rhtaskid, act.releaseport,?,?,port)
+
+
+
+AND transmit(buff, num.dibytes, port) = VALOF
+    $(
+    // Transmit the supplied buffer to the fileserver, retrying a few times
+    // if it fails.
+    // The result is txst.accepted if successful, txst.<reason> otherwise.
+    // If transmission fails, then a delay is introduced before returning
+    // from this procedure, to allow the ring handler and drivers to
+    // do other things than hammer a deaf fileserver (which may e.g.
+    // interfere with byte streams).  The globals
+    // FILESERVER.DEAF and FILESERVER.REALLY.DEAF are
+    // used both to allow the "fileserver not listening" message
+    // to be issued just once, regardless of how many coroutines
+    // are trying to use it, and so that a hard failure can be distinguished
+    // from a transient one, and the retry delay increased.
+
+    LET tx.status       = ?
+
+    FOR i=1 TO max.tx.tries
+    DO $(
+       tx.status := sendpkt(notinuse, rhtaskid, act.tx, ?, ?,
+                            buff, num.dibytes, fs.mc.id, port)
+
+       IF tx.status = txst.accepted
+       THEN
+         $(
+         IF fileserver.deaf
+         THEN
+           $(
+           IF fileserver.really.deaf THEN mess("fileserver listening again*n")
+           fileserver.really.deaf       := FALSE
+           fileserver.deaf              := FALSE
+           $)
+
+         RESULTIS tx.status
+         $)
+       $)
+
+    // Transmission failed
+    // Only complain once for all coroutines and wait a bit to
+    // avoid monopolising the ring.
+
+    TEST fileserver.deaf
+    THEN
+      $(
+      // Failed to get through at second attempt - maybe it's crashed
+      // so wait for a long time before retrying.
+      UNLESS fileserver.really.deaf
+      THEN
+        $(
+        mess("fileserver not listening*n")
+        fileserver.really.deaf  := TRUE // Stops message being issued
+                                        // more than once
+        $)
+
+      delay(tickspersecond*10)
+      $)
+    ELSE
+      $(
+      // Couldn't get through, but may just be a transient problem
+      // so return to the caller to let him retry.
+      fileserver.deaf := TRUE
+      $)
+
+    RESULTIS tx.status
+    $)
+
+
+
+
+
+/***********************************************************************
+*                                                                      *
+*                       32 bit arithmetic                              *
+*                                                                      *
+***********************************************************************/
+
+
+
+AND halve32(a,b) BE
+    $(
+    // a := b/2  where a and b are 32 bit values in vectors
+
+    LET b0      = b!0
+    a!0         := b0 >> 1
+    a!1         := [(b0 << 15) | (b!1 >> 1)] & #XFFFF
+    $)
+
+
+
+
+AND add.32.16(a,b) BE
+    $(
+    // a +:= b  where a is a 32 bit value in a vector, and b is a 16 bit value
+    // Both a and b are positive
+
+    LET a1      = a!1
+    LET aa1     = [a1 + b] & #XFFFF
+    a!1         := aa1
+    IF ([a1 & #X8000] \= 0) & ([aa1 & #X8000] = 0) THEN a!0 := a!0 + 1
+    $)
+
+
+
+
+AND sub.32.16(a,b) BE
+    $(
+    // a -:= b where a is a 32 bit value in a vector and b is a 16 bit value.
+    // Both a and b are positive
+
+    LET a1      = a!1
+    LET aa1     = [a1 - b] & #XFFFF
+    a!1         := aa1
+    IF ([a1 & #X8000] = 0) & ([aa1 & #X8000] \= 0) THEN a!0 := a!0 - 1
+    $)
+
+
+
+
+AND less.32.16(a,b) = VALOF
+    $(
+    // TRUE iff the 32 bit value a is less than the 16 bit value b.
+    // Both a and b are positive
+
+    IF (a!0 \= 0) | ([a!1 & #X8000] \= 0) THEN RESULTIS FALSE
+    RESULTIS a!1 < b  // Know that A is only 15 bits long
+    $)
+
+
+
+
+AND sub24(a,b,c) BE
+    $(
+    // Does a := b-c, where a, b, c are 24 bit numbers held as
+    // two 16 bit words in vectors. (8 bits in first word, 16 in second).
+    // a := b + (-c)  = b + (NOT c  + 1)
+
+    LET am      = NOT (c!0)  // 1s complement of c
+    LET al      = NOT (c!1)
+    LET bm      = (b!0 << 8) | (b!1 >> 8)
+    LET bl      = b!1 & #XFF
+
+    am          := (am << 8) | [(al >> 8) & #XFF]
+    al          := al & #XFF
+    al          := al + bl + 1
+    am          := am + bm + (al >> 8)
+
+    a!0         := am >> 8
+    a!1         := [(am << 8) | (al & #XFF)] & #XFFFF
+    $)
+
+
+
+AND less24(a, b) = VALOF
+    $(
+    // TRUE iff the positive number held in vector A is less than that in B
+
+    LET a1 = a!1
+    LET b1 = b!1
+    LET aa0 = (a!0 << 1) | (a1 >> 15)
+    LET bb0 = (b!0 << 1) | (b1 >> 15)
+    LET aa1 = a1 & #X7FFF
+    LET bb1 = b1 & #X7FFF
+
+    IF aa0 < bb0 THEN RESULTIS TRUE
+
+    IF aa0 = bb0 THEN RESULTIS aa1 < bb1
+
+    RESULTIS FALSE
+    $)
+
+
+
+
+
+
+
+
+
+/***********************************************************************
+*                                                                      *
+*                     General Routines                                 *
+*                                                                      *
+***********************************************************************/
+
+
+//AND copktwait(dest, pkt) = VALOF
+//    $(
+//    // Used to replace BLIB pktwait.
+//    //
+//    // The requested packet has either not yet returned, or has come back
+//    // out of the expected order and been stored on RINGPKT.QUEUE.
+//
+//    LET lv.pkt = @ringpkt.queue
+//
+//    UNTIL !lv.pkt = 0
+//    DO $(
+//       LET p = !lv.pkt
+//
+//       IF p = pkt THEN RESULTIS headpkt(lv.pkt) // Found: dequeue & return it
+//
+//       lv.pkt := p
+//       $)
+//
+//    // Packet not found: wait for it to arrive
+//
+//    RESULTIS cowait(pkt)
+//    $)
+
+
+
+AND mess(f,a,b,c) BE
+    $(
+    // Output a message to the console, preserving result2
+    LET r2      = result2
+
+    writes("****** FSFH: ")
+    writef(f,a,b,c)
+    result2     := r2
+    $)
+
+
+
+AND append(qaddr, pkt) BE
+    $(
+    // Put pkt on the end of the queue
+    UNTIL !qaddr = 0 DO qaddr := !qaddr
+
+    !qaddr := pkt
+    !pkt   := 0
+    $)
+
+
+
+AND headpkt(lv.queue) = VALOF
+    $(
+    // Dequeue and return the head packet from the queue.
+
+    LET p = !lv.queue
+
+    IF p \= 0
+    THEN
+      $( // The queue is not empty
+      !lv.queue         := !p // Dequeue packet
+      !p                := notinuse // and get it ready for sending
+      $)
+
+    RESULTIS p  // Packet or zero
+    $)
+
+
+
+AND clear.wordvec(v, size) BE FOR i=0 TO size-1 DO v!i := 0
+
+
+
+AND set.wordvec(v, n, a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12,a13,a14) BE
+    $(
+    // Set fields 0 to n-1 of vector V from A1 onwards.
+
+    blockcopywords(@a1, v, n)
+    $)
+
+
+
+AND set.dibytevec(v, n, a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12,a13,a14) BE
+    $( // Set fields 0 to n-1 of dibyte vector V from A1 upwards
+    FOR i=0 TO n-1 DO put2bytes(v, i, [@a1]!i)
+    $)
+
+
+
+
+AND blockcopywords(source, dest, size) BE
+    // Copy a vector of BCPL words.
+    // Replace by machine code for efficiency.
+    $(
+    LET sp, dp, s.end = source, dest, source+size
+
+    UNTIL sp = s.end
+    DO $(
+       !dp      := !sp
+       dp       := dp+1
+       sp       := sp+1
+       $)
+    $)
+
+
+
+AND blockcopydibytes(frombuff, fboffset, tobuff, tboffset, n) BE
+    $(
+    // Copy N dibytes from dibyte offset FBOFFSET in vector FROMBUFF
+    // to offset TBOFFSET in vector TOBUFF.
+    // Replace by machine code for speed.
+
+    FOR i=0 TO n-1
+    DO put2bytes(tobuff, tboffset+i, get2bytes[frombuff, fboffset+i] )
+    $)
+
+
+
+
+AND copy.dibytes.to.words(dibyte.vec, word.vec, n) BE
+    // Must work if DIBYTE.VEC = WORD.VEC
+    FOR i=n-1 TO 0 BY -1 DO word.vec!i := get2bytes(dibyte.vec, i)
+   
+

@@ -1,0 +1,668 @@
+SECTION "FEP"
+
+$<PDPRSX
+NEEDS "FINDSG"
+NEEDS "TITLE"
+NEEDS "IOERROR"
+$>PDPRSX
+
+$$CGCOMHDR := TRUE
+$$BGCOMHDR := TRUE
+$$AEHDR    := TRUE
+$$AEOCHDR  := TRUE
+GET "ERRHDR"
+GET "SYNHDR"
+//GET "TRNHDR"
+
+/******************************************************************************\
+* Under TRIPOS, if it fails it returns FALSE, and MST must clear up!!!!
+*
+* On exit the following are set:
+*
+* SOURCEFILE    ((CGFLAGS & cgf.Cgonly) ~= 0) -> OCODEFILE, SOURCEFILE
+* SOURCESTREAM  Opened, and Selected
+*
+* LISTOUT       LISTFILE -> Opened listfile, SYSOUT
+* CLOSELIST     SPOOL -> SPOOLOUTPUT, ENDWRITE
+* PRSOURCE      Set if listfile is given        Actually is TRUE -> listing
+*                                                           FALSE-> NO listing
+*                                                           1    -> preprocess
+*                                                           2 (temp) Use ver...
+* ((CGFLAGS & cgf.Cgonly) ~= 0) RSX     - /OC set
+*               TRIPOS  - NO Sourcefile, BUT ocodefile
+*
+* FILEOCODE     B OCODE file specified
+* SLOW          B if slow (!!)                          OR (CGFLAGS & cgf.Cgonly)
+* OCODEFILE     S Name given, OR slow -> Sysgenned      OR (CGFLAGS & cgf.Cgonly)
+\******************************************************************************/
+
+MANIFEST $(
+   SW.NO = ('N'<<8) \/ 'O'
+
+// List File
+   SW.AL = ('A'<<8) \/ 'L'
+   $<PDPRSX   SW.SP = ('S'<<8) \/ 'P' $>PDPRSX
+
+// Source file
+   SW.CC = ('C'<<8) \/ 'C'
+   SW.CR = ('C'<<8) \/ 'R'              // CRoss compilation
+   SW.DE = ('D'<<8) \/ 'E'              // DEfinitions
+   SW.ER = ('E'<<8) \/ 'R'              // $ERR$
+   SW.EM = ('E'<<8) \/ 'M'
+   SW.EX = ('E'<<8) \/ 'X'              // $G$, $ERR$, ...
+   SW.GL = ('G'<<8) \/ 'L'              // $G$
+   SW.GE = ('G'<<8) \/ 'E'              // Show everything that's got!
+   SW.IG = ('I'<<8) \/ 'G'              // IGnore gets
+   SW.LN = ('L'<<8) \/ 'N'              // Include Line Numbers in tree
+   SW.MC = ('M'<<8) \/ 'C'              // MaChine - like CC but sets -sy, cr
+   SW.QT = ('Q'<<8) \/ 'T'              // QuieT
+   SW.PR = ('P'<<8) \/ 'R'              // Print $< less source!
+   SW.RE = ('R'<<8) \/ 'E'              // REgister -> SIMPLE COMPLEX OP
+   SW.SA = ('S'<<8) \/ 'A'              // SAve space size
+   SW.SL = ('S'<<8) \/ 'L'              // SLow
+   SW.SW = ('S'<<8) \/ 'W'              // SWitch size
+   SW.SY = ('S'<<8) \/ 'Y'              // SYstem tag
+   SW.TO = ('T'<<8) \/ 'O'              // Trn Opt
+   SW.TS = ('T'<<8) \/ 'S'              // display free Trn Space
+   SW.UN = ('U'<<8) \/ 'N'              // UNtag OR UNix
+   SW.VE = ('V'<<8) \/ 'E'
+   SW.WA = ('W'<<8) \/ 'A'
+   SW.WO = ('W'<<8) \/ 'O'
+   SW.WS = ('W'<<8) \/ 'S'
+$<PDPRSX
+   SW.OC = ('O'<<8) \/ 'C'              // OCode
+$>PDPRSX
+
+// Ocode file
+   SW.NU = ('N'<<8) \/ 'U'              // NUmeric
+   SW.BY = ('B'<<8) \/ 'Y'              // BYte operators       in OCODE
+   SW.DI = ('D'<<8) \/ 'I'              // DIbyte operators     in OCODE
+   SW.OP = ('O'<<8) \/ 'P'              // OP:=
+
+   SW.PD = ('P'<<8) \/ 'D'
+// SW.PS = ('P'<<8) \/ 'S'
+   SW.PT = ('P'<<8) \/ 'T'
+   SW.TR = ('T'<<8) \/ 'R'              // TRACE        debug
+   SW.FS = ('F'<<8) \/ 'S'
+   SW.MU = ('M'<<8) \/ 'U'
+   SW.WS = ('W'<<8) \/ 'S'
+   SW.HW = ('H'<<8) \/ 'W'              // %% is not changed into ! (i.e.32bit)
+$<TRIPOS
+        // CG step
+   SW.CO = ('C'<<8) \/ 'O'
+   SW.DB = ('D'<<8) \/ 'B'
+   SW.FC = ('F'<<8) \/ 'C'
+   SW.FN = ('F'<<8) \/ 'N'
+   SW.HX = ('H'<<8) \/ 'X'
+   SW.MI = ('M'<<8) \/ 'I'              // Use M68020 Instructions
+   SW.MD = ('M'<<8) \/ 'D'
+   SW.LB = ('L'<<8) \/ 'B'              // CG for Library (23456)
+   SW.LO = ('L'<<8) \/ 'O'              // cg LOng names ( len | data | 0s | len
+   SW.PC = ('P'<<8) \/ 'C'
+   SW.SC = ('S'<<8) \/ 'C'
+   SW.SN = ('S'<<8) \/ 'N'
+$>TRIPOS
+
+   recurse.space        = 1500
+
+   def.al               = FALSE
+   def.em               = 20
+   def.de               = FALSE                         // debug
+   def.di               = $<16BIT FALSE $>16BIT $<32BIT TRUE $>32BIT
+   def.fc               = FALSE                         // func count
+   def.lb               = FALSE
+   def.ln               = TRUE
+   def.lo               = TRUE
+   def.mi               = FALSE                         // M68020 Instructions
+   def.md               = $<68000TRIPOS TRUE    $>68000TRIPOS
+                          $<LSI4TRIPOS  FALSE   $>LSI4TRIPOS // */% by n(R)
+   def.mu               = TRUE
+   def.nu               = FALSE
+   def.oc               = FALSE
+   def.op               = FALSE                         // Optimise
+   def.pc               = FALSE
+   def.pn               = TRUE                          // Proc Names
+   def.sl               = FALSE
+   def.sn               = TRUE                          // Section Names
+   def.sw               = 150
+   def.ssp              = -1
+   def.ts               = -1    // Or MAXINT ....
+
+$<TRIPOS
+   def.ha               = $<68000TRIPOS TRUE    $>68000TRIPOS
+                          $<LSI4TRIPOS  FALSE   $>LSI4TRIPOS
+   def.qt               = FALSE
+   def.re               = TRUE
+   def.sc               = $<68000TRIPOS TRUE    $>68000TRIPOS
+                          $<LSI4TRIPOS  FALSE   $>LSI4TRIPOS
+   def.sp               = FALSE
+   def.wa               = TRUE
+   def.ws               = 15000
+   F.sf = 0
+   F.cf = 1
+   F.of = 2
+   F.lf = 5
+
+   F.opt=6
+   F.rep=7
+
+   Max.arg      = F.rep
+   FV.len       = 80
+$>TRIPOS
+$<PDPRSX
+   def.ha               = FALSE                 // no %% OCODE
+   def.qt               = TRUE
+   def.sp               = TRUE
+   def.re               = TRUE
+   def.wa               = FALSE
+   F.sf = 6
+   F.of = 4
+   F.cf = 0
+   F.lf = 2
+$>PDPRSX
+/*
+cgf.Backvec
+cgf.Cgonly
+cgf.Restricted
+cgf.Cglisting
+cgf.Hexlist
+cgf.Multiple
+stf.opt
+stf.untag
+stf.halfwordop
+stf.nowarn
+*/
+   def.stflags  =                 stf.def               |
+                        -def.di * stf.halfwordop        |
+                        -def.de * stf.debug             |
+                        -def.op * stf.op                |
+                        -def.re * stf.reg
+
+   def.cgflags  =       -def.wa * cgf.WORDADDRESS       |
+                        -def.ha * cgf.halfwordop        |
+                        -def.sn * cgf.Sectnaming        |
+                        -def.mu * cgf.Multiple          |
+                        -def.fc * cgf.Callcounting      |
+                        -def.pn * cgf.Procnames         |
+                        -def.sc * cgf.Stkchking
+
+   def.cgflag2  =       -def.mi * cgf2.68020            |
+                        -def.op * cgf2.opt              |
+                        -def.md * cgf2.mdr              |
+                        -def.lb * cgf2.library          |
+                        -def.lo * cgf2.longnames        |
+                        -def.pc * cgf2.profcount
+$)
+
+LET FINDPARMS(FILEVEC, version) = VALOF
+$(
+   LET SWITCHERROR(CH) BE
+   TASKWRITEF("Illegal switch *'%C%C*' - ignored*N", CH>>8, CH&255)
+
+   LET STACKSIZ = $<PDPRSX      STACKTOP() -        $>PDPRSX
+                  $<TRIPOS      STACKBASE/*+STACKSIZE*/- $>TRIPOS LEVEL()
+   $<PDPRSX AND SPOOLING        = def.sp $>PDPRSX
+   AND FTR, CH  = ?,?
+   AND FILEVECTOR = ?
+   AND SY       = TRUE
+   AND CROSS    = FALSE
+   AND EXT      = FALSE
+   LET start.nl = "LSI4TRIPOS"
+   LET end.nl   = "68000TRIPOS"
+   LET end.nl   = "PDPRSX"
+   LET sp.table = TABLE 2,3,2
+
+   LET ADDTAG(TAG, VALUE) BE
+   $( !CONDVEC  := !CONDVEC+1           // NUMBER OF PRE-SET FLAGS
+      !CONDPTR  := VALUE                // TAG:=VALUE
+      FOR I=0 TO TAG%0 DO (CONDPTR+1)%I := TAG%I
+      CONDPTR   := CONDPTR+2+TAG%0/BYTESPERWORD
+   $)
+$<TRIPOS
+   LET args     = "FROM,TO,OCODE/K,MC/K,CHARCODE/K,VER/K,OPT/K,REPEAT/S"
+   CONDVEC      := FILEVEC
+$>TRIPOS
+$<PDPRSX
+   DATEVEC      := FILEVEC      //==== DATEVEC IS LOCAL HERE AND OUTPUTSECTION==
+   TIMEVEC      := DATEVEC + 6  //==== DATEVEC IS LOCAL HERE AND OUTPUTSECTION==
+   CONDVEC      := TIMEVEC + 6  //==== DATEVEC IS LOCAL HERE AND OUTPUTSECTION==
+$>PDPRSX
+   FILEVECTOR   := CONDVEC + 60
+
+   CONDVEC!0    := 0
+   SHOWALL      := FALSE
+   CONDPTR      := CONDVEC+1
+
+   LISTOUT      := SYSOUT
+   SAVESPACESIZE:= def.ssp
+   STFLAGS      := def.stflags
+   CGFLAGS      := def.cgflags
+   CGFLAG2      := def.cgflag2
+
+   LINECOUNT, PRLINE := 1,0
+   WORKSPACE    := $<PDPRSX STACKSIZ-recurse.space $>PDPRSX
+                   $<TRIPOS def.ws                 $>TRIPOS
+   reportmax    := def.em
+   SLOW         := def.sl
+   Line.info    := def.ln
+   Free.trnspace:= def.ts
+   TRN.SW.SPACE := def.sw
+   NUMERICOCODE := def.nu
+   LASTSECT     := FALSE
+   OCODE        := 0
+
+   SELECTINPUT(SYSIN); SELECTOUTPUT(SYSOUT)
+$<PDPRSX
+   FTR := FINDTITLES(3, FILEVECTOR, ".OBJ/.LST/.ZOC/.BCP")
+   IF FTR<0 DO
+   $( IF FTR=ENDSTREAMCH STOP(REPORTCOUNT>0 -> -256, 0)
+      TASKWRITEF("Command syntax error")
+      LOOP
+   $)
+$>PDPRSX
+$<TRIPOS
+//==============================================================================
+//====== If not in same node LOAD OVERLAY. Does NOT return =====================
+//==============================================================================
+//      ???????? WHY OV TRANS REPORT ???????????
+    IF (stackbase!CO.SEND) - STACKBASE < 750
+    THEN OVTRANSREPORT(4, (stackbase!Co.send)-STACKBASE)
+    IF rdargs(args, FILEVECTOR, 80)=0 DO OVTRANSREPORT(-2, args)
+$>TRIPOS
+   SOURCEFILE   := FILEVECTOR!F.sf
+   OCODEFILE    := FILEVECTOR!F.of
+   LISTFILE     := FILEVECTOR!F.lf
+   CODEFILE     := FILEVECTOR!F.cf
+
+   PRSOURCE     := $<PDPRSX     (FTR>=2) & (LISTFILE%0 NE 0)    $>PDPRSX
+                   $<TRIPOS     LISTFILE ~= 0                   $>TRIPOS
+   FILEOCODE    := $<PDPRSX     (FTR>=3) & (OCODEFILE%0 NE 0)   $>PDPRSX
+                   $<TRIPOS     OCODEFILE ~= 0                  $>TRIPOS
+   SETBIT(@CGFLAGS, cgf.Codegen | cgf.cgcodeing,
+                   $<PDPRSX     CODEFILE%0 NE 0                 $>PDPRSX
+                   $<TRIPOS     CODEFILE ~= 0                   $>TRIPOS      )
+
+        //==== DATEVEC IS LOCAL HERE AND OUTPUTSECTION==
+$<PDPRSX  IF PRSOURCE THEN DATE(DATEVEC) <> TIMEOFDAY(TIMEVEC)  $>PDPRSX
+
+   QUIET        := def.qt & NOT PRSOURCE
+
+$<PDPRSX
+  $<BC1' CGXINIT(); CGPARMS(FILEVECTOR!1) $>BC1'
+IF PRSOURCE \/ FILEOCODE DO
+$(L
+   SELECTINPUT(FINDSTRINGINPUT(FILEVECTOR!3))   // list file switches
+
+ $(R
+   ch := nextsw()
+
+   SWITCHON CH INTO
+   $( CASE SW.SP: SPOOLING      := SETTING;                             ENDCASE
+      CASE SW.AL: setbit(@CGFLAGS, cgf.Cglisting, SETTING);             ENDCASE
+      CASE sw.de: setbit(@STFLAGS, stf.Decls, SETTING);                 ENDCASE
+      CASE sw.di:
+      CASE sw.hw: setbit(@STFLAGS, stf.halfwordop, SETTING);            ENDCASE
+      CASE SW.SA: SAVESPACESIZE := COLREADN(); UNRDCH();                ENDCASE
+//      CASE SW.PS: PAGESIZE    := COLREADN(); UNRDCH();                ENDCASE
+      DEFAULT:    SWITCHERROR(CH);                                      ENDCASE
+      CASE ENDSTREAMCH: ENDREAD();                                      BREAK
+   $)
+ $)R REPEAT
+
+   SELECTINPUT(FINDSTRINGINPUT(FILEVECTOR!5))   // Ocode file switches
+
+ $(O
+   CH := NEXTSW()
+
+   SWITCHON CH INTO
+   $( CASE SW.BY:       setbit(@STFLAGS, stf.byte, setting);            ENDCASE
+      CASE sw.di:
+      CASE SW.HA:       setbit(@CGFLAGS, cgf.halfwordop, setting);      ENDCASE
+      CASE SW.NU:       NUMERICOCODE := SETTING;                        ENDCASE
+      CASE SW.OP:       setbit(@STFLAGS, stf.op, setting);              ENDCASE
+      CASE SW.UN:       setbit(@STFLAGS, stf.op | stf.byte, ~setting);
+                        SY              := ~setting;
+                        CROSS           := setting;
+                        NUMERICOCODE    := setting
+                        !CONDVEC:=!CONDVEC+1
+                        FOR I = 0 TO 5 DO (CONDPTR+1)%i := "UNIX"%i
+                        !CONDPTR := SETTING
+                        CONDPTR := CONDPTR + (4/BYTESPERWORD)+2;        ENDCASE
+                                                                        ENDCASE
+      DEFAULT:          SWITCHERROR(CH);                                ENDCASE
+      CASE ENDSTREAMCH: ENDREAD();                                      BREAK
+   $)
+ $)O REPEAT
+
+$)L
+
+   SELECTINPUT(FINDSTRINGINPUT(FILEVECTOR!7))   // source file switches
+
+$(R
+   CH := NEXTSW()
+
+   SWITCHON CH INTO
+   $( CASE sw.de: setbit(@STFLAGS, stf.Decls, SETTING);                 ENDCASE
+      CASE sw.cr: CROSS, SY := SETTING, ~SETTING;                       ENDCASE
+      CASE SW.CO: SETBIT(@CGFLAG2, cgf2.opt,    SETTING);               ENDCASE
+      CASE SW.IG: setbit(@STFLAGS, stf.noget, SETTING);                 ENDCASE
+//      CASE SW.PD: PPDEBUG     := SETTING;                             ENDCASE
+//      CASE SW.PT: PPTRACE     := SETTING;                             ENDCASE
+//      CASE SW.TR: TREE        := SETTING;                             ENDCASE
+      CASE SW.GL: setbit(@STFLAGS, stf.glob, SETTING);                  ENDCASE
+      CASE SW.GE: SHOWALL       := SETTING;                             ENDCASE
+      CASE SW.EM: REPORTMAX     := COLREADN(); UNRDCH();                ENDCASE
+      CASE SW.ER: setbit(@STFLAGS, stf.err, SETTING);                   ENDCASE
+      CASE SW.EX: setbit(@STFLAGS, stf.ext, SETTING);                   ENDCASE
+      CASE SW.FS: SETBIT(@CGFLAGS, cgf.Wordaddress, SETTING);           ENDCASE
+      CASE SW.LN: Line.info     := SETTING;                             ENDCASE
+      CASE SW.OC: setbit(@CGFLAGS, cgf.Cgonly, SETTING);                ENDCASE
+      CASE SW.PR: PRSOURCE,QUIET:= Setting -> 1, 0, Setting;            ENDCASE
+      CASE SW.QT: QUIET         := SETTING;
+                  IF setting THEN prsource := 2;                        ENDCASE
+      CASE SW.RE: setbit(@STFLAGS, stf.Reg, SETTING);                   ENDCASE
+      CASE SW.SL: SLOW          := SETTING;                             ENDCASE
+      CASE SW.SW: TRN.SW.SPACE  := COLREADN(); UNRDCH();                ENDCASE
+      CASE SW.SY: SY            := SETTING;                             ENDCASE
+      CASE SW.TO: SETBIT(@STFLAGS, stf.opt,   SETTING);                 ENDCASE
+      CASE SW.TR: SETBIT(@STFLAGS, stf.debug, SETTING);                 ENDCASE
+      CASE SW.UN: setbit(@STFLAGS, stf.untag, SETTING);                 ENDCASE
+      CASE SW.VE: WRITEF("Version %S*N", VERSION);                      ENDCASE
+      CASE SW.WS: WORKSPACE     := COLREADN(); UNRDCH();                ENDCASE
+      CASE SW.MC: cross, sy := setting, ~setting;
+      CASE SW.CC: !CONDVEC:=!CONDVEC+1
+                  CH := RDCH()
+                  FTR := READSTRING(CONDPTR+1, '/')
+                  IF EQUALSTRING("UNIX", condptr+1) THEN
+                  $( setbit(@STFLAGS, stf.op | stf.byte, ~setting);
+                     SY                 := ~setting
+                     CROSS              := setting
+                     NUMERICOCODE       := Setting
+                  $)
+                  !CONDPTR := SETTING
+                  CONDPTR := CONDPTR + (FTR/BYTESPERWORD)+2
+                  IF TERMINATOR = '/' UNRDCH();                         ENDCASE
+//      CASE SW.WA: SETBIT(@CGFLAGS, cgf.WORDADDRESS, SETTING);         ENDCASE
+      CASE SW.WA: SETBIT(@STFLAGS, stf.nowarn,  ~SETTING);              ENDCASE
+      DEFAULT:    SWITCHERROR(CH);                                      ENDCASE
+      CASE ENDSTREAMCH: ENDREAD();                                      BREAK
+   $)
+$)R REPEAT
+
+   UNLESS STACKSIZ >= WORKSPACE + recurse.space
+   DO $( TASKWRITEF("Insufficient stack space");                        LOOP $)
+$>PDPRSX
+$<TRIPOS
+    REPEAT.AGAIN        := FILEVECTOR!F.rep
+    UNLESS FILEVECTOR!F.opt=0 DO
+    $(SW
+       LET i, opts = 1, FILEVECTOR!F.opt
+       LET rdn(opts,lvi) = VALOF
+        $( LET n, i = 0, !lvi+1
+           LET ch = opts%i
+           WHILE i<=opts%0 & '0'<=ch<='9' DO
+           $( n, i := n*10+ch-'0', i+1; ch := opts%i $)
+           !lvi := i-1
+           RESULTIS n
+        $)
+
+       WHILE i<=opts%0 DO
+       $( LET ch = CAPITALCH(opts%i)
+          LET setting = ch ~= '-'
+
+          $( UNLESS setting
+             $( i:=i+1; ch := i>opts%0 -> ENDSTREAMCH, CAPITALCH(opts%i) $)
+             IF 'A'<=ch<='Z' & i<opts%0 & 'A'<=capitalch(opts%(i+1))<='Z'
+             THEN $( i:=i+1; ch := ch<<8 | CAPITALCH(opts%i) $)
+             UNLESS ch = sw.no BREAK
+             setting := FALSE
+          $) REPEAT
+
+          SWITCHON ch INTO
+          $( DEFAULT:    SWITCHERROR(ch);                               ENDCASE
+             CASE ENDSTREAMCH:                                          BREAK
+             CASE SW.AL: SETBIT(@CGFLAGS, cgf.Cglisting, SETTING);      ENDCASE
+             CASE sw.mc: cross, sy := setting, ~setting
+             CASE sw.cc:
+                     i := i+1
+                     $( LET base        = VEC 20
+                        LET ptr, firstch=  0, opts%i
+                        TEST 'A' <= capitalch(firstch) <= 'Z'
+                        THEN firstch := ENDSTREAMCH
+                        ELSE i := i+1
+                        ch := opts%i
+                        $( ptr, i := ptr+1, i+1
+                           base%ptr := ch
+                           CH := opts%i
+                        $) REPEATUNTIL  ch='/' | ch=':' | ch=' ' | ch='*T' |
+                                        ch=firstch | i>opts%0
+                        base%0 := ptr;
+                        IF compstring("UNIX", base) =0
+                        $( setbit(@STFLAGS, stf.op | stf.byte, ~setting);
+                           SY           := ~setting
+                           CROSS        := Setting
+                           NUMERICOCODE := Setting
+                        $)
+                        addtag(base, TRUE)
+                     $)                                                 ENDCASE
+             CASE SW.BY: setbit(@STFLAGS, stf.byte, setting);           ENDCASE
+             CASE SW.CO: SETBIT(@CGFLAG2, cgf2.opt,     SETTING);       ENDCASE
+             CASE sw.cr: CROSS, SY := SETTING, ~SETTING;                ENDCASE
+             CASE SW.DB: SETBIT(@CGFLAGS, cgf.Procnames | cgf.Stkchking |
+                        cgf.Callcounting | cgf.Sectnaming,  SETTING);   ENDCASE
+             CASE sw.de: setbit(@STFLAGS, stf.Decls,    SETTING);       ENDCASE
+             CASE sw.em: reportmax      := rdn(opts,@i);                ENDCASE
+             CASE SW.ER: setbit(@STFLAGS, stf.err,      SETTING);       ENDCASE
+             CASE SW.EX: setbit(@STFLAGS, stf.ext,      SETTING);       ENDCASE
+             CASE SW.FC: SETBIT(@CGFLAGS, cgf.Callcounting, SETTING);   ENDCASE
+             CASE SW.FN: SETBIT(@CGFLAGS, cgf.Procnames, SETTING);      ENDCASE
+             CASE SW.FS: SETBIT(@CGFLAGS, cgf.Backvec,  SETTING);       ENDCASE
+             CASE SW.GE: SHOWALL        := SETTING;                     ENDCASE
+             CASE SW.DI: SETBIT(@CGFLAGS, cgf.halfwordop,SETTING);      ENDCASE
+             CASE SW.HW: SETBIT(@STFLAGS, stf.halfwordop,SETTING);      ENDCASE
+             CASE SW.HX: SETBIT(@CGFLAGS, cgf.Hexlist,  SETTING);       ENDCASE
+             CASE sw.ig: SETBIT(@STFLAGS, stf.noget,    SETTING);       ENDCASE
+             CASE SW.OP: setbit(@STFLAGS, stf.op,       setting);       ENDCASE
+             CASE SW.LB: SETBIT(@CGFLAG2, cgf2.library, SETTING);       ENDCASE
+             CASE SW.LN: Line.info      := SETTING;                     ENDCASE
+             CASE SW.LO: SETBIT(@CGFLAG2, cgf2.longnames,SETTING);      ENDCASE
+             CASE SW.MD: setbit(@CGFLAG2, cgf2.mdr,     SETTING);       ENDCASE
+             CASE SW.MI: setbit(@CGFLAG2, cgf2.68020,   SETTING);       ENDCASE
+             CASE SW.NU: NUMERICOCODE   := SETTING;                     ENDCASE
+//           CASE SW.PS: PAGESIZE       := COLREADN();                  ENDCASE
+             CASE SW.PR: PRSOURCE,QUIET := Setting -> 1, 0, Setting;    ENDCASE
+// Why was SW.PC commented out ?
+             CASE SW.PC: SETBIT(@CGFLAG2, cgf2.Profcount,SETTING);      ENDCASE
+             CASE sw.qt: QUIET          := SETTING;
+// QuieT also => no listing to VER.
+                  IF setting & prsource ~= 0 THEN prsource := 2;        ENDCASE
+             CASE sw.re: SETBIT(@STFLAGS, stf.reg,      SETTING);       ENDCASE
+             CASE sw.sa: SAVESPACESIZE  := rdn(opts,@i);                ENDCASE
+             CASE SW.SC: SETBIT(@CGFLAGS, cgf.Stkchking,SETTING);       ENDCASE
+             CASE sw.sl: SLOW           := SETTING;                     ENDCASE
+             CASE SW.SN: SETBIT(@CGFLAGS, cgf.Sectnaming,SETTING);      ENDCASE
+             CASE SW.SW: TRN.SW.SPACE   := rdn(opts, @i);               ENDCASE
+             CASE sw.sy: SY             := SETTING;                     ENDCASE
+             CASE SW.TO: SETBIT(@STFLAGS, stf.opt,      SETTING);       ENDCASE
+             CASE SW.TR: SETBIT(@STFLAGS, stf.debug,    SETTING);       ENDCASE
+             CASE SW.TS: Free.trnspace  := SETTING -> MAXINT, -1;       ENDCASE
+             CASE sw.un: SETBIT(@STFLAGS, stf.untag,    SETTING);       ENDCASE
+//           CASE SW.UN: setbit(@STFLAGS, stf.op | stf.byte, ~setting); ENDCASE
+             CASE SW.VE: WRITEF("Version %S*N", VERSION);               ENDCASE
+//           CASE SW.WA: SETBIT(@CGFLAGS, cgf.WORDADDRESS,SETTING);     ENDCASE
+             CASE SW.WA: SETBIT(@STFLAGS, stf.nowarn,  ~SETTING);       ENDCASE
+             CASE sw.ws:
+             CASE sw.wo:
+             CASE 'L':
+             CASE 'W':   workspace := rdn(opts, @i);                    ENDCASE
+             CASE ':':
+             CASE '/':
+             CASE ' ':
+             CASE '*T':                                                 ENDCASE
+          $)
+          i := i+1
+       $)
+    $)SW
+/*
+$<DEBUG'
+   UNLESS workspace=def.ws & reportmax=def.em & noget=def.ig & Quiet=def.qt &
+          Slow = def.sl & Numericocode=def.nu & REPORTUNTAGGED=def.un
+$>DEBUG'
+   WRITEF("WS=%N EM=%N %SIG %SQT %SSL %SNU %SUN *
+          *for '%S' odode '%S', ver '%S', to '%S'*N",
+                Workspace,      Reportmax,
+                (STFLAGS & Stf.NOGET)=0 -> "", "-",
+                QUIET           -> "", "-",
+                SLOW            -> "", "-",
+                NUMERICOCODE    -> "", "-",
+                (STFLAGS & Stf.untag)=0-> "", "-",
+                SOURCEFILE = 0  -> "<UNSET>", SOURCEFILE,
+                OCODEFILE  = 0  -> "<UNSET>", OCODEFILE,
+                LISTFILE   = 0  -> "<UNSET>", LISTFILE,
+                CODEFILE   = 0  -> "<UNSET>", CODEFILE)
+*/
+$>TRIPOS
+   $<PDPRSX IF SOURCEFILE%0=0 LOOP $>PDPRSX
+//   IF SOURCEFILE=0 LOOP
+
+   IF SY
+$<TRIPOS
+      $( LET V          = VEC 20
+         LET SYSTAG     = "TRIPOS"
+         LET type       = ROOTNODE ! RTN.INFO ! INFO.MCTYPE
+         LET len1       = type%0
+         LET len2       = SYSTAG%0
+
+         FOR I = 1 TO len1 DO V%      i  := type%i
+         FOR I = 1 TO len2 DO V%(len1+i) := systag%i
+                              V%      0  := len1 + len2
+         ADDTAG(SYSTAG, TRUE)           // For AJW
+         ADDTAG(type, TRUE)             // For AJW
+         ADDTAG(V, TRUE)
+         IF COMPSTRING(V, "68000TRIPOS")=0 THEN ADDTAG("MC68000TRIPOS", TRUE)
+      $)
+$>TRIPOS
+$<TRIPOS'
+      ADDTAG($<PDPRSX "PDPRSX" $>PDPRSX , TRUE)
+$>TRIPOS'
+
+   IF CROSS THEN ADDTAG("CROSS", TRUE)
+
+   IF savespacesize = def.ssp
+   $( LET base = CONDVEC+2
+      LET mc.number = -1
+      FOR I = 1 TO !CONDVEC
+      $( IF (base!-1) THEN FOR I = 0 TO @end.nl - @start.nl
+         DO IF COMPSTRING(base, (@START.nl)!I) =0 THEN mc.number := I
+         UNLESS mc.number < 0 BREAK
+         BASE := BASE + 2 + base%0 /BYTESPERWORD
+      $)
+      savespacesize := mc.number <0 -> 2, sp.table!mc.number
+   $)
+
+$<PDPRSX
+   $( LET s = OCODEFILE
+      FOR I = 1 TO s%0-3 IF s%i='.' & s%(i+2)='O' & s%(i+3)='C'
+      $( s%(I+1) := NUMERICOCODE -> 'N', 'B'; BREAK $)
+   $)
+
+   IF ((CGFLAGS & cgf.Cgonly) ~= 0) $<BC1 | FTR < 3 $>BC1
+   $( LET V=VEC UNP.SIZ
+      UNPACKTITLE(((CGFLAGS&cgf.Cgonly)=0) -> CODEFILE, SOURCEFILE, V)
+      V!(UNP.EXT  ) := numericocode -> 'N', 'B'
+      V!(UNP.EXT+1) := 'O'
+      V!(UNP.EXT+2) := 'C'
+      PACKTITLE(V, ((CGFLAGS & cgf.Cgonly) ~= 0) -> SOURCEFILE, OCODEFILE)
+      TEST ((CGFLAGS & cgf.Cgonly) ~= 0) THEN SLOW, FILEOCODE := TRUE, TRUE
+      ELSE SETBIT(CGFLAGS, cgf.Codegen, FALSE)
+   $)
+$>PDPRSX
+$<TRIPOS
+   IF SOURCEFILE=0 TEST OCODEFILE=0
+                   $( TASKWRITEF("No input*N"); FATAL.ERROR() $)
+                   ELSE SOURCEFILE, CGFLAGS := OCODEFILE, CGFLAGS | cgf.Cgonly
+
+//==============================================================================
+//====================== What about 'BCPL SOURCE' - -> NO ocode file ===========
+//====================== TEMP in TRN7 use NIL:                       ===========
+//==============================================================================
+
+   IF SOURCEFILE ~= 0 & CODEFILE ~= 0 & OCODEFILE = 0 & SLOW
+   $( LET def.name = "T:OCODE-T??"
+      LET len = (def.name%0)/BYTESPERWORD
+      LET MIN = FILEVECTOR + Fv.len+1
+      FOR I = 0 TO Max.arg IF FILEVECTOR!I>MIN & FILEVECTOR!I ~= 0
+                     THEN MIN := FILEVECTOR!I
+      IF MIN - FILEVECTOR - max.arg - 2 < len
+      $( TASKWRITEF("Bad args"); FATAL.ERROR() $)
+      min := min-len -2
+      FILEVECTOR!F.of := min
+      OCODEFILE := min
+      FOR I = 0 TO len DO min!I := def.name!I
+      min%(DEF.name%0)          := taskid REM 10 + '0'
+      min%(DEF.name%0 -1)       := taskid  /  10 + '0'
+   $)
+$>TRIPOS
+
+   SOURCESTREAM := FINDINPUT(SOURCEFILE)
+$<PDPRSX
+   IF SOURCESTREAM < 0
+   $( TASKWRITEF(IOERROR(SOURCESTREAM), SOURCESTREAM, SOURCEFILE); LOOP $)
+$>PDPRSX
+$<TRIPOS
+   IF SOURCESTREAM = 0 DO
+   $( TASKWRITEF("Failed to open %S as source (%N)*N", SOURCEFILE, RESULT2)
+      FATAL.ERROR()
+   $)
+$>TRIPOS
+
+   SELECTINPUT(SOURCESTREAM)
+
+   UNLESS PRSOURCE=FALSE DO
+   $( LET datevec = VEC 15
+        LET timevec = datevec + $<PDPRSX 6 $>PDPRSX $<TRIPOS 5 $>TRIPOS
+      LISTOUT := FINDOUTPUT(LISTFILE)
+$<PDPRSX
+      IF LISTOUT < 0 $( TASKWRITEF(IOERROR(LISTOUT), LISTOUT, LISTFILE); LOOP $)
+$>PDPRSX
+$<TRIPOS
+      IF LISTOUT = 0 DO
+      $( TASKWRITEF("Failed to open %S as List file (%N)*N", LISTFILE, RESULT2)
+         Fatal.error()
+      $)
+$>TRIPOS
+      SELECTOUTPUT(LISTOUT)
+      TEST PRSOURCE < 0
+      $( WRITEF("BCPL V%S : ", version)
+$<PDPRSX  DATE(DATEVEC) <> TIMEOFDAY(TIMEVEC)   $>PDPRSX
+$<TRIPOS UNLESS DATSTRING(DATEVEC) DO DATEVEC%0 := 0 $>TRIPOS
+          WRITEF("Compilation of %S on %S  %S*N*N", sourcefile, datevec,timevec)
+      $)
+      ELSE IF prsource=2 THEN prsource := FALSE
+
+      $<PDPRSX CLOSELIST := SPOOLING -> SPOOLOUTPUT, ENDWRITE $>PDPRSX
+   $)
+   REPORTCOUNT := 0                             // OK, Early errors passed
+   SLOW := SLOW | (CGFLAGS & cgf.CGonly) ~= 0   // -> Read from file
+   RESULTIS WORKSPACE
+
+$<TRIPOS
+Fail:
+//      DEB("S%N, C%N, OC%N.  ", SOURCEFILE, CODEFILE, OCODEFILE)
+//      DEB("Sou'%S', Code'%S', OCfile'%S'.  ", SOURCEFILE, CODEFILE, OCODEFILE)
+        REPORTCOUNT := 1000
+        RESULTIS 0
+$>TRIPOS
+$) REPEAT
+
+AND colreadn() = VALOF
+$( LET ch=rdch()
+   IF '0'<=ch<='9' THEN unrdch()
+   RESULTIS readn()
+$)
+
+AND setbit(addr, bit, Value) BE TEST VALUE
+THEN !addr := !addr |  bit
+ELSE !addr := !addr & ~bit
+
+

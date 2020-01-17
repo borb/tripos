@@ -1,0 +1,36 @@
+; Device control block for the MSCP disk/controller
+
+;       .WORD        0  ; Link to driver
+        .WORD        0  ; Device ID
+        .WORD        0  ; Work queue
+        .WORD        0  ; Start routine
+        .WORD        0  ; Stop routine
+        JSR     R2,@(PC)+
+        .WORD        0  ; Interrupt routine
+        .WORD      154  ; Interrupt vector
+        .WORD   172150  ; Address and polling register
+        .WORD   172152  ; Status and address register
+        .WORD   0       ; Next init step bit
+        .WORD   0       ; init list pointer
+        .BYTE   154/4!200 ; vector + int enable
+        .BYTE   200     ; ring sizes + top bit
+        .WORD   0       ; message ring address low
+        .WORD   0       ; message ring address high
+        .WORD   1       ; Go!
+
+        .WORD   60      ; command size
+        .WORD   0       ; virtual circuit id
+        .BLKB   60      ; command buffer
+        .WORD   0       ; response size
+        .WORD   0       ; virtual circuit id
+        .BLKB   60      ; response buffer
+
+        .WORD   0,0     ; interrupt identity area
+        .WORD   0,0     ; message ring
+        .WORD   0,0     ; command ring
+
+        .WORD   0       ; flag word
+
+        .END
+
+

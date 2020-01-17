@@ -1,0 +1,174 @@
+SECTION "DEBUG-E"
+
+GET "LIBHDR"
+
+GLOBAL
+$(
+WRITEARG:151
+ISFUN:152
+PRINT:162
+CONT:165
+ERROR:167
+TESTBREAK:168
+RCH:169
+
+REC:171
+
+LEV:179
+CURRTCB:180
+GLOBV:181
+SPTR:184
+SBASE:185
+CH:193
+
+CURRTASK:199
+$)
+
+
+MANIFEST
+$(
+G.SBASE=12
+CO.LINK=0
+CO.CALLER=1
+CO.STACKEND=2
+CO.RESUMEPTR=3
+CO.FUNCTION=4
+TCB.P=11
+LIBWORD=23456
+INSTR.ENTRY=#067605
+$)
+
+
+LET START(PKT, SADEBUG) = VALOF
+ $( LET TASK = PKT!1
+    LET T = ROOTNODE!RTN.TASKTAB
+    LET P = 0
+    LEV := LEVEL()
+    START := SADEBUG
+    UNLESS 0<TASK<=T!0 DO ERROR()
+    CURRTCB := T!TASK
+    IF CURRTCB=0 DO ERROR()
+    CURRTASK := TASK
+    GLOBV := CURRTCB!TCB.GBASE
+    P := CURRTCB!TCB.P
+
+    // REPEAT loop to get commands
+    $( LET NBASE = 0
+       LET FSIZE = 5
+       RCH()
+       SWITCHON CH INTO
+       $( DEFAULT:
+             ERROR()
+
+          CASE '*N':
+             NEWLINE()
+             UNRDCH()
+             BREAK
+
+          CASE '*E':CASE '*S':
+             LOOP
+
+          CASE 'N':
+    NXTB:    NBASE := CONT(SBASE+CO.CALLER)
+             UNLESS NBASE=0 \/ NBASE=-1 DO
+             $( WRITES("*N*NCalled from")
+                GOTO NEWB $)
+             NBASE := SBASE
+             NBASE := CONT(NBASE) REPEATUNTIL
+                NBASE=0 \/ CONT(NBASE+CO.CALLER)=0
+             GOTO NEWB
+
+          CASE 'T': CASE 'B':
+             NBASE := CONT(GLOBV+G.SBASE)
+    NEWB:    IF NBASE=0 DO
+             $( WRITES("*N*NEnd of backtrace*N*N")
+                BREAK $)
+             SBASE := NBASE
+          CASE 'U':
+             NEWLINE(); NEWLINE()
+             NBASE := CONT(SBASE+CO.CALLER)
+             TEST NBASE=-1 THEN
+                WRITES("Root stack")
+             ELSE
+             $( UNLESS NBASE=0 DO WRITES("Active ")
+                WRITES("Coroutine")
+                WRITEARG(CONT(SBASE+CO.FUNCTION))
+             $)
+             SPTR :=
+              ( SBASE=CONT(GLOBV+G.SBASE) ->
+                   P, CONT(SBASE+CO.RESUMEPTR) ) >> 1
+             GOTO NEWP
+
+    NXTP: CASE 'D':
+             IF SPTR=SBASE GOTO NXTB
+             FSIZE := CONT(CONT(SPTR-1)>>1)>>1
+             SPTR := SPTR-FSIZE-1
+    NEWP:    IF FSIZE>5 DO FSIZE := 5
+             NEWLINE()
+             TEST SPTR=SBASE THEN
+             $( LET SEND = CONT(SBASE+CO.STACKEND)+50
+                LET SHWM = SEND
+                WHILE CONT(SHWM)=0 DO SHWM:=SHWM-1
+                WRITEF("Stack base %U5 end %U5 *
+                       *hwm %U5 ",SBASE,SEND,SHWM)
+             $)
+             ELSE
+             $( LET F = CONT(SPTR-2)-8
+                WRITEARG(F)
+           L:   WRITEF("%U2",SPTR)
+                FOR I=0 TO FSIZE-2 DO
+                   PRINT(CONT(SPTR+I))
+             $)
+             IF FSIZE<1 DO ERROR()
+             TESTBREAK()
+             IF CH='B' GOTO NXTP
+       $)
+       WRITES("E*E")
+    $) REPEAT
+
+   RESULTIS -1
+
+REC:
+   RESULTIS 0
+ $)
+
+
+AND WRITEARG(N) BE
+    TEST ISFUN(N)
+      THEN WRITEF(" %S ",(N-8)>>1)
+      ELSE WRITEF("  %I6 ",N)
+
+
+AND ISFUN(F) = VALOF
+ $( LET A = F>>1
+    IF (A>>10)>=ROOTNODE!RTN.MEMSIZE \/ A-5<0 RESULTIS FALSE
+    RESULTIS (CONT(A)=INSTR.ENTRY \/
+            CONT(A-5)=LIBWORD) & (A-4)%0=7 -> TRUE, FALSE
+ $)
+
+
+AND PRINT(N) BE
+    TEST ISFUN(N)
+      THEN WRITEARG(N)
+      ELSE WRITEF("  %I6 ",N)
+
+
+AND CONT(A) = VALOF
+ $( IF (A>>10)>=ROOTNODE!RTN.MEMSIZE DO ERROR()
+    RESULTIS !A $)
+
+
+AND ERROR() BE
+    LONGJUMP(LEV, REC)
+
+
+AND TESTBREAK() BE
+    IF TESTFLAGS(1) DO ERROR()
+
+
+AND RCH() BE
+ $( TESTBREAK()
+    CH := CAPITALCH(RDCH())
+ $)
+
+

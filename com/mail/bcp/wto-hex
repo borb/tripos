@@ -1,0 +1,9 @@
+$(  LET string = "Create xxxxxxxx"
+    FOR i = 1 TO 8
+    $(  LET n = (Header.file.entry >> ((8-I)*4)) & 15
+        string%(i+7) := n<10 -> n+'0', n+'A'-10
+    $)
+    wto.mc("Delta", string)
+$)
+
+

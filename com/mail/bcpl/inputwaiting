@@ -1,0 +1,20 @@
+MANIFEST                // All these stolen from :g.iohdr
+$( SCB.TYPE     = 2
+   SCB.POS      = 4
+   SCB.END      = 5
+   act.how.much.input = 803
+$)
+
+//      Returns ZERO iff there is no input waiting on scb
+
+LET inputwaiting(scb) =
+// No scb, Non interactive, Exhausted, Buffered
+(scb=0 | (scb!SCB.TYPE > 0) | scb!SCB.end=0 | scb!SCB.POS<scb!SCB.END) -> TRUE,
+(ABS scb!SCB.TYPE = CONSOLETASK) -> VALOF
+$(
+    LET chars = sendpkt(notinuse, consoletask, act.how.much.input, -1)
+    RESULT2 := 0
+    RESULTIS chars
+$) , 1
+
+

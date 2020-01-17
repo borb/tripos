@@ -1,0 +1,145 @@
+/***********************************************************************
+**             (C) Copyright 1982  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+                  ####    ##        ########  ########  #######
+                 ######   ##        ########  ########  ########
+                ##    ##  ##           ##     ##        ##    ##
+                ########  ##           ##     ######    ########
+                ##    ##  ##           ##     ##        #######
+                ##    ##  ##           ##     ##        ##  ##
+                ##    ##  ########     ##     ########  ##   ##
+                ##    ##  ########     ##     ########  ##    ##
+
+************************************************************************
+**    Author:   Mike Richardson                 October 1982          **
+**    Based on the "protect" program by Brian Knight                  **
+***********************************************************************/
+
+// Modifications
+//
+// 22-nov-84 NJO  Access may be given as "default".  OBJINFO library and
+//                filing machine DIRHDR included to get necessary info.
+
+SECTION "ALTER"
+
+    GET "LIBHDR"
+    GET "MANHDR"
+    GET "FILEHDR"
+    GET "bcpl.objinfo"
+    GET "SYS:sys.fm.headers.dirhdr"  // for default access matrixes
+
+
+LET start() BE
+    $(
+    LET argv            = VEC 30
+    LET access.bits     = TABLE 0,0,0,0
+    LET task            = ?
+    LET name            = ?
+    LET access.string   = ?
+    LET rdargs.string   = "NAME/A,ACCESS/A"
+    LET matrix.seg      = 0
+    LET first           = 0
+
+    IF rdargs(rdargs.string, argv, 30) = 0
+    THEN
+      $(
+      writef("Bad args for key string *"%S*"*N", rdargs.string)
+      stop(20)
+      $)
+
+    name          := argv!0
+    access.string := argv!1
+
+    IF compstring(access.string, "default") = 0 THEN
+    $( LET type = ?
+
+       UNLESS objinfo.obj(objinfo.type, name, @type, 0, 0) DO
+          GOTO fail
+
+       SWITCHON type INTO
+       $( DEFAULT:
+          writef("Object has unknown type %N*N", type)
+          stop(20)
+
+          CASE type.dir:
+          access.bits!0 := def.dir.v.access
+          access.bits!1 := def.dir.x.access
+          access.bits!2 := def.dir.y.access
+          access.bits!3 := def.dir.z.access
+          ENDCASE
+
+          CASE type.file:
+          access.bits!0 := def.file.v.access
+          access.bits!1 := def.file.x.access
+          access.bits!2 := def.file.y.access
+          access.bits!3 := def.file.z.access
+          ENDCASE
+       $)
+
+       GOTO matrix.set
+    $)
+
+    UNLESS [access.string%0 > 0] & [access.string%1 = '/'] DO
+        $( writes("Initial *"/*" missing from access matrix*N")
+           stop  (20)
+        $)
+
+    // The value of the ACCESS argument is a string of letters representing
+    // the modes of access to be allowed.
+
+    FOR i = 2 TO access.string%0 DO
+    $( LET c = access.string%i
+       LET b = 0
+
+       SWITCHON capitalch(c) INTO
+       $( CASE 'R': b := matrix.R ; ENDCASE
+          CASE 'W': b := matrix.W ; ENDCASE
+          CASE 'E': b := matrix.E ; ENDCASE
+
+          CASE 'D': b := matrix.D ; ENDCASE
+          CASE 'A': b := matrix.A ; ENDCASE
+          CASE 'U': b := matrix.U ; ENDCASE
+
+          CASE 'C': b := matrix.C ; ENDCASE
+          CASE 'F': b := matrix.F ; ENDCASE
+          CASE 'V': b := matrix.V ; ENDCASE
+          CASE 'X': b := matrix.X ; ENDCASE
+          CASE 'Y': b := matrix.Y ; ENDCASE
+          CASE 'Z': b := matrix.Z ; ENDCASE
+
+          CASE '/': matrix.seg := matrix.seg + 1
+                    IF matrix.seg > 3 THEN
+                    $( writes ("Too many fields in access matrix*N")
+                       stop   (20)
+                    $)
+                    ENDCASE
+
+          DEFAULT: writef("Unknown access mode *'%C*'*n", c)
+                   stop  (20)
+       $)
+       access.bits!matrix.seg := access.bits!matrix.seg | b
+    $)
+
+matrix.set:
+
+    task := devicetask(name)    // find the filing system
+
+    IF task = 0 THEN GOTO fail  // Device not mounted
+
+    UNLESS sendpkt(notinuse, task, action.alter, ?, ?, result2,
+                                                          name, access.bits)
+      THEN GOTO fail
+
+    // Success
+
+    stop(0)
+
+fail:
+    writes("ALTER failed: ")
+    fault(result2)
+    stop(20)
+    $)
+
+

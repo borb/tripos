@@ -1,0 +1,44 @@
+**********************************************************
+*                                                        *
+*              DCB for LSI4 Floppy Discs                 *
+*                                                        *
+**********************************************************
+
+        REL    0
+
+******  DATA   0                Link (inserted by LOADSEG)
+        DATA   0                Device ID
+        DATA   0                Work queue
+        DATA   0                Start routine
+        DATA   0                Stop routine
+        DATA   0                Interrupt routine
+        DATA   :88              Device address (:11 << 3)
+        DATA   0                Interrupt vector address
+        DATA   76               Maximum cylinder number
+
+* Table used to store current cylinder address of each
+* drive
+
+        DATA   -1               Drive 0
+        DATA   -1               Drive 1
+        DATA   -1               Drive 2
+        DATA   -1               Drive 3
+
+* Hardware control block starts here
+
+        DATA   0                Operation code
+        DATA   0                Drive number
+        DATA   0                Cylinder address
+        DATA   0                Relative seek address
+        DATA   0                Sector number
+        DATA   0                Word count
+        DATA   0                Buffer address
+        DATA   0                Interrupt address
+        DATA   0                Words processed
+        DATA   0                Status
+
+        END
+
+
+
+

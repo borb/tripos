@@ -1,0 +1,59 @@
+
+SECTION "taskwait"
+
+GET "libhdr"
+
+LET start () BE
+$(
+   LET arg.vec = VEC 50
+   AND task    = 0
+
+   IF rdargs ( "task/a,echo/k",arg.vec, 20 ) = 0 THEN
+   $(
+      writes ( "bad arguments*N" )
+      stop   ( 0 )
+   $)
+
+   FOR i = 1 TO ( arg.vec ! 0 ) % 0 DO
+   $(
+      UNLESS '0' <=  [ ( arg.vec ! 0 ) % i ] <= '9' DO
+      $(
+         writes ( "bad character in task number*N" )
+         stop   ( 0 )
+      $)
+
+      task := task * 10 + ( arg.vec ! 0 ) % i - '0'
+   $)
+
+   $(
+      LET task.tab = rootnode ! rtn.tasktab
+      LET task.tcb = task.tab ! task
+
+      UNLESS 0 < task < task.tab ! 0 DO
+      $(
+         writes ( "bad task number*N" )
+         stop   ( 0 )
+      $)
+
+      IF task.tcb = 0 THEN
+      $(
+         writef ( "task %N does not exist*N", task )
+         stop   ( 0 )
+      $)
+
+      $(
+         delay ( tickspersecond )
+
+         IF testflags ( 4 ) THEN
+         $(
+            writes ( "****BREAK*N" )
+            stop   ( 0 )
+         $)
+      $) REPEATUNTIL task.tab ! task = 0
+   $)
+
+   IF arg.vec ! 1 \= 0 THEN
+      writef ( "%S*N", arg.vec ! 1 )
+$)
+
+

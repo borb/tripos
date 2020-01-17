@@ -1,0 +1,213 @@
+SECTION "BUILD"
+GET     "LIBHDR"
+
+// Modifications
+//
+// 13-sep-85 NJO  Rdargs call added to read input and output files - mainly
+//                so an output file can be written using a profile assignment
+//                to access :info (for those without full access).
+
+MANIFEST
+$( max.name.size = 30    // characters in output file name
+$)
+
+LET start () BE
+$(
+   LET len = findlength ()
+   LET in  = 0
+   LET out = 0
+   LET buf = ?
+   LET bp  = 1024
+   LET rx  = ?
+   LET trace = ?
+
+   $( LET args = "FROM,FAULTFILE/K,INFODIR/K,TRACE/K"
+      LET argv = VEC 1 + 50/bytesperword
+      LET name = VEC max.name.size/bytesperword
+
+      IF rdargs(args, argv, 1+50/bytesperword) = 0 THEN
+      $( writef("Args unsuitable for string %S*N", args)
+         stop(16)
+      $)
+
+      IF argv!0 = 0 THEN
+         argv!0 := "sys:info.faults"
+
+      IF argv!1 = 0 THEN
+         argv!1 := "faults-table"
+
+      IF argv!2 = 0 THEN
+         argv!2 := "sys:info"
+
+      name%0 := 0     // construct output file name - set to "" initially
+
+      append(argv!2, name)
+
+      IF (name%0 ~= 0) & (name%(name%0) ~= ':') THEN
+         append(".", name)
+
+      append(argv!1, name)
+
+      trace := argv!3
+
+      in := findinput  ( argv!0 )
+
+      out := findoutput ( name )
+
+      IF [ in = 0 ] | [ out = 0 ] THEN
+      $(
+         IF [ in  = 0 ] THEN
+            writef ( "Unable to open faults source file %S*N", argv!0 )
+         IF [ out = 0 ] THEN
+            writef ( "Unable to open faults table file %S*N", name )
+
+         endstream (  in )
+         endstream ( out )
+         stop   (  20 )
+      $)
+   $)
+
+   buf := getvec ( len )
+
+   IF [ buf = 0 ] THEN $( writes    ( "Unable to get work buffer*N" )
+                          endstream (  in )
+                          endstream ( out )
+                          stop      (  20 )
+                       $)
+
+   FOR i = 0 TO 1023 DO buf ! i := 0
+
+   selectinput ( in )
+   writes      ( "Building faults table file*N" )
+
+   $( LET fn = ?
+      LET ml = ?
+      LET br = ?
+      LET ch = rdch () ; WHILE [ ch = '*S' ] |
+                               [ ch = '*T' ] |
+                               [ ch = '*N' ] DO ch := rdch ()
+
+      IF ch = endstreamch THEN BREAK
+
+      IF testflags(1) THEN
+      $( writes ( "****** BREAK   -   WARNING  faults file is partially*
+                  * built and will be corrupt!*N" )
+         endstream ( in )
+         endstream ( out )
+         freevec ( buf )
+         stop ( 20 )
+      $)
+
+      UNLESS [ '0' <= ch <= '9' ] | [ ch = '#' ] DO
+      $(
+         ch := rdch () REPEATUNTIL [ ch = '*N' ] | [ ch = endstreamch ]
+         LOOP
+      $)
+
+      fn := readnumber ( ch )
+      rx := result2
+
+      IF fn = -1 THEN $( endstream (  in )
+                         endstream ( out )
+                         freevec   ( buf )
+                         stop      (  20 )
+                      $)
+
+      br := testflags ( 8 )
+
+      IF br | trace THEN
+      $(  TEST rx = 10
+               THEN writef ( "%I6  : *E", fn )
+               ELSE TEST rx = 16 THEN writef ( "#X%X4  : *E", fn )
+                                 ELSE writef ( "#%O5  : *E", fn )
+      $)
+
+      ml := readmess ( buf, bp + 3 )
+
+      IF br | trace THEN
+      $( FOR i = 1 TO ml DO wrch ( getbyte ( buf, bp*2+6+i ) )
+         newline ()
+      $)
+
+      put2bytes ( buf, bp + 0, get2bytes ( buf, fn & #X03FF ) )
+      put2bytes ( buf, bp + 1, fn )
+      put2bytes ( buf, bp + 2, rx )
+      put2bytes ( buf, fn & #X03FF, bp )
+
+      bp := bp + ml/2 + 4
+
+   $) REPEAT
+
+   selectoutput ( out )
+   writewords   ( buf, [ bp*2 + 100 ] / bytesperword )
+   freevec      ( buf )
+   endread      ()
+   endwrite     ()
+$)
+
+AND readnumber ( fch ) = VALOF
+$(
+   LET radix = 10
+   LET num   = 0
+
+   IF fch = '#' THEN $( fch := rdch ()
+                        TEST [ fch = 'X' ] |
+                             [ fch = 'x' ] THEN $( fch   := rdch ()
+                                                   radix := 16       $)
+                                           ELSE    radix := 8
+                     $)
+
+   UNTIL fch = '*S' DO $( LET d = [ '0' <= fch <= '9' ] -> fch - '0',
+                                  [ 'A' <= fch <= 'F' ] -> fch - 'A' + 10,
+                                  [ 'a' <= fch <= 'f' ] -> fch - 'a' + 10,
+                                  999
+
+                          UNLESS 0 <= d <= radix DO
+                          $(
+                             writes    ( "Error in fault number*N" )
+                             RESULTIS -1
+                          $)
+
+                          num := num * radix + d
+                          fch := rdch ()
+                       $)
+
+   result2 := radix ; RESULTIS num
+$)
+
+AND readmess ( buff, diboff ) = VALOF
+$(
+   LET ch = rdch ()
+   LET l  = 0
+
+   UNTIL [ ch = '*N' ] | [ ch = endstreamch ] DO
+      $(
+         l := l + 1 ; buff % [ diboff*2 + l ] := ch ; ch := rdch ()
+      $)
+
+   buff % [ diboff * 2 ] := l ; RESULTIS l
+$)
+
+AND findlength () = 10000
+
+AND append(str, buffer) BE
+
+// Append the string STR to that already in BUFFER
+
+$( LET str.len = str%0
+   LET buf.len = buffer%0
+   LET tot.len = str.len + buf.len
+
+   IF tot.len > max.name.size THEN
+   $( writes ( "Output file name too long for internal buffer!*N" )
+      stop ( 20 )
+   $)
+
+   FOR i = 1 TO str.len DO
+   $( buffer%(buf.len + i) := str%i
+
+      buffer%0 := tot.len
+   $)
+$)
+
+

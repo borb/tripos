@@ -1,0 +1,242 @@
+**********************************************************
+*                                                        *
+*        (C) Copyright 1978 Tripos Research Group        *
+*            University of Cambridge                     *
+*            Computer Laboratory                         *
+*                                                        *
+**********************************************************
+
+**********************************************************
+*                                                        *
+* This is the console device driver for the LSI4/30      *
+*                                                        *
+**********************************************************
+
+* Device control block symbols
+
+D:LINK  EQU     0       link to device driver
+D:ID    EQU     1       device id
+D:WKQ   EQU     2       work queue
+D:STRT  EQU     3       start routine
+D:STOP  EQU     4       stop routine
+D:INT   EQU     5       interrupt routine
+D:DAFC  EQU     6       device address
+D:IVEC  EQU     7       interrupt vector
+D:CMND  EQU     8       last command
+D:PAIR  EQU     9       link to other DCB
+D:WRTE  EQU    10       non-zero if output DCB
+
+* Packet symbols
+
+P:LINK  EQU     0       link to next pkt
+P:ID    EQU     1       device or task id
+P:TYPE  EQU     2       type or action
+P:RES1  EQU     3       result
+P:RES2  EQU     4       result 2
+P:A1    EQU     5       argument 1
+
+* Rootnode
+
+CRNTSK  EQU   :0B       current task TCB
+DEVMVP  EQU   :15       ptr to MOVPKT
+DEVINT  EQU   :16       ptr to INTENT
+DEVRET  EQU   :17       ptr to INTRET
+
+        REL    0
+
+        DATA   INIT     initialisation routine
+        DATA   UNIN     uninitialisation routine
+
+* Initialisation routine.
+*  A holds the device id
+*  Y           DCB
+*  A,X,Y,K,L must be preserved
+
+INIT    DATA   0
+        CEA    START,Q          fill in rest of the DCB
+        COPY   Q,D:STRT(Y)
+        CEA    STOP,Q
+        COPY   Q,D:STOP(Y)
+        CEA    INT,Q
+        COPY   Q,D:INT(Y)
+        COPYE  DSTOPC,Q         last command was RESET
+        COPY   Q,D:CMND(Y)
+        COPY   Y,Q
+        COPY   D:IVEC(Y),Y      get interrupt vector
+        EXCH   Q,7(Y)           plant the DCB
+        JNE    Q,INIT1          branch if a DCB was there
+        COPY   7(Y),Y           restore DCB
+        COPY   =0,Q
+        COPY   Q,D:PAIR(Y)      clear link
+        JMP    *INIT            return
+INIT1   EXCH   Q,7(Y)           restore old DCB
+        COPY   7(Y),Y           old DCB
+        COPY   Q,D:PAIR(Y)      set links between DCBs
+        EXCH   Q,Y
+        COPY   Q,D:PAIR(Y)
+        JMP    *INIT
+
+* Uninitialisation routine.
+*  A holds the DCB
+*  Y           DCB
+*  A,X,Y,K,L must be preserved
+
+UNIN    DATA   0
+        COPY   D:PAIR(Y),Q      get other DCB
+        COPY   D:IVEC(Y),Y      get int. vector
+        COPY   Q,7(Y)           plant other DCB in vec.
+        JEQ    Q,UNIN1          branch if no other DCB
+        COPY   Q,Y
+        COPY   =0,Q
+        COPY   Q,D:PAIR(Y)      clear other's link
+UNIN1   COPY   A,Y              restore Y
+        JMP    *UNIN            return
+
+* Device start routine.
+*  Y holds the DCB
+*  X,Y,K,L must be preserved
+*  A must be non zero on exit
+
+START   DATA   0
+        COPY   Y,DCB            Save the DCB
+        COPY   D:PAIR(Y),Y      Get paired DCB
+        JEQ    Y,STRT0          Branch if none
+        COPY    D:CMND(Y),A     Get other's last command
+        CSK     A,DSTOPC        and see if it was reset
+        JMP     STRT9
+        JMP     STRT9           Pair is active
+        JMP     STRT0           Pair is not active so go
+STRT9   COPY    D:WRTE(Y),A     Is pair input ?
+        JEQ     A,STRT7         Yes - shall we abandon the input ?
+STRT8   COPY    DCB,Y
+        JMP     *START          Do nothing
+STRT7   COPY    D:DAFC(Y),A     Test for data ready
+        XNX     A
+        IN      :01,Q
+        TBIT    3,Q
+        JT      OV,STRT8        Data ready - let input proceed
+        COPY    DSTOPC,Q
+        XNX     A
+        OUT     Q,:01           Abandon input
+        COPY    Q,D:CMND(Y)     and correct last command
+STRT0   COPY   DCB,Y
+        COPY   Y,Q
+        COPY   D:IVEC(Y),Y
+        COPY   Q,7(Y)           Plant DCB in int. vector
+        COPY   Q,Y
+        COPY   D:WRTE(Y),A      Get I/O status
+        COPY   D:WKQ(Y),Y       get head pkt
+        JEQ    A,STRT2          Branch if READ
+        ADD    =P:A1,Y          buffer address
+        COPY   DAOB,A           AOB instruction
+STRT1   COPY   Y,Q
+        COPY   DCB,Y
+        ADD    D:DAFC(Y),A      add in the device address
+        COPY   D:IVEC(Y),Y      get interrupt vector
+        COPY   A,0(Y)           plant the auto IO inst
+        SHIFT  Q,LO,1           make byte address
+        COPY   Q,2(Y)           buffer address
+        COPY   =-1,Q
+        JF     OV,$+2           jump if in bottom 32K
+        CBIT   15,Q             clear extra address bit
+        COPY   Q,1(Y)           word count
+        COPY   DCB,Y
+        SHIFT  A,R,12           get IN/OUT bit
+        AND    =2,A
+        ADD    DSTRTC,A         form the command word
+        COPY   D:DAFC(Y),Q      get device address
+        XNX    Q                issue start command
+        OUT    A,:01
+        OR     =:F0,A           expecting EOB interrupt
+        COPY   A,D:CMND(Y)      save it for SARDCH/SAWRCH
+        CEA    :0680,A
+        COPY   A,DSTRTC
+        JMP    *START
+
+STRT2   ADD    =P:RES1,Y        buffer address
+        COPY   DAIB,A           AIB instruction
+        JMP    STRT1
+
+* Device stop routine.
+*  Y holds the DCB
+*  X,Y,K,L must be preserved
+
+STOP    DATA   0
+        COPY   Y,Q
+        COPY   Y,DCB1
+        COPY   D:IVEC(Y),Y
+        CSK    Q,7(Y)           DCB = active one?
+        JMP    STOP1            Unequal
+        JMP    STOP1            Unequal
+        COPY   Q,Y              Equal
+        COPY   DSTOPC,A         get the command word
+        COPY   A,D:CMND(Y)      save it for SARDCH/SAWRCH
+        COPY   D:DAFC(Y),Q      get device address
+        XNX    Q
+        OUT    A,:01            issue reset command
+        COPY   *D:WKQ(Y),A      Check for > 1 packet
+        JNE    A,STOP1          Branch if so
+        COPY   D:PAIR(Y),Y
+        JEQ    Y,STOP1          Branch if no paired DCB
+        COPY   D:WKQ(Y),A
+        JEQ    A,STOP1          Branch if no packets
+        JST    *D:STRT(Y)       Start up other DCB
+STOP1   COPY   DCB1,Y
+        JMP    *STOP
+
+* Device interrupt routine.
+*  Y holds the DCB
+*  K,L must be preserved
+
+INT     COPY   DSTOPC,Q         Set command word
+        COPY   Q,D:CMND(Y)      Into DCB
+        COPY   =0,Q
+        COPY   D:DAFC(Y),A      Check status
+        XNX    A
+        IN     :01,A            Get status bits
+        TBIT   5,A              Check for framing error
+        JF     OV,$+2           Not set
+        COPY   =-1,Q            Error result
+        COPY   D:WKQ(Y),X       Get head packet
+        COPY   Q,P:RES2(X)      Set RES2
+        COPY   P:LINK(X),Q      Unlink packet
+        COPY   Q,D:WKQ(Y)
+        COPY   Y,DCB1           Save DCB
+        COPY   D:WRTE(Y),A      Get status
+        JNE    A,INT0
+        CEA    :0610,A
+        COPY   A,DSTRTC
+        JMP    INT1
+INT0    JEQ    Q,INT1           Branch if no more pkts
+        COPY   D:DAFC(Y),A      Get device code
+        XNX    A
+        IN     :01,A            Get status
+        TBIT   3,A              Check data ready bit
+        JF     OV,INT2          Not set
+INT1    COPY   D:PAIR(Y),A      Get paired DCB
+        JEQ    A,INT2           Non-existent
+        COPY   A,Y
+        COPY   D:WKQ(Y),A       Check work queue
+        JNE    A,INT3
+        COPY   DCB1,Y           Restore interrupted DCB
+INT2    COPY   D:WKQ(Y),A       Check work queue
+        JEQ    A,$+2            Branch if empty
+INT3    JST    *D:STRT(Y)       Restart device
+        COPY   DCB1,Y
+        COPY   D:ID(Y),A        device id for MOVPKT
+        COPY   X,Y              pkt
+        COPY   CRNTSK,Q         TCB
+        JST    *DEVMVP          send the pkt back
+        JMP    *DEVINT
+
+DCB     DATA   0
+DCB1    DATA   0
+DWRITE  DATA   1000
+DSTRTC  DATA   :0680
+DSTOPC  DATA   :0100
+DAIB    AIB    :00
+DAOB    AOB    :00
+
+        END
+
+

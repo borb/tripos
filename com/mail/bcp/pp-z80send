@@ -1,0 +1,191 @@
+$$TRACE := TRUE
+MANIFEST
+$(      do.tuid         = 3
+        do.puid         = do.tuid  + 4
+        do.pointers     = do.puid  + 4
+        Max.words       = 512
+        send.index.ring.words = 8*4
+$)
+// Now, lets just ZAP a mail item into the queue.
+// Try to keep the parms as for Z80SEND!!
+// Common uses are:
+//      error:  TO (original sender), INREPLYTO (messageid),
+//              SUBJECT (unknown user), PUID=0 (NO FROM!!!!),
+//              TRIPOS  (data file that couldn't be sent),
+//              HEADER  (header file that couldn't be sent)
+LET pp.z80send(stamp, tuid, puid, to., subject, tripos, cap,
+        immediate, cc, bcc, mode, replyto, forward, bits, inreply,
+        tripos.header, cap.header,
+        end) = VALOF
+$(
+
+    // This routine pretends to send off an SSP send request to the mailserver
+    // using a previously prepared transmit buffer.
+    LET txbuff          = GETVEC (Max.words/rwpw)
+    LET null            = TABLE 0,0,0,0,0,0,0,0
+    LET args            = 1                     // Zero terminator
+    LET bitaddr         = VEC 0
+    LET forwardaddr     = VEC 0
+
+    FOR i = @immediate to @end
+                IF !I = -1 THEN FOR ptr = I TO @end DO !ptr := 0
+
+    !bitaddr    := 0
+     bitaddr%%0 := bits
+    !forwardaddr:= 0
+     forwardaddr%%0     := forward
+    if puid = 0 THEN puid := null
+    if tuid = 0 THEN tuid := null
+
+    IF TXBUFF=0
+    $(  LET r2 = RESULT2;
+        WRITEF("GETVEC FAILED in pp.Z80SEND*N")
+        RESULT2 := r2
+        RESULTIS FALSE
+    $)
+
+    k                   := txbuff
+
+    FOR i = @stamp TO @end -1
+    DO  TEST !I = 0
+        THEN IF i <= @cap | i=@tripos.header | i=@cap.header THEN !I := null
+        ELSE IF i > @puid THEN args := args+1
+unless mode=0 | mode=null THEN args := args-1
+
+    k!0         := do.pointers
+    k!1         := do.pointers+args
+
+    add.string(to.,             send.to)
+    add.string(subject,         send.subject)
+    add.item  (tripos+uid, 7,   send.tripos)
+    add.item  (cap+uid, 7,      send.cap)
+    add.string(immediate,       send.immediate)
+    add.string(cc,              send.cc)
+    add.string(bcc,             send.bcc)
+    add.string(replyto,         send.replyto)
+    add.string(inreply,         send.inreply)
+    add.item  (bitaddr, 1,      send.bits)
+    add.item  (forwardaddr, 1,  send.forward)
+    add.item  (tripos.header+uid, 7,    send.tripos.header)
+    add.item  (cap.header+uid, 7,       send.cap.header)
+    add.item  ((TABLE 1), -1,   0)
+
+    k := k!1
+
+    // BEWARE ----- k!1 uses upto k %% (rwpw)-1 i.e. bb.ssp.args on 68000 !!
+
+    z80timestamp(txbuff)
+
+    // Set the TUID and PUID of the user
+    FOR i=0 TO 3 DO txbuff%%(do.tuid+i) := tuid %% i
+    FOR i=0 TO 3 DO txbuff%%(do.puid+i) := puid %% i
+
+    IF k > Max.words    $( freevec(txbuff); RESULT2 := #XD00B; RESULTIS FALSE $)
+
+    //  Now insert the info ...
+    $(  LET send.index  = VEC file.desc.size
+        LET lock.file   = VEC file.desc.size
+        LET index.cache = get.temp.vec(send.index.ring.words/rwpw)
+        LET current.slot= ?
+        LET mode        = ?
+        LET fs.link     = ms.fs.fail.link
+        LET fs.level    = ms.fs.fail.level
+        Zap.file(send.index)
+        Zap.file(lock.file)
+        send.index ! cache.address      := index.cache
+        send.index ! cache.size         := send.index.ring.words/rwpw
+
+        // First retrieve the insert index, and find a free group ....
+        retrieve.entry(root, root.send.index, send.index)
+Retry:
+        mode := 0
+        ms.fs.fail.level := level()
+        ms.fs.fail.link := send.fs.link
+        current.slot := 0
+        UNTIL current.slot >= 100
+        $(      LET free = TRUE
+                LET offset= address.offset(send.index, current.slot*4, 16)*bprw
+                for i = 0 TO 15 UNLESS index.cache%(offset+i) = 0
+                                free := FALSE <> BREAK
+                IF free BREAK
+                current.slot +:= 4
+        $)
+$<TRACE
+        IF trace WRITEF("%n is free*N", current.slot)
+$>TRACE
+        // Then obtain a lock on the insert index ...
+        open.file(send.index)
+        mode +:= 1      // FILE OPEN !!!!!!!!!!!!!!!!!!!!!!
+        retrieve.entry(send.index, current.slot, lock.file)
+        UNLESS (lock.file!uid = 0)      close.file(send.index) <> GOTO Retry
+        create.file(send.index, current.slot, lock.file, FALSE)
+        close.file(send.index)
+        mode -:= 1      // FILE CLOSED !!!!!!!!!!!!!!!!!!!
+        // Now I've got it ...........
+$<TRACE
+        IF trace WRITEF("%n Taken*N", current.slot)
+$>TRACE
+        lock.file!cache.address := txbuff
+        lock.file!cache.size    := k
+        flush.cache(lock.file)
+        $<TRACE IF trace WRITEF("Flushed OK*N") $>TRACE
+        // SSP file written !!
+$<TRACE
+        IF trace
+        $(
+                let addr = tripos=null -> cap=null ->
+                                        lock.file+uid,
+                                        cap+uid,
+                                        tripos+uid
+                WRITEF("Retain in %n that at %n = %X4 %X4 %X4 %X4*N",
+                current.slot+1, addr,
+                                addr %% 0,
+                                addr %% 1,
+                                addr %% 2,
+                                addr %% 3)
+
+        $)
+$>TRACE
+        retain.in.index(send.index, current.slot+1,
+                                        tripos=0 -> cap=0 ->
+                                        lock.file,
+                                        cap,
+                                        tripos)
+        UNLESS tripos.header=null & cap.header=null
+                retain.in.index(send.index, current.slot+2, 
+                tripos.header=null ->   cap.header, tripos.header)
+
+$<TRACE
+        IF trace WRITEF("Retained OK*N")
+$>TRACE
+        Freevec(txbuff)
+        RESULTIS TRUE
+
+send.fs.link:
+    $(  LET R2 = RESULT2
+        if mode = 1     mode := 0 <> close.file(send.index)
+        ms.fs.fail.link := fs.link
+        ms.fs.fail.level := fs.level
+        FREEVEC(txbuff)
+        RESULT2 := r2
+    $)
+    RESULTIS FALSE
+    $)
+$)
+
+AND add.item(address, upb, type) BE UNLESS address!0 = 0 | address=0
+$(  LET data = k!1
+    LET pointer = k!0
+//  IF (address!0)%0 = 0 RETURN
+
+    k!1 := data + upb/bprw+1
+    IF k!1 > Max.words wto.mc("delta", "block too long") <> RETURN
+    FOR i=0 TO upb/bprw DO k%%(data + i) := address %% i
+    k%%pointer := (type << 8) + data +1 // All offsets 'wrong'.
+
+    k!0 := pointer      + 1
+$)
+
+AND add.string(users, type) BE add.item(users, users%0, type)
+
+

@@ -1,0 +1,1241 @@
+//******************************************************************************
+//*   Assembler for the Motorola MC68000 Microprocessor:  Section 5            *
+//******************************************************************************
+
+
+
+SECTION "M68KASM5"
+
+
+GET "LIBHDR"
+
+GET "M68KHDR"
+
+
+
+LET complain( code )  BE  asmerror( code, yes )
+
+
+
+AND warning( code )   BE  asmerror( code, no )
+
+
+
+AND asmerror( code, fatal )  BE
+$(
+    TEST  pass2  THEN
+    $(
+        LET offset  =  errors * eb.size
+
+        TEST  errors = errorsize  THEN
+        $(
+            selectoutput( sysout )
+            writef( "*N******  More than %N errors detected  -  assembly aborted.*N", errorsize )
+            selectoutput( liststream )
+
+            aborted  :=  yes
+            ended    :=  yes         // premature ending
+        $)
+        ELSE  
+        $(
+            errorvec!(offset + eb.line)  :=  linenumber
+            errorvec!(offset + eb.code)  :=  code
+            errorvec!(offset + eb.file)  :=  currentfile
+            errors                       :=  errors + 1
+
+            selectoutput( sysout )
+
+            writes( "******  " )
+
+            FOR  i = 0  TO  length-1  DO  wrch( inputbuff % i )
+
+            newline()
+
+            writef( "******  File *"%S*" line %N  -  %S*N*N", 
+                     currentfile, linenumber, message( code ) )
+
+            selectoutput( liststream )
+        $)
+    $)
+    ELSE  errors  :=  errors + 1
+
+    error.found  :=  yes
+
+    IF  fatal  THEN
+    $(
+        commentline  :=  yes
+
+        longjump( recoverlevel, recoverlabel )
+    $)
+$)
+
+
+
+AND error( code )  BE
+$(
+//  Fatal error, so print out the error message to the console, and then
+//  wind up.
+
+    selectoutput( sysout )
+
+    writef( "*N******  Pass %N, line %N.  Fatal error  -  %S*N",
+             (pass1 -> 1, (pass2 -> 2, 0)), linenumber, message( code ) )
+
+    aborted  :=  yes
+    ended    :=  yes
+
+    longjump( fatalerrorp, fatalerror )
+$)
+
+
+
+AND checkfor( symbol, messagenumber )  BE
+    TEST  symb = symbol  THEN  readsymb()
+                         ELSE  complain( messagenumber )
+
+
+
+AND message( code )  =  VALOF
+$(
+    SWITCHON  code  INTO
+    $(
+        CASE  0  :  RESULTIS  "INTERNAL ERROR IN ASSEMBLER  -  PLEASE REPORT"
+        CASE  1  :  RESULTIS  "Size specifier is illegal on Label"
+        CASE  2  :  RESULTIS  "Garbage found in Opcode field"
+        CASE  3  :  RESULTIS  "Illegal Opcode field"
+//      CASE  4  :  RESULTIS  "'END' statement missing"
+        CASE  5  :  RESULTIS  "Garbage found in Label field"
+        CASE  6  :  RESULTIS  "Illegal size specifier for this Opcode"
+        CASE  7  :  RESULTIS  "Illegal address mode for this Operand"
+        CASE  8  :  RESULTIS  "Illegal address mode for First Operand"
+        CASE  9  :  RESULTIS  "Illegal address mode for Second Operand"
+        CASE 10  :  RESULTIS  "',' expected after First Operand"
+        CASE 11  :  RESULTIS  "Too many operands for this Opcode"
+        CASE 12  :  RESULTIS  "Garbage found after Operand field"
+        CASE 13  :  RESULTIS  "First Operand must be of 'DATA' mode"
+        CASE 14  :  RESULTIS  "First Operand must be of 'DATA REGISTER' mode"
+        CASE 15  :  RESULTIS  "Second Operand must be of 'MEMORY ALTERABLE' mode"
+        CASE 16  :  RESULTIS  "Illegal address mode for Relative Branch"
+        CASE 17  :  RESULTIS  "Label must be of 'RELOCATABLE' type"
+        CASE 18  :  RESULTIS  "Label must be of 'ABSOLUTE' type"
+        CASE 19  :  RESULTIS  "Short Branch displacement of ZERO is illegal"
+        CASE 20  :  RESULTIS  "Location out of range for Short Branch"
+        CASE 21  :  RESULTIS  "Location out of range for Long Branch"
+        CASE 22  :  RESULTIS  "Second Operand must be of 'DATA REGISTER' mode"
+        CASE 23  :  RESULTIS  "Second Operand must be of 'DATA ALTERABLE' mode"
+        CASE 24  :  RESULTIS  "Illegal register combination for 'EXG' Opcode"
+        CASE 25  :  RESULTIS  "Operand must be of 'IMMEDIATE' mode"
+        CASE 26  :  RESULTIS  "Immediate value out of range of 4-Bit Unsigned Number"
+        CASE 27  :  RESULTIS  "First Operand must be of 'IMMEDIATE' mode"
+        CASE 28  :  RESULTIS  "Inconsistent Size Specifier for 'SR/CCR' Operand"
+        CASE 29  :  RESULTIS  "'.B' size specifier illegal for 'ADDRESS REGISTER' mode"
+        CASE 30  :  RESULTIS  "Second Operand must be of 'ADDRESS REGISTER' mode"
+        CASE 31  :  RESULTIS  "First Operand must be of 'ADDRESS REGISTER POST INCREMENT' mode"
+        CASE 32  :  RESULTIS  "Second Operand must be of 'ADDRESS REGISTER POST INCREMENT' mode"
+        CASE 33  :  RESULTIS  "Second Operand must be of 'DATA' mode"
+        CASE 34  :  RESULTIS  "Illegal Size Specifier for 'SR' Operand (W expected)"
+        CASE 35  :  RESULTIS  "Illegal Size Specifier for 'USP' Operand (L expected)"
+        CASE 36  :  RESULTIS  "First Operand must be of 'ADDRESS REGISTER' mode"
+        CASE 37  :  RESULTIS  "'SHORT' Size Specifier illegal for 'MOVE' Opcode"
+        CASE 38  :  RESULTIS  "Illegal Size Specifier for 'MOVEM' Opcode (W or L expected)"
+        CASE 39  :  RESULTIS  "Register Range must be for Registers of same type"
+        CASE 40  :  RESULTIS  "Illegal Size Specifier in 'REGISTER MASK'"
+        CASE 41  :  RESULTIS  "Register missing or malformed in 'REGISTER MASK'"
+        CASE 42  :  RESULTIS  "Second Operand must be of 'ADDRESS REGISTER + OFFSET' mode"
+        CASE 43  :  RESULTIS  "First Operand must be of 'ADDRESS REGISTER + OFFSET' mode"
+        CASE 44  :  RESULTIS  "Illegal Size Specifier for 'MOVEP' Opcode (W or L expected)"
+        CASE 45  :  RESULTIS  "'QUICK' Operand value out of range of 8-Bit Signed Number"
+        CASE 46  :  RESULTIS  "Illegal Size Specifier for 'ORG' directive (W or L expected)"
+        CASE 47  :  RESULTIS  "Garbage found after Directive"
+        CASE 48  :  RESULTIS  "Invalid length parameter for 'DS/DCB' directive"
+        CASE 49  :  RESULTIS  "'TTL' string longer than 60 characters"
+//      CASE 50  :  RESULTIS  "Unimplemented Directive!"
+        CASE 51  :  RESULTIS  "INTERNAL ERROR:  Phasing Difference  -  PLEASE REPORT"
+        CASE 52  :  RESULTIS  "'REGISTER' is illegal in Label field"
+        CASE 53  :  RESULTIS  "'INSTRUCTION' is illegal in Label field"
+        CASE 54  :  RESULTIS  "'DIRECTIVE' is illegal in Label field"
+        CASE 55  :  RESULTIS  "Illegal Label field"
+        CASE 56  :  RESULTIS  "Malformed 'SHIFT' Operator"
+        CASE 57  :  RESULTIS  "Closing 'QUOTE' missing from 'ASCII LITERAL'"
+        CASE 58  :  RESULTIS  "'ASCII LITERAL' Longer than 4 characters"
+        CASE 59  :  RESULTIS  "Illegal character in Source File"
+        CASE 60  :  RESULTIS  "Malformed Number"
+        CASE 61  :  RESULTIS  "Too few Operands for this Opcode"
+        CASE 62  :  RESULTIS  "Register or 'PC' missing after '('"
+        CASE 63  :  RESULTIS  "First Register after '(' must be 'ADDRESS REGISTER' or 'PC'"
+        CASE 64  :  RESULTIS  "Register missing afer ','"
+        CASE 65  :  RESULTIS  "')' missing after Register"
+        CASE 66  :  RESULTIS  "')' missing after Registers"
+        CASE 67  :  RESULTIS  "'-' or '/' after Register only valid in 'REGISTER MASK'"
+        CASE 68  :  RESULTIS  "Illegal use of 'REGISTER'"
+        CASE 69  :  RESULTIS  "Overall Parenthesis Mismatch"
+        CASE 70  :  RESULTIS  "Syntax Error in Expression"
+        CASE 71  :  RESULTIS  "Symbol/Expression must be of 'ABSOLUTE' type"
+        CASE 72  :  RESULTIS  "Index value out of range for 8-Bit Signed Number"
+        CASE 73  :  RESULTIS  "Forward Reference must not be 'LONG ABSOLUTE' mode"
+        CASE 74  :  RESULTIS  "Illegal negation of 'RELOCATABLE' value"
+        CASE 75  :  RESULTIS  "Dyadic Operator must have 'ABSOLUTE' Operands"
+        CASE 76  :  RESULTIS  "Illegal Operands for Diadic Operator"
+        CASE 77  :  RESULTIS  "Illegal termination of 'CONSTANTS LIST'"
+        CASE 78  :  RESULTIS  "Value out of range for 8-Bit Unsigned Number"
+        CASE 79  :  RESULTIS  "Illegal Forward Reference"
+        CASE 80  :  RESULTIS  "Size Specifier in illegal position"
+        CASE 81  :  RESULTIS  "Size Specifier on 'REGISTER' illegal here"
+        CASE 82  :  RESULTIS  "Statement must have Label field"
+        CASE 83  :  RESULTIS  "Statement must not have Label field"
+        CASE 84  :  RESULTIS  "Operand must be a Register"
+        CASE 85  :  RESULTIS  "Invalid Operand type for this Directive"
+        CASE 86  :  RESULTIS  "'.S' Size Specifier only valid on 'BRANCH' Opcodes"
+        CASE 87  :  RESULTIS  "Illegal Size Specifier on Index Register (W or L expected)"
+        CASE 88  :  RESULTIS  "Displacement type mismatch"
+        CASE 89  :  RESULTIS  "Index value out of range for 16-Bit Signed Number"
+        CASE 90  :  RESULTIS  "Tag Symbol longer than 30 characters"
+        CASE 91  :  RESULTIS  "Illegal Size Specifier (B W L or S expected)"
+        CASE 92  :  RESULTIS  "Multiply Defined Symbol"
+        CASE 93  :  RESULTIS  "Workspace Exhausted"
+        CASE 94  :  RESULTIS  "INTERNAL ERROR:  Parse Stack Overflow  -  PLEASE REPORT"
+        CASE 95  :  RESULTIS  "Undefined Symbol in Label Field"
+        CASE 96  :  RESULTIS  "Undefined Symbol in Opcode Field"
+        CASE 97  :  RESULTIS  "Undefined Symbol in Operand Field"
+//      CASE 98  :  RESULTIS  "Illegal Size Specifier for 'SIZE' Directive (B W or L expected)"
+        CASE 99  :  RESULTIS  "Second Operand must be of 'ALTERABLE' mode"
+        CASE 100 :  RESULTIS  "Invalid parameter for 'PLEN' directive"
+        CASE 101 :  RESULTIS  "Invalid parameter for 'LLEN' directive"
+        CASE 102 :  RESULTIS  "Instruction alignment error (Must be WORD aligned)"
+        CASE 103 :  RESULTIS  "'ENDC' statement missing"
+        CASE 104 :  RESULTIS  "Illegal use of 'SET' on a symbol defined by 'EQU'"
+        CASE 105 :  RESULTIS  "Illegal use of 'EQU' on a symbol defined by 'SET'"
+        CASE 106 :  RESULTIS  "Forward reference must not be to symbol defined by 'SET'"
+        CASE 107 :  RESULTIS  "Mismatched 'ENDC' statement"
+        CASE 108 :  RESULTIS  "Macro nesting too deep"
+        CASE 109 :  RESULTIS  "Bad reference to Macro Operand"
+        CASE 110 :  RESULTIS  "Illegally nested Macro Definitions"
+        CASE 111 :  RESULTIS  "Mismatched 'ENDM' statement"
+        CASE 112 :  RESULTIS  "Mismatched 'MEXIT' statement"
+        CASE 113 :  RESULTIS  "'ENDM' statement missing"
+        CASE 114 :  RESULTIS  "Mismatched Macro Brackets"
+        CASE 115 :  RESULTIS  "Incorrect termination of Macro Operand Field"
+//      CASE 116 :  RESULTIS  "Too many Assembler Generated Labels"
+        CASE 117 :  RESULTIS  "Illegal use of Macro Operands outside a Macro Body"
+        CASE 118 :  RESULTIS  "Too many operands for Macro"
+        CASE 119 :  RESULTIS  "Illegal generation of 'END' in Macro Expansion"
+        CASE 120 :  RESULTIS  "Illegal generation of 'ENDM' in Macro Expansion"
+        CASE 121 :  RESULTIS  "Illegal generation of 'MACRO' in Macro Expansion"
+        CASE 122 :  RESULTIS  "User 'FAIL' Statement"
+        CASE 123 :  RESULTIS  "Byte value must not be of 'RELOCATABLE' type"
+        CASE 124 :  RESULTIS  "Illegal re-definition of 'PLEN' parameter"
+        CASE 125 :  RESULTIS  "Illegal re-definition of 'LLEN' parameter"
+        CASE 126 :  RESULTIS  "Illegal use of 'END' within 'INCLUDE' file"
+        CASE 127 :  RESULTIS  "Terminating 'QUOTE' missing from 'INCLUDE' argument"
+        CASE 128 :  RESULTIS  "Input not provided for 'INCLUDE'"
+        CASE 129 :  RESULTIS  "Malformed argument for 'INCLUDE'"
+        CASE 130 :  RESULTIS  "'INCLUDE' nesting too deep"
+        CASE 131 :  RESULTIS  "'ENDC' missing in 'INCLUDE' file"
+        CASE 132 :  RESULTIS  "'ENDM' missing in 'INCLUDE' file"
+//      CASE 133 :  RESULTIS  "Illegal generation of 'INCLUDE' in Macro Expansion"
+        CASE 134 :  RESULTIS  "Register after '(' must be 'ADDRESS REGISTER' or 'PC'"
+        CASE 135 :  RESULTIS  "Illegal use of 'INSTRUCTION' in Operand Field"
+        CASE 136 :  RESULTIS  "Illegal use of 'DIRECTIVE' in Operand Field"
+        CASE 137 :  RESULTIS  "Illegal use of 'MACRO NAME' in Operand Field"
+        CASE 138 :  RESULTIS  "Address value too large"
+        CASE 139 :  RESULTIS  "Illegal '#' found in expression"
+        CASE 140 :  RESULTIS  "Illegal 'OPERATOR' found in expression"
+        CASE 141 :  RESULTIS  "Unexpected end of expression"
+        CASE 142 :  RESULTIS  "Illegal ')' found in expression"
+        CASE 143 :  RESULTIS  "Illegal ',' found in expression"
+        CASE 144 :  RESULTIS  "Illegal ':' found in expression"
+        CASE 145 :  RESULTIS  "Illegal 'REGISTER' found in expression"
+        CASE 146 :  RESULTIS  "Illegal '(An)/-(An)/(An)+' found in expression"
+        CASE 147 :  RESULTIS  "Illegal 'SR/CCR/USP/PC' found in expression"
+        CASE 148 :  RESULTIS  "Illegal forward reference to register defined by 'EQUR'"
+        CASE 149 :  RESULTIS  "BREAK"
+        CASE 150 :  RESULTIS  "Illegal 'CNOP' alignment value of ZERO"
+        CASE 151 :  RESULTIS  "Illegal forward reference to MACRO name"
+        CASE 152 :  RESULTIS  "Illegal use of 'XREF' symbol in BRANCH instruction"
+        CASE 153 :  RESULTIS  "Undefined symbol in 'XDEF' list"
+        CASE 154 :  RESULTIS  "Illegal 'XREF' symbol in 'XDEF' list"
+        CASE 155 :  RESULTIS  "Illegal symbol found in 'XDEF' list"
+        CASE 156 :  RESULTIS  "Illegal termination of 'XDEF' list"
+        CASE 157 :  RESULTIS  "'XREF' symbol is already defined"
+        CASE 158 :  RESULTIS  "Illegal symbol found in 'XREF' list"
+        CASE 159 :  RESULTIS  "Illegal termination of 'XREF' list"
+        CASE 160 :  RESULTIS  "'XREF' symbol is illegal in Label Field"
+        CASE 161 :  RESULTIS  "Illegal size for 'XREF' symbol (Must be L)"
+        CASE 162 :  RESULTIS  "Illegal use of 'XREF' symbol as displacement"
+        CASE 163 :  RESULTIS  "Illegal arithmetic on 'XREF' symbol"
+        CASE 164 :  RESULTIS  "Illegal use of 'XREF' symbol as argument to 'DIRECTIVE'"
+        CASE 165 :  RESULTIS  "'XDEF' Symbol is too long"
+        CASE 166 :  RESULTIS  "'XREF' Symbol is too long"
+        CASE 167 :  RESULTIS  "TRIPOS Module HUNK too large"
+        CASE 168 :  RESULTIS  "TRIPOS Module RELOC16 too large"
+        CASE 169 :  RESULTIS  "TRIPOS Module RELOC32 too large"
+        CASE 170 :  RESULTIS  "TRIPOS Module ABSHUNK too large"
+        CASE 171 :  RESULTIS  "TRIPOS Module ABSREL16 too large"
+        CASE 172 :  RESULTIS  "TRIPOS Module ABSREL32 too large"
+        CASE 173 :  RESULTIS  "Overlong input record  -  truncated"
+        CASE 174 :  RESULTIS  "Illegal forward reference to 'XREF' symbol"
+        CASE 175 :  RESULTIS  "Illegal value for WORD sized operand"
+        CASE 176 :  RESULTIS  "Illegal value for BYTE sized operand"
+        CASE 177 :  RESULTIS  "'RELOCATABLE' symbol out of range"
+        CASE 178 :  RESULTIS  "INTERNAL ERROR:  Code buffer overflow  -  PLEASE REPORT"
+        CASE 179 :  RESULTIS  "INTERNAL ERROR:  Bad store request  -  PLEASE REPORT"
+        CASE 180 :  RESULTIS  "Operand must be of 'CONTROL' mode"
+        CASE 181 :  RESULTIS  "Illegal address mode for 'ABSOLUTE' jump"
+        CASE 182 :  RESULTIS  "Location out of range for 'SHORT ABSOLUTE' jump"
+        CASE 183 :  RESULTIS  "Illegal forward reference to symbol defined by 'REG'"
+        CASE 184 :  RESULTIS  "'REGISTER MASK' is illegal in Label field"
+        CASE 185 :  RESULTIS  "Illegal 'REGISTER MASK' found in expression"
+        CASE 186 :  RESULTIS  "'STRING' arguments only valid with 'IFEQ/IFNE'"
+        CASE 187 :  RESULTIS  "Opening 'QUOTE' missing from 'STRING'"
+        CASE 188 :  RESULTIS  "Closing 'QUOTE' missing from 'STRING'"
+        CASE 189 :  RESULTIS  "Macro expansion too long"
+
+        DEFAULT  :  RESULTIS  "INTERNAL ERROR:  Undefined Error Code  -  PLEASE REPORT"
+    $)
+$)
+
+
+
+AND write0( number, field )  BE
+$(
+    IF  field > 1  THEN  write0( number/10, field-1 )
+
+    writechar( number REM 10  +  '0' )
+$)
+
+
+
+AND readtag()  BE
+$(
+//  Read a tag.  This is always guaranteed to be a "type 2" symbol, which we
+//  can look up immediately.
+
+    readtagsymbol( 0 )
+    
+    lookup( tagv, tagtable2 )
+$)
+
+
+
+AND readlabel()  BE
+
+//  Read a label.  This should be a "type 2" symbol, but we don't actually
+//  want to look it up yet.
+
+    readtagsymbol( 0 )
+
+
+
+AND readopcode()  BE
+$(
+//  Read an opcode.  This is always a "type 1" symbol, and can therefore
+//  be looked up immediately.  The only valid alternative to an opcode symbol
+//  is "end of line".
+
+    TEST  ch = '*N'  THEN  symb  :=  s.none
+    ELSE
+    $(
+        readtagsymbol( 2 )
+
+        lookup( tagv, tagtable1 )
+    $)
+$)
+
+
+
+AND readtagsymbol( errorcode )  BE
+$(
+//  Reads the tag, whose first character is in "ch".  We strip any suffix if
+//  one has been given, but that is all at this stage.
+
+    LET length  =  0
+
+    WHILE  symbolchar( ch, TRUE )  DO
+    $(  
+        //  Loop to read the individual characters of the tag.  We keep on
+        //  looking until we hit an invalid character, or the symbol gets
+        //  too long.
+
+        TEST  length = tagchars  THEN
+        $(
+            warning( 90 )
+
+            //  The symbol is too long for us, so we will just take the
+            //  first "tagchars" characters of it.  Ignore the rest of the
+            //  tag.
+
+            WHILE  symbolchar( ch, TRUE )  DO  rch()
+
+            BREAK
+        $)
+        ELSE
+        $(
+            //  Take only the first "tagchars" characters of the
+            //  symbol name.
+
+            length         :=  length + 1
+            tagv % length  :=  uppercase( ch )
+
+            rch()
+        $)
+    $)
+
+    //  We should check at this point to make sure that the first character is
+    //  valid.  If not, the length will be zero.
+
+    IF  length = 0  THEN  complain( errorcode )
+
+    tagv % 0  :=  length
+    
+    IF  ch = '\'  THEN
+    $(
+        TEST  inmacro  
+            THEN  UNTIL  ch = '*S'  |  ch = '*T'  |  ch = '*N'  DO  rch()
+            ELSE  complain( 117 )
+
+        tagsize.given  :=  ts.none
+
+        RETURN
+    $)
+
+    //  This symbol could be followed by a ".", and then by a length
+    //  specifier.  If so, we check for a suffix on the name we have read
+    //  in, and strip the suffix.
+
+    TEST  checksuffix( tagv, ".L" )  THEN  tagsize.given  :=  ts.long   ELSE
+    TEST  checksuffix( tagv, ".W" )  THEN  tagsize.given  :=  ts.word   ELSE
+    TEST  checksuffix( tagv, ".B" )  THEN  tagsize.given  :=  ts.byte   ELSE
+    TEST  checksuffix( tagv, ".S" )  THEN  tagsize.given  :=  ts.short  ELSE
+
+        //  No suffix given, so set the "tagsize.given" flag.
+        
+        tagsize.given  :=  ts.none
+$)
+
+
+
+AND checksuffix( string, suffix )  =  VALOF
+$(
+//  Check to see if the string given has suffix "suffix", and if so, strip
+//  it.  Return a boolean to say what we have done.
+
+    LET strl  =  string % 0
+    LET sufl  =  suffix % 0
+    
+    TEST  strl > sufl  THEN
+    $(
+        //  It is possible that this is a correct suffix, and so we should do
+        //  the check.  We search backwards...
+        
+        FOR  i = 0  TO  sufl-1  DO
+        $(
+            LET strch  =  uppercase( string % (strl - i) )
+            LET sufch  =  uppercase( suffix % (sufl - i) )
+            
+            UNLESS  strch = sufch  DO  RESULTIS  FALSE
+        $)
+        
+        //  If we drop through here, then the suffix matches, and so we should
+        //  strip it.
+        
+        string % 0  :=  strl - sufl
+        
+        RESULTIS  TRUE
+    $)
+    ELSE  RESULTIS  FALSE
+$)
+
+
+
+AND uppercase( ch )   =   'a' <= ch <= 'z'  ->  ch - 'a' + 'A',  ch
+
+
+
+AND symbolchar( char, digits )  =  uppercasechar( char )         |
+                                   lowercasechar( char )         |
+                                   (digits & digitchar( char ))  |
+                                   ch = '_'  |  ch = '.'
+
+
+
+AND macrochar( char )  =  uppercasechar( char )  |  digitchar( char )
+
+
+
+$<370
+AND uppercasechar( char )  =  VALOF                                    /* 370 */
+$(                                                                     /* 370 */
+//  See whether the character is an uppercase alphabetic character.    /* 370 */
+//  We cannot do this the simple minded way, because "\" is part of    /* 370 */
+//  the A-Z character set.                                             /* 370 */
+                                                                       /* 370 */
+    SWITCHON  char  INTO                                               /* 370 */
+    $(                                                                 /* 370 */
+        CASE 'A' :  CASE 'B' :  CASE 'C' :  CASE 'D' :                 /* 370 */
+        CASE 'E' :  CASE 'F' :  CASE 'G' :  CASE 'H' :                 /* 370 */
+        CASE 'I' :  CASE 'J' :  CASE 'K' :  CASE 'L' :                 /* 370 */
+        CASE 'M' :  CASE 'N' :  CASE 'O' :  CASE 'P' :                 /* 370 */
+        CASE 'Q' :  CASE 'R' :  CASE 'S' :  CASE 'T' :                 /* 370 */
+        CASE 'U' :  CASE 'V' :  CASE 'W' :  CASE 'X' :                 /* 370 */
+        CASE 'Y' :  CASE 'Z' :                                         /* 370 */
+                                                                       /* 370 */
+                    RESULTIS  TRUE                                     /* 370 */
+                                                                       /* 370 */
+                                                                       /* 370 */
+        DEFAULT  :  RESULTIS  FALSE                                    /* 370 */
+    $)                                                                 /* 370 */
+$)                                                                     /* 370 */
+                                                                       /* 370 */
+                                                                       /* 370 */
+                                                                       /* 370 */
+AND lowercasechar( char )  =  VALOF                                    /* 370 */
+$(                                                                     /* 370 */
+//  See whether the character is a lowercase alphabetic character.     /* 370 */
+                                                                       /* 370 */
+    SWITCHON  char  INTO                                               /* 370 */
+    $(                                                                 /* 370 */
+        CASE 'a' :  CASE 'b' :  CASE 'c' :  CASE 'd' :                 /* 370 */
+        CASE 'e' :  CASE 'f' :  CASE 'g' :  CASE 'h' :                 /* 370 */
+        CASE 'i' :  CASE 'j' :  CASE 'k' :  CASE 'l' :                 /* 370 */
+        CASE 'm' :  CASE 'n' :  CASE 'o' :  CASE 'p' :                 /* 370 */
+        CASE 'q' :  CASE 'r' :  CASE 's' :  CASE 't' :                 /* 370 */
+        CASE 'u' :  CASE 'v' :  CASE 'w' :  CASE 'x' :                 /* 370 */
+        CASE 'y' :  CASE 'z' :                                         /* 370 */
+                                                                       /* 370 */
+                    RESULTIS  TRUE                                     /* 370 */
+                                                                       /* 370 */
+                                                                       /* 370 */
+        DEFAULT  :  RESULTIS  FALSE                                    /* 370 */
+    $)                                                                 /* 370 */
+$)                                                                     /* 370 */
+$>370
+
+
+
+$<68K
+AND uppercasechar( char )  =  'A' <= char <= 'Z'                       /* 68K */
+AND lowercasechar( char )  =  'a' <= char <= 'z'                       /* 68K */
+$>68K
+
+
+
+$<CAP
+AND uppercasechar( char )  =  'A' <= char <= 'Z'                       /* CAP */
+AND lowercasechar( char )  =  'a' <= char <= 'z'                       /* CAP */
+$>CAP
+
+
+
+AND digitchar( char )  =  '0' <= char <= '9'
+
+
+
+AND lookup( tagvector, tagtable )  BE
+$(
+//  Looks up the tag (packed in tagvector) in the symbol table.
+//  If no entry exists, then a new one is created, with type
+//  "s.new" and value 0.
+//  Returns with "symbtype" pointing to the entry in the table.
+
+    LET hashval   =  0
+    LET offset    =  0
+    LET length    =  tagvector % 0
+    LET tagfound  =  FALSE
+    LET noxref    =  (tagtable = tagtable1)
+
+    FOR  i = 0  TO  (length < 10)  -> length, 10  DO
+         hashval  :=  (hashval << 1) + tagvector % i
+
+    hashval   :=  ABS (hashval)  REM  tagtablesize
+    symbtype  :=  tagtable!hashval
+
+    UNTIL  symbtype  =  0  |  tagfound  DO
+    $(
+        LET name  =  symbtype + st.name
+
+        IF  length = name % 0  THEN
+
+        tagfound  :=  VALOF
+                      $(
+                          FOR  i = 1  TO  length  DO
+                               UNLESS  tagvector % i  =  name % i  DO
+                                       RESULTIS  FALSE
+
+                          RESULTIS  TRUE
+                      $)
+
+        UNLESS  tagfound  DO  symbtype  :=  symbtype!st.link
+    $)
+
+    IF  symbtype = 0  THEN
+    $(
+        //  This is a new entry, and we must create it.
+
+        symbtype                :=  getstore( st.size + length/bytesperword )
+        symbtype!st.link        :=  tagtable!hashval
+        tagtable!hashval        :=  symbtype
+
+        FOR  i = 0  TO  length  DO  (symbtype + st.name) % i  :=  tagvector % i
+
+        symbtype!st.type        :=  s.new
+        symbtype!st.flags       :=  0
+        symbtype!st.value.high  :=  0
+        symbtype!st.value.low   :=  0
+        symbtype!st.definition  :=  (systemwords | noxref)  ->  0, cr.undefined
+        symbtype!st.references  :=  0
+    $)
+
+    symb    :=  symbtype!st.type  &  st.type.mask
+    regnum  :=  symbtype!st.value
+
+    IF  pass2  THEN
+    $(
+        IF  xref  THEN
+            UNLESS  symbtype!st.definition = 0  DO  
+                addref( symbtype, linenumber )
+
+        IF  symb = s.new                           THEN  undefined  :=  yes
+        IF  (symbtype!st.flags & stb.muldef) \= 0  THEN  complain( 92 )
+    $)
+$)
+
+
+
+AND addref( p, ln )  BE
+$(
+    LET t  =  p + st.references
+
+    IF  symbtype!st.definition = ln  THEN  RETURN
+
+    UNTIL  !t = 0  DO
+    $(
+        t  :=  !t + r.link
+
+        IF  t!r.line = ln  &  t!r.file = currentfile  THEN  
+        
+            //  We have already added a reference for this item on this line
+            //  in this file.  No more to be done.
+            
+            RETURN
+    $)
+
+    !t  :=  heap3( 0, ln, currentfile )
+$)
+
+
+
+AND heap3( a, b, c )  =  VALOF
+$(
+    LET s  =  getstore( 2 )
+
+    s!0  :=  a
+    s!1  :=  b
+    s!2  :=  c
+
+    RESULTIS  s
+$)
+
+
+
+AND heap2( a, b )  =  VALOF
+$(
+    LET s  =  getstore( 1 )
+
+    s!0  :=  a
+    s!1  :=  b
+
+    RESULTIS  s
+$)
+
+
+
+AND skiprest()  BE  charpos  :=  maxint   //  Force a Pseudo SKIPREC
+
+
+
+AND skiplayout()  BE  
+$(
+//  Skip layout characters, and a user comment (if one has been given).
+
+    WHILE  ch = '*S'  |  ch = '*T'  DO  rch()
+
+    IF  ch = '!'  THEN
+
+        //  Comment symbol, so skip everything until end of line.
+        
+        UNTIL  ch = '*N'  DO  rch()
+$)
+
+
+
+AND rch()  BE
+$(
+    IF  charpos > length  THEN  nextline()
+
+    ch       :=  ended  ->  endstreamch,  (inputbuff % charpos)
+    charpos  :=  charpos + 1
+$)
+
+
+
+AND nextline()  BE
+$(
+    charpos  :=  0
+    ended    :=  readline()
+$)
+
+
+
+AND readline()  =  VALOF
+$(
+//  Read the next input line from the source file.  On an IBM machine, we use
+//  record I/O, and then copy the result in order to expand tabs.  On other
+//  machines, we use character I/O, and expand tabs on the fly.
+
+$<CAP
+    LET char  =  rdch()                                                /* CAP */
+                                                                       /* CAP */
+    length      :=  0                                                  /* CAP */
+    linenumber  :=  linenumber + 1                                     /* CAP */
+                                                                       /* CAP */
+    IF  char = endstreamch  THEN  RESULTIS  yes                        /* CAP */
+                                                                       /* CAP */
+    UNTIL  char = '*N'  |  char = endstreamch  DO                      /* CAP */
+    $(                                                                 /* CAP */
+        TEST  char = '*T'  THEN                                        /* CAP */
+        $(                                                             /* CAP */
+            //  Tab character, so expand it into spaces now, so as to  /* CAP */
+            //  avoid copying later on.                                /* CAP */
+                                                                       /* CAP */
+            LET nlength  =  (length + tabspace)  &  tabmask            /* CAP */
+                                                                       /* CAP */
+            UNTIL  length = nlength  DO                                /* CAP */
+            $(                                                         /* CAP */
+                putinbuffer( inputbuff, length, '*S' )                 /* CAP */
+                                                                       /* CAP */
+                length  :=  length + 1                                 /* CAP */
+            $)                                                         /* CAP */
+        $)                                                             /* CAP */
+        ELSE                                                           /* CAP */
+        $(                                                             /* CAP */
+            //  Simple character.  Add it to the buffer, and then go   /* CAP */
+            //  back for more.                                         /* CAP */
+                                                                       /* CAP */
+            putinbuffer( inputbuff, length, char )                     /* CAP */
+                                                                       /* CAP */
+            length  :=  length + 1                                     /* CAP */
+        $)                                                             /* CAP */
+                                                                       /* CAP */
+        char  :=  rdch()                                               /* CAP */
+    $)                                                                 /* CAP */
+$>CAP
+
+$<68K
+    LET char  =  rdch()                                                /* 68K */
+                                                                       /* 68K */
+    length      :=  0                                                  /* 68K */
+    linenumber  :=  linenumber + 1                                     /* 68K */
+                                                                       /* 68K */
+    IF  char = endstreamch  THEN  RESULTIS  yes                        /* 68K */
+                                                                       /* 68K */
+    UNTIL  char = '*N'  |  char = endstreamch  DO                      /* 68K */
+    $(                                                                 /* 68K */
+        TEST  char = '*T'  THEN                                        /* 68K */
+        $(                                                             /* 68K */
+            //  Tab character, so expand it into spaces now, so as to  /* 68K */
+            //  avoid copying later on.                                /* 68K */
+                                                                       /* 68K */
+            LET nlength  =  (length + tabspace)  &  tabmask            /* 68K */
+                                                                       /* 68K */
+            UNTIL  length = nlength  DO                                /* 68K */
+            $(                                                         /* 68K */
+                putinbuffer( inputbuff, length, '*S' )                 /* 68K */
+                                                                       /* 68K */
+                length  :=  length + 1                                 /* 68K */
+            $)                                                         /* 68K */
+        $)                                                             /* 68K */
+        ELSE                                                           /* 68K */
+        $(                                                             /* 68K */
+            //  Simple character.  Add it to the buffer, and then go   /* 68K */
+            //  back for more.                                         /* 68K */
+                                                                       /* 68K */
+            putinbuffer( inputbuff, length, char )                     /* 68K */
+                                                                       /* 68K */
+            length  :=  length + 1                                     /* 68K */
+        $)                                                             /* 68K */
+                                                                       /* 68K */
+        char  :=  rdch()                                               /* 68K */
+    $)                                                                 /* 68K */
+$>68K
+
+$<370
+    LET tempbuff    =  VEC  maxllen/bytesperword                       /* 370 */
+    LET templength  =  0                                               /* 370 */
+                                                                       /* 370 */
+    length      :=  readrec( tempbuff )                                /* 370 */
+    linenumber  :=  linenumber + 1                                     /* 370 */
+                                                                       /* 370 */
+    IF  length = endstreamch  THEN  RESULTIS  yes                      /* 370 */
+                                                                       /* 370 */
+    IF  length < 0  THEN                                               /* 370 */
+    $(                                                                 /* 370 */
+        //  We did not read the whole record.  Skip the rest of the    /* 370 */
+        //  record.                                                    /* 370 */
+                                                                       /* 370 */
+        skiprec()                                                      /* 370 */
+                                                                       /* 370 */
+        length  :=  ABS length                                         /* 370 */
+    $)                                                                 /* 370 */
+                                                                       /* 370 */
+    //  Having read the record, we should now copy it to the main      /* 370 */
+    //  buffer, expanding tabs as we go.                               /* 370 */
+                                                                       /* 370 */
+    FOR  i = 0  TO  length-1  DO                                       /* 370 */
+    $(                                                                 /* 370 */
+        LET char  =  getfrombuffer( tempbuff, i )                      /* 370 */
+                                                                       /* 370 */
+        TEST  char = '*T'  THEN                                        /* 370 */
+        $(                                                             /* 370 */
+            LET nlength  =  (templength + tabspace)  &  tabmask        /* 370 */
+                                                                       /* 370 */
+            UNTIL  templength = nlength  DO                            /* 370 */
+            $(                                                         /* 370 */
+                putinbuffer( inputbuff, templength, '*S' )             /* 370 */
+                                                                       /* 370 */
+                templength  :=  templength + 1                         /* 370 */
+            $)                                                         /* 370 */
+        $)                                                             /* 370 */
+        ELSE                                                           /* 370 */
+        $(                                                             /* 370 */
+            //  Simple character.  Add it to the buffer, and then go   /* 370 */
+            //  back for more.                                         /* 370 */
+                                                                       /* 370 */
+            putinbuffer( inputbuff, templength, char )                 /* 370 */
+                                                                       /* 370 */
+            templength  :=  templength + 1                             /* 370 */
+        $)                                                             /* 370 */
+    $)                                                                 /* 370 */
+                                                                       /* 370 */
+    length  :=  templength                                             /* 370 */
+$>370
+    
+    //  Check to see whether the line has been truncated, and if it has,
+    //  put out a warning message.
+
+    UNLESS  length < maxllen  DO
+    $(
+        length  :=  maxllen
+
+        warning( 173 )
+    $)
+
+    //  Strip trailing spaces, in case this hasn't been done by the
+    //  run time system.
+
+    FOR  i = length-1  TO  0  BY  -1  DO
+         TEST  inputbuff % i  =  '*S'  
+             THEN  length  :=  length - 1
+             ELSE  BREAK
+
+    inputbuff % length  :=  '*N'
+
+    RESULTIS  no
+$)
+
+
+
+AND getfrombuffer( buffer, offset )  =
+
+//  Read the "offset" character from the given buffer.  We check to see whether
+//  we are within the range 0 -> maxllen-1, and if not, return a dummy 
+//  character.
+
+    offset < maxllen  ->  buffer % offset,  '*S'
+
+
+
+AND putinbuffer( buffer, offset, char )  BE
+
+//  Store the character "ch" at position "offset" in the buffer given.
+//  We check to make sure that we are within range of 0 -> maxllen-1.
+
+    IF  offset < maxllen  THEN
+        buffer % offset  :=  char
+
+
+
+AND declare( tagtable, words )  BE
+$(
+//  Take words, separated by '/' from the string "words" and creates symbol 
+//  table entries for them.  A null word marks the end of "words".
+
+    LET i       =  1
+    LET length  =  0
+
+    $(  // Main Decoding Loop
+
+        LET ch  =  words % i
+
+        TEST  ch = '/'  THEN
+        $(
+            //  We have read a complete word.
+            //  If it is a null word, then we are at the end of the string
+
+            LET t  =  0
+
+            IF  length = 0  THEN  RETURN
+
+            tagv % 0  :=  length
+
+            lookup( tagv, tagtable )
+
+            //  When we return from lookup, "symb" should point to the entry 
+            //  we have just created.  Update the "type" and "value" fields of 
+            //  the entry.  Data for  the updating comes from "datavector", 
+            //  pointed to by "dataptr".
+
+            symbtype!st.template    :=  dataptr!0
+
+            symbtype!st.type        :=  (dataptr!1)         +  // Instruction type
+                                        (dataptr!2  <<  4)     // Mask type
+
+            symbtype!st.flags       :=  stb.setnow             // Always defined
+
+            symbtype!st.value.high  :=  dataptr!3              // Source operand type
+            symbtype!st.value.low   :=  dataptr!4              // Destination operand type
+
+            dataptr                 :=  dataptr + 5
+
+            length  :=  0
+        $)
+        ELSE
+        $(
+            //  Read the next character, trusting that no word
+            //  is longer than "tagchars" characters
+
+            length         :=  length + 1
+            tagv % length  :=  ch
+        $)
+
+        i  :=  i + 1
+    $)
+    REPEAT
+$)
+
+
+
+AND block1( a )  =  VALOF
+$(
+    LET space  =  expspace( 1 )
+
+    space!0  :=  a
+
+    RESULTIS  space
+$)
+
+
+
+AND block2( a, b )  =  VALOF
+$(
+    LET space  =  expspace( 2 )
+
+    space!0  :=  a
+    space!1  :=  b
+
+    RESULTIS  space
+$)
+
+
+
+AND block3( a, b, c )  =  VALOF
+$(
+    LET space  =  expspace( 3 )
+
+    space!0  :=  a
+    space!1  :=  b
+    space!2  :=  c
+
+    RESULTIS  space
+$)
+
+
+
+AND expspace( n )  =  VALOF
+$(
+    expvecp  :=  expvecp - n
+
+    IF  expvecp < expvec  THEN  error( 94 )
+
+    RESULTIS expvecp
+$)
+
+
+
+AND makefile( name )  =  VALOF
+$(
+//  Return a copy of the file name given, truncating it to a reasonable
+//  number of characters if necessary.
+
+    LET namel   =  name % 0
+    LET length  =  namel > 30  ->  30, namel
+    LET store   =  getstore( length/bytesperword )
+
+    //  If we can copy the whole string, then all well and good.  If not, then
+    //  we should put an indication that the file has been truncated.
+    
+    TEST  namel > length  THEN
+    $(
+        //  This means a truncation is necessary.  Take the last letters of
+        //  the filename, but put some dots to imply truncation.
+        
+        FOR  i = 1  TO  3       DO  store % i  :=  '.'
+        FOR  i = 4  TO  length  DO  store % i  :=  name % (namel - length + i)
+    $)
+    ELSE
+    
+        //  Easier.  All we need do is to copy the string across verbatim,
+        //  since it fits anyway.
+        
+        FOR  i = 1  TO  namel  DO  store % i  :=  name % i
+
+    //  Having copied the characters, we can set the length, and return a
+    //  pointer to the copied string.
+
+    store % 0  :=  length
+
+    RESULTIS  store
+$)
+
+
+
+AND initstore( chunksize )  BE
+$(
+//  Initialise the storage package, defining the size of chunks which will
+//  be grabbed from the standard storage manager.
+
+    storage.chunksize   :=  chunksize
+    storage.root        :=  0
+    storage.high        :=  0
+    storage.low         :=  0
+
+    storage.wordsused   :=  0
+    storage.totalwords  :=  0
+$)
+
+
+
+AND getstore( upb )  =  VALOF
+$(
+//  Analagous to "getvec"  -  allocate a vector whose word upperbound
+//  is "upb" from the heap.  If there is not enough room in the current
+//  chunk, then allocate a new chunk.
+
+    LET size   =  upb + 1
+    LET chunk  =  0
+
+    IF  size > storage.chunksize  THEN  error( 179 )
+
+    IF  (storage.high - storage.low)  <  size  THEN
+    $(
+        //  Not enough room left in the current chunk, so allocate a
+        //  new chunk, and try again.
+
+        LET newchunk  =  getchunk( storage.chunksize, FALSE )
+
+        storage.low   :=  newchunk
+        storage.high  :=  storage.low + storage.chunksize
+    $)
+
+    chunk              :=  storage.low
+    storage.low        :=  storage.low + size
+    storage.wordsused  :=  storage.wordsused + size
+
+    RESULTIS  chunk
+$)
+
+
+
+AND getchunk( chunksize, allused )  =  VALOF
+$(
+//  Get a new chunk of store, and link it onto the chain of those chunks
+//  which have been allocated already.
+
+    LET size   =  chunksize + 1
+    LET chunk  =  getvec( size )
+    
+    IF  chunk = 0  THEN
+    $(
+        //  We have failed to allocate the storage, and so we should do
+        //  something about out.  Perhaps we can put out a helpful
+        //  message?
+        
+        selectoutput( sysout )
+        
+        writef( "******  Failed to allocate %N words*N", size )
+        writef( "******  %S*N", (size < 10000  ->  "Increase workspace size",
+                                                   "Bad 'ORG' or 'DS' directive?") )
+                                               
+        selectoutput( liststream )
+        
+        error( 93 )
+    $)
+
+    chunk!0             :=  storage.root
+    storage.root        :=  chunk
+    storage.totalwords  :=  storage.totalwords + size + 1
+    
+    IF  allused  THEN  storage.wordsused  :=  storage.wordsused + size + 1
+
+    RESULTIS  chunk + 1
+$)
+
+
+
+AND uninitstore()  BE
+$(
+//  Free all the storage in use by the storage package.  The base of the
+//  storage chain is pointed to by "storage.root".
+
+    UNTIL  storage.root = 0  DO
+    $(
+        LET next  =  storage.root!0
+
+        freevec( storage.root )
+
+        storage.root  :=  next
+    $)
+$)
+
+
+
+AND printequates( stream, sourcename )  BE  UNLESS  stream = 0  DO
+$(
+//  Print out the symbol table as a series of equates which are acceptable
+//  to the assembler.
+
+    LET o  =  output()
+
+    selectoutput( stream )
+
+    printbanner()
+
+    writef( "**  Equates for file *"%S*" written on %S at %S*N",
+             sourcename, datestring, timestring )
+
+    printbanner()
+
+    newline()
+
+    //  Now, scan the symbol table itself, and print out all equates we
+    //  can.  Only absolute symbols are printed out properly.  
+    
+    FOR  i = 0  TO  tagtablesize-1  DO
+    $(
+        LET t  =  tagtable2!i
+        
+        UNTIL  t = 0  DO
+        $(
+            //  Look at the current item on the tag table chain, and decide
+            //  whether to print it out.
+            
+            UNLESS  t!st.definition = 0  DO
+            $(
+                //  This is a user symbol, so decide how to print it out.
+                
+                LET line   =  t!st.definition
+                LET type   =  t!st.type  &  st.type.mask
+                LET value  =  t!st.value
+                
+                IF  line > 0  &  absolute( type )  THEN
+                $(
+                    LET name    =  t + st.name
+                    LET length  =  name % 0
+                    
+                    writef( "%S  ", name )
+                    
+                    FOR  j = length  TO  30  DO  wrch( '*S' )
+                    
+                    writef( "EQU    $%X8*N", value )
+                $)
+            $)
+            
+            t  :=  t!st.link
+        $)
+    $)
+        
+    //  When we drop out of there, we can do no more than close the stream
+    //  down, and return to the caller.
+    
+    endwrite()
+    
+    selectoutput( o )
+$)
+
+
+
+AND printbanner()  BE
+$(
+    FOR  i = 1  TO  80  DO  wrch( '**' )
+
+    newline()
+$)
+
+
+
+AND dumpsymbols( stream, sourcename )  BE  UNLESS  stream = 0  DO
+$(
+//  Print out the symbol table in a form which as acceptable to the 68000
+//  debugger.
+
+    LET o  =  output()
+
+    selectoutput( stream )
+
+    writef( "[{!}]*N*
+            *Symbol table of *"%S*" dumped on %S at %S*N",
+             sourcename, datestring, timestring )
+
+    //  Now, scan the symbol table itself, and print out all the symbols we
+    //  can.
+    
+    FOR  i = 0  TO  tagtablesize-1  DO
+    $(
+        LET t  =  tagtable2!i
+        
+        UNTIL  t = 0  DO
+        $(
+            //  Look at the current item on the tag table chain, and decide
+            //  whether to print it out.
+            
+            UNLESS  t!st.definition = 0  DO
+            $(
+                //  This is a user symbol, so decide how to print it out.
+                
+                LET line   =  t!st.definition
+                LET type   =  t!st.type  &  st.type.mask
+                LET value  =  t!st.value
+                
+                IF  line > 0  &  (absolute( type ) | relocatable( type ))  THEN
+                $(
+                    LET name    =  t + st.name
+                    LET length  =  name % 0
+                    
+                    writef( "%S/", name )
+                    writef( "%S/", absolute( type )  ->  "A", "R" )
+                    writef( "%N*N", value )
+                $)
+            $)
+            
+            t  :=  t!st.link
+        $)
+    $)
+        
+    //  When we drop out of there, we can do no more than close the stream
+    //  down, and return to the caller.
+    
+    endwrite()
+    
+    selectoutput( o )
+$)
+
+

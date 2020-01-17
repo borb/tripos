@@ -1,0 +1,353 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+  ########    ####    ##    ##  ########  ########  ########  ##
+  ########   ######   ##   ##   ########  ########  ########  ##
+     ##     ##    ##  ##  ##    ##        ##           ##     ##
+     ##     ########  ####      ######    ######       ##     ##
+     ##     ##    ##  ## ##     ##        ##           ##     ##
+     ##     ##    ##  ##  ##    ##        ##           ##     ##
+     ##     ##    ##  ##   ##   ########  ##        ########  ########
+     ##     ##    ##  ##    ##  ########  ##        ########  ########
+
+************************************************************************
+**    Author:   Brian Knight                           July 1979      **
+***********************************************************************/
+
+
+// Modifications:
+//
+// 20 Feb 81 by BJK: Use of authenticated byte stream by default;
+//                   NOTAUTH keyword introduced.
+// 22 Jul 83 by CGG: Use of Project Universe machine names allowed
+
+// TAKEFILE [FILE] remote name [FROM] machine [AS] local name
+//          [SERVICE service name] [NOTAUTH]
+
+// Transfers a file to this machine via the ring using BSP
+
+/***********************************************************************
+*                                                                      *
+*               GIVEFILE/TAKEFILE File Transfer Protocol               *
+*               ----------------------------------------               *
+*                                                                      *
+*    The GIVEFILE and TAKEFILE commands and their corresponding        *
+* services transfer files by superimposing a simple record structure   *
+* on a byte stream pair.  The protocol is based on FTP-B as described  *
+* in "A Network Independent File Transfer Protocol" prepared by the    *
+* High Level Protocol Group.                                           *
+*                                                                      *
+*    The contents of the file are sent in records, each of which       *
+* contains one or more sub-records.  Each sub-record is preceded by a  *
+* header byte with the following format:                               *
+*                                                                      *
+*  Bit  10000000: If set, then this sub-record is the last in the      *
+*                 current record.                                      *
+*                                                                      *
+*  Bit  01000000: If set, then this sub-record is a compressed sequence*
+*                 (see below)                                          *
+*                                                                      *
+*  Bits 00111111: A binary count (0 - 63)                              *
+*                                                                      *
+*    If the compression bit (01000000) is zero, then the sub-record    *
+* consists of the next COUNT bytes after the header.  If this bit is   *
+* one, then the sub-record consists of the single byte following the   *
+* header inserted COUNT times.                                         *
+*                                                                      *
+*    A header byte of zero is used to introduce control sequences in   *
+* the data stream, so a null record must be represented as the header  *
+* byte 10000000.                                                       *
+*                                                                      *
+*    Only two character codes are used for transferring data:          *
+* IA5 with any parity, and binary.  The initial default is IA5.        *
+* Binary is selected by the three-byte control sequence                *
+* #X00 #X42 #X01, and IA5 by the sequence #X00 #X42 #X00. The code     *
+* should not be changed between sub-records of a multi-part record.    *
+*                                                                      *
+*    When IA5 is selected, each record corresponds to a text line,     *
+* and the first character of each record is an ANSI control character  *
+* (' ', '+', '0', '-' or '1').  No other character within a record     *
+* has any formatting significance.                                     *
+*                                                                      *
+*    When binary code is in use, the record boundaries have no         *
+* significance, and the data is regarded as a stream of bytes.         *
+*                                                                      *
+*    The maximum record length (before compression or division into    *
+* sub-records) is 252 bytes.                                           *
+*                                                                      *
+*    The first record sent from the command to the service is          *
+* interpreted as an IA5 string (without a control character), and      *
+* is used as the stream name of the 'file' to be transferred.          *
+* For TRIPOS, this string is used as the argument to FINDINPUT         *
+* or FINDOUTPUT.                                                       *
+*                                                                      *
+*    At the end of the file, the control sequence #X00 #X43 #X00       *
+* should be sent, and transmission forced.                             *
+*                                                                      *
+*    At some time during (if an error occurs) or immediately after     *
+* the transfer, the service end should send the command end a single   *
+* record and force transmission.  A null record sent after the         *
+* transfer indicates success; otherwise, the record should be an       *
+* error message sent as an IA5 string, which the command end can       *
+* display.                                                             *
+*                                                                      *
+***********************************************************************/
+
+
+SECTION "takefile"
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "RINGHDR"
+GET "BCPL.BSPLIB"
+GET "BCPL.U-SVC-NM"
+
+
+MANIFEST
+    $(
+    eor          = #X80  // End of record marker
+    comp.flag    = #X40  // Compressed subrecord
+    lenmask      = #X3F  // bytes in subrecord
+    initial.pos  =  8    // Last char in constant part of AUTHBSP: name
+    notauth.pos  =  4    // Ditto of BSP: name
+    max.rec.bytes = 256  // Longest record
+    srvname.size =  40   // max. number of characters in stream name
+    $)
+
+GLOBAL
+    $(
+    eof          : ug + 0
+    binary       : ug + 1
+    bs.closed    : ug + 2
+    $)
+
+
+LET start() BE
+    $(
+    LET rdargs.string   = "FILE/A,FROM=MACHINE/A,AS/A,SERVICE/K,NOTAUTH/S"
+    LET filename = ?
+    LET mc.name = ?
+    LET service.prefix = "givefile"  // Default - may be overridden
+    LET service.name = VEC srvname.size/bytesperword
+    LET input.name  = "AUTHBSP:123456789012345678901234567890"
+    LET notauth.name= "BSP:123456789012345678901234567890"
+    LET as.name = ?
+    LET argv = VEC 40
+    LET first.line = TRUE
+    LET pos = initial.pos
+    LET outstr, bsp.outstr, bsp.instr = 0, 0, 0
+    LET constr = output()
+    LET auth.opt        = ?  // FALSE iff NOTAUTH specified
+
+    IF rdargs(rdargs.string, argv, 40) = 0
+    THEN
+      $(
+      writef("Bad args for key string *"%S*"*n", rdargs.string)
+      stop(20)
+      $)
+
+    filename := argv!0
+    mc.name  := argv!1
+    as.name  := argv!2
+    IF argv!3 \= 0 THEN service.prefix := argv!3
+    auth.opt    := argv!4 = 0
+
+    // Use AUTHBSP: by default; BSP: if NOTAUTH specified.
+
+    IF NOT auth.opt
+    THEN
+      $( // NOTAUTH specified
+      input.name        := notauth.name
+      pos               := notauth.pos
+      $)
+
+    service.name%0 := srvname.size
+    IF NOT u.svc.nm(service.name, mc.name, service.prefix) |
+       (service.name%0 + pos) > input.name%0 THEN
+    $(  writef("Machine or service name (*"%S...*") too long*N", service.name)
+        stop(20)
+    $)
+
+    eof := FALSE
+    binary := FALSE // Default code is IA5
+    bs.closed := FALSE
+    outstr := findoutput(as.name)
+    IF outstr=0
+    THEN $( writef("Can't open %s for output*n", as.name); stop(20) $)
+    selectoutput(outstr)
+
+    // Construct full name for findinput: "AUTHBSP:<service>"
+
+    FOR i=1 TO service.name%0
+    DO $( pos := pos+1; input.name%pos := service.name%i $)
+
+    input.name %0 := pos
+
+    bsp.instr := findinput(input.name )
+    IF bsp.instr = 0
+    THEN
+      $(
+      endwrite() // Close local output file
+      selectoutput(constr)
+      writef("Can't open %s for input*n", input.name )
+      stop(20)
+      $)
+
+    bsp.outstr := result2
+    selectinput(bsp.instr)
+    selectoutput(bsp.outstr)
+
+    // Away we go
+    // Send the filename - special record with no cc
+    wrch(eor | filename%0)
+    writes(filename)
+    bsp.forceout()
+
+    // Start writing the file
+    selectoutput(outstr)
+
+    $(  // loop
+    LET recbuff = VEC max.rec.bytes/bytesperword
+    LET l = readrec(recbuff, max.rec.bytes)
+    IF eof THEN BREAK
+
+    TEST binary
+    THEN FOR i=0 TO l-1 DO wrch(recbuff%i)
+    ELSE
+      $(
+      LET cc    = recbuff%0
+
+      TEST first.line
+      THEN
+        $( // Have to mess about to get cc right on first record
+        IF cc='1' THEN wrch('*p')
+        IF cc='0' THEN wrch('*n')
+        IF cc='-' THEN writes("*n*n")
+        // Ignore others to avoid spurious blank line
+        first.line := FALSE
+        $)
+      ELSE SWITCHON cc
+           INTO
+             $(
+             CASE '+': wrch('*c'); ENDCASE
+             CASE ' ': wrch('*n'); ENDCASE
+             CASE '0': writes("*n*n"); ENDCASE
+             CASE '-': writes("*n*n*n"); ENDCASE
+             CASE '1': wrch('*p'); ENDCASE
+             DEFAULT:  wrch('*n')
+             $)
+
+      // Write rest of record
+      FOR i = 1 TO l-1 DO wrch(recbuff%i)
+      $)
+
+    IF testflags(1)
+    THEN
+      $( endwrite()  // Close file being received
+         selectoutput(constr); writes("****** BREAK*n")
+         GOTO exit
+      $)
+    $) REPEAT
+
+
+    // End of file
+    IF (NOT binary) & (NOT first.line) THEN newline() // Terminate last record
+
+    // Wait for message
+    // Null string -> success, error message
+    endwrite() // Close file being received
+    selectinput(bsp.instr)
+    selectoutput(constr)
+
+    $(
+    LET c       = rdch()
+
+    TEST c=endstreamch
+    THEN writes("Byte stream failure*n")
+    ELSE
+      $(
+      LET n = c & #X3F
+
+      IF n \= 0
+      THEN writef("Error at %s - ", mc.name)
+
+      // Read on for error message or just to give 'close request'
+      // a chance.
+      $( LET c = rdch()
+         UNTIL c = endstreamch
+         DO $( wrch(c); c := rdch() $)
+      $)
+      IF n \= 0 THEN newline()
+      $)
+    $)
+exit:
+    endread()  // close byte streams
+    $)
+
+
+
+AND readrec(buff, max.bytes) = VALOF
+    $(
+    // Reads a record into the buffer, removing any sub-records
+    // and comp.flag sequences, and returns its length in bytes.
+    // -1 is returned if the record is too long.
+    // If the control sequence for 'end of file' is encountered,
+    // then the flag eof is set.
+    // If endstreamch is read, then flags eof and bs.closed are set.
+    LET last.sr = FALSE
+    LET pos = -1
+
+      $( // Main loop
+      LET ch = rdch()
+      IF ch=endstreamch
+      THEN $( eof := TRUE; bs.closed := TRUE; RESULTIS -1 $)
+
+      TEST ch = #X00
+      THEN
+        $( // This is a control sequence
+        LET c1, c2      = rdch(), rdch()
+
+        SWITCHON c1
+        INTO
+          $(
+          CASE #X42: binary := c2=#X01; ENDCASE // Code selection
+          CASE #X43: IF c2=#X00 THEN eof := TRUE; BREAK // End of file
+          $)
+
+        LOOP
+        $)
+      ELSE
+        $( // A sub record
+        LET n = ch & lenmask
+        last.sr := (ch & eor) \= 0
+
+        TEST (ch & comp.flag) \= 0
+        THEN
+          $( // Repeat next byte n times
+          ch := rdch()
+          FOR i=1 TO n
+          DO $(
+             pos := pos + 1
+             IF pos = max.bytes THEN $( eof := TRUE; RESULTIS -1 $)
+             buff%pos := ch
+             $)
+          $)
+        ELSE
+          $( // Read next n bytes
+          FOR i=1 TO n
+          DO $(
+             pos := pos + 1
+             IF pos = max.bytes THEN $( eof := TRUE; RESULTIS -1 $)
+             buff%pos := rdch()
+             $)
+          $)
+        $)
+      $) REPEATUNTIL last.sr
+
+    RESULTIS pos+1
+    $)
+
+   
+

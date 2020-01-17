@@ -1,0 +1,1240 @@
+/****************************************************************************\
+*                           Systems Research Group                           *
+******************************************************************************
+
+
+      #######     ####    ##        ########   ######   ##    ##  #######  
+      ########   ######   ##        ########  ########  ##    ##  ######## 
+      ##    ##  ##    ##  ##        ##        ##    ##  ##    ##  ##    ## 
+      #######   ########  ##        ######    ##    ##  ##    ##  ######## 
+      ##    ##  ##    ##  ##        ##        ##    ##  ##    ##  #######  
+      ##    ##  ##    ##  ##        ##        ##    ##  ##    ##  ##  ##   
+      ########  ##    ##  ########  ##        ########  ########  ##   ##  
+      #######   ##    ##  ########  ##         ######    ######   ##    ## 
+
+      #######   #######   ########  ##    ##  ########  ########  #######  
+      ########  ########  ########  ###   ##  ########  ########  ######## 
+      ##    ##  ##    ##     ##     ####  ##     ##     ##        ##    ## 
+      #######   ########     ##     ## ## ##     ##     ######    ######## 
+      ##        #######      ##     ##  ####     ##     ##        #######  
+      ##        ##  ##       ##     ##  ####     ##     ##        ##  ##   
+      ##        ##   ##   ########  ##   ###     ##     ########  ##   ##  
+      ##        ##    ##  ########  ##    ##     ##     ########  ##    ## 
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   PB   -     2/7/86             *
+\****************************************************************************/
+
+
+SECTION "PRINTER"
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "MANHDR"
+GET "IOHDR"
+GET "UIDHDR"
+GET "BCPL.SSPLIB"
+GET "BCPL.TSPARM"
+GET "BCPL.CR82LIB"
+GET "BCPL.REVTRACE"
+GET "BCPL.FINDSTRINGIN"
+GET "STRING-TO-NUMBER"
+
+GLOBAL
+$(
+    // Real globals
+    asyncreplies        : ug + 0
+    logging             : ug + 1
+    logstream           : ug + 2
+    rhtaskid            : ug + 3
+    sysin               : ug + 4
+    sysout              : ug + 5
+    global.info         : ug + 6
+    debug               : ug + 7
+    vmepi               : ug + 8
+    vmesio              : ug + 9
+
+    // printer specific
+    p.info              : ug + 10
+    char.depth          : ug + 11
+
+    // Laser only
+    wrap                : ug + 20
+    laser.bitsperline   : ug + 21
+    laser.bitsperpage   : ug + 22
+
+    // Options
+    shade               : ug + 30
+$)
+
+
+
+MANIFEST
+$(
+    type.connect         =  ts.parm.msgtype.connect
+    type.accept          =  ts.parm.msgtype.accept
+    type.disconnect      =  ts.parm.msgtype.disconnect
+    type.authentication  =  ts.parm.msgtype.auth
+
+    act.test.offline     =  ('p' << 16) | ('b' << 8) | 1
+    act.set.tof          =  ('p' << 16) | ('b' << 8) | 2
+
+    arg.called           =  1
+    arg.calling          =  2
+    arg.quality          =  3
+    arg.explanation      =  4
+
+    open.error           =  0
+    open.cr82            =  1
+    open.tsbsp           =  2
+    open.bsp             =  3
+
+    rbuffsize            =  256
+
+
+    spacespertab         =  8   // For tab expansion
+    starlines            =  3   // Number lines of stars before & after banner
+    starcount            =  15  // Number of start at left and right of banner
+    blanklines           =  2   // between bottom of header and start of text.
+
+    chain.charsperline   =  132 // the printer page width.
+    chain.linesperpage   =  60  // the page length
+
+    // LaserWriter info -- units in points (inch/72).
+    laser.horiz.align   = 20-2  // Set the origin to be reasobale,
+    laser.vert.align    = 21+2  // left & bottom
+
+    laser.horiz.loss    = 36+4  // Lost at the left & right of a page
+    laser.vert.loss     = 38+6 // Lost at the bottom & top of a page
+// ********************** was 36 for laser writer
+// **********************  -- 38 seems to work on laserwriter+
+    laser.linedepth     = 11    // default linedepth
+    laser.pointsize     = 10    // default pointsize
+
+    laser.maxbits       = 842   // Larger  PHYSICAL dimension of paper
+    laser.minbits       = 595   // Smaller PHYSICAL dimension of paper
+
+    p.laser             = 1
+    p.chain             = 2
+
+    char.reset.laserwriter = 4
+
+    fc.balfourprint      =  0
+    fc.balfourout        =  1
+    fc.balfourprint.raw  =  2
+    fc.balfourprint.chain=  3
+    fc.balfourprint.chain.raw=  4
+
+    g.cis               = 0
+    g.cos               = 1
+    g.pos.l.bits        = 2
+    g.pos.char          = 3
+    g.P.type            = 4
+    g.char.width        = 5
+    g.char.depth        = 6
+    g.line.top          = 7
+    g.size              = 8
+
+    mains               = 0
+    pars                = mains + g.size
+    sers                = pars  + g.size
+    sizes               = sers  + g.size
+
+    rxbuffersize         =  1024
+
+    printer.station      =  #XFF
+    printer.port         =  100
+    printer.timeout      =  tickspersecond
+    
+    PAR.stacksize       =  1000
+
+    argv.size           = 40
+
+    error.busy           =  #XBFE0    //  Printer busy with ring document
+    error.badopen        =  #XC009    //  Service does not exist (?)
+    error.badfunc        =  #XC002    //  Unknown function
+    error.badparms       =  #XC005    //  Invalid parameters
+    error.offline        =  #XBFE2    //  Printer offline
+    error.switched.off   =  #XBFE3    //  Printer switched off
+    chan.1               =  32
+$)
+
+
+
+LET start( initpkt )  BE
+$(
+//  Main routine of the printer driver.  Called either as a program or as a
+//  resident task.  The purpose is to wait for requests coming from the
+//  outside world, and then either reject them or start the printing operation
+//  going.
+
+    LET rxpkt      =  getvec( rhpkt.lifetime )
+    LET rxbuffer   =  getvec( rxbuffersize/ringwordsperword )
+    LET dummy      = VEC sizes
+
+    LET PARco     =  0
+    LET SERco     =  0
+    LET PARpkt    =  0
+    LET SERpkt    =  0
+    LET oldwait   =  0
+    LET vmesio    =  0
+    LET iscommand =  initpkt = 0
+
+    $(  LET base = @globsize
+        FOR i = 1 TO globsize
+        IF base!i = base!135 THEN base!I := base!135 - 135*2 + i*2
+        base!135 -:= 2
+    $)
+
+    IF  rxpkt = 0  |  rxbuffer = 0  THEN  abort( error.getvecfailure )
+
+    vmepi       :=  0
+    vmesio      :=  0
+    global.info := sizes
+
+    TEST iscommand
+    $(  LET argv = VEC argv.size
+
+        UNLESS RDARGS("debug/s,allow=cs/s,shade/s", argv, argv.size)
+        $(  WRITEF("Bad args*N")
+            STOP (20)
+        $)
+        debug := argv!0 -> TRUE, FALSE
+        shade := argv!2 -> TRUE, FALSE
+    $)
+    ELSE
+    $(
+        //  We are started up as a real task, and so we should
+        //  real I/O streams, and return the initialisation packet.
+        
+        initio()
+        
+        selectinput( findinput( "**" ) )
+        selectoutput( findoutput( "**" ) )
+        
+        returnpkt( initpkt, TRUE, 0 )
+
+        debug := FALSE
+        shade := FALSE
+    $)
+
+    sysin         :=  input()
+    sysout        :=  output()
+
+    logging       :=  TRUE
+    logstream     :=  findoutput( "**" )
+
+    rhtaskid      :=  rootnode!rtn.info!rtninfo.ring!ri.rhtaskid
+    asyncreplies  :=  0
+    
+    message( "Printer driver task %N starting", taskid )
+
+    //  Having set up the I/O streams, we should create the main coroutine,
+    //  and then set up the reception request.
+
+    PARco        :=  createco( PAR, PAR.stacksize )
+    SERco        :=  createco( PAR, PAR.stacksize )
+    
+    IF PARco = 0 | SERco = 0
+        abort( error.getvecfailure )
+
+    //  Now, initialise the printer values by putting the printer to the
+    //  top of a new page.
+
+    printerinit()
+    
+    char.depth:=  1
+
+    get.globals( mains )
+
+    get.globals( pars )
+    p.info ! g.pos.char  :=  1
+    p.info ! g.char.width:=  1
+    p.info ! g.pos.l.bits:=  chain.linesperpage -1
+    p.info ! g.P.type    :=  p.chain
+    p.info ! g.line.top := chain.linesperpage - char.depth
+
+    get.globals( sers )
+    p.info ! g.P.type    :=  p.laser
+
+    //  We are now in a state when we can start the infinite loop to wait for
+    //  requests coming from outside.
+    
+    rxpkt!pkt.link        :=  notinuse
+    rxpkt!pkt.id          :=  rhtaskid
+    rxpkt!pkt.type        :=  act.rx.bb
+    rxpkt!pkt.res1        :=  0
+    rxpkt!pkt.res2        :=  0
+    rxpkt!rhpkt.buff      :=  rxbuffer
+    rxpkt!rhpkt.size      :=  rxbuffersize
+    rxpkt!rhpkt.station   :=  printer.station
+    rxpkt!rhpkt.port      :=  printer.port
+    rxpkt!rhpkt.lifetime  :=  printer.timeout
+
+    $(  LET resvec = VEC 5
+        TEST global.lookup("balfourout", resvec, 0, 0)
+        THEN rxpkt!rhpkt.port   := resvec!2 
+        ELSE message("Failed to lookup my port -- using %N", rxpkt!rhpkt.port)
+    $)
+
+    oldwait  :=  pktwait
+    pktwait  :=  copktwait
+
+    // Ask the PAR routine to open its output stream
+    set.globals (pars)
+    PARpkt := callco( PARco, 0 )
+    get.globals( pars )
+
+    set.globals (sers)
+    SERpkt := callco( SERco, 0 )
+    
+    get.globals( sers )
+
+    qpkt( rxpkt )
+
+    $(  //  Repeat loop to wait for packets to arrive, and then handle them
+        //  when they do.
+        
+        LET pkt  =  taskwait()
+        
+        TEST  pkt = PARpkt  THEN
+
+            //  This is the packet which was expected by the PAR coroutine,
+            //  and so we should pass it on without further ado.
+        $(  set.globals( pars)
+            PARpkt  :=  callco( PARco, pkt )
+            get.globals( pars )
+        $)
+            
+        ELSE
+        
+        TEST  pkt = SERpkt  THEN
+
+            //  This is the packet which was expected by the SER coroutine,
+            //  and so we should pass it on without further ado.
+        $(  set.globals( sers)
+            SERpkt  :=  callco( SERco, pkt )
+            get.globals( sers )
+        $)
+        ELSE
+        
+        TEST  pkt = rxpkt  THEN
+        $(
+            //  This is the reception request coming back.  We should look
+            //  to see whether a timeout has gone off.  If not, then we should
+            //  either fire up the PAR coroutine or reject this packet out
+            //  of hand.
+            
+            TEST  pkt!pkt.res1 = 0  THEN
+
+                //  This is a timeout, so we should look to see whether this
+                //  is the time to stop.
+                
+                IF (PARpkt = 0 | PARpkt = -1) & (SERpkt = 0 | SERpkt = -1) &
+                   asyncreplies = 0  THEN
+                
+                    //  We have no commitments outside this world, and so
+                    //  we can check the "break d" flag, which might be
+                    //  telling us to stop.
+                    
+                    IF  testflags( #B0100 )  THEN
+                    
+                        //  This is the end of the road chaps.  We should break
+                        //  from this loop, and let the outer level deal
+                        //  with the closing down.
+                        
+                        BREAK
+
+                //  Look at see whether the relevant coroutine is in use
+                //  and if it is, then moan immediately.  Otherwise, we should
+                //  pass on the request to the next level.
+            ELSE SWITCHON get2bytes (pkt!rhpkt.buff, bb.ssp.func) INTO
+            $(
+                CASE fc.balfourprint:
+                CASE fc.balfourout:
+                CASE fc.balfourprint.raw:
+                        TEST SERpkt = 0
+                        THEN SERpkt  :=  callco( SERco, pkt )
+                        ELSE
+                        $(  IF debug = -3 THEN abort(12345, pkt)
+                            asyncreply( pkt!pkt.res2, error.busy, pkt!rhpkt.buff)
+                        $)
+                        ENDCASE
+
+                CASE fc.balfourprint.chain:
+                CASE fc.balfourprint.chain.raw:
+                        TEST PARpkt = 0
+                        THEN PARpkt  :=  callco( PARco, pkt )
+                        ELSE asyncreply( pkt!pkt.res2, error.busy, pkt!rhpkt.buff) 
+                        ENDCASE
+
+                DEFAULT:
+                        asyncreply(pkt!pkt.res2, error.badfunc, pkt!rhpkt.buff)
+           $)         
+            //  Having reached this stage, we should resubmit the reception
+            //  request, and go round the loop one more time.
+            
+            qpkt( pkt )
+        $)
+        
+        ELSE
+        $(
+            //  Not the coroutine packet or the reception packet.  This must
+            //  mean that this is an asynchronous reply coming back from the
+            //  ring handler, and because of this, we should free the packet.
+
+            set.globals( mains )
+            
+            IF  asyncreplies = 0  THEN  abort( 9999 )  //  Hmmm!
+
+            freepkt( pkt )
+
+            asyncreplies  :=  asyncreplies - 1
+        $)
+    $)
+    REPEAT  //  Until requested not to
+
+    //  When we drop out of that loop, we should delete the PAR coroutine, and
+    //  then close down as best we can.
+
+    set.globals( mains )
+    
+    pktwait  :=  oldwait
+
+    deleteco( PARco )
+    deleteco( SERco )
+    
+    freevec( rxpkt )
+    freevec( rxbuffer )
+
+    message( "Printer driver task %N stopping", taskid )
+
+    endstream( vmesio )
+    endstream( vmepi )
+    endstream( logstream )
+    
+    UNLESS  iscommand  DO
+    $(
+        endstream( sysin )
+        endstream( sysout )
+        
+        endtask( tcb!tcb.seglist!3 )
+    $)
+$)
+
+AND set.globals(offset) BE
+$(  p.info := global.info + offset
+    SELECTINPUT  ( p.info ! g.cis)
+    SELECTOUTPUT ( p.info ! g.cos)
+    char.depth  := p.info ! g.char.depth
+
+$)
+
+AND get.globals(offset) BE
+$(  p.info              := global.info + offset
+    p.info ! g.cis      := input()
+    p.info ! g.cos      := output()
+    p.info ! g.char.depth       := char.depth
+$)
+
+
+AND PAR( pkt )  =  (pkt = 0) -> VALOF SWITCHON p.info ! g.P.type INTO
+    $(  DEFAULT:
+                message ( "printer type %n called with pkt=0", p.info!g.P.type)
+                RESULTIS 0
+        CASE p.laser:
+                vmesio := findoutput ( "VMESIO:2" )
+                IF vmesio=0 THEN message("Giving up on VMESIO:2 (%N)", RESULT2) <> RESULTIS -1
+                SELECTOUTPUT(vmesio)
+                message("SHOULD Set VMESIO: non reflect (%n)*N", vmesio!scb.type)
+//              sendpkt(notinuse, ABS vmesio!scb.type, act.non.reflect.mode,
+//                              0,0, TRUE)
+                RESULTIS 0
+                ENDCASE
+        CASE p.chain:
+                vmepi := findoutput ( "VMEPI:" )
+                IF vmepi=0 THEN message("Giving up on VMEPI: (%N)", RESULT2) <> RESULTIS -1
+                SELECTOUTPUT(vmepi)
+//              message("SHOULD Set VMEPI: non reflect (%n)*N", vmepi!scb.type)
+//              sendpkt(notinuse, ABS vmepi!scb.type, act.non.reflect.mode, ?, ?, TRUE)
+                RESULTIS 0
+                ENDCASE
+    $) , VALOF
+$(FOREVER
+//  The main coroutine of the printer driver.  We are called when a ring
+//  reception succeeds, and a block is available for decoding.
+
+    LET title     =  VEC rbuffsize/bytesperword
+    LET tsbuff    =  VEC rbuffsize/bytesperword
+    LET called    =  VEC rbuffsize/bytesperword
+    LET calling   =  VEC rbuffsize/bytesperword
+    LET ts.b      =  VEC ts.parm.bufdesc.order
+
+    LET size      =  pkt!pkt.res1
+    LET source    =  pkt!pkt.res2
+    LET buff      =  copybuffer( pkt!rhpkt.buff )
+
+    LET port      =  get2bytes( buff, bb.ssp.replyport )
+    LET type      =  get2bytes( buff, bb.ssp.type )
+    LET func      =  get2bytes( buff, bb.ssp.func )
+    LET caller    =  revtrace(source, port)
+
+    LET bs.in     =  0
+    LET bs.out    =  0
+    LET opentype  =  0
+    LET dummy     =  0
+    LET ok        =  TRUE
+
+    called % 0 := 0
+    title  % 0 := 0
+
+    //  If we reach this point in the proceedings, then all has worked, and
+    //  so we should start decoding the options.
+        
+    ts.b!ts.parm.bufdesc.buffer    :=  buff
+    ts.b!ts.parm.bufdesc.start     :=  0
+    ts.b!ts.parm.bufdesc.lastused  :=  size*bytesperringword
+    ts.b!ts.parm.bufdesc.upb       :=  size*bytesperringword
+    ts.b!ts.parm.bufdesc.order     :=  FALSE
+        
+    //  We read the BSP parameters into dummy variables, since this will
+    //  set up the TS PARM descriptor properly for us.
+
+    opentype  :=  bsp.read.bsp.parms( ts.b, @dummy, @dummy, @dummy, @dummy )
+        
+    TEST opentype = open.error THEN
+    $(
+        //  Not open of the "open" types of reqest which we are expecting,
+        //  so out on its ear.
+
+        message ( "Reject %s (bad open)", caller )
+        if (debug = -2) abort(1235, 1)
+        asyncreply( source, error.badopen, buff )
+        
+        freevec( buff )
+        
+        RESULTIS 0
+    $)
+    ELSE
+    
+    TEST  opentype = open.cr82  |  opentype = open.tsbsp  THEN
+    $(
+        //  This is a new style "transport service" open, and so we should
+        //  call the "tsparm" library to decode the arguments for us.
+        LET undefined = "<undefined>"
+        for i = 0 to undefined%0 DO called%i := undefined%i
+        for i = 0 to undefined%0 DO calling%i := undefined%i
+        for i = 0 to undefined%0 DO title%i := undefined%i
+        for i = 0 to undefined%0 DO tsbuff%i := undefined%i
+        
+        ok &:= ts.parm.read(ts.b,type.connect,arg.called, called,rbuffsize)
+        ok &:= ts.parm.read(ts.b,type.connect,arg.calling,calling,rbuffsize)
+        ok &:= ts.parm.read(ts.b,type.connect,arg.quality,tsbuff,rbuffsize)
+        ok &:= ts.parm.read(ts.b,type.connect,arg.explanation,title,rbuffsize)
+        message("  [ we have (%s|%s|%s|%s) ]*N", called, calling, tsbuff, title)
+        // Just in case ... it's harmless !
+        IF (called%0) & (title%0 = 0)
+        THEN message("Assuming `%s' is a title", called)
+         <>  FOR i = 0 TO called%0 DO title%i := called%i
+    $)
+    ELSE
+    
+    TEST  opentype = open.bsp  THEN
+    $(
+        //  This is an old Cambridge "BSP" type open request, and so we must
+        //  do the decoding ourselves.
+        
+        LET pos     =  ts.b!ts.parm.bufdesc.start
+        LET length  =  byteget( buff, pos )
+
+        message ("Received old style open from %s", caller)
+
+        TEST  length > rbuffsize  THEN
+
+            //  Oh dear - the parameter string is too long for us to cope
+            //  with, and so we should just set the "ok" flag to FALSE.
+            
+            ok  :=  FALSE
+            
+        ELSE
+        $(
+            //  More like it.  We have the parameter for the asking, and so
+            //  we decode it to <title>*N<called>
+            //  another.
+            LET data = title
+            LET next = 0
+
+            called%0 := 0       // in case not used ...
+
+            FOR i = 1 TO length
+            $(  LET ch = byteget ( buff, pos+i )
+                TEST (ch = '*N')
+                $(  IF (data) THEN data%0 := next
+                    data := (data = title) -> called, 0
+                    next := 0
+                $)
+                ELSE IF data
+                    next +:= 1
+                 <> data%next := byteget( buff, pos + i )
+            $)
+            IF data THEN data%0 := next
+        $)
+    $)
+    ELSE
+    $(
+        //  More worrying, since this is an internal error, and a bad return
+        //  code from the TSPARM library.
+        
+        message( "Unexpected RC=%N from the TSPARM library!", opentype )
+        
+        ok  :=  FALSE
+    $)
+
+
+    //  If, and only if all that succeeded, will the flag "ok" still be
+    //  true.  If all has gone well, then we should continue with the
+    //  next stage.
+        
+    UNLESS  ok  DO
+    $(
+        //  We have failed to decode the transport service parameters,
+        //  and so we should complain about this.
+
+        message ( "Reject %s (bad parms)", caller )
+            
+        asyncreply( source, error.badparms, buff )
+        
+        freevec( buff )
+        
+        RESULTIS 0
+    $)
+
+    //  We are almost there now, but there is still the obstacle that the
+    //  printer may be switched off, off line, or generally dead.  We should
+    //  check for that here.
+    
+    $(  LET rc = printerdead()
+
+        UNLESS (rc & #X0E) = 0
+        $(
+            message ( "Reject %s (printer dead %X2)", caller, rc )
+
+            asyncreply( source, ((rc & #X08)=0) -> error.offline,
+                                                   error.switched.off, buff )
+        
+            freevec( buff )
+        
+            RESULTIS 0
+        $)
+    $)
+
+
+    //  Decoding successful, so we should make the connection and
+    //  read the file from the byte stream.
+
+    ts.b!ts.parm.bufdesc.start  :=  0
+
+    message ( "Send ack to %s", caller)
+
+    IF title%0 = 0
+        FOR i = 0 TO caller%0 DO title%0 := caller%0
+
+    IF  bsp.openack( ts.b, source, "OK", @bs.in, @bs.out )  THEN
+    $(
+        LET ch = ?
+        //  We have successfully sent the OPENACK, and so we can now start
+        //  drooling data from the byte stream.  The title for the document,
+        //  if any, is given as the explanation text
+        
+        selectinput( bs.in )
+
+        ch := RDCH()
+        UNRDCH()
+
+        SWITCHON  func  INTO
+        $(
+            CASE fc.balfourprint:
+            CASE fc.balfourprint.raw:
+                        print( title, func = fc.balfourprint, p.laser, called)
+                        ENDCASE
+            CASE fc.balfourprint.chain.raw:
+            CASE fc.balfourprint.chain:
+                        print( title, func = fc.balfourprint.chain, p.chain, called)
+                        ENDCASE
+            CASE fc.balfourout:
+                        UNLESS ch = '%'
+                        $(      message("Documents starts with %X2 rather than %X2 (%%)", ch, '%');
+                                ENDCASE
+                        $)
+                        postscript( title, called )
+                        ENDCASE
+        $)
+
+        //  The end of the print operation, and so we should close the
+        //  byte stream.
+        
+        endread()
+        selectinput( sysin )
+    $)
+
+    //  When we finally drop out of that lot, we return zero, so that the
+    //  outer level cause the print server to stop.
+
+    RESULTIS 0
+$)FOREVER REPEAT
+
+
+
+AND copybuffer( buffer )  =  VALOF
+$(
+//  Copy a ring buffer from static to heap storage.  This is just so that the
+//  library routine "bsp.openack" can work properly!
+
+    LET buff  =  getvec( rxbuffersize/ringwordsperword )
+
+    IF  buff = 0  THEN  abort( error.getvecfailure )
+
+    FOR i = 0 TO rxbuffersize-1 DO put2bytes( buff, i, get2bytes( buffer, i ))
+
+    RESULTIS  buff
+$)
+
+
+
+AND print( banner, header, printer.type, called )  BE
+$(
+//  This is a formatted print document, and so we should print a header, and
+//  format the document as we print it.
+
+    LET ch      =  rdch()
+    LET string  =  checkbanner( banner )
+    LET laser   = (p.info ! g.P.type = p.laser)
+
+    message( "(%S) (%s) %s%sstarted", string, called,
+                        (laser)  -> "", "chain ", (header) -> "", "raw ")
+    TEST laser
+    $(
+        LET font = "Courier"
+        LET argv =  VEC argv.size
+        LET linedepth = laser.linedepth
+        LET pointsize = laser.pointsize
+        LET head.pointsize = pointsize
+        LET head.linedepth = linedepth
+        LET usable.page = ?
+        LET usable.line = ?
+        LET landscape = FALSE
+        LET manual = FALSE
+        LET copies = 1
+
+        wrap := TRUE
+
+        IF (called%0)
+        $(  LET old = input()
+            LET new = findstringin( called )
+            IF new
+            $(  SELECTINPUT(new)
+                IF rdargs("font=fount=fontname/k,pointsize/k,linedepth/k,*
+                     *copies/k,wrap/s,landscape/s,manual/s", argv, argv.size)
+                $(  IF argv!0 THEN font := argv!0 <> wrap := argv!4
+                    IF argv!1 IF string.to.number(argv!1)  pointsize :=RESULT2
+                    IF argv!2 IF string.to.number(argv!2)  linedepth :=RESULT2
+                    IF argv!3 IF string.to.number(argv!3)  copies    :=RESULT2
+
+                    landscape := argv!5
+                    manual    := argv!6
+
+                    IF (argv!1 = 0) & (argv!2 ~= 0) pointsize := linedepth-1
+                    IF (argv!2 = 0) & (argv!1 ~= 0) linedepth := pointsize+1
+
+                    IF pointsize > head.pointsize  head.pointsize := pointsize
+                    IF linedepth > head.linedepth  head.linedepth := linedepth
+
+                    message("Font %s, pointsize %n, linedepth %n, copies %n%s%s",
+                        font, pointsize, linedepth, copies,
+                        landscape -> ", landscape", "",
+                        manual -> ", manual", "")
+                $)
+            $)
+            selectinput (old)
+        $)
+
+        TEST landscape
+        THEN laser.bitsperpage,laser.bitsperline :=laser.minbits,laser.maxbits
+        ELSE laser.bitsperpage,laser.bitsperline :=laser.maxbits,laser.minbits
+        usable.page := laser.bitsperpage -
+                (landscape -> laser.horiz.loss, laser.vert.loss)
+        usable.line := laser.bitsperline -
+                (landscape -> laser.vert.loss, laser.horiz.loss)
+        char.depth := linedepth
+
+        p.info ! g.char.width := ((pointsize * 6) + 3) / 10
+        p.info ! g.line.top   := usable.page - char.depth
+        p.info ! g.pos.l.bits := p.info ! g.line.top
+
+        WRCH (char.reset.laserwriter)
+        WRITEF("%%! header for plain text*N")
+        WRITEF("statusdict /waittimeout 300 put*N")
+        IF manual       WRITEF("statusdict begin /manualfeed true def end*N")
+
+/*      // Set up A4 page (from net)
+        WRITEF("/a4[[300 72 div 0 0 -300 72 div -72 3436] 292 3365{*N")
+        WRITEF("statusdict /jobstate(printing)put 0 setblink margins exch*N")
+        WRITEF("142 add exch 256 add 8 div round cvi frametoroket*N")
+        WRITEF("statusdict /jobstate(busy)put 1 setblink}/framedevice load*N")
+        WRITEF("60 45{dup mul exch dup mul add 1.0 exch sub}/setscreen*N")
+        WRITEF("load{}/settransfer load /initgraphics load /erasepage load*N")
+        WRITEF("]cvx statusdict begin bind end readonly def*N")
+*/
+        // Set dimensions & cc routines
+        WRITEF("/linedepth %n def*N", linedepth)
+        WRITEF("/pointsize %n def*N", pointsize)
+        WRITEF("/top %n def*N", usable.page)
+        WRITEF("/wop %n def*N", usable.line)
+        WRITEF("/cr{show 0 currentpoint exch pop moveto}def*N") 
+        WRITEF("/cent{dup stringwidth pop wop exch sub 2 div 0 rmoveto show}def*N") 
+        WRITEF("/grey{exch show gsave currentpoint newpath pointsize add*N")
+        WRITEF("moveto wop 0 rlineto neg 1 add linedepth mul pointsize sub*N")
+        WRITEF("0 exch rlineto wop neg 0 rlineto closepath 0.995 setgray*N")
+        WRITEF("fill grestore} def*N")
+        WRITEF("/nl{show 0 currentpoint exch pop linedepth sub moveto}def*N") 
+        WRITEF("/ep{show ")
+        UNLESS copies = 1 WRITEF("%n{copypage}repeat ", copies-1)
+        WRITEF("showpage}def*N")
+        WRITEF("/sp{%s%N %N translate %s%s0 top linedepth sub moveto}def*N",
+                        landscape -> "90 rotate ", "",
+                        landscape -> laser.vert.align, laser.horiz.align,
+                        landscape -> laser.horiz.align - laser.bitsperpage,
+                                     laser.vert.align,
+                        debug ->
+        "64 64 moveto (+) show 32 32 moveto (+) show 16 16 moveto (+) show 8 8 moveto (+) show 0 0 moveto (+) show wop top moveto (**) show wop 2 sub top 2 sub moveto (**) show wop 2 sub top 2 sub moveto (**) show wop 4 sub top 4 sub moveto (**) show ", "",
+                        debug -> "wop 8 sub top 8 sub moveto (**) show wop 16 sub top 16 sub moveto (**) show wop 32 sub top 32 sub moveto (**) show ",
+                        "")
+        // Now start for real
+//      WRITEF("a4*N")
+        IF (shade)
+        $(
+        WRITEF("/grey2{gsave newpath*N")
+        WRITEF("0 top moveto*N")
+        WRITEF("wop 0 rlineto*N")
+        WRITEF("0 top neg rlineto*N")
+        WRITEF("wop neg 0 rlineto closepath 0.9 setgray*N")
+        WRITEF("fill grestore} def*N")
+        WRITEF("/grey3{gsave newpath*N")
+        WRITEF("-60 top 60 add moveto*N")
+        WRITEF("wop 120 add 0 rlineto*N")
+        WRITEF("0 top 120 add neg rlineto*N")
+        WRITEF("wop 120 add neg 0 rlineto closepath 0.8 setgray*N")
+        WRITEF("fill grestore} def*N")
+        WRITEF("/grey1{gsave newpath*N")
+        WRITEF("60 top 60 sub moveto*N")
+        WRITEF("wop 120 sub 0 rlineto*N")
+        WRITEF("0 top 120 sub neg rlineto*N")
+        WRITEF("wop 120 sub neg 0 rlineto closepath 0.99 setgray*N")
+        WRITEF("fill grestore} def*N")
+        $)
+
+        // If a header, ensure it is AT LEAST the default size
+        TEST (header)
+        $(  WRITEF("/%s findfont %n scalefont setfont*Nsp*N%s(",
+                        font, head.pointsize,
+                (shade) -> "grey3 grey2 grey1*N", "")
+            printheader( string )
+            UNLESS (pointsize = head.pointsize)
+            WRITEF(") show /%s findfont pointsize scalefont setfont*N(", font)
+        $)
+        ELSE WRITEF("/%s findfont pointsize scalefont setfont*Nsp*N%s(", font,
+                (shade) -> "grey3 grey2 grey1*N", "")
+    $)
+    ELSE
+    $(
+        set.tof()
+        IF (header) THEN printheader( string )
+    $)
+
+    UNTIL  ch = endstreamch  DO
+    $(  //  Copy set of characters from the byte stream onto the printer.
+        
+        IF  checkbreak( string )  THEN  BREAK
+
+        FOR  i = 1  TO  1024  DO
+        $(
+            writech( ch )
+            
+            ch  :=  rdch()
+            
+            IF  ch = endstreamch  THEN  BREAK
+        $)
+    $)
+    
+    //  We must always force a newpage here, so pretend we have written 
+    //  something, and then call "writech" to reset all counters for us.
+
+    UNLESS header
+    DO p.info ! g.pos.char  :=  2
+
+    writech( ENDSTREAMCH )
+    fflush()
+
+    message( "(%S) finished", string )
+$)
+
+
+AND fflush() = VALOF
+$( LET func = cos!scb.func2
+   LET res2 = result2
+   LET res  = TRUE
+   UNLESS cos!scb.id=id.outscb DO abort (187, result2)
+   UNLESS func=0               DO res := func(cos)
+   cos ! scb.pos := 0
+   result2  := res2
+   RESULTIS    res
+$)
+
+AND postscript ( banner, called ) BE
+$(
+//  This is a formatted print document, and so we should print a header, and
+//  format the document as we print it.
+
+    LET ch      =  rdch()
+    LET string  =  checkbanner( banner )
+
+    message( "(%S) %sstarted", string, "postscript ")
+
+    wrch ( char.reset.laserwriter )
+
+    UNTIL  ch = endstreamch  DO
+    $(
+        //  Copy set of characters from the byte stream onto the printer.
+        
+        IF  checkbreak( string )  THEN  BREAK
+        
+        FOR  i = 1  TO  1 // 024  DO
+        $(
+            wrch( ch )
+            
+            ch  :=  rdch()
+            
+            IF  ch = endstreamch  THEN  BREAK
+        $)
+    $)
+    
+    wrch ( char.reset.laserwriter )
+
+    fflush()
+
+    message( "(%S) finished", string )
+$)
+
+AND printheader( banner )  BE
+//  Write a header out, so that the people know who this document belongs to.
+    comment(1, 0, starlines, starcount, 1, banner, blanklines)
+
+
+
+AND starline()  BE
+$(
+//  Write a line full of stars. Chain only
+
+    FOR i = 1 TO chain.charsperline
+    DO  writech( '**' )
+
+    writech( '*N' )
+$)
+
+
+
+AND blankline()  BE  writech( '*N' )
+
+
+
+AND stringline( stars, string )  BE
+$(
+//  Write a substituted string on a line.  We truncate the banner to a
+//  maximum length, so that we can guarantee to have a space between the
+//  header and the banner message.
+
+    LET maximum  =  ((p.info ! g.P.type = p.laser) ->
+                        ((laser.bitsperline - laser.horiz.align) /
+                        p.info ! g.char.width), chain.charsperline) - stars*2 - 2
+    LET length   =  string % 0
+    LET before   =  0
+    LET after    =  0
+    
+    IF  length > maximum  THEN  length  :=  maximum
+
+    before  :=  (maximum - length)/2
+    after   :=  (maximum - length - before)
+
+    FOR  i = 1  TO  stars    DO  writech( '**' )
+    FOR  i = 1  TO  before+1 DO  writech( '*S' )
+    FOR  i = 1  TO  length   DO  writech( string % i )
+    FOR  i = 1  TO  after+1  DO  writech( '*S' )
+    FOR  i = 1  TO  stars    DO  writech( '**' )
+    
+    writech( '*N' )
+$)
+
+
+
+AND printermessage( string )  BE
+//  Write a banner out to the printer with a message on it.
+    comment(1, 2, 1, 1, 0, string, 0)
+
+
+AND comment ( b, b.1, s.1, star.count, b.2, text, b.3 ) BE
+$(
+    TEST (p.info ! g.P.type = p.laser)
+    $(
+        // Check if near end of page ..... 
+        TEST (p.info ! g.pos.l.bits) < (char.depth * (2*b+2))
+                WRITEF(") 0 top linedepth 5 mul sub moveto (")
+         <>  message ( "find a nice clean place to put *"%S*" as only %b lines left", text, p.info!g.pos.l.bits)
+        ELSE UNLESS((p.info ! g.pos.char) = 1) DO writech( '*N' )
+
+        WRITEF(") %N grey*N(", 2*b +1)
+        FOR I = 1 TO b DO blankline()
+        WRITEF(") show (")
+        FOR i = 1 TO (text%0 >= ((laser.bitsperline - laser.horiz.loss)/p.info ! g.char.width)) ->
+                ((laser.bitsperline - laser.horiz.loss)/p.info ! g.char.width), text%0
+        DO WRITECH( text%i )
+        WRITEF(") cent (")
+        FOR i = 0 TO b+(b.3 -> 1, 0) DO blankline()
+    $)
+    ELSE
+    $(  FOR I = 1 TO b.1 DO blankline()
+        FOR I = 1 TO s.1 DO starline()
+        FOR I = 1 TO b.2 DO stringline (star.count, "")
+                            stringline (star.count, text)
+        FOR I = 1 TO b.2 DO stringline (star.count, "")
+        FOR I = 1 TO s.1 DO starline()
+        FOR I = 1 TO b.3 DO blankline()
+    $)
+$)      
+
+AND checkbreak( banner )  =  VALOF
+$(
+//  Check to see whether the task has been broken, or there is a break in the
+//  byte stream.
+
+    IF  testflags( #B1000 )  THEN  message( "(%S) printing", banner )
+
+    IF  testflags( #B0001 )  THEN
+    $(
+        message( "(%S) aborted", banner )
+        
+        printermessage( "Document aborted manually" )
+        
+        RESULTIS  TRUE
+    $)
+
+    IF  bsp.test.reset( cis )  THEN
+    $(
+        message( "(%S) BSP error", banner )
+        
+        printermessage( "Byte stream timed out or broken" )
+        
+        RESULTIS  TRUE
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND checkbanner( banner )  =  banner % 0 = 0  ->  "unnamed document", banner
+        
+        
+
+AND writech( ch )  BE
+$(
+//  Version of "wrch" which takes note of where on the page we currently
+//  are.  This means that we can expand tabs, and print newpage characters
+//  when necessary.  Unprintable characters are filtered out here.
+
+    LET pos.l.bits, pos.char = p.info ! g.pos.l.bits, p.info ! g.pos.char
+    LET printer.type = p.info ! g.P.type
+
+    SWITCHON (ch) INTO
+    $(
+    CASE '*T':
+        //  We should print at least one space, taking us up to the next
+        //  character position.
+        
+        $(  //  Repeat loop to write out the characters.  We use "writech"
+            //  rather than "wrch" so that wrapping is handled properly.
+        
+            writech( '*S' )
+            
+            pos.char     :=  pos.char + 1
+        $)
+        REPEATUNTIL  (pos.char REM spacespertab) = 1
+    ENDCASE
+
+    CASE '*N':
+        //  Newline character.  This means print out a carriage return and
+        //  a line feed.  This may mean moving onto a new page.
+        
+        pos.l.bits := pos.l.bits - char.depth
+
+IF debug WRITEF(" [%N]", pos.l.bits)
+
+        TEST pos.l.bits < 0
+        THEN writech ( '*P' )
+        ELSE
+        $(  TEST printer.type = p.laser
+            THEN WRITEF(") nl*N(")
+            ELSE WRITES( "*C*N" )
+
+            p.info ! g.pos.char  :=  1
+            p.info ! g.pos.l.bits := pos.l.bits
+        $)
+    ENDCASE
+
+    CASE '*C':
+        //  Carriage return character.  Reset the "position on line" pointer.
+        
+        TEST printer.type = p.laser
+        THEN WRITES(") cr*N(")
+        ELSE wrch( '*C' )
+        
+        p.info ! g.pos.char  :=  1
+    ENDCASE
+
+    CASE '*P':
+    CASE ENDSTREAMCH:
+        //  Newpage character.  We should print it out, and reset the character
+        //  pointers appropriately.  We optimise out multiple page throws ...
+        
+        UNLESS (pos.char = 1) & (pos.l.bits = p.info ! g.line.top)
+        $(
+            TEST printer.type = p.laser
+            THEN WRITEF( (ch = '*P') -> ") ep sp*N(", ") ep*N%c",
+                                                char.reset.laserwriter)
+            ELSE WRITES( "*C*P" )
+            
+            p.info ! g.pos.char   :=  1
+            p.info ! g.pos.l.bits :=  p.info ! g.line.top
+        $)
+    ENDCASE
+    
+    DEFAULT:
+        //  A bog standard character, which we should write out to the 
+        //  page.  We should check to see whether we have overflowed the
+        //  line, and if so, then we should print a newline character first.
+
+        UNLESS (printer.type = p.laser & wrap = FALSE)
+        $(  LET too.long = pos.char > laser.bitsperline/(p.info ! g.char.width)
+            IF pos.char >= (laser.bitsperline - laser.horiz.loss) /
+                           (p.info ! g.char.width)
+            $(  writech( '*N' )
+                IF too.long THEN writech ( '!' )
+                too.long := FALSE
+            $)
+            IF too.long THEN writech('*N') <> writech('!') <> writech('!')
+        $)
+
+        IF (printer.type = p.laser) & (ch = '(' | ch = ')' | ch = '\')
+        THEN wrch ( '\' )       
+        wrch( c( ch ) )
+        
+        p.info ! g.pos.char +:= 1
+    $)
+$)
+
+        
+        
+AND c( char )  =      //  N.B.  ASCII specific!
+
+    ( "???????????????????????????????? !*"#$%&'()**+,-./0123456789:;<=>?*
+      *@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~?"
+    ) % ((char & #X7F) + 1)
+
+
+
+AND asyncreply( station, error, buff )  BE
+$(
+//  Start an asynchronous reply going, and increment the reply count.
+
+    LET txpkt   =  getpkt( error )
+    LET txbuff  =  result2
+
+    txpkt!pkt.link       :=  notinuse
+    txpkt!pkt.id         :=  rhtaskid
+    txpkt!pkt.type       :=  act.tx
+    txpkt!pkt.res1       :=  0
+    txpkt!pkt.res2       :=  0
+    txpkt!rhpkt.buff     :=  txbuff
+    txpkt!rhpkt.size     :=  bb.ssp.args
+    txpkt!rhpkt.station  :=  station
+    txpkt!rhpkt.port     :=  get2bytes ( buff, bb.ssp.replyport )
+    
+    asyncreplies         :=  asyncreplies + 1
+
+    qpkt( txpkt )
+$)
+
+
+
+AND getpkt( code )  =  VALOF
+$(
+//  Return a single piece of store which is both a packet and a transmission
+//  buffer for the packet.
+
+    LET txpkt   =  getvec( rhpkt.lifetime + 1 + bb.ssp.args/ringwordsperword )
+    LET txbuff  =  txpkt + rhpkt.lifetime + 1
+    
+    IF  txpkt = 0  THEN  abort( error.getvecfailure )
+    
+    put2bytes( txbuff, bb.ssp.type, code.openack )
+    put2bytes( txbuff, bb.ssp.replyport, 0 )
+    put2bytes( txbuff, bb.ssp.rc, code )
+
+    result2  :=  txbuff
+
+    RESULTIS  txpkt
+$)
+
+
+
+AND freepkt( pkt )  BE  freevec( pkt )
+
+
+
+AND copktwait( id, pkt )  =  cowait( pkt )
+    
+
+
+AND message( format, arg1, arg2, arg3, arg4, arg5, arg6 ) BE IF logging THEN
+$(
+//  Write out a logging message.
+
+    LET o  =  output()
+    
+    selectoutput( logstream )
+    
+    writes( "****** " )
+    writef( format, arg1, arg2, arg3, arg4, arg5, arg6 )
+    newline()
+    
+    selectoutput( o )
+$)
+
+
+
+//****************************************************************************
+//*                 The printer driver routines themselves                   *
+//****************************************************************************
+
+AND printerdead()  = VALOF
+$(  LET res = sendpkt(notinuse, cos!scb.type, act.test.offline, 0, 1, cos)
+        // Is the device offline.  Put in 0 1 as a default ......
+    IF RESULT2 = 0 THEN RESULTIS res
+    RESULTIS 0
+$)
+
+AND set.tof() BE sendpkt(notinuse, cos!scb.type, act.set.tof, ?, ?, cos)
+
+AND printerinit() BE    RETURN
+
+

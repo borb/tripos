@@ -1,0 +1,137 @@
+SECTION "LCG4"
+
+GET "LCGHDR"
+
+LET movetoaqy(a) = VALOF
+// move simulated stack item A to some suitable register
+$(  LET k, n = h1!a, h2!a
+    IF k=k.reg RESULTIS n
+    FOR i = r.a TO r.y
+    DO IF k=reg.k!i & n=reg.n!i & isfree(i) $( h1!a,h2!a:=k.reg,i; RESULTIS i $)
+    IF k=k.ry UNLESS isfree(r.a) \/ isfree(r.q) DO
+    $(  movetor(a, r.y); RESULTIS r.y $)
+    RESULTIS movetor(a, anybut(-1, -1))
+$)
+
+AND movetoaq(a) = VALOF
+$(  LET k, n = h1!a, h2!a
+    LET r.afree = NOT reg.locked ! r.a
+    LET r.qfree = NOT reg.locked ! r.q
+    LET itemusingr.ar.q = -1
+    LET s = -1 // will hold the chosen register
+    IF k=k.reg & n\=r.y RESULTIS n // no work to do
+    FOR t = tempv TO arg1 BY 3 IF h1!t=k.reg DO
+    $(  LET r = h2!t
+        UNLESS r.a<=r<=r.q LOOP
+        IF itemusingr.ar.q=-1 DO itemusingr.ar.q := t
+        TEST r=r.a
+        THEN r.afree := no
+        ELSE r.qfree := no
+    $)
+    // attempt to choose a suitable register
+    IF r.qfree & reg.k!r.q=k.none DO s := r.q
+    IF r.afree & reg.k!r.a=k.none DO s := r.a
+    IF n=reg.n!r.q & k=reg.k!r.q & r.qfree DO s := r.q
+    IF n=reg.n!r.a & k=reg.k!r.a & r.afree DO s := r.a
+    IF s=-1 DO $( IF r.qfree DO s := r.q IF r.afree DO s := r.a $)
+    UNLESS s=-1 RESULTIS movetor(a, s)
+    storet(itemusingr.ar.q)
+$)  REPEAT
+
+AND movetor(a, r) = VALOF
+  // Move SS item 'a' to register 'r'.
+  $( LET k, n, s = h1 ! a, h2 ! a, ?
+     IF regusedby(a) \= r THEN
+       freereg(r)
+     s := argreg(a)
+     IF n = reg.n ! r & k = reg.k ! r THEN s := r               // Prefer 'r'
+     IF s >= 0 THEN // Already in reg!
+       $( IF s \= r THEN $( genrr(f.lr, s, r); moveinfo(s, r) $)
+          GOTO ret
+       $)
+
+     SWITCHON k INTO
+       $( CASE k.numb:          setrtok(r, n);                          ENDCASE
+          CASE k.lvloc:         gene(f.cea, r, m.x, n);                 ENDCASE
+          CASE k.lvlab:         gene(f.cea, r, m.rel, eref(k,n));       ENDCASE
+          CASE k.lvglob:        setrtok(r, n); genrr(f.addr, r.l, r);   ENDCASE
+
+          CASE k.loc: CASE k.glob:
+          CASE k.lab: CASE k.ry: CASE k.abs:    genm(f.l, f.le, r, k, n, 0)
+       $)
+
+     setinfo(r, k, n)
+ret: h1 ! a, h2 ! a := k.reg, r
+     RESULTIS r
+  $)
+
+AND storet(a) BE
+// stores simulated stack item A in true stack location
+$(  LET s, r = h3!a, ?
+    IF h1!a=k.loc & h2!a=s RETURN    // item already there
+
+    r := movetoaqy(a)
+    gensore(f.st, f.ste, r, m.x, s)
+    forgetvar(k.loc, s)
+    remem(r, k.loc, s)
+    h1!a, h2!a := k.loc, s
+$)
+
+AND anybut(r1, r2) = VALOF
+  // Return any free register except 'r1' and 'r2'
+  $( FOR i = r.a TO r.q DO
+       IF r1\=i & r2 \= i & reg.k!i=k.none &
+         isfree(i) THEN
+         RESULTIS i
+
+     FOR i = r.a TO r.q DO IF r1 \= i & r2 \= i & isfree(i) THEN RESULTIS i
+
+    IF r1\=r.y & r2 \= r.y  & isfree(r.y) THEN                  RESULTIS r.y
+     FOR t = tempv TO arg1 BY 3 DO
+     $( LET s = regusedby(t)
+        IF s=-1 | s=r1 | s = r2 THEN LOOP
+        storet(t)
+         // This will free S and so
+        RESULTIS s
+     $)
+  $)
+
+AND freereg(r) BE $( LET t = itemusing(r); UNLESS t=-1 storet(t) $)
+
+AND itemusing(r) = VALOF
+$(  FOR p = tempv TO arg1 BY 3
+    DO IF (r=h2!p & h1!p=k.reg) | (r=r.y & h1!p=k.ry) RESULTIS p
+    RESULTIS -1
+$)
+
+AND forgetall() BE FOR r=r.a TO r.y DO reg.k!r,reg.n!r,reg.locked!r:=k.none,0,no
+
+AND forgetreg(r) BE reg.k!r, reg.n!r := k.none, 0
+
+AND forgetvar(k, n) BE  // K is K.LOC, K.GLOB or K.LAB
+FOR r = r.a  TO r.y IF reg.n!r = n & reg.k!r = k THEN forgetreg(r)
+
+AND forgetallvars() BE FOR r = r.a TO r.y DO
+// Called after BCPL indirect assignment
+    $( LET k = reg.k!r
+       IF k=k.loc | k=k.glob | k=k.lab | k=k.abs THEN forgetreg(r)
+    $)
+
+AND remem(r, k, n) BE IF reg.k!r=k.none THEN reg.k!r, reg.n!r := k, n
+
+AND setinfo(r, k, n) BE TEST k=k.reg | k=k.ry
+THEN forgetreg(r)
+ELSE reg.k!r, reg.n!r := k, n
+
+AND moveinfo(s, d) BE reg.k!d, reg.n!d := reg.k!s, reg.n!s
+
+
+AND argreg(a) = h1 ! a = k.reg -> h2 ! a, VALOF
+  // Returns register containing 'a', either via
+  //  SS or the slave.
+  $( LET k, n = h1 ! a, h2 ! a
+     FOR r = r.a TO r.y DO IF reg.k!r=k & reg.n!r=n & isfree(r) THEN RESULTIS r
+     RESULTIS -1
+  $)
+
+

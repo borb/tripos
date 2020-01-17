@@ -1,0 +1,114 @@
+SECTION "RCH"
+
+GET "SYNHDR"
+
+$$INLINETRIPOS := $$68000TRIPOS;
+
+$<INLINETRIPOS
+        GET "LIBHDR"
+        GET "IOHDR"
+$>INLINETRIPOS
+
+LET RCH() BE
+$(
+   CH :=
+$<INLINETRIPOS'
+        RDCH()
+$>INLINETRIPOS'
+$<INLINETRIPOS
+        VALOF
+$( MANIFEST $( EOFlatch = -2 $)
+   LET pos, end = cis!scb.pos, cis!scb.end
+   // The END field of the SCB is set to -2 when the stream is exhausted.
+   // -2 is used (rather than 0 or -1) because:
+   //    -2 cannot be a valid END (buffer would fill store)
+   //    -1 is the initial value of END for a new stream
+   //    END will be 0 if the handler delivers an empty buffer
+
+   // If RDCH receives an empty buffer, then it delivers EMPTYBUFFCH.
+   // This will never happen for normal streams to files, terminals, etc.,
+   // but can occur with ring byte streams.
+   // This can be ignored here .....
+
+   IF pos>=end DO       // NOT WHILE !!!!
+   $( LET func = cis!scb.func1
+      result2 := 0
+      UNLESS cis!scb.id=id.inscb DO abort (186, cis)
+      IF end  = EOFlatch RESULTIS endstreamch // Old end of stream
+      IF func = 0 | NOT func (cis) DO
+      $( UNLESS result2=0 DO abort (188, result2)
+         cis!scb.pos, cis!scb.end := 0, EOFlatch
+         PRINTING := FALSE                      // !! N.B.
+         RESULTIS endstreamch
+      $)
+      pos := 0
+      end := cis!scb.end
+   $)
+
+   // We have a buffer, but it may be an empty one.
+   // If it is empty, then set the POS field of the SCB to zero so we will
+   // get a new buffer next time, then return EMPTYBUFFCH.
+
+   IF end=0
+   THEN $( cis!scb.pos := 0; RESULTIS emptybuffch $) // Empty buffer - return marker
+
+   || First call, buffer exhausted or stream exhausted.
+   cis!scb.pos := pos+1;
+   RESULTIS cis!scb.buf%pos
+$)
+$>INLINETRIPOS
+   IF PRINTING
+   $( UNLESS LINECOUNT=PRLINE | PRSOURCE>0
+      $( LET c = Skipping-> '$',' '
+         WRITEF("%I4%C ", LINECOUNT, c);
+         PRLINE := LINECOUNT
+      $)
+$<INLINETRIPOS'
+      WRCH(CH)
+$>INLINETRIPOS'
+$<INLINETRIPOS
+$( LET pos, end = cos!scb.pos, cos!scb.end
+   IF pos >= end DO
+   $(
+      $( LET func = cos!scb.func2
+        LET res2 = result2
+        LET res  = TRUE
+        UNLESS cos!scb.id=id.outscb DO abort (187, result2)
+        UNLESS func=0          DO res := func(cos)
+        result2  := res2
+        UNLESS res DO abort (189, res2)
+      $)
+      pos := 0
+   $)
+   cos!scb.buf%pos := ch
+   cos!scb.pos     := pos+1
+$)
+$>INLINETRIPOS
+  $)
+  IF CH < ' ' & (CH='*P' | CH='*N' | CH='*C')
+  $( linecount:=linecount+1; CH := '*N' $)
+
+  CHCOUNT := CHCOUNT + 1
+  CHBUF!(CHCOUNT&63) := CH
+$)
+
+LET PRCH(ch) BE IF (SHOWALL | GETP=0) & CH~=ENDSTREAMCH
+$( UNLESS LINECOUNT=PRLINE | PRSOURCE>0
+   $(   LET c = Skipping-> '$',' '
+        WRITEF("%I4%C ", LINECOUNT, c)
+        PRLINE := LINECOUNT
+   $)
+   WRCH(CH)     // Jump there ......
+$)
+
+LET rdtag(char) BE
+$( LET i = 1
+   wordv%i := char
+
+   WHILE 'a' <= ch <='z' | 'A'<= ch <='Z' | '0'<=ch<='9' | ch='.' | ch='_'
+   $( i := i+1; wordv%i := ch; rch() $)
+
+   wordv%0 := i
+$)
+
+

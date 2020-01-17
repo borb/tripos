@@ -1,0 +1,83 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+                #######   ######      ####    ########  ######## 
+                ########  #######    ######   ########  ######## 
+                ##    ##  ##    ##  ##    ##     ##     ##       
+                #######   ##    ##  ########     ##     ######   
+                ##        ##    ##  ##    ##     ##     ##       
+                ##        ##    ##  ##    ##     ##     ##       
+                ##        #######   ##    ##     ##     ######## 
+                ##        ######    ##    ##     ##     ######## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   02/03/87             *
+\*****************************************************************************/
+
+
+
+SECTION "PDATE"
+
+
+
+GET "LIBHDR"
+GET "STRING-TO-NUMBER"
+
+
+
+MANIFEST
+$(
+    a.days       =  0
+    a.mins       =  1
+    a.ticks      =  2
+$)
+
+
+
+LET start()  BE
+$(
+//  Print out the days, mins and ticks information given as a date.
+
+    LET args   =  "DAYS/A,MINS/A,TICKS/A"
+    LET argv   =  VEC 50
+
+    LET date   =  VEC 2
+    LET datev  =  VEC 15
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+        error( "Bad arguments for *"%S*"", args )
+
+    TEST  string.to.number( argv!a.days )  
+        THEN  date!0  :=  result2
+        ELSE  error( "Bad DAYS value: *"%S*"", argv!a.days )
+
+    TEST  string.to.number( argv!a.mins )  
+        THEN  date!1  :=  result2
+        ELSE  error( "Bad MINS value: *"%S*"", argv!a.mins )
+
+    TEST  string.to.number( argv!a.ticks )  
+        THEN  date!2  :=  result2
+        ELSE  error( "Bad TICKS value: *"%S*"", argv!a.ticks )
+
+    callseg( "sys:l.dat-to-strings", date, datev )
+
+    writef( "%S, %S at %S*N", datev+10, datev+0, datev+5 )
+$)
+
+
+
+AND error( format, arg1, arg2 )  BE
+$(
+//  Write out an error message and stop.
+
+    writes( "****** PDATE:  " )
+    writef( format, arg1, arg2 )
+    newline()
+    
+    stop( 20 )
+$)
+
+

@@ -1,0 +1,388 @@
+//****************************************************************************
+//*                                                                          *
+//*        M68KASM  -  Assembler for the MC68000 family  -  Section 10       *
+//*                                                                          *
+//*                             Error Handling                               *
+//*                                                                          *
+//****************************************************************************
+//*     I. D. Wilson    -    Last Modified    -    IDW    -    19/11/86      *
+//****************************************************************************
+
+
+
+SECTION "M10"
+
+
+
+GET "LIBHDR"
+GET "M68KHDR"
+
+
+
+LET complain( code )  BE  asmerror( code, TRUE )
+
+
+
+AND warning( code )   BE  asmerror( code, FALSE )
+
+
+
+AND asmerror( code, fatal )  BE
+$(
+//  If we have met a fatal number of errors, then no point in going any
+//  further.
+
+    TEST  errors = errorsize  THEN
+    $(
+        //  Error vector is full, so stop at this point.
+
+        IF  pass2  THEN
+        $(
+            selectoutput( sysout )
+            writef( "*N******  More than %N errors detected  -  assembly aborted.*N", errorsize )
+            selectoutput( liststream )
+        $)
+
+        aborted  :=  TRUE
+        ended    :=  TRUE         // premature ending
+    $)
+    ELSE
+
+    IF  pass2  THEN
+    $(
+        LET offset  =  errors * eb.size
+
+        errorvec!(offset + eb.line)  :=  linenumber
+        errorvec!(offset + eb.code)  :=  code
+        errorvec!(offset + eb.file)  :=  currentfile
+    $)
+
+    //  Print out an error message at the console, if this is required.
+    //  We always do this in pass 2, but there is an option to do it in
+    //  pass 1 as well.
+
+    IF  pass2  |  pass1errors  THEN
+    $(
+        selectoutput( sysout )
+
+        writes( "******  " )
+
+        FOR  i = 0  TO  length-1  DO  wrch( inputbuff % i )
+
+        newline()
+
+        writef( "******  File *"%S*" line %N  -  %S*N*N",
+                 filelist!currentfile, linenumber, message( code ) )
+
+        selectoutput( liststream )
+    $)
+
+    error.found  :=  TRUE
+    errors       :=  errors + 1
+
+    IF  fatal  THEN
+    $(
+        commentline  :=  TRUE
+
+        longjump( recoverlevel, recoverlabel )
+    $)
+$)
+
+
+
+AND error( code )  BE
+$(
+//  Fatal error, so print out the error message to the console, and then
+//  wind up.
+
+    selectoutput( sysout )
+
+    writes( "*N******  Fatal error " )
+
+    writes( pass1  ->  "(in pass 1)",
+            pass2  ->  "(in pass 2)",
+                       "(in initialisation)" )
+
+    writef( "*N******  File *"%S*" line %N  -  %S*N*N",
+             filelist!currentfile, linenumber, message( code ) )
+
+    aborted  :=  TRUE
+    ended    :=  TRUE
+
+    longjump( fatalerrorlevel, fatalerrorlabel )
+$)
+
+
+
+AND checkfor( symbol, messagenumber )  BE
+    TEST  symb = symbol  THEN  readsymb()
+                         ELSE  complain( messagenumber )
+
+
+
+AND message( code )  =  VALOF
+$(
+    SWITCHON  code  INTO
+    $(
+        CASE  0  :  RESULTIS  "INTERNAL ERROR IN ASSEMBLER  -  PLEASE REPORT"
+        CASE  1  :  RESULTIS  "Size specifier is illegal on label"
+        CASE  2  :  RESULTIS  "Garbage found in opcode field"
+        CASE  3  :  RESULTIS  "Illegal opcode field"
+//      CASE  4  :
+        CASE  5  :  RESULTIS  "Garbage found in label field"
+        CASE  6  :  RESULTIS  "Illegal size specifier for this opcode"
+        CASE  7  :  RESULTIS  "Illegal address mode for this operand"
+        CASE  8  :  RESULTIS  "Illegal address mode for first operand"
+        CASE  9  :  RESULTIS  "Illegal address mode for second operand"
+        CASE 10  :  RESULTIS  "',' separator missing after first operand"
+        CASE 11  :  RESULTIS  "',' separator missing after second operand"
+        CASE 12  :  RESULTIS  "Garbage found after operand field"
+        CASE 13  :  RESULTIS  "First operand must be of 'DATA' mode"
+        CASE 14  :  RESULTIS  "First operand must be of 'DATA REGISTER' mode"
+        CASE 15  :  RESULTIS  "Second operand must be of 'MEMORY ALTERABLE' mode"
+        CASE 16  :  RESULTIS  "Illegal address mode for relative branch"
+        CASE 17  :  RESULTIS  "Label must be of 'RELOCATABLE' mode"
+        CASE 18  :  RESULTIS  "Label must be of 'ABSOLUTE' mode"
+        CASE 19  :  RESULTIS  "Short branch displacement of '$00' is illegal"
+        CASE 20  :  RESULTIS  "Location out of range for '.B' branch"
+        CASE 21  :  RESULTIS  "Location out of range for '.W' branch"
+        CASE 22  :  RESULTIS  "Second operand must be of 'DATA REGISTER' mode"
+        CASE 23  :  RESULTIS  "Second operand must be of 'DATA ALTERABLE' mode"
+        CASE 24  :  RESULTIS  "Illegal register combination for 'EXG' opcode"
+        CASE 25  :  RESULTIS  "Operand must be of 'IMMEDIATE' mode"
+        CASE 26  :  RESULTIS  "Immediate value out of range '0 - 15'"
+        CASE 27  :  RESULTIS  "First operand must be of 'IMMEDIATE' mode"
+        CASE 28  :  RESULTIS  "Inconsistent size Specifier for 'SR/CCR' operand"
+        CASE 29  :  RESULTIS  "'.B' size specifier illegal for 'ADDRESS REGISTER' mode"
+        CASE 30  :  RESULTIS  "Second operand must be of 'ADDRESS REGISTER' mode"
+        CASE 31  :  RESULTIS  "First operand must be of 'ADDRESS REGISTER POST INCREMENT' mode"
+        CASE 32  :  RESULTIS  "Second operand must be of 'ADDRESS REGISTER POST INCREMENT' mode"
+        CASE 33  :  RESULTIS  "Second operand must be of 'DATA' mode"
+        CASE 34  :  RESULTIS  "Illegal size specifier for 'SR' operand"
+        CASE 35  :  RESULTIS  "Illegal size specifier for 'USP' operand"
+        CASE 36  :  RESULTIS  "First operand must be of 'ADDRESS REGISTER' mode"
+        CASE 37  :  RESULTIS  "'.S' size specifier illegal for 'MOVE' Opcode"
+        CASE 38  :  RESULTIS  "Illegal size specifier for 'MOVEM' opcode"
+        CASE 39  :  RESULTIS  "Register range must be for registers of same type"
+        CASE 40  :  RESULTIS  "Illegal size specifier in 'REGISTER MASK'"
+        CASE 41  :  RESULTIS  "Register missing or malformed in 'REGISTER MASK'"
+        CASE 42  :  RESULTIS  "Second operand must be of 'ADDRESS REGISTER + OFFSET' mode"
+        CASE 43  :  RESULTIS  "First operand must be of 'ADDRESS REGISTER + OFFSET' mode"
+        CASE 44  :  RESULTIS  "Illegal size specifier for 'MOVEP' opcode"
+        CASE 45  :  RESULTIS  "'QUICK' operand value out of range '-128 - +127'"
+        CASE 46  :  RESULTIS  "Illegal size specifier for 'ORG' directive"
+        CASE 47  :  RESULTIS  "Garbage found after directive"
+        CASE 48  :  RESULTIS  "Invalid length parameter for 'DS/DCB' directive"
+        CASE 49  :  RESULTIS  "'TTL' string longer than 60 characters"
+        CASE 50  :  RESULTIS  "Second operand must be of 'IMMEDIATE' mode"
+        CASE 51  :  RESULTIS  "INTERNAL ERROR:  phasing difference  -  PLEASE REPORT"
+        CASE 52  :  RESULTIS  "'REGISTER' is illegal in label field"
+        CASE 53  :  RESULTIS  "'INSTRUCTION' is illegal in label field"
+        CASE 54  :  RESULTIS  "'DIRECTIVE' is illegal in label field"
+        CASE 55  :  RESULTIS  "Illegal label field"
+        CASE 56  :  RESULTIS  "Malformed 'SHIFT' operator"
+        CASE 57  :  RESULTIS  "Closing 'QUOTE' missing from 'ASCII LITERAL'"
+        CASE 58  :  RESULTIS  "'ASCII LITERAL' longer than 4 characters"
+        CASE 59  :  RESULTIS  "Illegal character in source file"
+        CASE 60  :  RESULTIS  "Malformed number"
+        CASE 61  :  RESULTIS  "Unexpected end of operand field"
+        CASE 62  :  RESULTIS  "Register or 'PC' missing after '('"
+        CASE 63  :  RESULTIS  "First register after '(' must be 'ADDRESS REGISTER' or 'PC'"
+        CASE 64  :  RESULTIS  "Register missing afer ','"
+        CASE 65  :  RESULTIS  "')' missing after register"
+        CASE 66  :  RESULTIS  "')' missing after registers"
+        CASE 67  :  RESULTIS  "'-' or '/' after register only valid in 'REGISTER MASK'"
+        CASE 68  :  RESULTIS  "Illegal use of 'REGISTER'"
+        CASE 69  :  RESULTIS  "Overall parenthesis mismatch"
+        CASE 70  :  RESULTIS  "Syntax error in expression"
+        CASE 71  :  RESULTIS  "Symbol/expression must be of 'ABSOLUTE' mode"
+        CASE 72  :  RESULTIS  "Index value out of range '-128 - +127'"
+        CASE 73  :  RESULTIS  "Forward reference must not be 'LONG ABSOLUTE' mode"
+        CASE 74  :  RESULTIS  "Illegal negation of 'RELOCATABLE' value"
+        CASE 75  :  RESULTIS  "Dyadic operator must have 'ABSOLUTE' operands"
+        CASE 76  :  RESULTIS  "Illegal operands for diadic operator"
+        CASE 77  :  RESULTIS  "Illegal termination of 'CONSTANTS LIST'"
+        CASE 78  :  RESULTIS  "Value out of range '0 - 255'"
+        CASE 79  :  RESULTIS  "Illegal forward reference"
+        CASE 80  :  RESULTIS  "Size specifier in illegal position"
+        CASE 81  :  RESULTIS  "Size specifier on 'REGISTER' illegal here"
+        CASE 82  :  RESULTIS  "Statement must have label field"
+        CASE 83  :  RESULTIS  "Statement must not have label field"
+        CASE 84  :  RESULTIS  "Operand must be a register"
+        CASE 85  :  RESULTIS  "Invalid operand type for this directive"
+        CASE 86  :  RESULTIS  "'.S' size specifier illegal here"
+        CASE 87  :  RESULTIS  "Illegal size specifier on index register"
+        CASE 88  :  RESULTIS  "Displacement type mismatch"
+        CASE 89  :  RESULTIS  "Index value out of range '-32768 - +32767'"
+        CASE 90  :  RESULTIS  "Tag symbol longer than 30 characters"
+        CASE 91  :  RESULTIS  "Illegal size specifier"
+        CASE 92  :  RESULTIS  "Multiply defined symbol"
+        CASE 93  :  RESULTIS  "Workspace exhausted"
+        CASE 94  :  RESULTIS  "INTERNAL ERROR:  parse stack overflow  -  PLEASE REPORT"
+        CASE 95  :  RESULTIS  "Undefined symbol in label field"
+        CASE 96  :  RESULTIS  "Undefined symbol in opcode field"
+        CASE 97  :  RESULTIS  "Undefined symbol in operand field"
+//      CASE 98  :
+        CASE 99  :  RESULTIS  "Second operand must be of 'ALTERABLE' mode"
+        CASE 100 :  RESULTIS  "Invalid parameter for 'PLEN' directive"
+        CASE 101 :  RESULTIS  "Invalid parameter for 'LLEN' directive"
+        CASE 102 :  RESULTIS  "Instruction alignment error"
+        CASE 103 :  RESULTIS  "'ENDC' statement missing"
+        CASE 104 :  RESULTIS  "Illegal use of 'SET' on a symbol defined by 'EQU'"
+        CASE 105 :  RESULTIS  "Illegal use of 'EQU' on a symbol defined by 'SET'"
+        CASE 106 :  RESULTIS  "Forward reference must not be to symbol defined by 'SET'"
+        CASE 107 :  RESULTIS  "Mismatched 'ENDC' statement"
+        CASE 108 :  RESULTIS  "Macro nesting too deep"
+        CASE 109 :  RESULTIS  "Bad reference to macro operand"
+        CASE 110 :  RESULTIS  "Illegally nested macro definitions"
+        CASE 111 :  RESULTIS  "Mismatched 'ENDM' statement"
+        CASE 112 :  RESULTIS  "Mismatched 'MEXIT' statement"
+        CASE 113 :  RESULTIS  "'ENDM' statement missing"
+        CASE 114 :  RESULTIS  "Mismatched macro brackets"
+        CASE 115 :  RESULTIS  "Incorrect termination of macro operand field"
+//      CASE 116 :  RESULTIS  "Too many assembler generated labels"
+        CASE 117 :  RESULTIS  "Illegal use of macro operands outside a macro body"
+        CASE 118 :  RESULTIS  "Too many operands for macro"
+        CASE 119 :  RESULTIS  "Illegal generation of 'END' in macro expansion"
+        CASE 120 :  RESULTIS  "Illegal generation of 'ENDM' in macro expansion"
+        CASE 121 :  RESULTIS  "Illegal generation of 'MACRO' in macro expansion"
+        CASE 122 :  RESULTIS  "User 'FAIL' statement"
+        CASE 123 :  RESULTIS  "Byte value must not be of 'RELOCATABLE' type"
+        CASE 124 :  RESULTIS  "Illegal re-definition of 'PLEN' parameter"
+        CASE 125 :  RESULTIS  "Illegal re-definition of 'LLEN' parameter"
+        CASE 126 :  RESULTIS  "Illegal use of 'END' within 'INCLUDE' file"
+        CASE 127 :  RESULTIS  "Terminating 'QUOTE' missing from 'INCLUDE' argument"
+        CASE 128 :  RESULTIS  "Input not provided for 'INCLUDE'"
+        CASE 129 :  RESULTIS  "Malformed argument for 'INCLUDE'"
+        CASE 130 :  RESULTIS  "'INCLUDE' nesting too deep"
+        CASE 131 :  RESULTIS  "'ENDC' missing in 'INCLUDE' file"
+        CASE 132 :  RESULTIS  "'ENDM' missing in 'INCLUDE' file"
+//      CASE 133 :  RESULTIS  "Illegal generation of 'INCLUDE' in macro expansion"
+        CASE 134 :  RESULTIS  "Register after '(' must be 'ADDRESS REGISTER' or 'PC'"
+        CASE 135 :  RESULTIS  "Illegal use of 'INSTRUCTION' in operand field"
+        CASE 136 :  RESULTIS  "Illegal use of 'DIRECTIVE' in operand field"
+        CASE 137 :  RESULTIS  "Illegal use of 'MACRO NAME' in operand field"
+        CASE 138 :  RESULTIS  "Address value too large"
+        CASE 139 :  RESULTIS  "Illegal '#' found in expression"
+        CASE 140 :  RESULTIS  "Illegal 'OPERATOR' found in expression"
+        CASE 141 :  RESULTIS  "Unexpected end of expression"
+        CASE 142 :  RESULTIS  "Illegal ')' found in expression"
+        CASE 143 :  RESULTIS  "Illegal ',' found in expression"
+        CASE 144 :  RESULTIS  "Illegal ':' found in expression"
+        CASE 145 :  RESULTIS  "Illegal 'REGISTER' found in expression"
+        CASE 146 :  RESULTIS  "Illegal '(An)/-(An)/(An)+' found in expression"
+        CASE 147 :  RESULTIS  "Illegal 'SYSTEM REGISTER' found in expression"
+        CASE 148 :  RESULTIS  "Illegal forward reference to register defined by 'EQUR'"
+        CASE 149 :  RESULTIS  "BREAK"
+        CASE 150 :  RESULTIS  "Illegal 'CNOP' alignment value of '0'"
+        CASE 151 :  RESULTIS  "Illegal forward reference to 'MACRO NAME'"
+        CASE 152 :  RESULTIS  "Illegal use of 'XREF' symbol in BRANCH instruction"
+        CASE 153 :  RESULTIS  "Undefined symbol in 'XDEF' list"
+        CASE 154 :  RESULTIS  "Illegal 'XREF' symbol in 'XDEF' list"
+        CASE 155 :  RESULTIS  "Illegal symbol found in 'XDEF' list"
+        CASE 156 :  RESULTIS  "Illegal termination of 'XDEF' list"
+        CASE 157 :  RESULTIS  "'XREF' symbol is already defined"
+        CASE 158 :  RESULTIS  "Illegal symbol found in 'XREF' list"
+        CASE 159 :  RESULTIS  "Illegal termination of 'XREF' list"
+        CASE 160 :  RESULTIS  "'XREF' symbol is illegal in Label Field"
+        CASE 161 :  RESULTIS  "Illegal size for 'XREF' symbol (Must be L)"
+        CASE 162 :  RESULTIS  "Illegal use of 'XREF' symbol as displacement"
+        CASE 163 :  RESULTIS  "Illegal arithmetic on 'XREF' symbol"
+        CASE 164 :  RESULTIS  "Illegal use of 'XREF' symbol as argument to 'DIRECTIVE'"
+        CASE 165 :  RESULTIS  "'XDEF' symbol is too long"
+        CASE 166 :  RESULTIS  "'XREF' symbol is too long"
+        CASE 167 :  RESULTIS  "TRIPOS module HUNK too large"
+        CASE 168 :  RESULTIS  "TRIPOS module RELOC16 too large"
+        CASE 169 :  RESULTIS  "TRIPOS module RELOC32 too large"
+        CASE 170 :  RESULTIS  "TRIPOS module ABSHUNK too large"
+        CASE 171 :  RESULTIS  "TRIPOS module ABSREL16 too large"
+        CASE 172 :  RESULTIS  "TRIPOS module ABSREL32 too large"
+        CASE 173 :  RESULTIS  "Overlong input record  -  truncated"
+        CASE 174 :  RESULTIS  "Illegal forward reference to 'XREF' symbol"
+        CASE 175 :  RESULTIS  "Illegal value for WORD sized operand"
+        CASE 176 :  RESULTIS  "Illegal value for BYTE sized operand"
+        CASE 177 :  RESULTIS  "'RELOCATABLE' symbol out of range"
+        CASE 178 :  RESULTIS  "INTERNAL ERROR:  code buffer overflow  -  PLEASE REPORT"
+        CASE 179 :  RESULTIS  "INTERNAL ERROR:  bad store request  -  PLEASE REPORT"
+        CASE 180 :  RESULTIS  "Operand must be of 'CONTROL' mode"
+        CASE 181 :  RESULTIS  "Illegal address mode for 'ABSOLUTE JUMP'"
+        CASE 182 :  RESULTIS  "Location out of range for 'SHORT ABSOLUTE JUMP'"
+        CASE 183 :  RESULTIS  "Illegal forward reference to symbol defined by 'REG'"
+        CASE 184 :  RESULTIS  "'REGISTER MASK' is illegal in label field"
+        CASE 185 :  RESULTIS  "Illegal 'REGISTER MASK' found in expression"
+        CASE 186 :  RESULTIS  "'STRING' arguments only valid with 'IFEQ/IFNE'"
+        CASE 187 :  RESULTIS  "Opening 'QUOTE' missing from 'STRING'"
+        CASE 188 :  RESULTIS  "Closing 'QUOTE' missing from 'STRING'"
+        CASE 189 :  RESULTIS  "Macro expansion too long"
+        CASE 190 :  RESULTIS  "First operand must be of 'REGISTER' mode"
+        CASE 191 :  RESULTIS  "First operand must be of 'SYSTEM REGISTER' mode"
+        CASE 192 :  RESULTIS  "Second operand must be of 'REGISTER' mode"
+        CASE 193 :  RESULTIS  "First operand must be of 'MEMORY ALTERABLE' mode"
+        CASE 194 :  RESULTIS  "Second operand must be of 'MEMORY ALTERABLE' mode"
+        CASE 195 :  RESULTIS  "System register 'SR/CCR/PC' illegal here"
+        CASE 196 :  RESULTIS  "'REGISTER PAIR' is illegal with '.W' size specifier"
+        CASE 197 :  RESULTIS  "'REGISTER PAIR' is compulsory with 'DIVSL/DIVUL' opcode"
+        CASE 198 :  RESULTIS  "Third operand must be of 'IMMEDIATE' mode"
+        CASE 199 :  RESULTIS  "Operand must be of 'REGISTER' mode"
+        CASE 200 :  RESULTIS  "First operand must be of 'CONTROL' mode"
+        CASE 201 :  RESULTIS  "Third operand must be of 'MEMORY ALTERABLE' mode"
+        CASE 202 :  RESULTIS  "':' separator missing in first Operand"
+        CASE 203 :  RESULTIS  "':' separator missing in second Operand"
+        CASE 204 :  RESULTIS  "':' separator missing in third Operand"
+        CASE 205 :  RESULTIS  "Third operand must be of 'REGISTER INDIRECT' mode"
+        CASE 206 :  RESULTIS  "Immediate value out of range '0 - 255'"
+        CASE 207 :  RESULTIS  "Second operand must be of 'CONTROL' mode"
+        CASE 208 :  RESULTIS  "Short branch displacement of '$FF' is illegal"
+        CASE 209 :  RESULTIS  "Operand must be of 'DATA REGISTER' or 'CONTROL ALTERABLE' mode"
+        CASE 210 :  RESULTIS  "First operand must be of 'DATA REGISTER' or 'CONTROL' mode"
+        CASE 211 :  RESULTIS  "Second operand must be of 'DATA REGISTER' or 'CONTROL ALTERABLE' mode"
+        CASE 212 :  RESULTIS  "'{' missing in bit field specifier"
+        CASE 213 :  RESULTIS  "':' missing in bit field specifier"
+        CASE 214 :  RESULTIS  "'}' missing in bit field specifier"
+        CASE 215 :  RESULTIS  "'OFFSET' in bit field specifier must be of 'DATA REGISTER' or 'ABSOLUTE' mode"
+        CASE 216 :  RESULTIS  "'WIDTH' in bit field specifier must be of 'DATA REGISTER' or 'ABSOLUTE' mode"
+        CASE 217 :  RESULTIS  "'OFFSET' in bit field specifier out of range '1 - 31'"
+        CASE 218 :  RESULTIS  "'WIDTH' in bit field specifier out of range '1 - 31'"
+        CASE 219 :  RESULTIS  "Immediate value out of range '0 - 7'"
+        CASE 220 :  RESULTIS  "'.D' size specifier illegal here"
+        CASE 221 :  RESULTIS  "'.X' size specifier illegal here"
+        CASE 222 :  RESULTIS  "'.P' size specifier illegal here"
+        CASE 223 :  RESULTIS  "Inconsistent size specifier for 'FLOATING POINT REGISTER' operand"
+        CASE 224 :  RESULTIS  "No monadic variant for this opcode"
+        CASE 225 :  RESULTIS  "Second operand must be of 'FLOATING POINT REGISTER' mode"
+        CASE 226 :  RESULTIS  "Size specifier is compulsory for 'FLOATING POINT' opcode"
+        CASE 227 :  RESULTIS  "'}' missing in 'K FACTOR'"
+        CASE 228 :  RESULTIS  "'K FACTOR' out of range '-64 - +63'"
+        CASE 229 :  RESULTIS  "'K FACTOR' must be of 'IMMEDIATE' or 'DATA REGISTER' mode"
+        CASE 230 :  RESULTIS  "First operand must be of 'FLOATING POINT CONTROL REGISTER' mode"
+        CASE 231 :  RESULTIS  "Second operand must be of 'FLOATING POINT CONTROL REGISTER' mode"
+        CASE 232 :  RESULTIS  "Inconsistent size specifier for 'FLOATING POINT CONTROL REGISTER' operand"
+        CASE 233 :  RESULTIS  "Unexpected register type in 'REGISTER MASK'"
+        CASE 234 :  RESULTIS  "Inconsistent register types in 'REGISTER MASK'"
+        CASE 235 :  RESULTIS  "Illegal use of '-' in 'REGISTER MASK'"
+        CASE 236 :  RESULTIS  "'DATA REGISTER' only valid with one of 'FPIAR/FPSR/FPCR'"
+        CASE 237 :  RESULTIS  "'ADDRESS REGISTER' only valid with 'FPIAR'"
+        CASE 238 :  RESULTIS  "']' missing in 68020 address"
+        CASE 239 :  RESULTIS  "',' missing in 68020 address"
+        CASE 240 :  RESULTIS  "')' missing in 68020 address"
+        CASE 241 :  RESULTIS  "68020 base register must be 'ADDRESS REGISTER' or 'PC/ZPC'"
+        CASE 242 :  RESULTIS  "68020 index register must be 'ADDRESS REGISTER' or 'DATA REGISTER'"
+        CASE 243 :  RESULTIS  "68020 base displacement address missing"
+        CASE 244 :  RESULTIS  "68020 base register missing"
+        CASE 245 :  RESULTIS  "Illegal use of 'ZPC' in 68020 address"
+        CASE 246 :  RESULTIS  "Illegal '[' found in expression"
+        CASE 247 :  RESULTIS  "Illegal ']' found in expression"
+        CASE 248 :  RESULTIS  "Illegal '{' found in expression"
+        CASE 249 :  RESULTIS  "Illegal '}' found in expression"
+        CASE 250 :  RESULTIS  "Illegal scaling factor in 68020 address"
+        CASE 251 :  RESULTIS  "Illegal '.W' found in expression"
+        CASE 252 :  RESULTIS  "Illegal '.L' found in expression"
+        CASE 253 :  RESULTIS  "Value out of range '-32768 - +32767'"
+        CASE 254 :  RESULTIS  "Invalid parameter for 'IFDEF/IFNDEF' directive"
+        CASE 255 :  RESULTIS  "Too many 'INCLUDE' files  -  PLEASE REPORT"
+
+        DEFAULT  :  RESULTIS  "INTERNAL ERROR:  undefined error code  -  PLEASE REPORT"
+    $)
+$)
+
+

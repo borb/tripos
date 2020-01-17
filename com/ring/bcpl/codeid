@@ -1,0 +1,92 @@
+SECTION "codeid"
+
+GET "libhdr"
+GET "ringhdr"
+GET "bcpl.ssplib"
+
+//   This program polls the CODEID function of a specified service
+//printing out the resulting version number and identification string.
+//
+//   The prefix "codeid-" is put on the given service name and an SSP
+//sent to the resulting name.  If the name has a domain prefix then
+//the codeid prefix is inserted after this.
+
+//   Modifications:
+
+//   27-Jul-83 by NJO:  FULLNAME switch added to specify full service name.
+
+LET start() BE
+
+$( LET buffer = VEC 128/bytesperword
+   LET prefix = "codeid-"
+   LET argv   = VEC 40
+   LET txbuf  = VEC 2
+   LET rc     = 16
+
+   IF rdargs("SERVICE/A,FULL=FULLNAME/S", argv, 40) = 0 THEN
+   $( writes("Bad args*N")
+      GOTO exit
+   $)
+
+   //Construct name in buffer
+
+   TEST argv!1 ~= 0   //FULLNAME switch set?
+   DO
+   $( LET name    = argv!0     //Yes - copy NAME into BUFFER as is
+      FOR i = 0 TO name%0 DO
+         buffer%i := name%i
+   $)
+   OR
+   $( LET name    = argv!0
+      LET namelen = name%0
+      LET starpos = charinstring('**', name)
+      LET pfxlen  = prefix%0
+
+      FOR i = 1 TO starpos DO
+         buffer%i := name%i
+
+      FOR i = 1 TO pfxlen DO
+         buffer%(starpos+i) := prefix%i
+
+      FOR i = starpos+1 TO namelen DO
+         buffer%(pfxlen+i) := name%i
+
+      buffer%0 := namelen + pfxlen
+   $)
+
+//   writef("Codeid service name is %S*N", buffer)
+
+   UNLESS ssp(buffer, txbuf, 3, buffer, 64, 0) DO
+   $( writes("SSP failed*N")
+      GOTO exit
+   $)
+
+   //SSP succeeded.  BUFFER should now contain an integer version number
+   //and a string identifying the code.
+
+   $( LET version = get2bytes(buffer, bb.ssp.arg1)
+
+      FOR i = 0 TO byteget(buffer, bb.ssp.arg2*bytesperringword) DO
+         buffer%i := byteget(buffer, bb.ssp.arg2*bytesperringword + i)
+
+      writef("Code version %N.%N%N*N", version/100, (version/10) REM 10, version REM 10)
+      writef("ID string: %S*N", buffer)
+   $)
+   rc := 0
+
+exit:
+   stop(rc)
+$)
+
+AND charinstring(char, string) = VALOF
+
+//Returns the position of the first occurrence of CHAR in STRING, or
+//zero if it does not occur.
+
+$( FOR i = 1 TO string%0 DO
+      IF string%i = char RESULTIS i
+
+   RESULTIS 0
+$)
+
+

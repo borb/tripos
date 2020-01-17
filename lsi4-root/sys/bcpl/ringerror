@@ -1,0 +1,87 @@
+SECTION "ringerror"
+
+GET "libhdr"
+GET "clihdr"
+GET "ringhdr"
+GET "BCPL.ringhdr-noglobs"
+GET "BCPL.ring"
+GET "BCPL.ringssp"
+
+
+
+
+
+//  This section is 'callseg'd with the following parameters:
+//
+//         level := callseg("SYS:L.RINGERROR", rc, vect, n)
+//
+//  where:
+//       rc             The return code to be interpreted
+//       string         A vector in which to place the returned string
+//       n              The size of the vector in words
+//       level          How confidently the return code is known:
+//                          0   -  RC is a known global return code
+//                          1   -  RC is an unknown global return code
+//                          2   -  RC is zero
+//                          4   -  RC is a positive (local) return code
+//                          5   -  RC interpreter not called
+//
+// A return string is always given.  It is suitable for printing out with:
+//
+//                 writef(string, rc)
+
+
+
+
+
+
+LET start(rc, vect, n) = VALOF
+$(  LET co=createco(ringfaultco, 250)
+    LET level=5
+    LET argvec=VEC 3
+    argvec!0 := rc
+    argvec!1 := vect
+    argvec!2 := n
+    argvec!3 := @level
+    TEST co=0 THEN ringfaultco(argvec) ELSE
+    $(  callco(co, argvec)
+        deleteco(co)
+    $)
+    RESULTIS level
+$)
+
+
+
+
+AND ringfaultco(vect) BE
+$(  LET default.string="ring error %X4 occured"
+    LET s = vect!1
+    LET s.len = vect!2*bytesperword-1
+    LET ok = FALSE
+    IF dr.initialise()=0 THEN
+    $(  LET why=VEC sv.upb
+        IF dr.lookup("WHY",why)~=0 THEN
+        $(  LET data = VEC 4
+            LET results = VEC 64
+            data!0 := 4
+            results!0 := 64
+            data!4:=vect!0      // return code
+            IF dr.ssp(why, data, results, 0, 2)=0 THEN
+            IF dr.result2=0 THEN
+            $(  LET string = results+4
+                LET len = dr.byteget(string, 0)
+                s%0 := (len > s.len -> s.len, len)
+                FOR i=1 TO s%0 DO s%i := dr.byteget(string, i)
+                ok := TRUE
+                !vect!3 := results!(4+(len/2+1))
+            $)
+        $)
+    $)
+    UNLESS ok THEN
+    $(  s%0 := (default.string%0 > s.len -> s.len, default.string%0)
+        FOR i=1 TO s%0 DO s%i := default.string%i
+    $)
+    dr.terminate()
+$)
+   
+

@@ -1,0 +1,77 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+                 ######   ##    ##  ########  ##        ##       
+                ########  ##    ##  ########  ##        ##       
+                ##        ##    ##  ##        ##        ##       
+                #######   ########  ######    ##        ##       
+                      ##  ##    ##  ##        ##        ##       
+                      ##  ##    ##  ##        ##        ##       
+                ########  ##    ##  ########  ########  ######## 
+                 ######   ##    ##  ########  ########  ######## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   12/05/87             *
+\*****************************************************************************/
+
+
+
+SECTION "SHELL"
+
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "IOHDR"
+GET "MANHDR"
+
+GET "BCPL.REX-OBEY"
+
+
+
+LET start()  BE
+$(
+//  Main routine of the "SHELL" command.  Read the file name from the command
+//  line, and then call the shell recursively to execute the file.
+
+    LET args  =  "FILE"
+    LET argv  =  VEC 50
+    LET file  =  0
+    
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** SHELL:  Bad arguments for *"%S*"*N", args )
+        
+        stop( 20 )
+    $)
+
+    file  :=  argv!0
+    
+    IF  file = 0  THEN  file  :=  "**"
+
+    //  Having set up the buffer, we must first make sure that we are actually
+    //  running under "Rex Tripos", because if not, the call will fail.
+    
+    UNLESS  compstring( rootnode!rtn.info!info.systemtype, "Rex-Tripos" ) = 0  DO
+    $(
+        //  We are not running under the right flavour of the operating system,
+        //  and so we must stop before any more damage is done.
+        
+        writes( "****** SHELL:  System is not *"Rex-Tripos*"*N" )
+        
+        stop( 20 )
+    $)
+
+    //  Otherwise, execute the command file, and make sure that the return code
+    //  is propogated back to our own shell.
+    
+    rex.obeyfile( file )
+    
+    result2  :=  cli.result2
+    
+    stop( cli.returncode )
+$)
+
+

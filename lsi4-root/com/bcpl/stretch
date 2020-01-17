@@ -1,0 +1,69 @@
+
+SECTION "stretch"
+
+GET     "libhdr"
+
+MANIFEST $( flag.ch = 128 $)
+
+LET start () BE
+$(
+   LET arg.vec = VEC 50
+   AND old.in, old.out = input (), output ()
+   AND source, stretch = ?, ?
+   AND ch.txt = ?
+
+   IF rdargs ( "FROM/A,TO/A", arg.vec, 50 ) = 0
+      THEN
+           $( writes ( "Bad arguements*N" )
+              FINISH
+           $)
+
+   source := findinput ( arg.vec ! 0 )
+
+   IF source = 0
+      THEN
+           $( writes ( "Unable to open input*N" )
+              FINISH
+           $)
+
+   selectinput ( source )
+
+   stretch := findoutput ( arg.vec ! 1 )
+
+   IF stretch = 0
+      THEN
+           $( writes ( "Unable to open output*N" )
+              endread ()
+              selectinput ( old.in )
+              FINISH
+           $)
+
+   selectoutput ( stretch )
+
+
+   ch.txt := rdch ()
+
+   $(
+      UNTIL ch.txt > flag.ch | ch.txt = endstreamch
+            DO
+               $( wrch ( ch.txt ) ; ch.txt := rdch () $)
+
+      IF ch.txt = endstreamch THEN BREAK
+
+      $( LET ch.rpt = rdch ()
+         AND count  = ch.txt - flag.ch
+
+         FOR i = 1 TO count DO wrch ( ch.rpt )
+      $)
+
+      ch.txt := rdch ()
+
+   $) REPEATUNTIL testflags ( 1 )
+
+   endread () ; endwrite ()
+
+   selectinput ( old.in ) ; selectoutput ( old.out )
+
+$)
+
+

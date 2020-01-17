@@ -1,0 +1,635 @@
+
+ /*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*************************************************************************
+*  (C) Copyright 1979  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*                   6 5 0 2     A S S E M B L E R                       *
+*                                                                       *
+*************************************************************************
+**  C  Gray  Girling      COMPUTER LAB,  CAMBRIDGE           14.07.79  **
+*************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*/
+
+
+
+
+
+
+
+//  LOG OF CHANGES:
+//  ===============
+//
+//  Log entry is <date> <general assembler version no.> <initials> <change>
+//
+//  ??.08.79  3.???  CGG   First installed
+//  25.10.82  3.068  CGG   Zero page accesses optimized
+
+
+
+
+// [* denotes a change to the assembler which diverges it from the standard
+//    versions produced at Cambridge University Computer Laboratory ]
+
+
+
+
+SECTION "asm6502"
+
+
+
+//*<LSI4:
+GET "libhdr"
+GET "GRASM:asmhdr"
+ /*LSI4>*/
+
+
+
+ /*<RSX
+GET "libhdr"
+GET "asmhdr"
+ /*RSX>*/
+
+
+
+ /*<CAP:
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+ /*CAP>*/
+
+
+
+ /*<IBM:
+GET "LIBHDR"
+GET "ASMHDR"
+ /*IBM>*/
+
+
+
+
+
+//
+//                     Error  messages
+//
+
+
+MANIFEST $(
+   e.xreg    =  e.e + 0
+   e.yreg    =  e.e + 1
+   e.xoryreg =  e.e + 2
+$)
+
+
+LET errormess(rc) = VALOF
+SWITCHON rc INTO
+$(  CASE e.xreg:      RESULTIS "'X' expected"
+    CASE e.yreg:      RESULTIS "'Y' expected"
+    CASE e.xoryreg:   RESULTIS "'X' or 'Y' expected"
+    DEFAULT:          RESULTIS "unknown return code given"
+$)
+
+
+
+
+
+//
+//                    Register  Discriptions
+//
+
+
+
+
+MANIFEST $(
+  r.bad       =  0            // bad register
+  r.x         =  bit1         // index with X register
+  r.y         =  bit2         // index with Y register
+  r.a         =  bit3         // use register a
+  r.z         =  bit4         // use zero page mode
+$)
+
+
+
+
+LET initsyms() BE
+$(  reg.put("X",r.x)
+    reg.put("Y",r.y)
+    reg.put("A",r.a)
+    reg.put("Z",r.z)
+$)
+
+
+
+
+
+//
+//                    Code   for   Opcode   Formats
+//
+
+
+
+GLOBAL $(
+  f.1   :  ag + 0   //   A field in which fmt1 addr mode usualy goes
+  f.2   :  ag + 1   //   The indirect bit in format 2
+
+  /*    These fields are layed out as folows:
+
+         -------------------------------------
+         |   OP1   |       f.1         | OP2 |
+         -------------------------------------
+
+         -------------------------------------
+         |   OP1   | f.2  |       OP2        |
+         -------------------------------------
+
+   */
+
+$)
+
+
+
+LET getsym(sym) = VALOF
+$(  LET ans=(item.type=i.iden)
+    IF ans THEN ans:=(sym=getreg(item.info))
+    IF ans THEN getitem()
+    RESULTIS ans
+$)
+
+
+
+
+LET putaddress(n) BE
+$(  LET sign=n&~#XFFFF
+    putword(n&255)
+    putword( (n&(255<<8)) >> 8)
+    UNLESS sign=(-1&~#XFFFF) | sign=0 THEN error(e.badbyte)
+$)
+
+
+
+LET zero.page(spec) = VALOF
+$(  // returns TRUE if the expression held in SPEC is definately a zero
+    // page address.  This routine must be called before another expression
+    // is evaluated so that DONTKNOW is still valid.
+    RESULTIS NOT (dontknow | spec!1\=0 | NOT 0<=spec!0<=255)
+$)
+
+
+
+LET fmt0(lab) BE get.and.declare(lab)
+
+
+AND fmt1(lab) BE
+$(  LET i=?
+    LET code=getcode(item.info)
+    get.and.declare(lab)
+    TEST scan(i.equals) THEN
+    $(  putwordf(2, f.1)    // immediate
+        putword(expression())
+        IF compcode("STA", code) THEN error(e.badform)
+    $) ELSE
+    TEST scan(i.lbkt) THEN
+    $(  i:=expression()
+        TEST scan(i.comma) THEN
+           TEST ~getsym(r.x) THEN error(e.xreg) ELSE
+           $(   putwordf(0, f.1)   // Indirect on X
+                putword(i)
+                UNLESS scan(i.rbkt) THEN error(e.expected,')')
+           $)
+        ELSE TEST ~scan(i.rbkt) THEN error(e.expected, ')') ELSE
+        $(  UNLESS scan(i.comma) THEN error(e.expected, ',')
+            UNLESS getsym(r.y) THEN error(e.yreg)
+            putwordf(4, f.1)     // indirect on Y
+            putword(i)
+        $)
+    $) ELSE TEST getsym(r.z) THEN
+    TEST ~scan(i.comma) THEN error(e.expected, ',') ELSE
+    $(  i:=expression()
+        TEST scan(i.comma) THEN
+        $(  putwordf(5, f.1)      // Zero page indexed
+            putword(i)
+            UNLESS getsym(r.x) THEN error(e.xreg)
+        $) ELSE
+        $(  putwordf(1, f.1)      // Zero page
+            putword(i)
+        $)
+    $) ELSE
+    $(  LET spec=VEC spec.size
+        label.expression(spec)
+        TEST scan(i.comma) THEN
+        $(  TEST getsym(r.x) THEN
+            $(  putwordf(7, f.1)    // absolute on X
+                putlabelspec(spec)
+            $)
+            ELSE TEST getsym(r.y) THEN
+            $(  putwordf(6, f.1)    // absolute on Y
+                putlabelspec(spec)
+            $) ELSE error(e.xoryreg)
+        $) ELSE
+        TEST zero.page(spec) THEN
+        $(  // use zero page addressing
+            putwordf(1, f.1)
+            putword(!spec)
+        $) ELSE
+        $(  putwordf(3, f.1)       //  absolute
+            putlabelspec(spec)
+        $)
+    $)
+$)
+
+
+
+
+AND fmt2(lab) BE
+$(  LET code=getcode(item.info)
+    LET spec=VEC spec.size
+    get.and.declare(lab)
+    TEST scan(i.lbkt) THEN
+    TEST ~compcode("JMP", code) THEN error(e.badform) ELSE
+    $(  putwordf(1, f.2)     // Indirect
+        putlabelspec(label.expression(spec))
+        UNLESS scan(i.rbkt) THEN error(e.expected, ')')
+    $) ELSE
+    $(  putlabelspec(label.expression(spec))  // Absolute
+    $)
+$)
+
+
+
+
+AND fmt3(lab) BE
+$(  LET i=?
+    get.and.declare(lab)
+    i:=pcrel.expression()-2
+    putword(i&255)
+    UNLESS -128<=i<=127 THEN warn(e.badbyte)
+$)
+
+
+
+
+AND fmt4(lab) BE
+$(  LET i=?
+    LET code=getcode(item.info)
+    get.and.declare(lab)
+    TEST item.type=i.equals THEN
+    $(  getitem()
+        putwordf(0, f.1)    // immediate
+        putword(expression())
+        IF compcode("BIT",code) | compcode("STX",code) | compcode("STY",code)
+        THEN error(e.badform)
+    $) ELSE
+    TEST getsym(r.z) THEN
+    TEST ~scan(i.comma) THEN error(e.expected, ',') ELSE
+    $(  i:=expression()
+        TEST scan(i.comma) THEN
+        $(  putwordf(5, f.1)      // Zero page indexed
+            putword(i)
+            TEST compcode("LDY",code) | compcode("STY",code) THEN
+               UNLESS getsym(r.x) THEN error(e.xreg)
+            ELSE TEST compcode("LDX",code) | compcode("STX",code) THEN
+               UNLESS getsym(r.y) THEN error(e.yreg)
+            ELSE error(e.badform)
+        $)
+        ELSE
+        $(  putwordf(1, f.1)      // Zero page
+            putword(i)
+        $)
+    $) ELSE
+    $(  LET spec=VEC spec.size
+        label.expression(spec)
+        TEST scan(i.comma) THEN
+        $(  TEST getsym(r.x) THEN
+            $(  putwordf(7, f.1)    // absolute on X
+                putlabelspec(spec)
+                UNLESS compcode("LDY",code) THEN error(e.badform)
+            $) ELSE TEST getsym(r.y) THEN
+            $(  putwordf(7, f.1)    // absolute on Y
+                putlabelspec(spec)
+                UNLESS compcode("LDX",code) THEN error(e.badform)
+            $) ELSE error(e.xoryreg)
+        $) ELSE
+        TEST zero.page(spec) THEN
+        $(  // use zero page addressing
+            putwordf(1, f.1)
+            putword(!spec)
+        $) ELSE
+        $(  putwordf(3, f.1)       //  absolute
+            putlabelspec(spec)
+        $)
+    $)
+$)
+
+
+
+
+AND fmt5(lab) BE
+$(  LET i=?
+    LET code=getcode(item.info)
+    get.and.declare(lab)
+    TEST getsym(r.a) THEN
+    $(  putwordf(2, f.1)    // accumulator mode
+        IF compcode("INC",code) | compcode("DEC",code) THEN error(e.badform)
+    $)
+    ELSE TEST getsym(r.z) THEN
+      TEST ~scan(i.comma) THEN error(e.expected, ',') ELSE
+      $(  i:=expression()
+          TEST scan(i.comma) THEN
+          $(  putwordf(5, f.1)   //  Zero page indexed on X
+              putword(i)
+              UNLESS getsym(r.x) THEN error(e.xreg)
+          $) ELSE
+          $(  putwordf(1, f.1)   //  Zero page
+              putword(i)
+          $)
+      $)
+    ELSE
+    $(  LET spec=VEC spec.size
+        label.expression(spec)
+        TEST scan(i.comma) THEN
+        $(  putwordf(7, f.1)     // Absolute indexed (by X)
+            putlabelspec(spec)
+            UNLESS getsym(r.x) THEN error(e.xreg)
+        $) ELSE
+        TEST zero.page(spec) THEN
+        $(  // use zero page addressing
+            putwordf(1, f.1)
+            putword(!spec)
+        $) ELSE
+        $(  putwordf(3, f.1)    //  Absolute
+            putlabelspec(spec)
+        $)
+    $)
+$)
+
+
+
+
+//
+//                   Character Set For 7-seg Displays
+//
+
+
+
+
+GLOBAL
+$(  cvtchar.to.ascii: ag+2
+$)
+
+
+
+
+LET cvtchar.to.7seg(ch) = VALOF
+SWITCHON ch INTO
+$(  CASE '*S': RESULTIS #X00
+    CASE '!': RESULTIS #X86
+    CASE '"': RESULTIS #X22
+    CASE '#': RESULTIS #X63
+    CASE '$': RESULTIS #X3B
+    CASE '%': RESULTIS #X2D
+    CASE '&': RESULTIS #X7B
+    CASE '*'': RESULTIS #X02
+    CASE '(': RESULTIS #XB9
+    CASE ')': RESULTIS #X8F
+    CASE '**': RESULTIS #X76
+    CASE '+': RESULTIS #X42
+    CASE ',': RESULTIS #X04
+    CASE '-': RESULTIS #X40
+    CASE '.': RESULTIS #X80
+    CASE '/': RESULTIS #X52
+    CASE '0': RESULTIS #X3F
+    CASE '1': RESULTIS #X06
+    CASE '2': RESULTIS #X5B
+    CASE '3': RESULTIS #X4F
+    CASE '4': RESULTIS #X66
+    CASE '5': RESULTIS #X6D
+    CASE '6': RESULTIS #X7D
+    CASE '7': RESULTIS #X07
+    CASE '8': RESULTIS #X7F
+    CASE '9': RESULTIS #X6F
+    CASE ':': RESULTIS #X82
+    CASE ';': RESULTIS #X84
+    CASE '<': RESULTIS #X46
+    CASE '=': RESULTIS #X48
+    CASE '>': RESULTIS #X70
+    CASE '?': RESULTIS #XD3
+    CASE '@': RESULTIS #X5F
+    CASE 'A': RESULTIS #X77
+    CASE 'B': RESULTIS #X7C
+    CASE 'C': RESULTIS #X39
+    CASE 'D': RESULTIS #X5E
+    CASE 'E': RESULTIS #X79
+    CASE 'F': RESULTIS #X71
+    CASE 'G': RESULTIS #X3D
+    CASE 'H': RESULTIS #X76
+    CASE 'I': RESULTIS #X05
+    CASE 'J': RESULTIS #X0D
+    CASE 'K': RESULTIS #X75
+    CASE 'L': RESULTIS #X38
+    CASE 'M': RESULTIS #X37
+    CASE 'N': RESULTIS #X54
+    CASE 'O': RESULTIS #X3F
+    CASE 'P': RESULTIS #X73
+    CASE 'Q': RESULTIS #X67
+    CASE 'R': RESULTIS #X50
+    CASE 'S': RESULTIS #XED
+    CASE 'T': RESULTIS #X78
+    CASE 'U': RESULTIS #XBE
+    CASE 'V': RESULTIS #X1C
+    CASE 'W': RESULTIS #X7E
+    CASE 'X': RESULTIS #X49
+    CASE 'Y': RESULTIS #X6E
+    CASE 'Z': RESULTIS #XDB
+    CASE '[': RESULTIS #X39
+    CASE '\': RESULTIS #X64
+    CASE ']': RESULTIS #X0F
+    CASE '^': RESULTIS #X23
+    CASE '_': RESULTIS #X08
+    CASE '`': RESULTIS #X20
+    CASE 'a': RESULTIS #XDF
+    CASE 'b': RESULTIS #X7C
+    CASE 'c': RESULTIS #X58
+    CASE 'd': RESULTIS #X5E
+    CASE 'e': RESULTIS #X7B
+    CASE 'f': RESULTIS #X71
+    CASE 'g': RESULTIS #X6F
+    CASE 'h': RESULTIS #X74
+    CASE 'i': RESULTIS #X04
+    CASE 'j': RESULTIS #X1E
+    CASE 'k': RESULTIS #X75
+    CASE 'l': RESULTIS #X86
+    CASE 'm': RESULTIS #X37
+    CASE 'n': RESULTIS #X54
+    CASE 'o': RESULTIS #X5C
+    CASE 'p': RESULTIS #X73
+    CASE 'q': RESULTIS #X67
+    CASE 'r': RESULTIS #X50
+    CASE 's': RESULTIS #XED
+    CASE 't': RESULTIS #X78
+    CASE 'u': RESULTIS #X9C
+    CASE 'v': RESULTIS #X1C
+    CASE 'w': RESULTIS #X7E
+    CASE 'x': RESULTIS #X49
+    CASE 'y': RESULTIS #X6E
+    CASE 'z': RESULTIS #XDB
+    CASE '{': RESULTIS #X39
+    CASE '|': RESULTIS #X30
+    CASE '}': RESULTIS #X0F
+    CASE '~': RESULTIS #X44
+    DEFAULT: RESULTIS 0
+$)
+
+
+LET disp7proc(lab) BE
+$(  get.and.declare(lab)
+    cvtchar:=cvtchar.to.7seg
+$)
+
+
+LET asciiproc(lab) BE
+$(  get.and.declare(lab)
+    cvtchar:=cvtchar.to.ascii
+$)
+
+
+
+
+
+
+
+
+
+
+LET initcodes() BE
+$(  code.put("DATA",dataproc,0)
+    code.put("EQU",equproc,0)
+    code.put("SET",setproc,0)
+    code.put("REF",refproc,0)
+    code.put("WREF",wrefproc,0)
+    code.put("NEEDS",needsproc,0)
+    code.put("DEF",defproc,0)
+    code.put("TEXT",textproc,0)
+    code.put("TITLE",titlproc,0)
+    code.put("ORG",orgproc,0)
+    code.put("VEC",storeproc,0)
+    code.put("ABS",absproc,0)
+    code.put("REL",relproc,0)
+    code.put("GET",getproc,0)
+    code.put("LIST",listproc,0)
+    code.put("END",endproc,0)
+    code.put("PAGE",ejectproc,0)
+    code.put("SPACE",spaceproc,0)
+    code.put("SSDISP",disp7proc,0)
+    code.put("ASCII",asciiproc,0)
+    code.put("CLC",fmt0,1,#X18)
+    code.put("CLD",fmt0,1,#XD8)
+    code.put("CLI",fmt0,1,#X58)
+    code.put("CLV",fmt0,1,#XB8)
+    code.put("BRK",fmt0,1,#X00)
+    code.put("DEY",fmt0,1,#X88)
+    code.put("DEX",fmt0,1,#XCA)
+    code.put("INX",fmt0,1,#XE8)
+    code.put("INY",fmt0,1,#XC8)
+    code.put("NOP",fmt0,1,#XEA)
+    code.put("PHA",fmt0,1,#X48)
+    code.put("PHP",fmt0,1,#X08)
+    code.put("PLA",fmt0,1,#X68)
+    code.put("PLP",fmt0,1,#X28)
+    code.put("RTI",fmt0,1,#X40)
+    code.put("RTS",fmt0,1,#X60)
+    code.put("SEC",fmt0,1,#X38)
+    code.put("SED",fmt0,1,#XF8)
+    code.put("SEI",fmt0,1,#X78)
+    code.put("TAX",fmt0,1,#XAA)
+    code.put("TAY",fmt0,1,#XA8)
+    code.put("TSX",fmt0,1,#XBA)
+    code.put("TXA",fmt0,1,#X8A)
+    code.put("TXS",fmt0,1,#X9A)
+    code.put("TYA",fmt0,1,#X98)
+    code.put("ORA",fmt1,1,#X01)
+    code.put("AND",fmt1,1,#X21)
+    code.put("EOR",fmt1,1,#X41)
+    code.put("ADC",fmt1,1,#X61)
+    code.put("STA",fmt1,1,#X81)
+    code.put("LDA",fmt1,1,#XA1)
+    code.put("CMP",fmt1,1,#XC1)
+    code.put("SBC",fmt1,1,#XE1)
+    code.put("JMP",fmt2,1,#X4C)
+    code.put("JSR",fmt2,1,#X20)
+    code.put("BCC",fmt3,1,#X90)
+    code.put("BCS",fmt3,1,#XB0)
+    code.put("BEQ",fmt3,1,#XF0)
+    code.put("BMI",fmt3,1,#X30)
+    code.put("BNE",fmt3,1,#XD0)
+    code.put("BPL",fmt3,1,#X10)
+    code.put("BVC",fmt3,1,#X50)
+    code.put("BVS",fmt3,1,#X70)
+    code.put("CPX",fmt4,1,#XE0)
+    code.put("CPY",fmt4,1,#XC0)
+    code.put("LDX",fmt4,1,#XA2)
+    code.put("LDY",fmt4,1,#XA0)
+    code.put("STX",fmt4,1,#X82)
+    code.put("STY",fmt4,1,#X80)
+    code.put("BIT",fmt4,1,#X20)
+    code.put("ASL",fmt5,1,#X02)
+    code.put("DEC",fmt5,1,#XC2)
+    code.put("INC",fmt5,1,#XE2)
+    code.put("LSR",fmt5,1,#X42)
+    code.put("ROR",fmt5,1,#X62)
+    code.put("ROL",fmt5,1,#X22)
+$)
+
+
+//
+//                        Initialisation
+//
+
+
+
+LET startasm(version) = (version/1000)\=3 -> "version 3.000 27-Feb-80", VALOF
+$(  name:="6502"
+    comntcheck:=TRUE
+    f.1 := newf(2,3)
+    f.2 := newf(5,1)
+    cvtchar.to.ascii:=cvtchar
+    RESULTIS 0
+$)
+
+
+

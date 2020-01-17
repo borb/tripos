@@ -1,0 +1,42 @@
+Form:           IEX  "dir,to/k,titles/s,nodates/s,puid/s"
+Purpose:        To examine a directory interactively
+Author:         PBr
+
+Examines the files in the directory dir.
+
+If to is quoted the output is send to file
+
+If Titles is quoted, only the filetitles are given
+
+Specification:
+   Similar to EX, but it is interactive and prompts after each file.
+   The reply to each prompt is read up to a non letter, and the word is
+uppercased. Unless the word then matches one of the options below, an error is
+given. A match occurs if the word is a leading (sub)string of an option, with at
+least the chracters that are in capitals.
+   Thus 'ex' matches 'Examine'
+
+   Some options, those with a (-) after them, recognise a '-' before the option
+to negate the action.
+
+   The options are:
+  <cr>          Go on to next entry
+  ?             Type list of options
+  *             Return to beginning of this directory
+  !             Send rest of line To CLI. '^' is substituted by the file name
+  DELete (-)    Add (remove) this file to (from) the list of those to be deleted
+  Examine       Examine this directory
+  EXAll         EXALL the current directory
+  Full (-)      Type full file information
+  Help          Type a list of options
+  List          Cease interaction
+  Previous      Go back one entry
+  PROtect (-)   Protect the current object R (or RWD if '-')
+  Quit          Do not examine rest of this directory
+  Sse           Edit the file (Be prepared to wait!)
+  Type          SCAN (q.v.) current file
+                TYPE TO LP: - print current file
+  TItles (-)    Only show file titles
+  Windup        Windup - exit to top level
+
+

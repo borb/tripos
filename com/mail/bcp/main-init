@@ -1,0 +1,255 @@
+SECTION "MAIN"
+
+GET "header"
+GET "TERMHDR"
+GET "CURHDR"
+
+$<COMMAND'
+GLOBAL $( cli.init=133 ;cli.standardoutput= 148 $)      //GET "CLIHDR"
+$>COMMAND'
+MANIFEST $( um.cache.size = (4000  $<SMALL /4 $>SMALL ) / rwpw $)
+
+LET call.main.initseg(n, start.pkt, lv.norm.output, trust.1, trust.2) = VALOF
+$(      LET address     = VEC 4
+        LET service     = TRUE
+
+    SC                  := FALSE
+    limited.access      := limit.none
+    ms.get.failure      := -6
+    ms.interlocked.file := 0
+    ms.perm.vec.chain   := 0
+    ms.temp.vec.chain   := 0
+    ms.fs.fail.level    := 0                    // Cannot use !!
+    ms.user.break.level := 0                    // Do not use !!
+
+$<COMMAND'
+    root                := perm.file()                  // INDEX
+    (root+uid) %% 0     := #X800d
+    (root+uid) %% 1     := #x2a6e
+    (root+uid) %% 2     := #xd59f
+    (root+uid) %% 3     := #x79b9
+$>COMMAND'
+
+    workfile.base       := 0
+
+    trusted             := FALSE
+    trace               := FALSE
+    full.trace          := FALSE
+    timing              := FALSE
+    breaks.allowed      := TRUE
+    selected            := 0                    // First selected
+    mail.count          := -1
+
+    fs.insert.index     := get.perm.vec(8/bytesperword)
+    client.puid         := get.perm.vec(8/bytesperword)
+    client.name         := get.perm.vec(30/bytesperword)
+    lookat.name         := get.perm.vec(30/bytesperword)
+    items               := get.perm.vec(Max.items)
+    items!0             := 0                            // none selected
+    items!1             := -1                           // invalid
+    mbox.name           := get.perm.vec(mbox.name.bytes / BYTESPERWORD)
+    mbox.name%0         := 0
+    mbox.puid           := get.perm.vec(8/bytesperword)
+    mbox.puid2          := get.perm.vec(8/bytesperword)
+    $(  Let Tripos      = "TRIPOS"
+        LET Puid        = TABLE $<68000 #XC2aa1, #X88335690 $>68000
+                                $<LSI4 #XC, #X2aa1, #X8833, #X5690 $>LSI4
+        LET len         = mbox.string + tripos%0/BYTESPERWORD
+        LET string      = ?
+        mbox.chain      := get.perm.vec(len)
+        string          := mbox.chain + mbox.string
+
+        FOR i = 0 TO mbox.string DO mbox.chain!I        := 0
+        FOR i = 0 TO Tripos%0    DO string%i            := Tripos%i
+        copy.uid(PUID, 0, mbox.chain+mbox.md,   0)
+                                        // mbox.ver, mbox.flags, mbox.index
+    $)
+    norm.input          := 0
+$<COMMAND'
+    IF service THEN  cli.init(start.pkt)        // Terminal type declared !!
+    Dynamic := TRUE
+$>COMMAND'
+    Terminal.data       := readtermvec()
+$<COMMAND
+    Terminal.remote     := terminal.data = 0
+    Dynamic := FALSE
+    SETSC(NOT terminal.remote)
+$>COMMAND
+    Terminal.type       := (Terminal.data=0) -> TERM.UNSET,
+                                                   Terminal.data ! TERM.NUMBER
+
+    User.puid           := uidset() + PUID.offset
+    User.tuid           := uidset() + TUID.offset
+    !lv.norm.output     := output()
+
+    rhtaskid            := rootnode!rtn.info!rtninfo.ring!ri.rhtaskid
+
+    $(  LET first = TRUE
+        UNTIL fs.find(-1)
+        $(      IF FIRST
+                THEN writeF("Can't locate the fileserver %X4, %N  Waiting*N",
+                                                        RESULT2, RESULT2)
+                delay(tickspersecond*5)
+                if testflags(1) tidyup()
+        $)
+        UNLESS FIRST
+        $(      WRITEF("Located Fileserver*N")
+                FIRST := TRUE
+        $)
+        UNTIL lookup.name("PS.MAP",address)
+        $(      IF first
+                THEN writef("Can't locate PS.MAP %X4 = %n.  Waiting*N",
+                                                        RESULT2, RESULT2)
+                first := FALSE
+                delay(tickspersecond*5)
+                if testflags(1) tidyup()
+        $)
+        UNLESS FIRST    WRITEF("Located PS.MAP*N")
+    $)
+    map.station         := address!0
+    map.port            := address!2
+    map.func            := address!3
+
+    mail.list           := get.perm.vec(ml.size*ml.element.size)
+
+    md                  := perm.file()          // UMMD only - It looks after buffers
+$<COMMAND'
+    client.index        := perm.file()          // INDEX
+    master.index        := perm.file()          // INDEX
+    send.file           := perm.file()          // Temp
+    header.file         := perm.file()          // Temp
+    recipients.puids.file:= perm.file()         // Temp, CREATED
+    expanded.groups.file:= perm.file()          // Temp, CREATED
+    client.md           := perm.file()          // HERE
+    um                  := perm.file()          // HERE....
+    client.group.directory:= perm.file()        // HERE ...
+    public.group.directory:= perm.file()        // HERE ...
+
+    client.md!cache.address             := get.perm.vec(600/rwpw)
+    client.md!cache.size                := 600
+    um!cache.address                    := get.perm.vec(um.cache.size)
+    um!cache.size                       := um.cache.size
+    client.group.directory!cache.address:= get.perm.vec(300/rwpw)
+    client.group.directory!cache.size   := 300
+    public.group.directory!cache.address:= get.perm.vec(300/rwpw)
+    public.group.directory!cache.size   := 300
+    new.umid            := get.perm.vec(umid.size)
+
+    // If initialisation code is linked in then use it!!
+
+    $(  LET quick       = FALSE
+        LET test.       = FALSE
+
+        TEST service
+        THEN    norm.input, cli.standardoutput := input(), output()
+        ELSE
+        $(  user.find.and.set.up()
+            norm.input  := findinput("**")
+        $)
+
+        IF testflags(2)
+        $(  LET argv = VEC 20
+$<SMALL
+            LET argv.string = "Quick/s,trace/s"
+$>SMALL
+$<SMALL'
+            LET argv.string = "Quick/s,trace/s,test/s,fred/s,mc/k"
+$>SMALL'
+            IF RDARGS(argv.string, argv, 20) = 0
+            $( WRITEF("Bag arg for '%S'*N", argv.string); RESULTIS 1 $)
+            quick       := argv!0
+            trace       := argv!1 &
+                           ( compare.uid(trust.1, 0, client.puid, 0) |
+                             compare.uid(trust.2, 0, client.puid, 0) )
+$<SMALL'
+            test.       := argv!2 &
+                           ( compare.uid(trust.1, 0, client.puid, 0) |
+                             compare.uid(trust.2, 0, client.puid, 0) )
+            IF argv!3 | (argv!4 ~= 0)
+            $(  TEST lookup.name("MAIL", address)
+                $(  writef("Can't find MAIL (%N=%X8)", RESULT2, RESULT2)
+//SO                START.OK := FALSE
+                $)
+                ELSE
+                $(      mail.station    := address!0
+                        mail.port       := address!2
+
+                        IF argv!3 THEN argv!4 := "FRED"
+                        UNLESS argv!4=0 TEST lookup.name(argv!4, address)
+                        THEN mail.station       := address!0
+                        ELSE
+                        $(  writef("Can't find %S (%N)", argv!4, RESULT2)
+//SO                        START.OK := FALSE
+                        $)
+                $)
+            $)
+$>SMALL'
+        $)
+
+        UNLESS test. IF validroutine(@ms.checker) THEN ms.checker()
+        retrieve.entry(root, root.user.map, um)
+        retrieve.entry(root, root.master.index, master.index)
+
+        read.cache(um, 0)
+
+        get.temp.files()
+        // Give information about his mail
+        UNLESS quick DO get.mail.list(TRUE, 0, -1)
+//==============================================================================
+//              POSSIBLY WAIT ??????????????????????????????????????????????????
+//==============================================================================
+    $)
+$>COMMAND'
+$<COMMAND
+    norm.input                  := findinput("**")
+    client.md                   := perm.file()
+    client.md!cache.address     := get.perm.vec(600/rwpw)
+    client.md!cache.size        := 600
+$<68000TRIPOS
+    IF testflags(2)
+    $(  LET argv = VEC 20
+        LET argv.string = "fred/s,mc/k"
+        IF RDARGS(argv.string, argv, 20) = 0
+        $( WRITEF("Bag arg for '%S'*N", argv.string); GOTO end $)
+
+        IF argv!0 | (argv!1 ~= 0)
+        $(      UNLESS lookup.name("MAIL", address)
+                $(  writef("Can't find MAIL (%N=%X8)", RESULT2, RESULT2)
+//SO                START.OK := FALSE
+                $)
+                mail.station    := address!0
+                mail.port       := address!2
+
+                IF argv!0 THEN argv!1 := "FRED"
+
+                UNLESS argv!1=0 TEST lookup.name(argv!1, address)
+                THEN mail.station       := address!0
+                ELSE
+                $(  writef("Can't find %S (%N)", argv!1, RESULT2)
+//SO                START.OK := FALSE
+                $)
+        $)
+    $)
+$>68000TRIPOS
+    // MAIL uses, to clear NEW MAIL bit
+    get.mail.list(TRUE, 0, -1)
+//==============================================================================
+//              POSSIBLY WAIT ??????????????????????????????????????????????????
+//==============================================================================
+    FOR i = 0 TO 3 DO client.puid%%i := (uidset()+puid.offset) %% i
+    convert..puid.to.name(client.puid, 0, client.name)
+$>COMMAND
+    FOR i = 0 TO client.name%0 DO lookat.name%i := client.name%i
+
+    ms.fs.fail.level    := level()              // Now safe ......
+    ms.user.break.level := level()
+
+    IF TERMINAL.data = 0
+    THEN WRITES("*N Unknown Terminal, Remote dumb assumed (see HELP TERMINAL)*N")
+    Terminal.depth      := (Terminal.data=0) -> 23, Terminal.data ! TERM.DEPTH
+    Terminal.width      := (Terminal.data=0) -> 79, Terminal.data ! TERM.WIDTH
+    cur.init(TRUE, TRUE)
+    RESULTIS service
+$)
+
+

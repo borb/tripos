@@ -1,0 +1,434 @@
+SECTION "RMESSAGE"
+
+GET "header"
+GET "TERMHDR"
+GET "CLIHDR"                    // cli.commandname
+GET "BCPL.gethex"
+GET "bcp.printheader"
+$<68000                         // LSI4s need to JOIN with R
+GET "bcp.basicutil"
+GET "bcp.basicfs"
+GET "bcp.sspfindpuid"
+GET "BCP.convertname"
+$>68000
+
+//=============================================================================
+
+MANIFEST $( summ.test = 1 $)
+STATIC  $( filestream = 0 $)
+GLOBAL  $( OLDOUTPUT: ug+27 $)          // EOF
+
+LET ms.read(user, read, delete, summarize, quiet, interactive) BE
+$(
+    // Search the current client's Message Directory for undeleted items and
+    // depending on the setting of the parameter booleans print out and/or
+    // delete them and/or summarizes them.
+
+    LET md.cache        = ?
+    LET header.file     = VEC file.desc.size
+    LET puid            = VEC 7/BYTESPERWORD
+    LET text.file       = VEC file.desc.size
+    LET umid            = VEC 6
+    LET t               = VEC 2
+    LET md.disp         = 0
+    LET md.offset       = ?
+    LET md.chain        = ?
+    LET subject.disp    = ?
+    LET sender.disp     = ?
+    LET length          = ?
+    LET count           = ?
+    LET keep            = ?
+    LET printed         = 0
+
+    IF read=1 & delete=1 & summarize=FALSE & QUIET=TRUE                 // CGG
+    THEN read, delete, summarize := FALSE, FALSE, summ.test
+
+    UNLESS user%0 = 0
+    $(  puid!0 := 0
+        UNLESS delete = TRUE DO delete := FALSE
+        UNLESS user%0=16 & gethex(user, puid, 8/BYTESPERWORD)
+        DO convert.name.to.puid(user, puid)
+        UNLESS compare.uid(uidset()+PUID.offset, 0,  puid, 0)
+        $(  Writes("You cannot inspect other people's mail*N")
+            RETURN
+        $)
+    $)
+
+    // If the client has no message directory then no further action is needed
+    IF summarize=summ.test & delete=FALSE & quiet = FALSE
+    $(  TEST find.puid.in.user.map(uidset() + PUID.offset, 0, 0) = 1
+        THEN WRITES("****** New mail for you*N")
+        ELSE UNLESS QUIET WRITES("****** No new mail for you*N")
+        RETURN
+    $)
+    count := find.puid.in.user.map(client.puid, client.index, client.md)
+    IF count < 0
+    $(  IF count = -1 & NOT quiet writes("****** No mail for you*N")
+        RETURN
+    $)
+
+    // If "delete" is set get an interlock to avoid DEMON altering file
+    UNLESS delete=FALSE | interactive THEN open.file(client.md)
+
+    count                       := interactive  // -> -1, 0
+    md.cache                    := get.temp.vec(600/rwpw)
+    client.md!cache.address     := md.cache
+    client.md!cache.size        := 600
+    read.cache(client.md,0)
+//  Do we want to copy it all to filestream ? ........
+    keep := delete & (oldoutput=output())
+    IF keep THEN filestream := findoutput("t:mail")
+
+    $(  // Loop for each entry in the client's Message Directory.
+
+        // Read more into the cache if necessary
+        IF ((md.disp + md.first.free + 100) >= (client.md!start.of.block +
+                                                          client.md!cache.size))
+        THEN read.cache(client.md, md.disp)
+
+        md.offset := md.disp - client.md!start.of.block
+
+        // End of entry chain ?
+        md.chain := md.cache%%(md.offset)
+        IF (md.chain = #xffff) & NOT interactive THEN BREAK
+
+        IF ((md.cache%%(md.offset + md.flags) & md.deleted.flag) = 0    |
+           ((md.chain = #xffff) & interactive )                         |
+           count < 0) &
+            (md.cache%%(md.offset + md.flags) & md.notmail.flag) = 0
+
+        $(
+            IF summarize > 0
+            $( WRITES("****** Mail for you*N"); little.tidyup(); RETURN $)
+
+            count := count + 1
+
+            TEST INTERACTIVE
+            $(  IF md.chain = #xffff THEN count := -2
+                TEST count <= 0
+                $(  WRITES(count=0 ->   "Mail editor*N",
+                                        "****** no more messages*N")
+                    md.chain := md.disp
+                $)
+                ELSE print.header(md.cache, md.offset, count, md.umid,
+                                md.cache%%(md.offset+md.sender),
+                                md.cache%%(md.offset+md.subject),
+                                md.version,
+                                md.header.bytes,
+                                md.message.bytes,
+                                md.cache%%(md.offset + md.flags) )
+            $(  LET ch  = ?
+                LET j   = ?
+                writes("<> *E")
+                ch := RDCH()
+                j := ch
+                UNTIL j = '*N' | j='*E' | j=ENDSTREAMCH DO j := RDCH()
+                SWITCHON capitalch(ch) INTO
+                $(      CASE '*E':      NEWLINE()
+                        CASE '*N':                                      LOOP
+                        CASE 'N':                                       BREAK
+                        CASE 'F':
+                        CASE 'T':
+                                IF count <= 0 THEN GOTO no.message
+                                copy.uid (md.cache,md.offset+md.header.puid,
+                                                         header.file+uid,0)
+                                copy.uid (md.cache,md.offset+md.message.puid,
+                                                         text.file+uid,0)
+                                $(  LET start = 0
+                                    UNLESS header.file!uid = 0 |
+                                                capitalch(ch) = 'T'
+                                    $(  start := type.mail.file(header.file,
+                                                                23, 0)
+                                        UNLESS text.file!uid = 0 DO NEWLINE()
+                                    $)
+                                    UNLESS text.file!uid = 0
+                                    DO type.mail.file (text.file, 23, start)
+                                    $(  LET t = md.cache%%(md.offset+md.flags)
+                                        IF (t & md.read.flag) = 0
+                                        DO write.tiny.block(client.md,
+                                                        t | md.read.flag,
+                                                        md.disp+md.flags)
+                                    $)
+                                $)                                      LOOP
+
+                        CASE 'D':
+                        CASE 'U':
+                                IF count <= 0 THEN GOTO no.message
+                                t%%0 := md.cache%%(md.offset+md.flags)
+                                t%%0 := capitalch(ch) = 'D' ->
+                                                t%%0 |  md.deleted.flag,
+                                                t%%0 & ~md.deleted.flag
+                                md.cache%%(md.offset+md.flags) := t%%0
+
+                                write.little.block(client.md, t,
+                                                md.disp+md.flags, 1)
+                                                                        LOOP
+                        CASE '?':
+                        CASE 'V':
+                                IF count <= 0 THEN GOTO no.message
+                                print.header(md.cache, md.offset,
+                                                count, md.umid,
+                                        md.cache%%(md.offset+md.sender),
+                                        md.cache%%(md.offset+md.subject),
+                                        md.version,
+                                        md.header.bytes,
+                                        md.message.bytes);              LOOP
+
+                        CASE '**':      md.chain,count := 0, 0;         BREAK
+                        CASE ENDSTREAMCH:
+                                    WRITES("End Of File*N")
+                                    ENDREAD()
+                                    SELECTINPUT(FINDINPUT("**"))
+                        CASE 'Q': CASE 'W':
+                                little.tidyup()
+                                RETURN
+                        CASE 'H':
+                                WRITES(
+"You are using the Ring Mail systems emulator of the standard tripos message *N*
+*editor. You may use the following commands*N")
+                                WRITES(
+"       **              Rewind*N*
+*       ?               Verify the current mail item*N*
+*       Delete          the current mail item*N*
+*<      Full            Type the full mail item>*N*
+*       Next            item*N")
+                                WRITES(
+"       Type            the current item*N*
+*       Undelete        the current item*N*
+*       Quit            = Windup*N*
+*       Windup          Finish this activity*N")
+
+//                              $(      LET x   = "RINGMAIL"
+//                                      LET y   = ?
+//                              $)
+//                              CALLSEG("sys:c.help", <vector of strings>
+                                                                        LOOP
+                        Default: $( LET count=0
+                                    WHILE UNRDCH() DO count := count+1
+                                    WRITES("Unexpected command -- ")
+                                    FOR I = 1 TO count DO WRCH(RDCH())
+                                 $)                                     LOOP
+                        NO.MESSAGE:
+                                Writes("No current message*N");         LOOP
+                $)
+            $) REPEAT
+            $)
+            ELSE
+$(Non.interactive
+            // An undeleted item has now been found.
+            IF read~= FALSE & count=1 & summarize=FALSE
+            $(  FOR i=0 TO 70 DO wrch('-'); newline()
+                printed := printed+1
+                IF keep
+                $(  SELECTOUTPUT(filestream)
+                    FOR i=0 TO 70 DO wrch('-'); newline()
+                    SELECTOUTPUT(oldoutput)
+                $)
+            $)
+
+            UNLESS summarize=FALSE
+            DO print.header(md.cache, md.offset, /*count*/-1, md.umid,
+                                md.cache%%(md.offset+md.sender),
+                                md.cache%%(md.offset+md.subject),
+                                md.version,
+                                md.header.bytes,
+                                md.message.bytes)
+
+            UNLESS read = FALSE
+            $(  copy.uid (md.cache,md.offset+md.header.puid,
+                                                         header.file+uid,0)
+                copy.uid (md.cache,md.offset+md.message.puid,
+                                                         text.file+uid,0)
+                UNLESS header.file!uid = 0 | summarize ~= FALSE
+                THEN printed := type.mail.file (header.file,
+                                        (OUTPUT()=OLDOUTPUT) -> 23, 0, printed)
+                UNLESS text.file!uid = 0
+                $(  //UNLESS summarize=FALSE NEWLINE()
+                    printed := type.mail.file (text.file,
+                                        (OUTPUT()=OLDOUTPUT) -> 23, 0, printed)
+                $)
+
+                IF keep
+                $(  SELECTOUTPUT(filestream)
+
+                    UNLESS header.file!uid = 0 | summarize ~= FALSE
+                    THEN type.mail.file (header.file, 0, 0)
+                    UNLESS text.file!uid = 0
+                    DO  type.mail.file (text.file, 0, 0)
+
+                    SELECTOUTPUT(oldoutput)
+                $)
+
+                $(  LET t = md.cache%%(md.offset+md.flags)
+                    IF (t & md.read.flag) = 0
+                    DO write.tiny.block(client.md, t | md.read.flag,
+                                                        md.disp+md.flags)
+                $)
+                IF summarize = FALSE
+                $( FOR i=0 TO 70 DO wrch('-'); newline()
+                   printed := printed+1
+                    IF keep
+                    $(  SELECTOUTPUT(filestream)
+                        FOR i=0 TO 70 DO wrch('-'); newline()
+                        SELECTOUTPUT(oldoutput)
+                    $)
+                $)
+            $)
+
+            UNLESS delete=FALSE
+            $(
+                t%%0 := md.cache%%(md.offset+md.flags) | md.deleted.flag
+                md.cache%%(md.offset+md.flags) := t%%0
+
+                write.little.block(client.md, t, md.disp+md.flags, 1)
+            $)
+$)Non.interactive
+        $)
+        md.disp := md.chain
+    $) REPEAT
+
+    UNLESS (count = 0) | (delete = FALSE) | (summarize=FALSE)
+    DO writef("*N%N items have been deleted*N", count)
+
+    IF count = 0 & NOT quiet writes("****** No mail for you*N")
+
+    // Release any interlock
+    UNLESS delete=FALSE DO close.file(client.md)
+    little.tidyup()
+$)
+
+//=============================================================================
+
+LET start() BE
+$(  MANIFEST $( A.user=0; A.to=1; A.opt=2 $)
+    LET argv            = VEC 20
+    LET address         = VEC 4
+    LET char            = ?
+    LET res             = ?
+//  LET filestream      = 0
+    LET rdargs.string   = "USER=USERS=INITIALS,TO,OPT/K"
+    LET delete          = 1
+    LET read            = 1
+    LET summarize       = FALSE
+    LET quiet           = FALSE
+    LET interactive     = FALSE
+
+    oldoutput           := output()
+    ms.interlocked.file := 0
+    ms.perm.vec.chain   := 0
+    ms.temp.vec.chain   := 0
+
+    limited.access      := FALSE
+    full.trace          := FALSE
+    trusted             := FALSE
+    timing              := FALSE
+    trace               := FALSE
+    breaks.allowed      := TRUE
+
+    rhtaskid := rootnode!rtn.info!rtninfo.ring!ri.rhtaskid
+    client.puid := uidset() + PUID.offset
+    lookup.name("FILESERVE",address)
+    fs.station  := address!0
+    fs.port     := address!2
+
+    client.md   := get.perm.vec(file.desc.size)
+
+    ms.fs.fail.level    := level()
+    ms.user.break.level := level()
+
+    IF rdargs(rdargs.string,argv, 20) = 0 $( writes("Bad args*N"); GOTO end $)
+
+    UNLESS argv!A.to = 0
+    $(  filestream := findoutput(argv!A.to)
+        IF filestream = 0
+        $( writef("Can't open %S for output*N",argv!A.to); GOTO end $)
+        selectoutput(filestream)
+    $)
+
+    UNLESS argv!A.opt = 0
+    $(
+        // Set actions for each option character.  If there are contradictory
+        // options the last one wins.
+
+        FOR i=1 TO (argv!A.opt)%0
+        $(  LET ch = capitalch( (argv!A.opt)%i )
+
+            SWITCHON ch INTO
+            $(
+
+            DEFAULT:
+                selectoutput(oldoutput)
+                writes("Unknown option '")
+                wrch((argv!A.opt)%i)
+                writes("'*N")
+                GOTO end
+
+            CASE 'D':     // Delete without reading
+                delete, read := TRUE, FALSE;                            ENDCASE
+
+            CASE 'R':    // Read without deleting
+                delete, read := FALSE, TRUE;                            ENDCASE
+
+            CASE 'E':    // Read and delete
+                delete, read := TRUE, TRUE;                             ENDCASE
+
+            CASE 'S':    // Summarize
+                read, delete, summarize := FALSE, FALSE, TRUE;          ENDCASE
+            CASE 'M':   // M???
+                interactive := TRUE;                                    ENDCASE
+
+            CASE 'Q':    // Quiet
+            CASE 'I':   // Init
+                Quiet := TRUE;                                          ENDCASE
+
+            CASE 'T':   // Test
+                read, delete, summarize := FALSE, FALSE, summ.test;     ENDCASE
+
+            CASE ',':    // For compatibility ignore commas.
+                ENDCASE
+
+            $)
+        $)    // End of loop for each option character.
+    $)
+
+
+// We now have a list of USERIDs in argv!A.user, or 0 -> Current user
+//  May be a PUID (16 chars starting with "FF02", or initials ...
+    $(  LET user = VEC 20
+        LET list = argv!A.user=0 -> "", argv!A.user
+        LET pos = 0
+
+        $(  FOR I = 1 TO 20
+            $(  LET ch = ?
+                pos := pos+1
+                ch := list%pos
+                IF pad.ch(ch) | pos>list%0 $( user%0 := i-1; BREAK $)
+                user%i := ch
+            $)
+            ms.read(user, read, delete, summarize, quiet, interactive)
+        $) REPEATUNTIL pos > list%0
+    $)
+
+    GOTO end
+
+ms.user.break.link:
+    selectoutput(oldoutput)
+    writef("*n****** BREAK.  %S abandoned*n", cli.commandname)
+    GOTO end
+
+ms.fs.fail.link:
+    selectoutput(oldoutput)
+    writes("abandoned - ")
+    fs.explain(fs.rc)
+    GOTO end
+
+end:
+    endstream(filestream)
+    little.tidyup()
+    unloadseg(ms.perm.vec.chain)
+    ms.perm.vec.chain := 0
+$)
+
+AND pad.ch(ch) = ch=' ' | ch=',' | ch='*T'
+
+

@@ -1,0 +1,30 @@
+ The top bit of a return code is 0 if it is system dependent or 1 if it
+     conforms to the following rules:
+
+ The next two bits have the following significance:
+        00  -  don't know about the nature of this return code
+        01  -  error, but it isn't fatal, retry if appropriate
+        10  -  fatal error, don't retry, caller is at fault
+        11  -  fatal error, don't retry, called service is at fault
+
+ The rest of the 16-bit return code (13 bits) are interpreted using the
+     following list:
+
+0000    failure, non specific
+0001    failure, reply block contains text message
+0002    unknown function
+0003    congestion; system full (too many users)
+0004    facility (on which service depends) temporarily not available
+0005    invalid parameters
+0006    unauthorised call
+0007    internal error, try again later
+0008    failure, reply block contains my system return code
+0009    service does not exist (at time of request at least)
+000A    service temporarily withdrawn
+000B    unexpected request block size
+000C    service's resource exhausted
+004n    invalid parameter n
+
+
+
+

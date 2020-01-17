@@ -1,0 +1,242 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+// This program provides a simple alarm-clock service.  It waits until
+// a specified time and then prints out a bell, the time and, optionally,
+// a user-specified message.  By default operation is synchronous: the
+// program does not return until the specified time, but a switch parameter
+// ASYNC is also provided to cause a separate task to be set up to perform
+// the timing.  The program may be activated from a CLI, by CALLSEG or
+// directly as a task.
+
+// Modifications
+//
+// 27-nov-84 NJO  Upgraded to provide CALLSEG and task interfaces.  ASYNC
+//                key added in command and CALLSEG mode to cause it to
+//                reload itself as a task and run asynchronously.
+// 14-dec-84 NJO  E-break detected - prints out info without terminating.
+
+SECTION "ALARM"
+
+GET "LIBHDR"
+GET "BCPL.FORKSEG"
+
+GLOBAL
+    $(
+    timestr    : ug + 0     // argument strings
+    message    : ug + 1
+    level.exit : ug + 2     // for crash-out
+    label.exit : ug + 3
+    $)
+
+MANIFEST
+    $(
+    minsinday = 24*60
+    tickspermin = 60*tickspersecond
+    $)
+
+LET start(activation.arg, callseg.time, callseg.message, callseg.async) = VALOF
+    $(
+    LET len        = ?
+    LET ticks      = 0
+    LET mins       = 0
+    LET hours,secs = ?, ?
+    LET minstowait = ?
+    LET constr     = 0    // console output stream - opened if we're a task
+    LET rc         = 20
+    LET pkt.sent   = FALSE
+    LET v          = VEC 14
+    LET msgv       = VEC 59/bytesperword
+    LET timev      = VEC 8/bytesperword
+
+    timestr    := timev
+    message    := msgv
+    level.exit := level()   // initialise globals
+    label.exit := exit
+
+    SWITCHON activation.arg INTO
+    $( CASE 0:     // loaded by a CLI - get parm with RDARGS
+       $( LET argstr = "time=at/A,message,async=fork/s"
+          LET argv   = VEC 50
+
+          IF rdargs(argstr, argv, 50) = 0 THEN
+             error("Args do not match string %S", argstr)
+
+          IF argv!2 THEN    // reload ourselves as a task, then exit
+          $( set.up.task(argv!0, argv!1)
+
+             rc := 0
+
+             GOTO exit
+          $)
+
+          copy.args(argv!0, argv!1)
+       $)
+       ENDCASE
+
+       CASE 1:     // CALLSEGed
+       CASE -1:
+       IF callseg.async THEN    // reload ourselves as a task, then exit
+       $( set.up.task(callseg.time, callseg.message)
+
+          rc := 0
+
+          GOTO exit
+       $)
+
+       copy.args(callseg.time, callseg.message)
+       ENDCASE
+
+       DEFAULT:    // set up as task
+       initio()
+       constr  := findoutput("**")
+       IF constr = 0 THEN
+       $( abort(1000, result2)    // not much else we can do!
+          GOTO exit
+       $)
+       selectoutput(constr)
+       copy.args(pkt.arg1!activation.arg, pkt.arg2!activation.arg)
+       returnpkt(activation.arg, 0, 0)
+       pkt.sent := TRUE
+       ENDCASE
+    $)
+
+    len := timestr%0
+
+    // Allow mins &/or secs to be omitted
+
+    SWITCHON len INTO
+        $(
+        CASE 8: // Full time
+                secs := digit(7)*10 + digit(8)
+                IF secs > 59 THEN error("Seconds value %N is > 59", secs)
+                ticks := secs * tickspersecond
+
+        CASE 6: // Just hours and mins
+        CASE 5: mins := digit(4)*10 + digit(5)
+                IF mins > 59 THEN error("Minutes value %N is > 59", mins)
+
+        CASE 3: // Just hours
+        CASE 2: hours := digit(1)*10 + digit(2)
+                IF hours > 23 THEN error("Hours value %N is > 23", hours)
+                mins := mins + (hours*60)
+                ENDCASE
+
+        DEFAULT: error("Invalid time: format is hh[:mm[:ss]]")
+
+        $)
+
+    WHILE TRUE DO
+    $(  datstamp(v)
+        minstowait := mins - v!1
+    
+        IF (minstowait = 0) | ((minstowait = 1) & (ticks < v!2)) THEN
+           BREAK                                             // < 1 min to go
+    
+        IF minstowait < 0 THEN
+           minstowait := minstowait + minsinday
+    
+        delay(tickspermin) // Wait one minute
+    
+        IF testflags(1) THEN
+            error("event at %S cancelled", timestr)
+
+        IF testflags(8) THEN
+        $( writef("****** Alarm set for %S", timestr)
+           UNLESS message = 0 DO
+              writef(" - %S", message)
+           newline()
+        $)
+    $)
+
+    // Wait for the remaining fraction of a minute
+    datstamp(v)
+    ticks := minstowait*tickspermin + (ticks - v!2)
+    IF ticks > 0 THEN
+       delay(ticks)
+
+    writef("*E*E*C****** Alarm: time is %S", datstring(v) + 5)
+
+    UNLESS message = 0 DO
+       writef(" - %S", message)
+    newline()
+
+    FOR j=1 TO 10 DO
+    $( wrch(7)           // Write 10 ASCII Bells at .1 second intervals
+       wrch('*E')
+       delay(tickspersecond/10)
+    $)
+
+    rc := 0
+
+exit:
+
+    SWITCHON activation.arg INTO
+       $( 
+       CASE 0:
+       stop(rc)
+
+       CASE 1:
+       CASE -1:
+       RESULTIS rc
+
+       DEFAULT:
+       UNLESS pkt.sent DO
+          returnpkt(activation.arg, rc, result2)
+       endwrite()                // close console stream
+       endtask((tcb.seglist!tcb) ! 3)
+       $)
+    $)
+
+
+AND copy.args(time, msg) BE
+    $( LET len = time%0
+
+       IF len > 8 THEN
+          error("Too many characters in time spec %S", time)
+
+       FOR i = 0 TO len DO
+          timestr%i := time%i
+
+       TEST msg = 0
+       DO message := 0
+       OR
+       $( len := msg%0
+
+          IF len > 59 THEN
+             error("Message is too long")
+
+          FOR i = 0 TO len DO
+             message%i := msg%i
+       $)
+    $)
+
+
+AND set.up.task(time, msg) BE
+
+$( LET code = "sys:c.alarm"
+   LET task = forkseg(code, 50, 100, 250, time, msg)
+
+   IF task = 0 THEN
+      error("Failed to fork code segment %S*N", code)
+$)
+
+
+AND digit(n) = VALOF
+    $(
+    LET d = timestr%n
+    UNLESS '0' <= d <= '9' THEN error("Invalid digit *'%C*'", d)
+    RESULTIS d - '0'
+    $)
+
+
+AND error(message, arg) BE
+    $(
+    writes("****** Alarm: ")
+    writef(message, arg)
+    newline()
+    longjump(level.exit, label.exit)
+    $)
+
+

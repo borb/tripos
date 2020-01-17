@@ -1,0 +1,34 @@
+Each command is described by a string specifying what is expected.
+This can be displayed by ending the input line with a '?', when the program will
+give the string as a prompt. All previous input is retained.  To investigate a
+command, type '<command> ?' and then give an invalid response once the string
+has been displayed. The single character '=' is always invalid.
+
+The string represents a set of attributed items, separated by commas, with
+possible aliases indicated by '='.  Items may be matched by position, or by
+quoting the keyword, then an optional '=', and then the value.
+
+To insert an item value that is the same as one of the keywords, or contains
+spaces, then it should be enclosed in double quotes, e.g. "The subject matter".
+
+The attributes are:
+        /A      This item must be supplied
+        /K      This item must be keyed if it occurs
+        /S      This item is a switch, that is there is no associated value
+
+Thus item/a,to,subject=about/K will match any of
+        1 fred subject wombats
+        1 to fred about wombats
+        about wombats to=fred item = 1
+
+When a mail item is to be selected, the number of the item concerned may be
+types, or one of F, L, N or '.', meaning the First, Last, Next or current item
+(the current item is marked with a '=>' in the item field).
+
+If a group of items may be selected, then '*' may be given to mean the previous
+group, or a set of item selectors may be given.  An item selecetor may be an
+item, or a pair of items seperated by a '-', to indicate all those bewteen the
+first item given and the second.  Thus 'f-l' is the same as matching the switch
+ALL.
+
+

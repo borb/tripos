@@ -1,0 +1,541 @@
+$<HEADER'
+GET "libhdr"
+GET "ringhdr"
+
+$$SC    := ~$$NOTSC
+$$SMALL :=  $$LSI4TRIPOS
+$$TRACE := ~$$SMALL
+
+MANIFEST $(
+    bpw                 = bytesperword
+    bprw                = bytesperringword
+    rwpw                = bytesperword/2        // Ring Words Per (machine) Word
+
+    fslen               = 15      // Length in ringwords of normal
+                                  // file server command buffer
+    long.timeout        = tickspersecond*25
+    short.timeout       = tickspersecond*5
+    umid.size           =  6      // Length (in ringwords) of Unique Message ID.
+    act.disconnect      = 801
+
+    // File server return codes:
+    rc.obj.in.use       = #xd612
+
+    // MAP sever return codes:
+    rc.unknown.name     = #xdfea
+
+    // LIMITED.ACCESS may be ...
+    limit.none          = FALSE
+    limit.read          = TRUE
+    limit.delete        = 1
+
+    // Manifests for mail system file desciptors:
+    cache.address       =  0    // Address of file's TRIPOS cache
+    cache.size          =  1    // Size in ring words of cache
+    start.of.block      =  2    // File server displacement of cache block in file
+    next.write          =  3    // Byte displacement within cache for next write
+    next.read           =  4    // Byte diplacement within cache for next read
+    uid                 =  5    // 8 byte area for file's current UID (TUID or PUID)
+    uid2                =  uid + 8/BYTESPERWORD
+                                // 8 byte area for file's PUID (when ms.uid is TUID)
+    file.desc.size      =  uid2+ 8/BYTESPERWORD
+    uid.inc             = 8/BYTESPERWORD
+    uid.upb             = uid.inc - 1
+    nextUID.offset      = 0
+    TUID.offset = 1
+    TPUID.offset        = TUID.offset  + 8/BYTESPERWORD
+    AUTHY.offset        = TPUID.offset + 8/BYTESPERWORD
+    PUID.offset         = AUTHY.offset + 8/BYTESPERWORD
+
+    mbox.name.bytes     = 255           // max number of chars in a mbox name
+    mbox.next           = 0
+    mbox.ver            = mbox.next     + 1
+    mbox.flags          = mbox.ver      + 1
+    mbox.md             = mbox.flags    + 1
+    mbox.index          = mbox.md       + 8/BYTESPERWORD
+    mbox.string         = mbox.index    + 8/BYTESPERWORD
+
+        rtninfo.ring    = 5
+        ri.uidset       = 3
+
+    root.user.map       =  0
+    root.master.index   =  1
+    root.help.index     =  2
+    root.send.index     =  3
+    root.report.file    =  4
+    root.dir.public.group= 5
+    root.index.public.group=6
+    root.other.send.indices=7
+
+    root.first.workfile = 10
+        workfile.send.slot      = 0
+        workfile.puid.slot      = 1
+        workfile.header.slot    = 2
+        workfile.group.slot     = 3
+        workfile.report.slot    = 4
+        workfile.remote.slot    = 5
+        workfile.spare.slot     = 6
+        workfile.spare.slot     = 7
+        workfile.spare.slot     = 8
+        workfile.spare.slot     = 9
+    workfile.slot.size          = workfile.spare.slot+1
+
+    // Displacement's of entries in master index slots:
+    master.index.md             =  0
+    master.index.user.index     =  1
+    master.index.group.dir      =  2
+    master.index.group.index    =  3
+    master.index.slot.size      =  4
+
+    // Manifests for elements in the "User Map" file (all in Ringwords):
+    um.chain            =  0    //Z80 Pointer to next UM element with same hash index.
+    um.user.puid        =  1    //Z80 Eight byte area for PUID of element's owner
+    um.md.puid          =  5    //Z80 8 byte area for PUID of user's
+                                //Z80 "Message Directory" file
+    um.mail             =  9    //Z80 User      has new mail boolean
+    um.element.size     = 11
+
+    hash.um.mask        = 127   //Z80 Mask for the hash table
+    first.um.space.pointer= hash.um.mask+1      // May be conservative !!
+    free.um.chain       = first.um.space.pointer+1
+                                                // Free chain !! [ Not used ??]
+    User.um.base        = first.um.space.pointer+1
+                                                // %% xx does NOT contain data!
+
+    EXTERMINATE.um.first= User.um.base + 1 * um.element.size
+// File displacement of first actual UM entry. This is used ONLY by exterminate.
+
+
+    // Manifests for elements in a user's "Message Directory" (RINGwords) file:
+    md.chain            =  0    // Word displacement within file of next entry
+    md.flags            =  1    // Flag word    (see below for bit definitions).
+        md.deleted.flag =  1    // Item has been marked for deletion by the Demon.
+        md.read.flag    =  2    // Item has been read
+        md.public.flag  =  4    // Item is public - anyone can read it
+        md.remote.flag  =  8    // This is mail for a remote host -> 3rd file
+                                // of recipients!
+        md.error.flag   = #X10  // This is an ERROR report -
+                                // -> Forth file of error header (no FROM etc)
+        md.weak.flag    = #X4000// Only a weak refrence !!
+        md.notmail.flag = #X8000// This isn't mail!!
+    // Both the "sender" and the "subject" strings consist of a length
+    // byte followed by up to 255 printable bytes.
+    md.sender           =  2    // Word displacement within entry of sender string.
+    md.nm.string1       = md.sender
+    md.subject          =  3    // Word displacement within entry of subject string.
+    md.nm.string2       = md.subject
+    md.umid             =  4    // "Unique Message ID" (includes timestamp)
+    md.message.puid     = 10    // 8 byte area  for PUID of message file
+    md.nm.puid1         = md.message.puid
+    md.header.puid      = 14    // 8 byte area for PUID of header file
+    md.nm.puid2         = md.header.puid
+    md.version          = md.header.puid        + 8/bprw        // for checking
+    md.nm.version       = md.version
+        // Manifest for Version
+        md.current.version      = 1     // Use this normally
+        md.max.version  = 1     // Anything Greater than this isn't a version ..
+        // Version numbers
+        md.sizebytes.version= 1 // First one with size bytes
+
+    //-- Is a mail item
+      md.message.bytes  = md.version            + 1             // Length
+      md.header.bytes   = md.message.bytes      + 1             // Ditto
+      md.remote.list    = md.header.bytes       + 1
+      md.remote.bytes   = md.remote.list        + 8/bprw
+      md.error.header   = md.remote.bytes       + 1
+      md.error.bytes    = md.error.header       + 8/bprw
+      md.first.free     = md.header.bytes       + 1     // Start of data
+      md.remote.first.free=md.remote.bytes      + 1     // Start if remote
+      md.error.first.free=md.error.bytes        + 1     // Start if error
+
+    //-- Isn't a mail item ......
+      md.nm.type        = md.message.bytes      // What is it then ?
+        md.nm.type.mbox = 1                     // It's a mail box
+        md.nm.type.dlist= 2                     // It's a distribition list
+
+
+    // Definitions (in MACHINE words) for internal "mail list" array of
+    // client's mail.
+    ml.size             = $<68000TRIPOS 11 $>68000TRIPOS // number of elements
+                          $<LSI4TRIPOS  10 $>LSI4TRIPOS
+    MAX.sender.len      = $<SMALL 19 $>SMALL $<SMALL' 40 $>SMALL'
+    MAX.sender.display  = $<SMALL 19 $>SMALL $<SMALL' 25 $>SMALL'
+    ml.message.puid     =  0
+    ml.header.puid      = ml.message.puid       +  8/BYTESPERWORD
+    ml.sender           = ml.header.puid        +  8/BYTESPERWORD
+    ml.subject          = ml.sender             + MAX.sender.len/BYTESPERWORD +1
+    ml.umid             = ml.subject            + 40/BYTESPERWORD
+    ml.entry.disp       = ml.umid               + 36/BYTESPERWORD
+    ml.flags            = ml.entry.disp         +  1
+    ml.message.size     = ml.flags              +  1
+    ml.header.size      = ml.message.size       +  1
+    ml.error.puid       = ml.header.size        +  1
+    ml.error.size       = ml.error.puid         +  8/BYTESPERWORD
+    ml.element.size     = ml.error.size         +  1
+
+    // Manifests for "convert.name.to.puid" results:
+    convert.ok          =  0
+    convert.bad.name    =  1
+    convert.no.map      =  2
+    convert.too.deep    =  3    // Excessive recursion while expanding a group
+
+    // Manifests for ms.get.failure:
+    ms.get.rc.locate    = -2
+    ms.get.rc.no.dir    = -3
+    ms.get.rc.read.fail = -4
+    ms.get.rc.break     = -5
+    ms.get.rc.no.read   = -6
+    ms.get.rc.dir.broken= -7
+
+    // Flag bits for 'find.keys'
+    km.first            = 1
+    km.join             = 2
+    km.zero.old         = 4
+
+                        // Mail server return codes:
+    success.rc                  = #x0000                // Worked
+    user.not.in.system.rc       = #xDF3F                // Not in system
+    no.new.mail.rc              = #xDF3E                // no NEW mail
+    action.already.done.rc      = #xDF3D                // Succeeded previously
+
+                        // Real ERRORS
+    congested.rc                = #xa003
+    unknown.function.rc         = #xc002
+    request.too.short.rc        = #xc00b
+    invalid.uid.set.rc          = #xdfd0
+    cant.reach.fs.rc            = #xa004
+    cant.reach.map.rc           = #xa104
+    cant.reach.aot.rc           = #xa204
+
+    // Mail server SSP function codes:
+    ssp.test                    = 1
+    ssp.send.request            = 2
+    ssp.enquire.request         = 3
+    ssp.kick.request            = 9
+    ssp.demon.end               = 666
+    ssp.set.request             = #X666
+                                        // Keys for send
+    send.to                     = 1
+    send.subject                = 2
+    send.tripos                 = 3
+    send.cap                    = 4
+    send.immediate              = 5
+    send.cc                     = 6
+    send.bcc                    = 7
+    send.grainsize              = 8
+    send.replyto                = 9
+    send.forward                = 10
+    send.bits                   = 11
+    send.tripos.header          = 12            // A header is provided
+    send.cap.header             = 13            //      from CAP
+    send.forward.id             = 14            // a MessageID is provided
+    send.inreply                = 15
+    send.ignore                 = 16
+    send.version                = 17
+    send.via                    = 18
+    send.max.type               = send.via
+current.send.version            = 1             // 1 Apr 83
+
+    // Manifests for tripos UID sets:
+    uidset.tuid                 = 1
+    uidset.puid                 = 1 + (12/rwpw)
+
+    Max.items                   = 10            // Max number of items in comman
+
+    // Remote.machine.bits indicates that output is destined for that mc
+    remote.machine.camjenny     =  1
+    remote.machine.tripos       =  2
+    remote.machine.phx          =  4
+    remote.machine.serc         =  8
+    remote.machine.tripos       = 16
+    remote.machine.cagr         = 32
+    remote.machine.camsteve     = 64
+    remote.machine.cuedvax      =128
+    
+    rg = 349-109                // Start of procedure   globals = 240
+    ug = rg - 70                // Start of variable    globals = 170
+$)
+
+$<MANIFESTS'
+GLOBAL $(
+    ms.checker                  : ug+  1                                        // msc
+    fs.rc                       : ug+  2        // Last FS RC
+    ms.user.break.link          : ug+  3
+    ms.user.break.level         : ug+  4
+    ms.fs.fail.link             : ug+  5        // Boggle !! Redefined in DEMON
+    ms.fs.fail.level            : ug+  6
+
+    fs.port                     : ug+  7
+    fs.station                  : ug+  8
+    map.port                    : ug+  9
+    map.station                 : ug+ 10
+    map.func                    : ug+ 11
+
+    rhtaskid                    : ug+ 12
+    k                           : ug+ 13  //    General purpose
+    workfile.base               : ug+ 14
+    remote.machines.bits        : ug+ 15
+    breaks.allowed              : ug+ 16
+    trace                       : ug+ 17  //    Boolean controlling tracing
+    timing                      : ug+ 18  //    Boolean controlling display of timing info
+    full.trace                  : ug+ 19
+    start.time                  : ug+ 20
+    stop.time                   : ug+ 21
+    trusted                     : ug+ 22
+    mail.list                   : ug+ 23
+    client.name                 : ug+ 24   // 15 byte sender    name string
+    ms.temp.vec.chain           : ug+ 25
+    ms.perm.vec.chain           : ug+ 26
+
+    ms.interlocked.file         : ug+ 27  //    Address of file descriptor for any open file
+    md                          : ug+ 28   // Message Directory descriptor for insertions
+    master.index                : ug+ 29  //    Pointer to master index file descriptor
+    root                        : ug+ 30
+    send.file                   : ug+ 31
+    recipients.puids.file       : ug+ 32
+    um                          : ug+ 33
+    client.index                : ug+ 34
+    client.md                   : ug+ 35
+    expanded.groups.file        : ug+ 36
+    client.group.directory      : ug+ 37
+    public.group.directory      : ug+ 38
+//  report.file.entry           : ug+ 39
+    call.main.initseg           : ug+ 39
+
+    new.umid                    : ug+ 40
+    client.puid                 : ug+ 41
+
+    remaining.mail.count        : ug+ 42
+
+    norm.input                  : ug+ 43
+    header.file                 : ug+ 45
+    mail.count                  : ug+ 46        // Number of actual messages ...
+    Terminal.data               : ug+ 47        // Pointer
+    Terminal.depth              : ug+ 48        // Value
+    Terminal.type               : ug+ 49        // Value
+    Terminal.width              : ug+ 50        // VAlue
+    Terminal.remote             : ug+ 44        // Boolean
+    User.tuid                   : ug+ 51        // Addr of TUID
+    User.puid                   : ug+ 52        // Addr of PUID
+
+    Dynamic                     : ug+ 53                // Is it dynamic ?
+    mail.station                : ug+ 54
+    mail.port                   : ug+ 55
+    limited.access              : ug+ 56
+    lookat.name                 : ug+ 57                // 15 byte name
+    sc                          : ug+ 58
+    selected                    : ug+ 59
+    items                       : ug+ 60        // Used by command - List of item Nos
+    mbox.name                   : ug+ 61
+    mbox.chain                  : ug+ 62
+    user.info                   : ug+ 63
+    mbox.puid                   : ug+ 64
+    mbox.puid2                  : ug+ 65
+    Time.zone                   : ug+ 66        // Shift from GMT if DAT called
+    fs.insert.index             : ug+ 67        // As SET by Inspect/Insert ...
+    ms.get.failure              : ug+ 68        // Why ms.get failed ..........
+    item1                       : ug+ 69        // Start at ...
+
+
+    // Procedure globals    :
+
+//  FILE TRACE                                                          // SYS
+    write..uid                  : rg+  0 // (MCword, dibyte.offset)
+    write.uid                   : rg+  1
+    ptrace                      : rg+  2
+    trace.file                  : rg+  3
+    ms.analyse                  : rg+  4
+    time.trace                  : rg+  5
+
+//  FILE UTIL
+//  GET BCPL.INPUTWAITING
+//  GET BCP.BASICUTIL
+//  GET BCP.CONVERTNAME
+    get.temp.files              : rg+  6
+    puid.already.used           : rg+  7
+    read.line                   : rg+  8
+    set.date.header             : rg+  9
+//  tidyup                      : in LIBHDR
+    z80timestamp                : rg+ 10
+    find.keys                   : rg+101
+
+//  FILE BASICUTIL
+//  GET BCPL.SSPLIB
+//  GET BCPL.VALIDPOINTER
+//  GET BCPL.UIDSET
+//  ????????    GET BCPL.ADDRTASKSGLOBALS
+//  GET BCPL.READTERMVEC
+    address.offset              : rg+ 11        // (file, dibyte.offset, dibyte.length)
+    break.test                  : rg+ 12
+    free.chain.vec              : rg+ 13
+    get.perm.vec                : rg+ 14
+    get.temp.vec                : rg+ 15
+    kick.postman                : rg+ 16        // (hard) <===ONLY rarely used==
+    little.tidyup               : rg+ 17
+    myfault                     : rg+ 18        // Basicutil
+    perm.file                   : rg+ 19        // Get and clear file
+    queue.ring.receive          : rg+ 20
+    type.mail.file              : rg+ 21
+    wto.log                     : rg+ 22        // (message)
+    wto.mc                      : rg+ 23        // (machine, message)
+    Zap.file                    : rg+ 24        // Clear it to UNUSED
+
+//  FILE BCPL.READTERMVEC
+    readtermvec                 : rg+ 25        // Basicutil
+//  FILE BCPL.SSPLIB            // Local !!
+    extend.ssp                  : rg+ 98        // Grabbed from below!!
+    ssp                         : rg+ 26
+    lookup.name                 : rg+ 27
+//  reverse.lookup              : rg +000
+
+//  FILE BASICFS
+    close.file                  : rg+ 28
+    compare.uid                 : rg+ 29
+    copy.uid                    : rg+ 30
+    fs.command                  : rg+ 31
+    fs.explain                  : rg+ 32
+    open.file                   : rg+ 33
+    read.byte.from.file         : rg+ 34
+    read.cache                  : rg+ 35
+    read.little.block           : rg+ 36
+    write..little.block         : rg+ 37        // (file, dibyteoffset, position, length)
+    write.little.block          : rg+ 38        // (file, MCaddr, position, length)
+    write.tiny.block            : rg+ 39        // (file, value, dibyteoffset)
+
+
+//  FILE FS
+//  GET BASICFS
+    bytes.from.file             : rg+ 40
+    bytes.to.file               : rg+ 41
+    change.file.size            : rg+ 42
+    create.file                 : rg+ 43
+    create.index                : rg+ 44
+    delete                      : rg+ 45
+    flush.cache                 : rg+ 46
+    retain.in.index             : rg+ 47
+    retrieve.entry              : rg+ 48
+    rewind.file                 : rg+ 49
+    write.byte.to.file          : rg+ 50
+    write.string.to.file        : rg+ 51
+
+//  FILE UMMD
+    find.puid.in.user.map       : rg+ 52
+    create.message.directory    : rg+ 53
+    insert.message              : rg+ 54
+
+//  FILE MISCCOM                // MISC pieces for $$COMMAND
+//C GET UMMD (INSERT.MESSAGE)
+//C GET Z80SEND                 // See below
+
+//  FILE SEND
+//C NEEDS RDFORM
+//C GET PUIDOFFILE
+//S GET RDFORM
+//  GET FINDSTRINGIN
+    new.send                    : rg+ 55        // (file, interact, to, cc,bcc, subj, -1
+
+//  FILE MAIL
+//  GET PRINTHEADER
+    get.mail.list               : rg+ 56
+    ms.mail                     : rg+ 57
+
+//  FILE MAIN
+//  GET SSPFINDPUID                                                     // COM
+//  GET CONVERTPUID                                                     // COM
+//  GET CUR....                                                         // SC
+    extra.items                 : rg+ 58
+    setsc                       : rg+ 59
+//  start                       : rn LIBHDR
+    refresh                     : rg+ 60
+//  rdargs                      : rn LIBHDR                             // SC!
+//  FAULT                       : in LIBHDR                     // COM & LSI4
+
+//  FILES CUR.....
+    cur.rdch                    : rg+ 61
+    cur.wrch                    : rg+ 62
+    cur.init                    : rg+ 63
+    cur.pos                     : rg+ 64
+    cur.attr                    : rg+ 65
+
+//  FILE LOGON                                                          // SYS
+    user.find.and.set.up        : rg+ 66
+//  FILE CONVERTNAME
+    convert.name.to.puid        : rg+ 67
+//  FILE READLIN                                                        // SC
+    readline                    : rg+ 68
+//  FILE FSINPUT                                                        // SC
+    fs.findinput                : rg+ 69
+//  FILE RDFORM
+    rdform                      : rg+ 70
+//  MSINIT                                                              // SYS
+    ms.init                     : rg+ 71
+//  FILE BSPPAIR                                                        // SYS
+//  GET BCPL.BSPLIB
+    bsp.find.stream.pair        : rg+ 72        //("printer")
+    bsp.test.reset              : rg+ 73                // BSPLIB!!
+
+//  FILE COMMAND
+//  GET BCPL.GETHEX                                                     // LOC
+//  GET BCPL.SETTERMVEC                                                 // LOC
+//  GET BCPL.FIND-KEY                                                   // LOC
+    exterminate                 : rg+ 74
+    ms.delete                   : rg+ 75
+    ms.demon                    : rg+ 76
+    ms.help                     : rg+ 77
+    ms.move                     : rg+ 78
+    ms.new.help                 : rg+ 79
+    ms.patch                    : rg+ 80
+    ms.select                   : rg+ 81
+    ms.send                     : rg+ 82
+    ms.setbit                   : rg+ 83
+    ms.terminal                 : rg+ 84        // Read term type
+    ms.type                     : rg+ 85
+
+//  REPORT file
+    old.wrch                    : rg+ 86
+    post.to.z80                 : rg+ 87
+    report.file                 : rg+ 88
+    report.subject              : rg+ 89
+    route.output.to.file        : rg+ 90
+    post.report                 : rg+ 91
+
+//  FILE CONVERTPUID
+    convert..puid.to.name       : rg+ 92        // (MC address, dibyte.offset, Resultvec
+    reverse.lookup              : rg+ 93
+
+//  FILE BCPL.VALIDPOINTER
+    validpointer                : rg+ 94
+//  FILE BCPL.VALIDROUTINE
+    validroutine                : rg+ 95        // (address)
+//  FILE BCPL.INPUTWAITING
+    inputwaiting                : rg+ 96
+//  FILE UIDSET
+    uidset                      : rg+ 97
+//  ????????    FILE ADDRTASKSGLOBALS
+//    addrtasksglobals          : rg+ 98        // Now extend.ssp
+
+//  FILE GROUPS                                                         // SYS
+//  GET CONVERTPUID
+//  GET Z80SEND                                                         // LOC
+    check.and.record.name       : rg+ 99
+    group.edit                  : rg+100
+
+//  take.file                   : rg+101        // now find.keys
+//  give.file                   : rg+102
+    cdemon                      : rg+103
+    sdemon                      : rg+104
+
+//C GET Z80SEND                 // See below
+    Z80send                     : rg+105
+    Z80prod                     : rg+106        // MISCSER
+
+    fs.find                     : rg+107        // Find the FS !!
+    ms.insert                   : rg+108        // in COMMAND
+    pp.z80send                  : 150           // UGH!!!!!!!
+    MAXGLOB                     : rg+109        // BOGGLE!!!!!!!!!!!!! Touch it!
+$)
+$>MANIFESTS'
+$$HEADER := TRUE
+$>HEADER'
+
+

@@ -1,0 +1,250 @@
+/****************************************************************************\
+*                           Systems Research Group                           *
+******************************************************************************
+
+
+                      #####   ##        ########    ####
+                     #######  ##        ########   ######
+                    ##        ##           ##     ##    ##
+                    ##        ##           ##           ##
+                    ##        ##           ##          ##
+                    ##        ##           ##        ##
+                     #######  ########  ########   #######
+                      #####   ########  ########  ########
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   14/04/87            *
+\****************************************************************************/
+
+
+
+SECTION "CLI2"
+
+
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "IOHDR"
+
+
+
+LET start()  BE
+$(
+//  Program to load and start up a new console handler and CLI.
+
+    LET args       =  "INDEVICE/A,OUTDEVICE/A"
+    LET argv       =  VEC 50
+
+    LET dummy      =  VEC 3
+
+    LET indevice   =  0
+    LET outdevice  =  0
+    LET dev.in     =  0
+    LET dev.out    =  0
+    LET cohand     =  0
+    LET cli        =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "******  Bad arguments for *"%S*"*N", args )
+
+        stop( 20 )
+    $)
+
+    indevice   :=  argv!0
+    outdevice  :=  argv!1
+
+    dev.in     :=  convertnumber( indevice )
+    dev.out    :=  convertnumber( outdevice )
+
+    UNLESS  dev.in < 0  &  dev.out < 0  DO
+    $(
+        //  Bum numbers given, so complain about them.
+
+        UNLESS  dev.in < 0  DO
+            writef( "******  Bad INPUT device number *"%S*"*N", indevice )
+
+        UNLESS  dev.out < 0  DO
+            writef( "******  Bad OUTPUT device number *"%S*"*N", outdevice )
+
+        stop( 20 )
+    $)
+
+    //  Create the CLI for the new console handler.
+
+    cli  :=  createcli( dummy )
+
+    IF  cli = 0  THEN
+    $(
+        writes( "******  Unable to create new CLI task*N" )
+
+        stop( 20 )
+    $)
+
+    writef( "CLI task is %N*N", cli )
+
+    //  And the console handler itself.
+
+    cohand  :=  createcohand()
+
+    IF  cohand = 0  THEN
+    $(
+        writes( "******  Unable to create new COHAND task*N" )
+
+        deletetask( cli )
+
+        stop( 20 )
+    $)
+
+    writef( "COHAND task is %N*N", cohand )
+
+    //  All that remains now is to start the new tasks up.
+
+    sendpkt( notinuse, cohand, 0, 0, 0,
+             dev.in,
+             dev.out,
+             cli )        //  For Topexpress console handler
+
+    sendpkt( notinuse, cohand, act.set.currentinputtask, 0, 0,
+             cli )        //  For Computer Lab console handler
+
+    sendpkt( notinuse, cli, 0, 0, 0,
+             copydir( currentdir ),
+             cohand,
+             "**",
+             copydir( cli.commanddir ),
+             cli.defaultstack,
+             cli.prompt )
+$)
+
+
+
+AND createcli( dummy )  =  VALOF
+$(
+//  Create a new cli task, returning its task id.
+
+    LET seglist    =  VEC 4
+
+    LET stacksize  =  tcb!tcb.stsiz
+    LET priority   =  tcb!tcb.pri
+
+    LET task       =  0
+
+    //  Set up the segment list for the new task.  We copy across all the
+    //  old favourites, plus an extra dummy segment which sets the global
+    //  vector size.
+
+    dummy!0    :=  cli.module
+    dummy!1    :=  3
+    dummy!2    :=  0
+    dummy!3    :=  globsize
+
+    seglist!0  :=  4
+    seglist!1  :=  tcb!tcb.seglist!1
+    seglist!2  :=  tcb!tcb.seglist!2
+    seglist!3  :=  dummy
+    seglist!4  :=  tcb!tcb.seglist!4
+
+    //  Now, create the new task at the highest possible priority, so that
+    //  we do not lock up when we send a packet to it.
+
+    FOR  p = priority-1  TO  1  BY  -1  DO
+    $(
+        task  :=  createtask( seglist, stacksize, p )
+
+        UNLESS  task = 0  DO  BREAK
+    $)
+
+    RESULTIS  task
+$)
+
+
+
+AND createcohand()  =  VALOF
+$(
+//  Create a new console handler.
+
+    LET seglist    =  rootnode!rtn.tasktab!consoletask!tcb.seglist
+    LET stacksize  =  rootnode!rtn.tasktab!consoletask!tcb.stsiz
+    LET priority   =  rootnode!rtn.tasktab!consoletask!tcb.pri
+
+    LET task       =  0
+
+    FOR  p = priority-1  TO  1  BY  -1  DO
+    $(
+        task  :=  createtask( seglist, stacksize, p )
+
+        UNLESS  task = 0  DO  BREAK
+    $)
+
+    RESULTIS  task
+$)
+
+
+
+AND cli.init( pkt )  =  VALOF
+$(
+//  Version of "cli.init" called by the new cli when it is created.
+
+    initio()
+
+    currentdir           :=  pkt!pkt.arg1
+    consoletask          :=  pkt!pkt.arg2
+    cli.standardinput    :=  findinput( pkt!pkt.arg3 )
+    cli.standardoutput   :=  findoutput( "**" )
+    cli.commanddir       :=  pkt!pkt.arg4
+    cli.defaultstack     :=  pkt!pkt.arg5
+
+    cli.background       :=  NOT (cli.standardinput!scb.type < 0)
+
+    cli.currentinput     :=  findinput( "sys:s.initial-commands-cli2" )
+    cli.currentoutput    :=  cli.currentoutput
+
+    IF cli.currentinput = 0  THEN  cli.currentinput  :=  cli.standardinput
+
+    returncode           :=  0
+    cli.returncode       :=  0
+    cli.faillevel        :=  cli.initialfaillevel
+    cli.result2          :=  0
+    cli.commandfile % 0  :=  0
+    cli.module           :=  0
+
+    FOR  i = 0  TO  pkt!pkt.arg6 % 0  DO  cli.prompt % i  :=  pkt!pkt.arg6 % i
+
+    selectinput( cli.currentinput )
+    selectoutput( cli.currentoutput )
+
+    writes( "*NTRIPOS starting*N*N" )
+
+    tcb!tcb.seglist!3  :=  0
+    result2            :=  pkt
+
+    RESULTIS  qpkt
+$)
+
+
+
+AND convertnumber( string )  =  VALOF
+$(
+//  Return the binary representation of the number given.
+
+    LET value   =  0
+    LET length  =  string % 0
+
+    UNLESS  length > 1          DO  RESULTIS  0
+    UNLESS  string % 1  =  '-'  DO  RESULTIS  0
+
+    FOR  i = 2  TO  length  DO
+    $(
+        LET ch  =  string % i
+
+        UNLESS  '0' <= ch <= '9'  DO  RESULTIS  0
+
+        value  :=  value * 10  +  ch  -  '0'
+    $)
+
+    RESULTIS  -value
+$)
+
+

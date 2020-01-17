@@ -1,0 +1,157 @@
+SECTION "SYN5"
+
+GET "SYNHDR"
+
+LET rdblockbody() = VALOF
+$(1 LET p, l = rec.p, rec.l
+    LET a = 0
+    LET ptr = @a
+
+ $( LET op = 0
+    rec.p, rec.l := level(), recover
+    ignore(s.semicolon)
+
+    SWITCHON symb INTO
+    $(s CASE s.manifest:
+        CASE s.static:
+        CASE s.global:
+                op := symb
+                nextsymb()
+                !ptr := rdsect(rdcdefs, op)                             //PB====
+                ENDCASE
+
+        CASE s.dollarname:
+                rdollarcom()
+                LOOP
+
+        CASE s.let:
+        $<EE    Earlyeval       := FALSE                        //PB==== $>EE
+                nextsymb()
+                !ptr := rdef()
+       recover:
+             $( LET qtr = ptr
+                WHILE symb=s.and DO
+                  $( nextsymb()
+                     !qtr := list3(s.and, !qtr, rdef())
+                     qtr := @h3!(!qtr)
+                  $)
+                op := s.let
+                ENDCASE
+             $)
+
+        DEFAULT:!ptr := rdseq()
+                UNLESS symb=s.rsect | symb=s.end DO synreport(52,99,-99)
+        CASE s.rsect: CASE s.end:
+                BREAK
+    $)s
+    !ptr := list3(op, !ptr, 0)
+    ptr := @h3!(!ptr)
+ $) REPEAT
+
+    rec.p, rec.l := p, l
+    RESULTIS a
+$)1
+
+AND rdseq() = VALOF
+$( LET n = 0
+   LET q = treeq
+
+   $( ignore(s.semicolon)
+//com      !treeq := rcom(treeq)
+      rcom(treeq)
+      treeq, n := treeq-1, n+1
+   $) REPEATUNTIL symb=s.rsect | symb=s.end
+
+   treeq := q
+   IF n=1 RESULTIS !q
+   IF n=2 RESULTIS list3(s.semicolon, q!0, q!(-1))
+   RESULTIS makelist(s.semicolonlist, n)
+$)
+
+
+AND rdcdefs( $<EE op $>EE ) = VALOF                             //PB====
+$( LET q, n = treeq, 0
+   LET p, l = rec.p, rec.l
+$<EE
+   LET look(x) = VALOF
+   $( FOR I = DECVEC TO DECPTR+3 BY -3  IF !TREEQ=!I RESULTIS I; RESULTIS 0 $)
+$>EE
+   rec.p, rec.l := level(), rec
+
+   $( !treeq := rname()
+      UNLESS symb=s.eq | symb=s.colon DO                        synreport(45)
+      nextsymb()
+      treeq!(-1) := rexp(0)
+$<EE
+// Have got a name and a value - Look them up in DECVEC
+//      DEB("%N:", !TREEQ)
+//      FOR I = DECVEC TO DECPTR+3 BY -3 DO DEB("%N %N %N  ", !I, i!(-1), i!(-2))
+      $( LET I = LOOK(!TREEQ)
+         TEST I = 0
+         $( !DECPTR := !TREEQ
+            DECPTR!(-1) := op=s.manifest -> S.manifest, 0
+            I := MANEVAL(TREEQ!(-1))
+            DECPTR!(-2) := I=Eval.def -> treeq!(-1), I
+//DEB("[A:%N:%S-%N %N %N @ %N] ",
+//              op, (!DECPTR)+2, !DECPTR, DECPTR!(-1), DECPTR!(-2), DECPTR)
+            DECPTR := DECPTR - 3
+         $)
+         ELSE
+DEB("[%S:%N=%N(%N)]", (!TREEQ)+2, I!(-2), MANEVAL(TREEQ!(-1)), TREEQ!(-1)) <>
+                UNLESS I!(-2) = MANEVAL(TREEQ!(-1)) DO I!(-1) := 0 // If same
+      $)
+      IF TREEQ-DECPTR < 20 THEN EARLYEVAL := FALSE
+$>EE
+      treeq, n := treeq-2, n+2
+rec:  ignore(s.semicolon)
+   $) REPEATWHILE symb=s.name
+
+   rec.p, rec.l := p, l
+   treeq := q
+   RESULTIS makelist(s.semicolonlist, n)
+$)
+
+AND rdsect(r $<EE , op $>EE ) = VALOF                           //PB====
+$( LET tag = wordnode
+   LET l, s = Linecount, Source.name
+   checkfor(s.lsect, 6)
+   r := r( $<EE op $>EE )               // do what you're told!         //PB====
+   UNLESS symb=s.rsect DO synreport(7, l, s)// Not $) !
+   TEST tag=wordnode                    // correct match!
+   THEN nextsymb()                      // so continue!
+   ELSE TEST wordnode=nulltag
+        THEN $( symb := 0; synreport(9, wordnode+2, tag+2) $)   // $(r $)//PB===
+        ELSE UNLESS (STFLAGS & stf.untag)=0                     // $(? $)r//PB====
+        $( LET p,l,nl = rec.p, rec.l, nlpending
+           rec.p, rec.l := level(), lab
+           //IF REPORTUNTAGGED < 0 THEN
+           reportcount := reportcount-1
+           synreport(10, wordnode+2, tag+2)
+lab:       rec.p, rec.l, nlpending := p,l, nl   // transparent error!
+        $)
+   RESULTIS r
+$)
+
+AND rnamelist() = VALOF
+$( LET q, n = treeq, 0
+
+   $( !treeq := rname()
+      treeq, n := treeq-1, n+1
+      UNLESS symb=s.comma BREAK
+      nextsymb()
+   $) REPEAT
+
+   treeq := q
+   IF n=1 RESULTIS !q
+   IF n=2 RESULTIS list3(s.comma, q!0, q!(-1))
+   RESULTIS makelist(s.commalist, n)
+$)
+
+
+AND rname() = VALOF $( LET a = wordnode; checkfor(s.name, 8); RESULTIS a $)
+
+AND ignore(item) BE IF symb=item DO nextsymb()
+
+AND checkfor(item, n) BE $( UNLESS symb=item DO synreport(n); nextsymb() $)
+
+

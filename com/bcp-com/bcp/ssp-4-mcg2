@@ -1,0 +1,474 @@
+SECTION "MCG2"
+
+GET "CG68HDR"
+
+// initialise the simulated stack (SS)
+LET initstack(n) BE
+$( arg2, arg1 := tempv, tempv+3
+   ssp := n
+   pendingop := s.none
+   h1!arg2, h2!arg2, h3!arg2 := k.loc, (ssp-2)*bpw, (ssp-2)*bpw
+   h1!arg1, h2!arg1, h3!arg1 := k.loc, (ssp-1)*bpw, (ssp-1)*bpw
+   IF maxssp<ssp DO maxssp := ssp
+$)
+
+
+// move simulated stack (SS) pointer to N
+AND stack(n) BE
+$(1 IF n>=ssp+4 DO
+    $( store(0,ssp-1)
+       initstack(n)
+       RETURN
+    $)
+
+    WHILE n>ssp DO loadt(k.loc, ssp*bpw)
+
+    UNTIL n=ssp DO
+    $( IF arg2=tempv DO
+       $( TEST n=ssp-1
+          THEN $( ssp := n
+                  h1!arg1,h2!arg1 := h1!arg2,h2!arg2
+                  h3!arg1 := (ssp-1)*bpw
+                  h1!arg2,h2!arg2 := k.loc, (ssp-2)*bpw
+                  h3!arg2 := (ssp-2)*bpw
+               $)
+          ELSE initstack(n)
+          RETURN
+       $)
+
+       arg1, arg2 := arg1-3, arg2-3
+       ssp := ssp-1
+    $)
+$)1
+
+
+
+// store all SS items from A to B in their true
+// locations on the stack
+AND store(a,b) BE
+$( FOR p = tempv TO arg1 BY 3 DO
+   $( LET s = h3!p
+      IF s>b BREAK
+      IF s>=a & h1!p>=k.reg DO storet(p)
+   $)
+   FOR p = tempv TO arg1 BY 3 DO
+   $( LET s = h3!p
+      IF s>b RETURN
+      IF s>=a DO storet(p)
+   $)
+$)
+
+
+
+AND scan() BE
+$(1 LET l, m = ?, ?
+
+//debug    IF traceloc>=0 DO
+//debug       TEST traceloc<=stvp<=traceloc+20
+//debug       THEN debug := 10
+//debug       ELSE debug := 0
+//debug    IF debug>0 DO dboutput(debug)
+
+    SWITCHON op INTO
+ $(sw DEFAULT:     cgerror(0, "BAD OP %N", op)
+                   ENDCASE
+
+      CASE 0:      RETURN
+
+//debug      CASE s.debug:debug := rdn() // set the debug level
+//debug                   ENDCASE
+
+      CASE s.lp:   loadt(k.loc,  rdn ()*bpw); ENDCASE
+      CASE s.lg:   loadt(k.glob, rdgn()*bpw); ENDCASE
+      CASE s.ln:   loadt(k.numb, rdn ()    ); ENDCASE
+
+      CASE s.lstr: cgstring(rdn());       ENDCASE
+
+      CASE s.true: loadt(k.numb, TRUE);   ENDCASE
+      CASE s.false:loadt(k.numb, FALSE);  ENDCASE
+
+      CASE s.llp:  loadt(k.lvloc, rdn()*bpw); ENDCASE
+      CASE s.llg:  loadt(k.lvglob,rdgn()*bpw);ENDCASE
+
+      CASE s.sp:   storein(k.loc, rdn()*bpw); ENDCASE
+      CASE s.sg:   storein(k.glob,rdgn()*bpw);ENDCASE
+
+      CASE s.ll:
+      CASE s.lll:
+      CASE s.sl: $( LET l = rdl()
+                    LET p = llist
+                    UNTIL p=0 $( IF l=h2!p BREAK; p := !p $)
+                    IF op=s.sl  & p=0 $( storein(k.lab, l); ENDCASE $)
+                    IF op=s.lll & p=0 $( loadt(k.lvlab, l); ENDCASE $)
+                    IF op=s.ll TEST p=0
+                                      $( loadt(k.lab,   l); ENDCASE $)
+                               ELSE   $( loadt(k.lvlabsh, h3!p); ENDCASE $)
+                    cgerror(0, "Illegal use of static constant")
+                    ENDCASE
+                 $)
+      CASE s.mod:
+                //      Format <change> address MOD op
+                //      E.g. loc +:= 1  == LN 1 LLP loc MOD PLUS
+                //
+                //      STOREIN optimises for K.LOC, K.GLOB, K.LAB
+                //      for +,-,|,&
+                //
+                //      name!const op:= y
+                //      becomes
+                //      OP      rs,const(A0, rd)
+                //      !!!!!!!!
+                $(  LET op      = rdn()
+                    LET mode    = arg1!h1
+                    LET do.offset= ( (pendingop=s.plus &
+                                           (arg2!h1 = K.numb | arg1!h1 = K.numb)
+                                     )                          |
+                                     ( pendingop=s.minus & arg1!h1 = K.numb)
+                                   )
+                    IF do.offset & arg2!h1 = K.numb THEN swapargs()
+
+                    TEST op=s.plus | op=s.minus | op=s.logor | op=s.logand
+                        // (@local) + const     => (@local')
+                        TEST ( pendingop=s.none | do.offset )   &
+                             ( mode=K.lvloc | mode=K.lvglob | mode=K.lvlab )
+                        $(  UNLESS pendingop = s.none
+                                lose1(arg1!h1, pendingop=s.plus ->
+                                                        arg1!h2 + arg2!h2,
+                                                        arg1!h2 - arg2!h2 )
+                            pendingop := op
+                            arg1!h1 := mode + (K.loc-K.lvloc)
+                            swapargs()                  // EVEN in case of - !!!
+                            storein(arg2!h1, arg2!h2)
+                        $)
+                        ELSE
+                        $(  LET r = ?
+                            cgrv()
+                            swapargs()
+                            cgdyadic(
+                                   op=s.plus    -> fns.add,
+                                   op=s.minus   -> fns.sub,
+                                   op=s.logor   -> fns.or,
+                                                   fns.and,     FALSE, TRUE)
+                           stack(ssp-2)
+/*
+                            r := movetoanyr(arg2)       // Pity - may be small int
+                            formea(arg1!h1, arg1!h2)
+                            genrea(op=s.plus    -> #XD180,
+                                   op=s.minus   -> #X9180,
+                                   op=s.logor   -> #X8180,
+                                                   #XC180, r, ea.m, ea.d)
+                            forgetvar(arg1!h1, arg1!h2)
+*/
+                        $)
+                    ELSE
+                    $(  //code  STATIC $( code1 = 0 $)
+                        LET loc.number = ?
+                        LET call.routine = op = s.mult | op = s.div |
+                                                op = s.rem
+                        //code  LET code.(a) BE
+                        //code $( CGERROR(0, "Code %X4", a); code1(a) $)
+//code                                  code1 := code
+//code  //                              code  := code.
+                        cgpendingop()
+                        cgrv()
+                        swapargs()
+                        IF call.routine         // Save MC address
+                        $(  LET r = arg2!h1
+        // We have a SS of <change> <addr>
+        // where addr is in K.IRn.
+        // We're just about to re use this address, so first of all store it on stack.
+        // To do this, fool STORET, by saying that arg2 is held in K.REG, n
+        // so that it just copies the number onto stack
+        // HOWEVER, NOTE THAT ONCE THE ADDRESS HAS BEEN LOADED INTO A REGISTER
+        // IT MUST BE TOLD THAT IT IS REALLY K.IRn
+
+        // Have to swap the args so that the stack location is not lost
+
+                            loc.number := arg2!h3
+//SHIFT IN BY EIGHT ............................................................
+        // LOC.NUMBER is where the MACHINE ADDRESS is actually stored
+
+                                    arg2!h1, arg2!h2 := K.reg, r & 7
+        // Mark it as a register
+
+                                    storet(arg2)
+        // Place a copy in the correvt location
+
+                                    $(  LET addr = arg2
+                                        loadt(K.loc, loc.number)
+        // Generate a new copy of the MACHINE ADDRESS
+
+                                        movetoanyr(arg1)
+        // Force it to be loaded into a register
+
+//                                      addr!h1 := K.ir0 + arg1!h2
+//                                      addr!h2 := 0
+//      and mark it as what it really is!
+
+                                    $)
+                                    arg1!h1 := K.ir0 + arg1!h2
+                                    arg1!h2 := 0
+//      mark it as what it really is!
+                                $)
+                                $(  LET reg, zero = arg2!h1, arg2!h2
+                                    LET swap = TRUE
+                                    LET fns = VALOF SWITCHON op INTO
+                                    $(  DEFAULT:        RESULTIS 0
+                                        CASE s.logor:   RESULTIS fns.or
+                                        CASE s.logand:  RESULTIS fns.and
+                                        CASE s.plus:    swap := FALSE; RESULTIS fns.add
+                                        CASE s.minus:   RESULTIS fns.sub
+                                    $)
+                                    TEST fns = 0
+                                    $(  pendingop := op; cgpendingop()
+                                        TEST call.routine
+                                        $(  movetoanyr(arg2)
+                                        //      Reload the MACHINE ADDRESS
+                                            arg2!h1 := K.ir0 + arg2!h2
+                                            arg2!h2 := 0
+                                        //      and mark it as what it really is!
+                                        $)
+                                        ELSE $( loadt(reg, zero); swapargs() $)
+                                        cgmove()
+                                    $)
+                                    ELSE cgdyadic(fns, swap, TRUE)
+                                $)
+                                stack(ssp-2)
+//code                                  code  := code1
+                            $)
+                        $)
+                        ENDCASE
+
+
+      CASE s.stind:     cgstind();                                      ENDCASE
+      CASE s.rv:        cgrv();                                         ENDCASE
+      CASE s.slctap:    cgslctap();                                     ENDCASE
+      CASE s.slctst:    cgslctst();                                     ENDCASE
+
+      CASE s.eq: CASE s.ne: CASE s.ls:CASE s.gr:CASE s.le:CASE s.ge:
+                   // Are we in boolean mode?
+                   $(   LET newop = rdn()
+                        TEST newop = s.jf | newop = s.jt
+                        $(
+                            cgcondjump.(newop=s.jt, rdl(), op)
+                            ENDCASE                             // need new op
+                        $)
+                        ELSE
+                        $(  cgpendingop()
+                            pendingop := op
+                            op := newop
+                            LOOP                                // Got new op
+                        $)
+                    $)
+
+      CASE s.mult:CASE s.div:CASE s.rem:
+      CASE s.plus:CASE s.minus:
+      CASE s.lshift:CASE s.rshift:
+      CASE s.logand:CASE s.logor:CASE s.eqv:CASE s.neqv:
+      CASE s.not:CASE s.neg:CASE s.abs:
+                   cgpendingop()
+                   pendingop := op
+                   ENDCASE
+
+      CASE s.endfor:
+//                 cgpendingop()
+//                 pendingop := s.le
+                   cgcondjump.(TRUE, rdl(), s.le)
+                   ENDCASE
+
+      CASE s.jt:
+      CASE s.jf:   l := rdl()
+                   $( LET nextop = rdn()
+
+                      IF nextop=s.jump DO
+                      $( cgcondjump.(op=s.jf, rdl(), s.none)
+                         GOTO jump
+                      $)
+                      cgcondjump.(op=s.jt, l, s.none)
+                      op := nextop
+                      LOOP
+                   $)
+
+      CASE s.res:  cgpendingop()
+                   store(0, ssp-2)
+                   movetor(arg1,r1)
+                   stack(ssp-1)
+
+      CASE s.jump: cgpendingop()
+                   store(0, ssp-1)
+                   l := rdl()
+
+      jump:        $( op := rdn() // deal with STACKs
+                      UNLESS op=s.stack BREAK
+                      stack(rdn())
+                   $) REPEAT
+
+                   UNLESS op=s.lab DO
+                   $( genb(f.bra, l)
+                      incode := FALSE
+                      LOOP
+                   $)
+                   m := rdl()
+                   UNLESS l=m DO
+                   $( genb(f.bra, l)
+                      incode := FALSE
+                   $)
+                   GOTO lab
+
+      CASE s.blab: // BCPL label (for compat. with FE)
+      CASE s.lab:  cgpendingop()
+                   store(0, ssp-1)
+                   m := rdl()
+
+      lab:         setlab(m)
+                   // only compile code inside
+                   // procedure bodies
+                   incode := procstkp>0
+                   countflag := (CGFLAGS & cgf.prof) ~= 0       //PBprofcounting
+                   forgetall()
+                   ENDCASE
+
+
+      CASE s.goto: cgpendingop()
+                   store(0, ssp-2)
+                   TEST h1!arg1=k.lvlabsh
+                   THEN genb(f.bra, h2!arg1)
+                   ELSE $( movetoa(rl)
+                           genea(f.jmp, m.2l, 0)
+                        $)
+                   incode := FALSE
+                   stack(ssp-1)
+                   ENDCASE
+
+      CASE s.query:cgpendingop()
+                   stack(ssp+1)
+                   ENDCASE
+
+      CASE s.stack:cgpendingop()
+                   stack(rdn())
+                   ENDCASE
+
+      CASE s.store:cgpendingop()
+                   store(0, ssp-1)
+                   ENDCASE
+
+      CASE s.entry:
+                $( LET n = rdn()
+                   LET l = rdl()
+                   cgentry(n, l)
+                   ENDCASE
+                $)
+
+      CASE s.save: IF procstkp>=20 DO cgerror(20, "PROC STACK OVF")
+                   procstk!procstkp     := procbase
+                   procstk!(procstkp+1) := maxssp
+                   procbase := stvp
+                   cgsave(rdn())
+//                 NOT PROVIDED YET!!!!!
+//                   IF (CGFLAGS & cgf.stkchking) ~= 0          //PBstkchking DO
+//                   $( genea(f.jsr,m.5s,sr.stkchk)
+//                      procstk!(procstkp+2) := stvp
+//                      code2(0)
+//                      maxssp := ssp
+//                   $)
+//                 NOT PROVIDED YET!!!!!
+                   procstkp := procstkp+3
+                   ENDCASE
+
+      CASE s.fnap:
+      CASE s.rtap: cgapply(op, rdn())
+                   ENDCASE
+
+      CASE s.rtrn:
+      CASE s.fnrn: cgreturn(op)
+                   incode := FALSE
+                   ENDCASE
+
+      CASE s.endproc:
+          $( LET n = rdn()
+             procstkp := procstkp-3
+//                 NOT PROVIDED YET!!!!!
+//           IF (CGFLAGS & cgf.stkchking) ~= 0                  //PBstkchking DO
+//           $( LET p = procstk!(procstkp+2)
+//              FOR i = 0 TO 3 DO
+//                  stv%(p+i) := (@maxssp)%i
+//           $)
+//                 NOT PROVIDED YET!!!!!
+             maxssp   := procstk!(procstkp+1)
+             procbase := procstk!procstkp
+             IF procstkp=0 DO cgstatics()
+             ENDCASE
+          $)
+
+      CASE s.rstack:
+                   initstack(rdn())
+                   loadt(k.reg, r1)
+                   ENDCASE
+
+      CASE s.finish:
+             $( LET k = ssp
+                stack(ssp+3)
+                loadt(k.numb, 0)
+                loadt(k.glob, gn.stop)
+                cgapply(s.rtap, k)
+                ENDCASE
+             $)
+
+      CASE s.switchon:
+            $( LET n = 2 * rdn() + 1
+               switchspace := getvec(n)
+               IF switchspace=0 cgerror(20, "can't get workspace for SWITCHON")
+               cgswitch(switchspace, n)
+               freevec(switchspace)
+               switchspace := 0
+               ENDCASE
+            $)
+
+      // not fully implemented yet
+      CASE s.gethalfword:
+      CASE s.puthalfword:
+//                 cghalfwordap(op);                                    ENDCASE
+      CASE s.getbyte:
+      CASE s.putbyte:
+                   cgbyteap(op)
+                   ENDCASE
+
+
+      // not fully implemented yet
+      CASE s.section:
+                cgname(s.defines, rdn(), TRUE)   // Always code generate it!
+                                                                        ENDCASE
+//$(  LET V = VEC 7/bytesperword
+//    LET len = RDN()
+//    FOR I = 1 TO len DO IF I < 7 THEN V%I := RDN()
+//v%0 := len<7 -> len, 7
+//CGERROR(0," ****** WARNING: Multiple SECTIONs, *"%S*" ignored*N", v)
+//$)                                                    ENDCASE
+
+      CASE s.needs:cgname(s.needs,rdn(), TRUE)   // Always code generate it!
+                                                                        ENDCASE
+
+      CASE s.global: cgglobal(rdn());                   RETURN
+
+      // DATALAB is always immediately followed
+      // by either (1) one or more ITEMNs
+      //        or (2) one ITEML
+      CASE s.datalab: datalabel := rdl()
+                      ENDCASE
+
+      // ITEML is always immediately preceeded by
+      // a DATALAB
+      CASE s.iteml:llist := getblk(llist, datalabel, rdl())
+                   ENDCASE
+
+      // ITEMN is always immediately preceeded by
+      // a DATALAB or an ITEMN
+      // CGITEMN sets DATALABEL to zero
+      CASE s.itemn:cgitemn(rdn())
+                   ENDCASE
+ $)sw
+
+    op := rdn()
+
+$)1 REPEAT
+
+

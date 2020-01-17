@@ -1,0 +1,43 @@
+GET "LIBHDR"
+GET "IOHDR"
+
+GLOBAL $( deplete : 1
+          close   : 2
+       $)
+
+LET deplete (scb) = VALOF
+$(  LET buf     = scb ! scb.buf
+    LET pos     = scb ! scb.pos
+    LET out     = output ()
+
+    FOR s = 1 TO scb ! scb.arg2 DO
+    $( LET nscb = scb![scb.arg2+s]
+       selectoutput (nscb)
+       FOR i = 0 TO pos-1 DO wrch (buf%i)
+       IF nscb!scb.type<0 THEN wrch('*E')
+    $)
+
+    scb!scb.pos := 0
+    selectoutput(out)
+    RESULTIS TRUE
+$)
+
+LET close (scb) = VALOF
+$(  LET buf     = scb ! scb.buf
+    LET pos     = scb ! scb.pos
+    LET out     = output ()
+
+    FOR s = 1 TO scb ! scb.arg2 DO
+    $( LET nscb = scb![scb.arg2+s]
+       selectoutput (nscb)
+       FOR i = 0 TO pos-1 DO wrch (buf%i)
+       IF nscb!scb.type<0 THEN wrch('*E')
+       endwrite()
+    $)
+
+    unloadseg(scb!scb.arg1)
+    selectoutput(out)
+    RESULTIS TRUE
+$)
+
+

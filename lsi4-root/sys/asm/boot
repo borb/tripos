@@ -1,0 +1,34 @@
+* Disable interrupts
+        DIN
+* Reset the disc controller
+        SELP    A,:A4
+* Start the transfer.
+        SST     :A0             Skip if idle
+        JMP     $-1
+        CEA     CB,X            X := @CB
+        OUT     X,:A0
+* Wait for transfer to finish
+?       SST     :A0             Skip if done
+        JMP     $-1
+* Enter bootstrap
+        JMP     0
+
+* Control block to read block 0
+CB      DATA    4               Opcode (read)
+        DATA    0               Unit
+        DATA    0               Cyl
+        DATA    0               Head
+        DATA    0               Sector
+        DATA    256             Word count
+        DATA    0               Memory address
+        DATA    0               No interrupts
+        DATA    0               Next IOB
+
+* Wasted slots to receive transfer status
+        DATA    0
+        DATA    0
+        DATA    0
+
+        END
+
+

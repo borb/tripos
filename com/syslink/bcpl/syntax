@@ -1,0 +1,1293 @@
+/****************************************************************************\
+*                          Systems Research Group                            *
+******************************************************************************
+
+
+      ######   #      #   ######   ##        ########  ##    ##  ##    ##
+     ########  ##    ##  ########  ##        ########  ###   ##  ##   ##
+     ##         ##  ##   ##        ##           ##     ####  ##  ##  ##
+     #######     ####    #######   ##           ##     ## ## ##  ####
+           ##     ##           ##  ##           ##     ##  ####  ## ##
+           ##     ##           ##  ##           ##     ##  ####  ##  ##
+     ########     ##     ########  ########  ########  ##   ###  ##   ##
+      ######      ##      ######   ########  ########  ##    ##  ##    ##
+
+           ######   #      #  ##    ##  ########    ####    #      #
+          ########  ##    ##  ###   ##  ########   ######   ##    ##
+          ##         ##  ##   ####  ##     ##     ##    ##   ##  ##
+          #######     ####    ## ## ##     ##     ########     ##
+                ##     ##     ##  ####     ##     ##    ##    #  #
+                ##     ##     ##  ####     ##     ##    ##   ##  ##
+          ########     ##     ##   ###     ##     ##    ##  ##    ##
+           ######      ##     ##    ##     ##     ##    ##  #      #
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   21/04/86            *
+\****************************************************************************/
+
+
+
+SECTION "SYNTAX"
+
+
+
+GET "LIBHDR"
+GET "SYSLINKHDR"
+
+
+
+LET definetagtable()  BE
+$(
+//  Set up the tag hash table, and initialise all the entries in it.
+
+    tagtable  :=  getstore( tagtablesize )
+
+    FOR  i = 0  TO  tagtablesize-1  DO  tagtable!i  :=  NIL
+$)
+
+
+
+AND definecommands()  BE
+$(
+//  Set up the list of commands which we are prepared to recognise.
+
+    commandlist  :=  NIL
+
+    definecommand( "include", c.include )
+    definecommand( "absmin", c.absmin )
+    definecommand( "absmax", c.absmax )
+    definecommand( "storemin", c.storemin )
+    definecommand( "storemax", c.storemax )
+    definecommand( "memorysize", c.memorysize )
+    definecommand( "tcbsize", c.tcbsize )
+    definecommand( "rootnode", c.rootnode )
+    definecommand( "mcaddrinc", c.mcaddrinc )
+    definecommand( "mcrelocinc", c.mcrelocinc )
+    definecommand( "tasktab", c.tasktab )
+    definecommand( "devtab", c.devtab )
+    definecommand( "info", c.info )
+    definecommand( "seg", c.seg )
+    definecommand( "**seg", c.star.seg )
+    definecommand( "driver", c.driver )
+    definecommand( "dcb", c.dcb )
+    definecommand( "task", c.task )
+    definecommand( "**task", c.star.task )
+    definecommand( "dev", c.dev )
+$)
+
+
+
+AND definecommand( name, type )  BE
+$(
+//  Add an entry into the command list for this name and type pair.
+
+    LET entry  =  getstore( cl.size )
+
+    entry!cl.link  :=  commandlist
+    entry!cl.name  :=  lookuptag( name )
+    entry!cl.type  :=  type
+
+    commandlist    :=  entry
+$)
+
+
+
+AND defineflags()  BE
+$(
+//  Define all the flags and other values which are associated with the
+//  main part of the syslink program.
+
+    f.absmin      :=  defineflag( "absmin" )
+    f.absmax      :=  defineflag( "absmax" )
+    f.storemin    :=  defineflag( "storemin" )
+    f.storemax    :=  defineflag( "storemax" )
+    f.memorysize  :=  defineflag( "memorysize" )
+    f.tcbsize     :=  defineflag( "tcbsize" )
+    f.rootnode    :=  defineflag( "rootnode" )
+    f.mcaddrinc   :=  defineflag( "mcaddrinc" )
+    f.mcrelocinc  :=  defineflag( "mcrelocinc" )
+    f.tasktab     :=  defineflag( "tasktab" )
+    f.devtab      :=  defineflag( "devtab" )
+    f.info        :=  defineflag( "info" )
+$)
+
+
+
+AND defineflag( name )  =  VALOF
+$(
+//  Set up a pointer to a flag block, and set the "defined" field to FALSE,
+//  so that we can pick up duplicate definitions.
+
+    LET flag  =  getstore( fb.size )
+
+    flag!fb.name     :=  lookuptag( name )
+    flag!fb.defined  :=  FALSE
+    flag!fb.value    :=  0
+
+    RESULTIS  flag
+$)
+
+
+
+AND parsefile( file )  =  VALOF
+$(
+//  Read and parse the main input file, and then check the parameters to make
+//  sure that everything makes sense.
+
+    UNLESS  handlefile( file )  DO  RESULTIS  FALSE
+    UNLESS  checkparameters()   DO  RESULTIS  FALSE
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND checkparameters()  =  VALOF
+$(
+//  Check all the parameters given for meaningless values, before we waste time
+//  opening and reading files.
+
+    LET oldelev  =  errorlevel
+    LET oldelab  =  errorlabel
+
+    LET high1    =  0
+    LET high2    =  0
+
+    LET tlist    =  tasklist
+    LET dlist    =  devicelist
+    LET active   =  FALSE
+    LET clock    =  FALSE
+
+    errorlevel    :=  level()
+    errorlabel    :=  label
+
+    p.absmin      :=  flagval( f.absmin )
+    p.absmax      :=  flagval( f.absmax )
+    p.storemin    :=  flagval( f.storemin )
+    p.storemax    :=  flagval( f.storemax )
+    p.rootnode    :=  flagval( f.rootnode )
+
+    //  Now check the addresses to make sure that they make sense.  The "min"
+    //  values must be less than the "max" values, and the memory areas must
+    //  not overlap.
+
+    IF  compare( p.absmin, p.absmax ) > 0  THEN
+        error( "Bad absolute store addresses: %N,%N", p.absmin, p.absmax )
+
+    IF  compare( p.storemin, p.storemax ) > 0  THEN
+        error( "Bad relocatable store addresses: %N,%N", p.storemin, p.storemax )
+
+    UNLESS  compare( p.absmax, p.storemin ) < 0  |  compare( p.storemax, p.absmin ) < 0  DO
+        error( "Absolute and relocatable store overlaps" )
+
+    IF  compare( p.rootnode, p.absmin ) < 0  |  compare( p.rootnode, p.absmax ) > 0  THEN
+        error( "Rootnode address %N not in absolute store", p.rootnode )
+
+    //  The above are addresses in memory, and hence are unsigned values.
+    //  the rest are simple values, and so must all be positive.
+
+    p.memorysize  :=  flagval( f.memorysize )
+    p.tcbsize     :=  flagval( f.tcbsize )
+    p.mcaddrinc   :=  flagval( f.mcaddrinc )
+    p.mcrelocinc  :=  flagval( f.mcrelocinc )
+    p.tasktab     :=  flagval( f.tasktab )
+    p.devtab      :=  flagval( f.devtab )
+
+    IF  p.memorysize < 0       THEN  error( "Illegal *"memorysize*" value: %N", p.memorysize )
+    IF  p.tcbsize < tcb.sbase  THEN  error( "Illegal *"tcbsize*" value: %N", p.tcbsize )
+    IF  p.mcaddrinc < 0        THEN  error( "Illegal *"mcaddrinc*" value: %N", p.mcaddrinc )
+    IF  p.tasktab < 0          THEN  error( "Illegal *"tasktab*" value: %N", p.tasktab )
+    IF  p.devtab < 0           THEN  error( "Illegal *"devtab*" value: %N", p.devtab )
+
+    //  The numbers seem OK, but check to make sure that the "storemax" and
+    //  "memorysize" values match.  The first is the word address of the last
+    //  usable store location, with the second being the store size in Kwords.
+
+    high1  :=  p.memorysize * 1024
+    high2  :=  p.storemax + 1
+
+    UNLESS  compare( high1, high2 ) = 0  DO
+        error( "Illegal *"memorysize/storemax*" values: %N,%N", high1, high2 )
+
+    //  We have reasonable values, but do the task and device identifiers match
+    //  the numbers given.
+
+    IF  tasklist = NIL    THEN  error( "No tasks defined" )
+    IF  devicelist = NIL  THEN  error( "No devices defined" )
+
+    UNTIL  tlist = NIL  DO
+    $(
+        LET id  =  tlist!task.id
+
+        IF  id > p.tasktab  THEN
+            error( "Task %N out of range 1 to %N", id, p.tasktab )
+
+        IF  tlist!task.active  THEN  active  :=  TRUE
+
+        tlist  :=  tlist!task.link
+    $)
+
+    UNLESS  active  DO  error( "No active task defined" )
+
+    //  Having checked the tasks, do the same for the devices.  We must be
+    //  careful with the sign of the identifiers.
+
+    UNTIL  dlist = NIL  DO
+    $(
+        LET id  =  dlist!device.id
+
+        UNLESS  1 <= ABS( id ) <= p.devtab  DO
+            error( "Device %N out of range -1 to -%N", id, p.devtab )
+
+        IF  id = -1  THEN  clock  :=  TRUE
+
+        dlist  :=  dlist!device.link
+    $)
+
+    UNLESS  clock  DO  warning( "No CLOCK device defined" )
+
+    //  Now, check the info vectors, making sure that there are no references
+    //  to undefined segments.
+
+    IF  f.info!fb.defined  THEN  checkinfo( f.info!fb.value )
+
+    errorlevel  :=  oldelev
+    errorlabel  :=  oldelab
+
+    RESULTIS  TRUE
+
+    //  Error recovery point.  We just return with a "false" verdict, and let
+    //  the higher level handle the problem.
+
+label:
+
+    errorlevel  :=  oldelev
+    errorlabel  :=  oldelab
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND flagval( flag )  =  VALOF
+$(
+//  Return the value associated with a flag, checking that it has been
+//  defined.
+
+    UNLESS  flag!fb.defined  DO
+        error( "Item *"%S*" not defined", flag!fb.name )
+
+    RESULTIS  flag!fb.value
+$)
+
+
+
+AND checkinfo( info )  BE
+$(
+//  Check this info node, making sure that it does not contain references to
+//  undefined segment lists.
+
+    LET type     =  info!i.type
+    LET value    =  info!i.value
+    LET seglist  =  0
+
+    SWITCHON  type  INTO
+    $(
+        CASE s.string :
+        CASE s.number :  //  Bound to be OK.
+
+                         ENDCASE
+
+
+        CASE s.list   :  //  Check each item in the list individually.
+
+                         FOR  i = 1  TO  value!0  DO  checkinfo( value!i )
+
+                         ENDCASE
+
+
+        CASE s.tag    :  //  We have to look this name up in the list of
+                         //  segment lists, just to make sure that it is
+                         //  defined.
+
+                         seglist  :=  findseglist( value )
+
+                         IF  seglist = NIL  THEN
+                             error( "Info segment *"%S*" not defined", value )
+
+                         info!i.type   :=  s.seglist
+                         info!i.value  :=  seglist
+
+                         ENDCASE
+
+
+        DEFAULT       :  //  Internal error.  Undefined type value.
+
+                         panic( "(internal)  Unexpected info type %N", type )
+    $)
+$)
+
+
+
+AND handlefile( file )  =  VALOF
+$(
+//  Parse a syslink input file, returning when the file is exhausted.
+
+    LET stream   =  findinput( file )
+    LET success  =  TRUE
+
+    TEST  stream = 0  THEN
+    $(
+        //  We have failed to open the source file, and so we should complain
+        //  bitterly about it.
+
+        message( "Failed to open source file *"%S*"", file )
+
+        success  :=  FALSE
+    $)
+    ELSE
+    $(
+        //  Otherwise, we have opened the file, and so we should parse it.
+        //  The parameters of the current file are saved, so that we can
+        //  restore them at the end.
+
+        LET oldin    =  input()
+        LET oldfile  =  filename
+        LET oldline  =  linenumber
+        LET oldlev   =  errorlevel
+        LET oldlab   =  errorlabel
+        LET oldch    =  ch
+
+        selectinput( stream )
+
+        filename    :=  file
+        linenumber  :=  1
+
+        errorlevel  :=  level()
+        errorlabel  :=  label
+
+        nextch()
+
+        UNTIL  ch = endstreamch  DO
+        $(
+            //  We have read a character which is not end of stream.  We should
+            //  therefore make sure that it is a valid tag character, and then
+            //  go on to parse the actual command.
+
+            LET tag      =  checktag()
+            LET command  =  lookupcommand( tag )
+
+$<TRIPOS
+            IF  testflags( #B0001 )  THEN  error( "BREAK" )
+$>TRIPOS
+
+            SWITCHON  command  INTO
+            $(
+                CASE c.include    :  doinclude()                ;  ENDCASE
+                CASE c.absmin     :  setnumber( f.absmin )      ;  ENDCASE
+                CASE c.absmax     :  setnumber( f.absmax )      ;  ENDCASE
+                CASE c.storemin   :  setnumber( f.storemin )    ;  ENDCASE
+                CASE c.storemax   :  setnumber( f.storemax )    ;  ENDCASE
+                CASE c.memorysize :  setnumber( f.memorysize )  ;  ENDCASE
+                CASE c.tcbsize    :  setnumber( f.tcbsize )     ;  ENDCASE
+                CASE c.rootnode   :  setnumber( f.rootnode )    ;  ENDCASE
+                CASE c.mcaddrinc  :  setnumber( f.mcaddrinc )   ;  ENDCASE
+                CASE c.mcrelocinc :  setnumber( f.mcrelocinc )  ;  ENDCASE
+                CASE c.tasktab    :  setnumber( f.tasktab )     ;  ENDCASE
+                CASE c.devtab     :  setnumber( f.devtab )      ;  ENDCASE
+                CASE c.info       :  declareinfo()              ;  ENDCASE
+                CASE c.seg        :  declareseglist( FALSE )    ;  ENDCASE
+                CASE c.star.seg   :  declareseglist( TRUE )     ;  ENDCASE
+                CASE c.driver     :  declareseg( type.driver )  ;  ENDCASE
+                CASE c.dcb        :  declareseg( type.dcb )     ;  ENDCASE
+                CASE c.task       :  declaretask( FALSE )       ;  ENDCASE
+                CASE c.star.task  :  declaretask( TRUE )        ;  ENDCASE
+                CASE c.dev        :  declaredev()               ;  ENDCASE
+
+                DEFAULT           :  error( "Unexpected *"%S*"", tag )
+            $)
+
+            //  After reading and parsing a command, there should be a piece
+            //  of terminating punctuation.
+
+            checkfor( ';', "Missing *";*"" )
+        $)
+
+        GOTO  endoffile
+
+        //  Error recovery point.  We come here when some sort of syntax error
+        //  has been found in the file.  We immediately set the "success" flag
+        //  to "false", and then join the common code to restore the previous
+        //  state.
+
+    label:
+
+        success  :=  FALSE
+
+        //  Normal end of file point.  When we reach end of file, we close
+        //  the stream down, and restore all the parameters of the previous
+        //  file.
+
+    endoffile:
+
+        endread()
+        selectinput( oldin )
+
+        filename    :=  oldfile
+        linenumber  :=  oldline
+        errorlevel  :=  oldlev
+        errorlabel  :=  oldlab
+        ch          :=  oldch
+    $)
+
+    RESULTIS  success
+$)
+
+
+
+AND nextch()  BE
+$(
+//  Return the next non-blank, non-comment character from the input stream.
+
+    ch  :=  readch()  REPEATWHILE  ch = '*S'  |  ch = '*T'  |  ch = '*N'
+
+    UNLESS  ch = '|'  DO  RETURN
+
+    ch  :=  readch()  REPEATUNTIL  ch = '*N'  |  ch = endstreamch
+$)
+REPEAT
+
+
+
+AND readch()  =  VALOF
+$(
+//  Read a character from the file, checking for newlines.
+
+    LET char  =  rdch()
+
+    IF  char = '*N'  THEN  linenumber  :=  linenumber + 1
+
+    RESULTIS  char
+$)
+
+
+
+AND doinclude()  BE
+$(
+//  Handle the "include" directive.  There is one argument, and that is the
+//  name of a file to be included.
+
+    LET file  =  checktag()
+
+    UNLESS  handlefile( file )  DO
+        error( "Invalid INCLUDE file *"%S*"", file )
+$)
+
+
+
+AND setnumber( flag )  BE
+$(
+//  Set the value of the flag given to be a number read from the stream.
+//  This is only valid if the flag has not been defined before.
+
+    IF  flag!fb.defined  THEN
+        error( "Item *"%S*" already defined", flag!fb.name )
+
+    flag!fb.value    :=  readnumber()
+    flag!fb.defined  :=  TRUE
+$)
+
+
+
+AND declareinfo()  BE
+$(
+//  Read an INFO type field.  This contains numbers, strings, pointers to
+//  vectors, and possible pointers to segment lists which have yet to be
+//  defined.
+
+    IF  f.info!fb.defined  THEN
+        error( "Item *"%S*" already defined", f.info!fb.name )
+
+    f.info!fb.value    :=  readinfoitem()
+    f.info!fb.defined  :=  TRUE
+$)
+
+
+
+AND readinfoitem()  =  VALOF
+$(
+//  Read an info item, and return a pointer to a block containing it.  Valid
+//  things here are:
+//
+//      number
+//      tag
+//      "string"
+//      (infolist)
+
+    LET result  =  0
+
+    TEST  ch = '"'  THEN
+    $(
+        result  :=  readinfostring()
+
+        checkfor( '"', "Closing *"quote*" missing from string" )
+    $)
+    ELSE
+
+    TEST  ch = '('  THEN
+    $(
+        result  :=  readinfolist()
+
+        checkfor( ')', "Missing *")*"" )
+    $)
+    ELSE
+
+    TEST  '0' <= ch <= '9'  |  ch = '#'  |  ch = '-'  THEN
+
+        result  :=  infoblock( s.number, readnumber() )
+
+    ELSE
+
+        result  :=  infoblock( s.tag, readtag() )
+
+    RESULTIS  result
+$)
+
+
+
+AND readinfostring()  =  VALOF
+$(
+//  Read a quoted string, stopping when we get to "end of line" or
+//  the terminating quote.  To get a quote in the string, two quotes must
+//  be used.
+
+    LET buffer  =  VEC 256/bytesperword
+    LET length  =  0
+
+    ch  :=  readch()
+
+    UNTIL  ch = '*N'  DO
+    $(
+        //  Check to see whether this is the terminating quote or not.
+
+        IF  ch = '"'  THEN
+        $(
+            LET nch  =  readch()
+
+            UNLESS  nch = '"'  DO
+            $(
+                unrdch()
+
+                BREAK
+            $)
+        $)
+
+        length           :=  length + 1
+        buffer % length  :=  ch
+        ch               :=  readch()
+    $)
+
+    //  When we drop out of that lot, we can update the length, and thenn
+    //  add this string into the permanent buffer area.
+
+    buffer % 0  :=  length
+
+    RESULTIS  infoblock( s.string, lookuptag( buffer ) )
+$)
+
+
+
+AND readinfolist()  =  VALOF
+$(
+//  Read a list of info items within parentheses, and return a pointer to
+//  it.  Items are separated by commas.
+
+    LET list   =  getstore( list.size )
+    LET count  =  0
+
+    nextch()
+
+    $(  //  Repeat loop to read info items.
+
+        IF  count = list.size  THEN
+            panic( "(internal)  >%N items in info list", list.size )
+
+        count       :=  count + 1
+        list!count  :=  readinfoitem()
+    $)
+    REPEATWHILE  testfor( ',' )
+
+    list!0  :=  count
+
+    RESULTIS  infoblock( s.list, list )
+$)
+
+
+
+AND declareseglist( temporary )  BE
+$(
+//  Read a named segment list, and add it to the list of those already defined.
+
+    LET segname   =  checktag()
+    LET seglist   =  getstore( sl.size )
+
+    LET lv.list   =  temporary  ->  @tempsegments, @permsegments
+    LET count     =  0
+
+    $(  //  Repeat loop to read a list of files.
+
+        IF  count = sl.size  THEN
+            panic( "(internal) >%N segments in list", sl.size )
+
+        count          :=  count + 1
+        seglist!count  :=  definesegment( checktag(), type.seglist, lv.list )
+    $)
+    REPEATWHILE  testfor( ',' )  &  count < sl.size
+
+    seglist!0  :=  count
+
+    defineseglist( segname, seglist, type.seglist )
+$)
+
+
+
+AND declareseg( type )  BE
+$(
+//  Declare a single segment of type "type".
+
+    LET segname  =  checktag()
+    LET seglist  =  getstore( sl.size )
+
+    seglist!0  :=  1
+    seglist!1  :=  definesegment( checktag(), type, @permsegments )
+
+    defineseglist( segname, seglist, type )
+$)
+
+
+
+AND declaretask( active )  BE
+$(
+//  Define a single task entry, and then make sure that this task has
+//  not already been declared.
+
+    LET id          =  readnumber()
+    LET segtable    =  getstore( st.size )
+    LET stack       =  0
+    LET priority    =  0
+    LET count       =  0
+
+    LET tag         =  checktag()
+
+    TEST  matchkey( "stack", tag )  THEN
+    $(
+        //  Stack before priority, so allow this!
+
+        stack     :=  readnumber()
+        priority  :=  keyednumber( "pri=priority" )
+    $)
+    ELSE
+
+    TEST  matchkey( "pri=priority", tag )  THEN
+    $(
+        //  Priority before stack.  Just as good as before.
+
+        priority  :=  readnumber()
+        stack     :=  keyednumber( "stack" )
+    $)
+
+    ELSE  error( "Unexpected *"%S*"", tag )
+
+    checkkey( "segs" )
+
+    $(  //  Loop to read the list of segment names.
+
+        IF  count = st.size  THEN
+            panic( "(internal) >%N segments in task table", st.size )
+
+        count           :=  count + 1
+        segtable!count  :=  lookupseglist( checktag(), type.seglist )
+    $)
+    REPEATWHILE  testfor( ',' )
+
+    segtable!0  :=  count
+
+    definetask( id, stack, priority, segtable, active )
+$)
+
+
+
+AND declaredev()  BE
+$(
+//  Declare a device.  This involves reading the device number, and the names
+//  of the DCB and DRIVER segments.
+
+    LET id      =  readnumber()
+    LET dcb     =  lookupseglist( keyedtag( "dcb" ), type.dcb )
+    LET driver  =  lookupseglist( keyedtag( "driver" ), type.driver )
+
+    definedevice( id, dcb, driver )
+$)
+
+
+
+AND keyedtag( key )  =  VALOF
+$(
+//  Check the given keyword, and then read a tag.
+
+    checkkey( key )
+
+    RESULTIS  readtag()
+$)
+
+
+
+AND keyednumber( key )  =  VALOF
+$(
+//  Check the given keyword, and then read a number.
+
+    checkkey( key )
+
+    RESULTIS  readnumber()
+$)
+
+
+
+AND checkkey( key )  BE
+$(
+//  Check that the next item in the list really is the key given.
+
+    LET tag  =  checktag()
+
+    UNLESS  matchkey( key, tag )  DO
+        error( "*"%S*" found where *"%S*" expected", tag, key )
+$)
+
+
+
+AND matchkey( key, tag )  =  VALOF
+$(
+//  Return TRUE if the tag given matches one of the keys in the key list.
+//  The possible keys are separated by "=" characters.
+
+    LET buffer  =  VEC 256/bytesperword
+    LET keyl    =  key % 0
+    LET length  =  0
+    LET pos     =  0
+    LET ch      =  0
+
+    UNTIL  pos = keyl  DO
+    $(
+        //  Look at the next character in the key string to see if it is
+        //  an "=" sign.  If so, then perform a comparison.
+
+        pos  :=  pos + 1
+        ch   :=  key % pos
+
+        IF  ch = '='  THEN
+        $(
+            //  Compare the string we have split off with the tag given, and
+            //  return TRUE if there is a match.
+
+            buffer % 0  :=  length
+
+            IF  compstring( buffer, tag ) = 0  THEN  RESULTIS  TRUE
+
+            //  Otherwise, reset the length of the string, and carry on to
+            //  see if we can find another match.
+
+            length  :=  0
+
+            LOOP
+        $)
+
+        //  If this is an ordinary character, then simply put it in the
+        //  buffer, and go round for more.
+
+        length           :=  length + 1
+        buffer % length  :=  ch
+    $)
+
+    //  When we drop out of the loop, we should compare with the last
+    //  item in the list.
+
+    buffer % 0  :=  length
+
+    RESULTIS  compstring( buffer, tag ) = 0
+$)
+
+
+
+AND definesegment( name, type, lv.list )  =  VALOF
+$(
+//  Add this segment to the segment list.  We add it to the permanent or
+//  temporary list depending on the state of this segment.
+
+    LET lock   =  locateobj( name )
+    LET entry  =  0
+
+    IF  lock = 0  THEN
+        error( "File *"%S*" does not exist", name )
+
+    freeobj( lock )
+
+    entry              :=  getstore( seg.size )
+
+    entry!seg.link     :=  NIL
+    entry!seg.name     :=  name
+    entry!seg.seglist  :=  NIL
+    entry!seg.type     :=  type
+    entry!seg.owner    :=  NIL
+    entry!seg.addr     :=  0
+
+    UNTIL  !lv.list = NIL  DO  lv.list  :=  !lv.list + seg.link
+
+    !lv.list           :=  entry
+
+    RESULTIS  entry
+$)
+
+
+
+$<PANOS
+AND locateobj( file )  =  findinput( file )
+
+
+
+AND freeobj( lock )  BE
+$(
+    LET i  =  input()
+
+    selectinput( lock )
+    endread()
+
+    selectinput( i )
+$)
+$>PANOS
+
+
+
+AND defineseglist( name, list, type )  BE
+$(
+//  Add this segment list to those already defined.  We must check to make
+//  sure that there is no name clash.
+
+    LET entry  =  findseglist( name )
+    LET ptr    =  @segmentlists
+
+    UNLESS  entry = NIL  DO
+        error( "Segment *"%S*" already defined", name )
+
+    entry            :=  getstore( segs.size )
+
+    entry!segs.link  :=  NIL
+    entry!segs.name  :=  name
+    entry!segs.list  :=  list
+    entry!segs.type  :=  type
+    entry!segs.addr  :=  NIL
+
+    UNTIL  !ptr = NIL  DO  ptr  :=  !ptr + segs.link
+
+    !ptr  :=  entry
+$)
+
+
+
+AND lookupseglist( name, type )  =  VALOF
+$(
+//  Return the entry corresponding to the given name and type.
+
+    LET entry  =  findseglist( name )
+
+    IF  entry = NIL  THEN
+        error( "Segment *"%S*" not defined", name )
+
+    UNLESS  entry!segs.type = type  DO
+        error( "Segment *"%S*" is wrong type", name )
+
+    RESULTIS  entry
+$)
+
+
+
+AND findseglist( name )  =  VALOF
+$(
+//  Scan the list of segment lists for the relevant name.
+
+    LET list  =  segmentlists
+
+    UNTIL  list = NIL  DO
+    $(
+        IF  list!segs.name = name  THEN  RESULTIS  list
+
+        list  :=  list!segs.link
+    $)
+
+    RESULTIS  NIL
+$)
+
+
+
+AND definetask( id, stack, priority, segtable, active )  BE
+$(
+//  Define the task given, checking all its parameters against the ones
+//  already declared to make sure that everything makes sense.
+
+    LET entry  =  getstore( task.size )
+    LET list   =  tasklist
+
+    LET ptr    =  tasklist
+    LET pptr   =  @tasklist
+
+    UNLESS  id > 0  DO
+        error( "Illegal task ID: %N  (must be >0)", id )
+
+    UNLESS  stack > 50  DO
+        error( "Illegal task stack size: %N (must be >50)", stack )
+
+    UNLESS  priority > 0  DO
+        error( "Illegal task priority: %N (must be >0)", priority )
+
+    //  The basic numbers seem OK, so we should scan the task list, making sure
+    //  that we don't have any task ID or priority clashes.
+
+    UNTIL  list = NIL  DO
+    $(
+        IF  id = list!task.id  THEN
+            error( "Task %N already defined", id )
+
+        IF  priority = list!task.priority  THEN
+            error( "Tasks %N and %N have same priority", id, list!task.id )
+
+        IF  active  &  list!task.active  THEN
+            error( "Tasks %N and %N are both active", id, list!task.id )
+
+        list  :=  list!task.link
+    $)
+
+    //  If we reach so far, then this means that the task seems OK.  We should
+    //  therefore add it into the task list.
+
+    entry!task.id        :=  id
+    entry!task.stack     :=  stack
+    entry!task.priority  :=  priority
+    entry!task.segtable  :=  segtable
+    entry!task.active    :=  active
+
+    UNTIL  ptr = NIL  DO
+    $(
+        //  Scan the list of tasks, so that we can put this one in its
+        //  rightful place.
+
+        IF  priority > ptr!task.priority  THEN  BREAK
+
+        pptr  :=  ptr+task.link
+        ptr   :=  ptr!task.link
+    $)
+
+    entry!task.link  :=  ptr
+    !pptr            :=  entry
+
+    //  Now, for each of the segment lists in the segment table, we should
+    //  scan the segment entries, flagging them as being needed.
+
+    FOR  i = 1  TO  segtable!0  DO
+    $(
+        LET list  =  segtable!i!segs.list
+
+        FOR  j = 1  TO  list!0  DO  list!j!seg.owner  :=  entry
+    $)
+$)
+
+
+
+AND definedevice( id, dcb, driver )  BE
+$(
+//  Define a device with the parameters given.
+
+    LET list       =  devicelist
+    LET entry      =  getstore( device.size )
+
+    LET ptr        =  devicelist
+    LET pptr       =  @devicelist
+
+    LET dcbseg     =  dcb!segs.list!1
+    LET driverseg  =  driver!segs.list!1
+
+    UNLESS  id < 0  DO
+        error( "Invalid device ID: %N", id )
+
+    UNTIL  list = NIL  DO
+    $(
+        IF  id = list!device.id  THEN
+            error( "Device %N already defined", id )
+
+        list  :=  list!device.link
+    $)
+
+    UNLESS  dcbseg!seg.owner = NIL  DO
+        error( "DCB *"%S*" already used by device %N",
+                dcbseg!seg.name, dcbseg!seg.owner!device.id )
+
+    entry!device.id      :=  id
+    entry!device.dcb     :=  dcb
+    entry!device.driver  :=  driver
+
+    UNTIL  ptr = NIL  DO
+    $(
+        //  Scan the list of devices, putting this one in its rightful
+        //  place (ordered by device ID).
+
+        IF  id > ptr!device.id  THEN  BREAK
+
+        pptr  :=  ptr+device.link
+        ptr   :=  ptr!device.link
+    $)
+
+    entry!device.link  :=  ptr
+    !pptr              :=  entry
+
+    //  Having set up the device itself, we should set up the back pointers
+    //  for the DCB and DRIVER segments, so that we can check that they are
+    //  all used later on.
+
+    dcbseg!seg.owner     :=  entry
+    driverseg!seg.owner  :=  entry
+$)
+
+
+
+AND readnumber()  =  VALOF
+$(
+//  Read a number (decimal, hexadecimal, octal or binary) from the input
+//  stream.
+
+    LET negative  =  testfor( '-' )
+    LET value     =  0
+
+    TEST  testfor( '#' )  THEN
+
+        //  Not decimal, so must be one of the other three.  We should look
+        //  at the next character to see if it is what we expect.
+
+        TEST  testfor( 'X' )  THEN  value  :=  readdigits( 16 )  ELSE
+        TEST  testfor( 'x' )  THEN  value  :=  readdigits( 16 )  ELSE
+        TEST  testfor( 'O' )  THEN  value  :=  readdigits( 8 )   ELSE
+        TEST  testfor( 'o' )  THEN  value  :=  readdigits( 8 )   ELSE
+        TEST  testfor( 'B' )  THEN  value  :=  readdigits( 2 )   ELSE
+        TEST  testfor( 'b' )  THEN  value  :=  readdigits( 2 )   ELSE
+
+            //  Silly character after a '#', so complain about it.
+
+            error( "Unexpected *"%C*" after *"#*"", ch )
+
+    ELSE  value  :=  readdigits( 10 )
+
+    RESULTIS  negative  ->  -value, value
+$)
+
+
+
+AND readdigits( base )  =  VALOF
+$(
+//  Read digits in base "base".
+
+    LET value  =  digitvalue( ch )
+
+    IF  value > base  THEN
+        error( "Illegal digit *"%C*" for base %N", ch, base )
+
+    ch  :=  readch()
+
+    $(  //  Loop to read the rest of the digit characters in this number.
+
+        LET dval  =  digitvalue( ch )
+
+        IF  dval > base  THEN  BREAK
+
+        value  :=  value * base  +  dval
+        ch     :=  readch()
+    $)
+    REPEAT
+
+    unrdch()
+    nextch()
+
+    RESULTIS  value
+$)
+
+
+
+AND digitvalue( char )  =  '0' <= char <= '9'  ->  char - '0',
+                           'A' <= char <= 'F'  ->  char - 'A' + 10,
+                           'a' <= char <= 'f'  ->  char - 'a' + 10,  maxint
+
+
+
+AND checktag()  =  VALOF
+$(
+//  Read the next item, and ensure that it is a tag.
+
+    UNLESS  tagch( ch )  DO
+        error( "Unexpected *"%C*"", ch )
+
+    RESULTIS  readtag()
+$)
+
+
+
+AND readtag()  =  VALOF
+$(
+//  This is a tag item, and so we should read it into a buffer, and then
+//  add it to the tag data structure.
+
+    LET buffer  =  VEC 256/bytesperword
+    LET length  =  0
+
+    WHILE  tagch( ch )  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  lowercase( ch )
+        ch               :=  readch()
+    $)
+
+    buffer % 0  :=  length
+
+    unrdch()
+    nextch()
+
+    RESULTIS  lookuptag( buffer )
+$)
+
+
+
+AND lowercase( char )  =  'A' <= char <= 'Z'  ->  char - 'A' + 'a',  char
+
+
+
+AND tagch( char )  =  'A' <= char <= 'Z'  |
+                      'a' <= char <= 'z'  |
+                      '0' <= char <= '9'  |
+                      char = '.'  |  char = ':'  |  char = '-'  |  char = '**'
+
+
+
+AND lookuptag( name )  =  VALOF
+$(
+//  Scan the tag hash table for this name, and return a permanently allocated
+//  piece of store for it.
+
+    LET hash   =  hashvalue( name )
+    LET entry  =  tagtable!hash
+
+    UNTIL  entry = NIL  DO
+    $(
+        //  Scan this list, looking for a previously defined tag entry.
+
+        LET hashname  =  entry!he.name
+
+        IF  compstring( name, hashname ) = 0  THEN  RESULTIS  hashname
+
+        entry  :=  entry!he.link
+    $)
+
+    //  If we drop through here, then we have failed to find the entry we want,
+    //  and so we should add a new entry to the hash table.
+
+    entry           :=  getstore( he.size )
+    name            :=  copystring( name )
+
+    entry!he.link   :=  tagtable!hash
+    entry!he.name   :=  name
+    tagtable!hash   :=  entry
+
+    RESULTIS  name
+$)
+
+
+
+AND copystring( string )  =  VALOF
+$(
+//  Make a copy of the given string in heap memory.
+
+    LET length  =  string % 0
+    LET store   =  getstore( length/bytesperword )
+
+    FOR  i = 0  TO  length  DO  store % i  :=  string % i
+
+    RESULTIS  store
+$)
+
+
+
+AND hashvalue( name )  =  VALOF
+$(
+//  Return the hash value of the name given.
+
+    LET hash  =  0
+
+    FOR  i = 0  TO  name % 0  DO  hash  :=  (hash << 1)  +  name % i
+
+    RESULTIS  (ABS hash)  REM  tagtablesize
+$)
+
+
+
+AND lookupcommand( tag )  =  VALOF
+$(
+//  Scan the command table so see if the tag given matches up to one of the
+//  commands we are expecting.
+
+    LET list  =  commandlist
+
+    UNTIL  list = NIL  DO
+    $(
+        IF  list!cl.name = tag  THEN  RESULTIS  list!cl.type
+
+        list  :=  list!cl.link
+    $)
+
+    RESULTIS  c.unknown
+$)
+
+
+
+AND checkfor( char, msg )  BE
+
+//  Make sure that the current character is the one expected, otherwise
+//  throw out an error message.
+
+    UNLESS  testfor( char )  DO  error( msg )
+
+
+
+AND testfor( char )  =  VALOF
+$(
+//  Look to see whether the next character to be read is the character given.
+
+    TEST  ch = char  THEN
+    $(
+        nextch()
+
+        RESULTIS  TRUE
+    $)
+    ELSE  RESULTIS  FALSE
+$)
+
+
+
+AND infoblock( type, value )  =  VALOF
+$(
+//  Return an info block, ready initialised.
+
+    LET info  =  getstore( i.size )
+
+    info!i.type   :=  type
+    info!i.value  :=  value
+    info!i.addr   :=  NIL
+
+    RESULTIS  info
+$)
+
+

@@ -1,0 +1,50 @@
+TESTING CODE:   Use SYS TESTMAIL or TRIPOS command TEST.MAIL.
+
+This is list of diferences between the standard and testing versions.
+The order is approximately chronological, but some differnces have changed.
+
+Items labeled * available on both systems, T only on TRIPOS and D only available
+on the Dynamic Mailserver.
+
+Changes since V2.1:
+-------------------
+
+None
+
+
+Thoughts of 11 Jun 82:
+-----------------------
+With the advent of PUBLIC mail, it is now possible to have junk TRIPOS mail, as
+the current TRIPOS message system already has.  If all mail sent to it is marked
+PUBLIC then anyone can LOOKAT it. This still needs the much awaited timeout
+mechanism to discrd it.
+
+I have also introduced the idea of a MBOX which is an object of the same
+structure as each user's mail directory.  These may be stored in a user's mail
+directory, and there are commands MOVE and COPY to manipulate mail between
+mboxes.  Thus all mail relating to a certain subject may be dumped to a relevant
+mbox.  The MBOX command may then be used to enter manipulate that collection of
+mail items.
+
+There is also the idea of a WEAK REFRENCE to a mail item or mbox, which means
+that the user has a pointer to it, but it is NOT retained in any index of his,
+and so may disappear.   If it is a mbox it is unlikely to disappear, and it is
+possible to give another user a weak refrence to your mail directory.
+
+In particular, users may have weak refrences to the TRIPOS mail directory, and
+some user(s) may have a strong refrence, and thus be able to control it.
+
+My main current concern is where to put the mboxes - they have been built so
+that the user has to supply the PUID of the directory, and the INDEX for that
+directory if full refrences are to be kept, so that it is not my problem when
+the fileserver fills up with the inevitable old mail.
+It would be trivial for me to create the directory and index for the mboxes, but
+I would then get stamped on for allowing rubbish to accumulate.
+
+
+Comments welcome.
+
+Known bugs:
+        none at the moment (except for ....)
+
+

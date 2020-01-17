@@ -1,0 +1,145 @@
+// (C) Copyright 1980 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+// CLI-init for floppy system where SYS: is drive 0.
+// Uses version three file handler and directory assignments.
+
+
+SECTION "CLI-INIT"
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "MANHDR"
+GET "IOHDR"
+GET "FH3MANIFESTS"
+
+GLOBAL
+$(
+   maxglob  : ug+350
+$)
+
+LET cli.init(parm.pkt) = VALOF
+ $( LET pkt = VEC pkt.arg6
+    LET prompt = "> "
+    LET initialseg = tcb!tcb.seglist!3
+    LET dummy = maxglob
+    LET disc.envec = TABLE
+        11,     || length of table
+        256,    || block size
+        1,      || sector origin
+        1,      || number of surfaces
+        4,      || sectors per block
+        6,      || blocks per track
+        1,      || number of reserved blocks
+        2,      || pre-allocation factor
+        1,      || interleave factor
+        0,      || lower cylinder
+        76,     || upper cylinder
+        3       || Cache slots
+
+
+
+    pkt!pkt.link := notinuse
+
+    pkt!pkt.id := task.consolehandler
+    pkt!pkt.arg1 := -3
+    pkt!pkt.arg2 := -4
+    qpkt(pkt); taskwait()
+
+    initio()
+    selectinput(findinput("**"))
+    selectoutput(findoutput("**"))
+    writes("*n*nTRIPOS starting*n")
+
+    pkt!pkt.id := task.debug
+    UNLESS qpkt(pkt)=0 DO taskwait()
+
+    pkt!pkt.id := task.filehandler
+    pkt!pkt.type := 0
+    pkt!pkt.arg1 := TABLE -2 // Device id of driver
+    pkt!pkt.arg2 := 0 // unit number
+    pkt!pkt.arg3 := disc.envec
+    pkt!pkt.arg4 := 1 // Update
+    UNLESS qpkt(pkt)=0 DO taskwait()
+
+
+    // Make the initial assignments
+
+    make.task.assignment("DF0", task.filehandler)
+
+    make.dir.assignment("SYS", "DF0:") // Root directory
+    make.dir.assignment("T", "DF0:T")  // Dir for temporary files
+
+
+    cli.background := FALSE
+    cli.standardinput := input()
+    cli.currentinput := findinput("SYS:S.INITIAL-COMMANDS")
+    IF cli.currentinput=0 DO
+       cli.currentinput := cli.standardinput
+    cli.standardoutput := output()
+    cli.currentoutput  := cli.standardoutput
+    cli.commanddir := locatedir("SYS:C")
+    returncode := 0
+    cli.returncode := 0
+    cli.faillevel  := cli.initialfaillevel
+    cli.result2 := 0
+    cli.commandfile%0 := 0
+    cli.defaultstack := cli.initialstack
+    cli.module := 0
+    FOR i = 0 TO prompt%0 DO
+       cli.prompt%i := prompt%i
+
+    tcb!tcb.seglist!3 := 0
+    start := cli.undefglobval
+    result2 := initialseg
+    RESULTIS unloadseg
+ $)
+
+
+
+AND make.task.assignment(name, task) BE
+    $(
+    // Make and link in an assignment node for the given name and task
+
+    LET lv.alist        = rootnode ! rtn.info + info.assignments
+    LET avec    = getvec(ass.name + name%0/bytesperword)
+    IF avec=0 THEN abort(result2)
+
+    avec ! ass.link    := !lv.alist
+    avec ! ass.task    := task
+    avec ! ass.dir     := 0
+    avec ! ass.type    := dt.disc
+    FOR i=0 TO name%0 DO (avec+ass.name)%i := name%i
+
+    !lv.alist           := avec
+    $)
+
+
+AND make.dir.assignment(name, dirname) BE
+    $(
+
+    LET lock            = ?
+    LET avec            = ?
+    LET lv.assignments  = rootnode ! rtn.info + info.assignments
+
+    IF dirname%0 > 30
+    THEN $( writef("assignment string too long*n"); RETURN $)
+
+
+    lock        := locatedir(dirname)
+
+    If lock=0
+    THEN $( writef("Can't find *"%s*"*n", dirname); RETURN $)
+
+    avec        := getvec(ass.name + name%0/bytesperword)
+    IF avec=0 THEN abort(result2)
+
+    avec ! ass.link     := !lv.assignments
+    avec ! ass.task     := lock ! lock.task
+    avec ! ass.dir      := lock
+    FOR i=0 TO name%0 DO (avec+ass.name)%i := name%i
+    !lv.assignments     := avec  // Link into the chain
+    $)
+
+

@@ -1,0 +1,486 @@
+$<COMMAND'      // GOT by bcp.command for INSERT.MESSAGE if $$COMMAND set
+SECTION "UMMD"
+
+GET "header"
+
+//              This Uses MD    -       Why not Client.md ????
+
+//*****************************************************************************
+//                MAIL SERVER ROUTINES FOR MANIPULATING                      //
+//                       THE USER MAP (UM) FILE                              //
+//                AND THE MESSAGE DIRECTORY (MD) FILES                       //
+//*****************************************************************************
+
+LET find.puid.in.user.map (user.puid, message.index,message.directory) = VALOF
+$(
+    // The first parameter is a  pointer to an 8 byte PUID area.
+    // The other two parameters are pointers to file descriptors.
+    // This function searchs in the hashed User Map file for a user with
+    // PUID = user.puid.  If it is found then the result is the entry number
+    // (0,1,...) of the users element and the UIDs of the two file descriptor
+    // parameters are set, otherwise the result is -1.
+
+    LET um.offset               = ?
+    LET um.cache.address        = um!cache.address
+    LET position                = ?
+
+    IF trace
+    $(  writef("Finding Message Directory for %n, ", user.puid)
+        write.uid(user.puid)
+        IF (user.puid = 0)
+        $(      user.puid := client.puid
+                WRITES(" or ")
+                write.uid(user.puid)
+        $)
+        newline()
+    $)
+
+     IF (user.puid = 0) user.puid := client.puid
+
+    // Ensure that the first block of the User Map is in store:
+    um.offset := address.offset(um,0, Hash.um.mask)
+
+    // Load pointer to head of user's hash chain:
+    position := um.cache.address %% (((user.puid%%3) & Hash.um.Mask)+um.offset)
+    $(
+        // Check if the end of the chain has been found
+        IF position = 0 THEN RESULTIS -1
+
+        // Load a new block into the cache if necessary
+        um.offset := address.offset(um, position, um.element.size)
+
+        // Check if this item is the correct one:
+        IF compare.uid(user.puid,0, um.cache.address, um.offset+um.user.puid)
+        THEN BREAK
+
+        // Repeat for next item on chain:
+        position := um.cache.address %% (um.offset + um.chain)
+    $) REPEAT
+
+    // The User Map element has now been found.
+    position := (position - User.um.Base) / um.element.size
+
+    // Set up file UIDs
+    UNLESS message.directory=0
+    DO  copy.uid(um.cache.address, um.offset+um.md.puid,
+                                                message.directory+uid, 0)
+    UNLESS message.index=0
+    DO  retrieve.entry(master.index,(position*master.index.slot.size)+
+                                        master.index.user.index,message.index)
+
+    IF trace & message.index~=0 & message.directory~=0
+    THEN ptrace("Found INDEX MD ",message.index,-1,message.directory)
+
+    RESULTIS position
+$)
+
+//=============================================================================
+
+LET create.message.directory (user.puid,message.index,message.directory,
+        mode, pos, group.index, group.directory, end) =VALOF
+$(  // Find a gap in the Master Message List and insert a new element for the
+    // given user.  This also involves creating (and retaining) a user message
+    // index and a Message Directory.
+    // IF mode=1 THEN delete the existing user .......
+    //
+    // IF pos > 0 THEN place the user at this position!
+    //
+    // Look through to see if there is a free slot first ????
+    //
+    // The first parameters points to an 8 byte area holding the user's puid.
+    // The other two parameters point to file descriptors.
+    // The result is the user's entry number in the User Map.
+    MANIFEST $( empty = 0 $)    // #XFFFF
+
+    LET puid                    = VEC 5
+    LET min.val                 = MAXINT        // The First offset used ...
+    LET entry                   = -1
+    LET new.position            = 0
+    LET end.position            = ?
+    LET um.offset               = ?
+    LET chain                   = ?
+    LET chain.word.dibyte       = ?
+    LET pf.position             = ?
+    LET um.cache                = um!cache.address
+
+    FOR i = @mode TO @end IF !I = -1 THEN FOR ptr = I TO @end DO !ptr := 0
+
+    IF user.puid = 0 THEN user.puid := client.puid
+
+    IF trace
+    $(  writef("%S Message Directory for", mode=1 -> "Deleteing", "Creating")
+        write.uid(user.puid)
+        UNLESS pos = 0 THEN WRITEF(" at postion %N*N", pos)
+        newline()
+    $)
+
+    // Get interlock on User Map ( to avoid two mail servers using same element)
+    open.file(um)
+
+    // Get the latest version of the first block of the User Map into store
+    read.cache(um, 0)
+
+    TEST mode=1
+    $(M1
+        new.position := find.puid.in.user.map(user.puid, 0, 0)
+        IF new.position = 0 $( WRITEF("Couldn't find user*N"); RESULTIS 0 $)
+        delete(master.index,(new.position*master.index.slot.size)+
+                                master.index.group.dir)
+        delete(master.index,(new.position*master.index.slot.size)+
+                                master.index.group.index)
+        delete(master.index,(entry*master.index.slot.size)+
+                                master.index.user.index)
+        delete(master.index,(entry*master.index.slot.size)+
+                                master.index.md)
+        new.position := (new.position * um.element.size) + User.um.base
+        end.position := um.cache %% address.offset(um, new.position, 1)
+        write.tiny.block(um, 0, new.position+um.user.puid)
+    $)M1
+    ELSE TEST pos = 0
+$(M1
+    FOR i = 0 TO Hash.um.mask
+    $(  LET val = um.cache %% address.offset(um, i, 1)
+        UNLESS val=0 | val = empty IF val < min.val THEN min.val := val
+    $)
+
+    // Find the position of the next gap in the User Map
+    end.position := um.cache %% first.um.space.pointer
+
+    IF trace WRITEF("Min.val = %N,  Max.val = %N*N", min.val, end.position)
+
+    FOR pos = min.val TO end.position - um.element.size BY um.element.size
+    $(  LET offset      = address.offset(um, pos+um.user.puid, 1)
+        IF um.cache %% offset = 0 | um.cache %% offset = empty
+        $( IF trace WRITEF("Free slot@%N*N", pos); new.position := pos; BREAK $)
+    $)
+
+    IF new.position=0
+    $(  new.position    := end.position
+        // Write the new "next space" value to disc
+        write.tiny.block(um,new.position+um.element.size,first.um.space.pointer)
+        IF trace WRITEF("No free slot, so %N used*N", new.position)
+    $)
+
+    entry := (new.position - User.um.Base)/um.element.size
+    um.offset := address.offset(um, new.position, um.element.size)
+    (um.cache) %% (um.offset + um.chain) := 0           // just in case ....
+
+    // Create the user distribution group directory:
+    create.file(master.index,(entry*master.index.slot.size)+
+                                master.index.group.dir,message.directory,FALSE)
+    // Create the user distribution group index:
+    create.index(master.index,(entry*master.index.slot.size)+
+                                master.index.group.index,message.index)
+
+    // Create the user's Message Directory and Message Index.
+    // Create the user message index:
+    create.index(master.index,(entry*master.index.slot.size)+
+                                        master.index.user.index,message.index)
+
+    // Create user's Message Directory:  um.offset
+    create.file(master.index,(entry*master.index.slot.size)+
+                                        master.index.md,message.directory,TRUE)
+    copy.uid(message.directory + uid, 0, um.cache, um.offset + um.md.puid)
+
+    copy.uid(user.puid,0, um.cache, um.offset + um.user.puid)
+$)M1
+    ELSE
+    $(given.pos
+    new.position := User.um.base + pos * um.element.size
+
+    end.position := um.cache %% first.um.space.pointer
+    IF end.position <= new.position
+    THEN end.position := new.position + um.element.size
+
+    entry := pos
+
+    um.offset := address.offset(um, new.position, um.element.size)
+    (um.cache) %% (um.offset + um.chain) := 0           // just in case ....
+
+    // Create the user's Message Directory and Message Index.
+    TEST group.directory=0
+    THEN delete(master.index,(entry*master.index.slot.size)+
+                                master.index.group.dir)
+    ELSE retain.in.index(master.index,(entry*master.index.slot.size)+
+                                master.index.group.dir, group.directory)
+
+    // Retain the User's Distribution group directory
+    TEST group.index=0
+    THEN delete(master.index,(entry*master.index.slot.size)+
+                                master.index.group.index)
+    ELSE retain.in.index(master.index,(entry*master.index.slot.size)+
+                                master.index.group.index, group.index)
+
+    // Create the user message index:
+    retain.in.index(master.index,(entry*master.index.slot.size)+
+                                        master.index.user.index,message.index)
+
+    // Create user's Message Directory:  um.offset
+    retain.in.index(master.index,(entry*master.index.slot.size)+
+                                        master.index.md,message.directory)
+    copy.uid(message.directory + uid, 0, um.cache, um.offset + um.md.puid)
+
+    copy.uid(user.puid,0, um.cache, um.offset + um.user.puid)
+    $)given.pos
+
+    // Add new element to appropriate hash chain:
+    chain := (user.puid %% 3) & Hash.um.mask
+    $(  LET next.chain  = um.cache %% address.offset(um, chain, 1)
+
+        IF next.chain = 0 | next.chain >= new.position
+        // Write hash chain update to disc:
+        $(  write.tiny.block(um, mode=1 -> end.position, new.position, chain)
+            IF trace writef("between %N and %N*N", chain, next.chain)
+            UNLESS next.chain=0 | next.chain = new.position
+            DO write.tiny.block(um, next.chain, new.position)
+            BREAK
+        $)
+        chain := next.chain
+    $) REPEAT
+
+    // Update new User Map element's entry on file server
+    um.offset := address.offset(um,    new.position, um.element.size)
+    write..little.block(um, um.offset, new.position, um.element.size)
+
+    // Release interlock on User Map
+    close.file(um)
+
+    z80prod(ssp.kick.request, 0,0, 0,0, -1)
+
+    IF trace THEN ptrace("Created INDEX MD ",message.index,-1,message.directory)
+
+    RESULTIS (new.position-User.um.Base)/um.element.size
+$)
+
+//=============================================================================
+$>COMMAND'
+
+LET insert.message (user.puid, subject, header.file, text.file,
+                                        header.size, text.size, bits,
+                                        First.string,
+                                        User.directory, User.index,
+                                        umid,
+                                        remote.file, remote.size,
+                                        error.file,  error.size,
+                                        end) = VALOF
+$(
+    // Insert the given header and text files in the message index and Message
+    // Directory of the user specified by the 8 byte vector "user.puid".
+    // "Subject" is the subject string which should be inserted in the
+    // Message Directory.
+
+    // User.directory and User.index LOOK like file descriptors (Only PUID valid)
+
+    // Use the global file descriptor at "md" to allow freeing of interlocks
+    // on breaks or catastrophes.
+
+    // If remote.file is given, then there are THREE files to be added!
+    // If error.file  is given, then
+    LET index                   = VEC file.desc.size      // Descriptor for user's message index.
+    LET md.cache                = VEC 600/rwpw
+    LET old.fs.fail.level       = ms.fs.fail.level
+    LET old.fs.fail.link        = ms.fs.fail.link
+    LET md.entry                = 0
+    LET OK                      = TRUE
+    LET chain.md                = 0
+    LET md.next                 = ?        // Pointer to next unused word within current entry
+    LET md.entry.disp           = ?
+    LET um.entry                = ?
+    LET own.directory           = ?
+    LET weak.refrence           = ?
+
+        FOR i = @bits TO @end
+                IF !I = -1 THEN FOR ptr = I TO @end DO !ptr := 0
+$<TRACE
+IF trace THEN WRITEF(
+"Insert.message (user.puid=%N, subject=%N, header.file=%N, text.file=%N,*
+* header.size=%N, text.size=%N, bits=%N, First.string=%N, User.directory=%N,*
+* User.index=%N, umid=%N, end=%N)*N",
+user.puid, subject, header.file, text.file, header.size, text.size, bits,
+First.string,User.directory, User.index, umid, end)
+$>TRACE
+    IF user.puid = 0 THEN user.puid := client.puid
+
+
+    // A directory has been supplied ?
+    own.directory               := user.directory ~= 0
+    // But no index? => Only weak refrence !
+    weak.refrence               := own.directory & (user.index = 0)
+
+$<TRACE
+    IF trace & user.puid ~= 0
+    $(  writes("Inserting message for ")
+        write.uid(user.puid)
+        newline()
+    $)
+$>TRACE
+
+    ms.fs.fail.level := level()
+    ms.fs.fail.link := insert.fs.fail.link
+    GOTO insert.main
+
+insert.fs.fail.link:
+    // This section of a code is entered if there is a file server failure
+    // while doing an insert.
+    TEST fs.rc = #xd800     // Range error return code
+    $(  // Since the mail system always leaves message directories with size
+        // 30k, this failure is assumed to be due to the file's owner
+        // changing its size.  As a result the insert is simply abandoned
+        // without trace (that'll teach him).
+        writes("*N     MESSAGE DIRECTORY RANGE ERROR - INSERT ABANDONED*N*N")
+        OK := FALSE
+        GOTO insert.end
+    $)
+    ELSE
+    $(  // Otherwise treat as a normal file server failure
+        IF ms.interlocked.file ~= 0 THEN close.file(ms.interlocked.file)
+        Zap.file(md)
+        ms.fs.fail.level := old.fs.fail.level
+        ms.fs.fail.link := old.fs.fail.link
+        WRITEF("FS failure %X4 trapped by INSERT.MESSAGE  --  *E", fs.rc)
+        longjump(ms.fs.fail.level,ms.fs.fail.link)
+    $)
+
+insert.main:
+    Zap.file(md)
+    Zap.file(index)
+    md!cache.address    := md.cache
+    md!cache.size       := 600
+
+    TEST own.directory
+    $(  copy.uid(user.directory+uid, 0, md   +uid, 0)
+        UNLESS user.index=0
+        copy.uid(user.index    +uid, 0, index+uid, 0)
+    $)
+    ELSE
+    $(  // Find the user's message index and Message Directory; create new ones
+        // if necessary.
+        um.entry := find.puid.in.user.map(user.puid,index,md)
+        UNLESS um.entry >= 0 THEN um.entry :=
+                               create.message.directory(user.puid,index,md, -1)
+    $)
+
+    // Get interlock on user's Message Directory
+    open.file(md)
+    read.cache(md,0)
+
+    // Find the first free word in the directory
+    $(  // Loop for each entry in the directory
+        LET flag        = ?
+        // Read the next block into the cache if necessary
+        LET offset = address.offset(md, chain.md, 1)
+
+        md.entry.disp := chain.md
+        // Get the next address on the chain
+        chain.md := md.cache %% offset //(chain.md + md.chain - md!start.of.block)
+
+        IF chain.md = #XFFFF THEN chain.md := -1                // 32bit !!!!!!!
+
+        IF (chain.md>=0) & (chain.md <= md.entry.disp) THEN $(
+            writes("*NDIRECTORY CHAIN CORRUPT - INSERT ABANDONED")
+            writes("*N==========================================*N")
+            GOTO insert.end
+        $)
+        IF chain.md<0 BREAK
+
+        flag := md.cache%%(address.offset(md, md.entry.disp+md.flags, 1));
+
+        md.entry +:= 2
+        IF (flag & md.remote.flag) ~= 0 THEN md.entry +:= 1
+        IF (flag & md.error.flag) ~= 0 THEN md.entry +:= 1
+    $) REPEAT
+
+    // The position for the new entry has now been found.  The new entry
+    // will now be constructed at word zero in the cache.
+
+    // Set the message and header file PUIDs
+    copy.uid(text.file  + uid, 0, md.cache, md.message.puid)
+    copy.uid(header.file+ uid, 0, md.cache, md.header.puid)
+    UNLESS remote.file=0
+    $(  copy.uid(remote.file+ uid, 0, md.cache, md.remote.list)
+$<TRACE IF TRACE WRITEF("Got remote file, %d bytes*N", remote.size) $>TRACE
+        md.cache %% md.remote.bytes     := remote.size
+    $)
+    UNLESS error.file=0
+    $(  copy.uid(error.file+ uid, 0, md.cache, md.error.header)
+$<TRACE IF TRACE WRITEF("Got error file, %d bytes*N", error.size) $>TRACE
+        md.cache %% md.error.bytes      := error.size
+    $)
+
+    // Set Unique Message ID
+    IF umid = 0 THEN umid := new.umid
+    UNLESS validpointer(@umid) WRITEF("Umid reset manually*N") <> umid := TABLE 0,0,0,0
+    FOR i=0 TO umid.size-1 DO md.cache %% (md.umid + i) := umid %% i
+
+    md.cache %% md.flags                := (bits & (own.directory -> ~0,
+                                           ~(md.read.flag | md.deleted.flag))) |
+                                            (weak.refrence -> md.weak.flag, 0) |
+                                            (error.file=0 -> 0, md.error.flag) |
+                                            (remote.file=0 -> 0, md.remote.flag)
+    md.cache %% md.version              := md.current.version
+    md.cache %% md.message.bytes        := text.file!uid = 0 -> 0, text.size
+    md.cache %% md.header.bytes         := header.file!uid=0 -> 0, header.size
+
+    md.next := (error.file=0) -> (remote.file=0) -> md.first.free,
+                                                    md.remote.first.free,
+                                  md.error.first.free
+    // Set the (variable length) "sender" string.
+    md.cache %% md.sender := md.next
+    // UNLESS first.string=-2
+    $(  IF first.string=0 THEN first.string := client.name
+        FOR i=0 TO first.string%0 DO md.cache%(md.next*bprw+i) := first.string%i
+        md.next := md.next + (first.string%0/bprw) +1
+    $)
+
+    // If necessary set the (variable length) subject string.
+    TEST subject=0
+    THEN md.cache %% md.subject := 0
+    ELSE
+    $(  md.cache %% md.subject := md.next
+        FOR i=0 TO subject%0 DO md.cache%(md.next*bprw + i) := subject%i
+        md.next := md.next + (subject%0/bprw) +1
+    $)
+
+    // Ensure that the word after this entry is negative.
+    md.cache %% md.next := -1
+    md.cache %% md.chain := md.next + md.entry.disp
+
+    UNLESS weak.refrence
+    $(  // Retain the message file in the recipients index:
+        UNLESS text.file  =0 | text.file  !uid= 0
+        DO retain.in.index(index, md.entry,    text.file)
+        UNLESS header.file=0 | header.file!uid= 0
+        DO retain.in.index(index, md.entry+1, header.file)
+        UNLESS remote.file=0 | remote.file!uid=0
+        DO retain.in.index(index, md.entry+2, remote.file)
+        UNLESS error.file=0 | error.file!uid=0
+        DO retain.in.index(index, md.entry+(remote.file=0->2,3), error.file)
+    $)
+
+    // Write the Message Directory update to the File Server
+    write..little.block(md, 0, md.entry.disp, md.next+1)
+
+    UNLESS own.directory
+//      UNLESS z80prod(ssp.set.request, 0,0, user.puid,0, -1) = TRUE
+        WRITEF(trace -> "Z80prod gave %N ", "",
+z80prod(ssp.set.request, 0,0, user.puid,0, -1) ) WRITEF(trace ->" %X4*N", "",
+RESULT2) <>
+        $( // Set the "new mail" boolean in the recipients entry in the user map
+                write.tiny.block(um, TRUE,
+                                um.entry*um.element.size +User.um.Base+um.mail)
+        $)
+
+    IF trace THEN writes("Message insertion complete*N")
+
+insert.end:
+    // Release the interlock
+    close.file(md)
+    Zap.file(md)
+    ms.fs.fail.level := old.fs.fail.level
+    ms.fs.fail.link := old.fs.fail.link
+    RESULTIS OK
+$)
+
+//=============================================================================
+
+

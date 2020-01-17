@@ -1,0 +1,80 @@
+LET map.lookup() BE
+$(      LET nsvec = VEC 3
+        LET first       = TRUE
+
+        $(      IF LOOKUP.name("PS.MAP", nsvec)
+                $( map.station, map.port, map.func := nsvec!0, nsvec!2, nsvec!3
+                   UNLESS FIRST WRITEF("Found PS.MAP*N") <> DELAY(tickspersecond)
+                   RETURN
+                $)
+                IF FIRST
+                $( WRITEF("Failed to lookup MAP - Use BREAK B to abandon*N")
+                   FIRST := FALSE
+                $)
+                delay(tickspersecond * 5)
+                IF testflags(1)
+                THEN LONGJUMP(ms.user.break.level, ms.user.break.link)
+        $) REPEAT
+$)
+
+LET convert.name.to.puid(name, puid) = VALOF
+$(  LET First   = "PNAME"
+    LET next    = "INITIALS"
+    LET next    = "WORLD"
+    LET Last    = "ANY"
+    LET rc      = ?
+
+    FOR I = @FIRST to @LAST
+    $(  rc := map.to.puid(!I, "PUID", name, puid)
+        IF rc = convert.ok THEN RESULTIS rc
+    $)
+
+    RESULTIS rc
+$)
+
+AND map.to.puid (domain1, domain2, name, puid) = VALOF
+$(  MANIFEST
+    $(  map.domain1     = bb.ssp.args * bprw
+        tx.bytes        = 60
+        rx.bytes        = 40            // 20 fails, 30 OK
+    $)
+    // Routine to set the 8 byte area "puid" to the PUID of the given name
+    // string.  Return FALSE if the name has no PUID.
+
+    LET map.domain2     = map.domain1 + domain1%0 + 1
+    LET map.name        = map.domain2 + domain2%0 + 1
+    LET tx.buff         = VEC tx.bytes/bpw
+    LET rx.buff         = VEC rx.bytes/bpw
+
+    IF (map.name + name%0) > tx.bytes THEN RESULTIS convert.bad.name
+    FOR k=0 TO domain1%0        DO tx.buff%(map.domain1 +k) := domain1%k
+    FOR k=0 TO domain2%0        DO tx.buff%(map.domain2 +k) := domain2%k
+    FOR k=0 TO name   %0        DO tx.buff%(map.name    +k) := name%k
+
+    UNLESS 0 < map.station < #X100 DO map.lookup()
+
+    FOR i= 3 TO 0 BY -1
+    $(  IF ssp(0, tx.buff, tx.bytes/bprw + 1, rx.buff, rx.bytes/bprw +1,
+                                        0, map.func, map.station, map.port)
+        THEN GOTO convert.success
+        IF (result2&#Xdf00) = #xdf00 THEN RESULTIS convert.bad.name
+        IF i=0 WRITEF("[MAP r2=%X4] ", RESULT2) <> RESULTIS convert.no.map
+        map.lookup()
+    $)
+
+convert.success:
+    // Convert and save result
+    FOR i=0 TO 7
+    $(  puid%i := 0
+        // Convert two hex digits to a byte value
+        FOR j=1 TO 2
+        DO puid %i := (puid%i<<4) + rx.buff%((bb.ssp.args+i)*2+j) -
+                ((rx.buff%((bb.ssp.args+i)*2 +j) >= 'A') -> ('A' -10), '0')
+    $)
+
+    RESULTIS convert.ok
+$)
+
+//=============================================================================
+
+

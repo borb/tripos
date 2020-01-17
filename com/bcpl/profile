@@ -1,0 +1,335 @@
+/*******************************************************************************
+**                 (C) Copyright 1984  TRIPOS Research Group                  **
+**                University of Cambridge Computer Laboratory                 **
+********************************************************************************
+
+      #######   #######    ######   ########  ########  ##        ########
+      ########  ########  ########  ########  ########  ##        ########
+      ##    ##  ##    ##  ##    ##  ##           ##     ##        ##
+      #######   ########  ##    ##  ######       ##     ##        ######
+      ##        #######   ##    ##  ##           ##     ##        ##
+      ##        ##  ##    ##    ##  ##           ##     ##        ##
+      ##        ##   ##   ########  ##        ########  ########  ########
+      ##        ##    ##   ######   ##        ########  ########  ########
+
+********************************************************************************
+**      Author: Mike Richardson                         September 1984        **
+*******************************************************************************/
+
+
+
+SECTION "PROFILE"
+    GET "LIBHDR"
+    GET "IOHDR"
+    GET "MANHDR"
+    GET "RINGHDR"
+    GET "FILEHDR"
+
+  GLOBAL $( profile : ug + 1 $)         // used by CLI-INIT
+
+MANIFEST $( p.prot   = 1
+            p.matrix = 2
+         $)
+
+LET start  (file) = profile(file)
+
+AND profile(file) = VALOF
+$(
+   LET com.argv = VEC 30
+   LET com.args = "file/a"
+   LET prf.argv = VEC 50
+   LET prf.args = "ass,obj,prt,mc/k,sys/k"
+   LET prf.file = 0
+   LET rc       = 0
+   LET mctype   = rootnode!rtn.info!info.mctype
+   LET systype  = rootnode!rtn.info!info.systemtype
+   LET command  = [file=0]
+   LET save.in  = input ()
+   LET ptype    = 0
+   LET strstack = VEC 10
+   LET strptr   = 0
+
+   TEST file=0 THEN IF rdargs(com.args, com.argv, 30)=0 THEN
+                    $( writes("Bad args*N")
+                       stop  (20)
+                    $)
+               ELSE com.argv!0 := file
+
+   prf.file := findinput (com.argv!0)
+   IF prf.file=0 THEN $( writef("Unable to open *"%S*" - ", com.argv!0)
+                         fault (result2)
+                         TEST command THEN stop  (20)
+                                      ELSE RESULTIS FALSE
+                      $)
+   selectinput(prf.file)
+   strstack ! 0 := prf.file
+
+   // now for a horrible bit of code to find out whether this is an access
+   // matrix system or whether it is a normal protection system : send off
+   // duff setaccess and alter requests and check the return codes ......
+
+   $( LET task = [currentdir = 0] -> 4, currentdir!lock.task
+      LET pr1  = sendpkt (-1,task,action.setaccess,?,?,currentdir,"**",0)
+      LET pr2  = result2
+      LET mr1  = sendpkt (-1,task,action.alter,?,?,currentdir,"**",
+                                                         [TABLE 0,0,0,0])
+      LET mr2  = result2
+
+      IF mr1 | pr1 THEN $( writes ("Unable to ascertain protection scheme*N")
+                           endread()
+                           stop   (20)
+                        $)
+
+      TEST [mr2 = 5153] | [mr2 = 209]
+           THEN UNLESS [pr2 = 5153] | [pr2 = 209] DO ptype := p.prot
+           ELSE IF     [pr2 = 5153] | [pr2 = 209] DO ptype := p.matrix
+
+      IF ptype = 0 THEN $( writef ("Unable to ascertain protection scheme*N")
+                           writef ("mr1=%C mr2=%N  pr1=%C pr2=%N*N",
+                                        mr1->'T','F',mr2,pr1->'T','F',pr2)
+                           endread()
+                           stop   (20)
+                       $)
+   $)
+
+   $( LET prf.assn = VEC 20
+      LET prf.name = VEC 30
+      LET prt.str  = ?
+      LET prf.mct  = ?
+      LET prf.syst = ?
+      LET prt.bits = 0
+      LET obj.lock = ?
+      LET ch       = rdch ()
+      LET remove   = ?
+      LET indirect = ?
+
+      TEST ch = '**'
+           THEN $( UNTIL ch = '*N' | ch = endstreamch DO ch := rdch ()
+                   GOTO next.line
+                $)
+           ELSE TEST ch=endstreamch
+                     THEN TEST strptr = 0
+                               THEN GOTO done
+                               ELSE $( strptr := strptr - 1
+                                       endread     ()
+                                       selectinput ( strstack ! strptr )
+                                    $)
+                     ELSE unrdch()
+
+      IF rdargs(prf.args,prf.argv,50)=0 THEN
+      $( writes("error in profile file (1)*N") ; GOTO next.line $)
+
+      prf.assn := substitute(prf.argv!0,prf.assn)
+      prf.name := substitute(prf.argv!1,prf.name)
+      prt.str  := prf.argv!2
+      prf.mct  := prf.argv!3
+      prf.syst := prf.argv!4
+      IF prf.assn=0 & prf.name=0 & prt.str=0 THEN LOOP
+
+      UNLESS prf.assn\=0 & prf.name\=0 DO
+          $( writes ("error in profile file (2)*N") ; GOTO next.line $)
+
+      remove   := compstring(prf.name,"$")=0
+      indirect := compstring(prf.assn,">")=0
+
+      IF remove & prt.str\=0 THEN
+      $( writef("Protection given for removal of *"%S*"*N",prf.assn)
+         GOTO next.line
+      $)
+
+      IF indirect THEN
+      $( LET newstream = ?
+         UNLESS prf.name\=0 DO $( writef("No file name for indirection*N")
+                                  GOTO next.line
+                               $)
+         IF strptr = 10   THEN $( writes("Too many indirection levels*N")
+                                  GOTO next.line
+                               $)
+         newstream := findinput(prf.name)
+         IF newstream=0 THEN
+         $( writef("Unable to open *"%S*" for indirection*N",prf.name)
+            GOTO next.line
+         $)
+         strptr            := strptr + 1
+         strstack ! strptr := newstream
+         selectinput(newstream)
+         GOTO next.line
+      $)
+
+      FOR c = 1 TO prf.assn%0 - 1 DO IF prf.assn%c = ':' THEN
+      $( writef ("Error in assignment name *"%S*" - spurious colons*N",prf.assn)
+         GOTO next.line
+      $)
+
+      UNLESS prf.assn%[prf.assn%0] = ':' DO
+          $( writef ("Error in assignment name *"%S*" - no colon*N",prf.assn)
+             GOTO next.line
+          $)
+
+      TEST prt.str=0
+           THEN UNLESS remove DO
+                    $( writef ("No access specified for *"%S*"*N",prf.assn)
+                       GOTO next.line
+                    $)
+           ELSE TEST compstring ( prt.str, "&" ) = 0 THEN prt.bits := 0 ELSE
+                $( LET first = 1
+                   LET last  = prt.str%0
+                   LET sep   = 0
+                   FOR i = 1 TO prt.str%0 DO IF prt.str%i = '/' THEN sep := i
+                   TEST ptype = p.prot
+                        THEN UNLESS sep = 0 DO last  := sep  - 1
+                        ELSE   TEST sep = 0 THEN first := last + 1
+                                            ELSE first := sep  + 1
+                   TEST ptype = p.prot THEN FOR c = first TO last DO
+                   SWITCHON capitalch(prt.str%c) INTO
+                   $( DEFAULT   : writef ( "Illegal protection character: %C*N",
+                                                    prt.str%c)
+                                  GOTO next.line
+                      CASE 'R'  : prt.bits := prt.bits | #B00000001 ; ENDCASE
+                      CASE 'W'  : prt.bits := prt.bits | #B00000010 ; ENDCASE
+                      CASE 'D'  : prt.bits := prt.bits | #B00000100 ; ENDCASE
+                   $)
+                   ELSE  FOR c = first TO last DO
+                   SWITCHON capitalch(prt.str%c) INTO
+                   $( DEFAULT   : writef ( "Illegal protection character: %C*N",
+                                                    prt.str%c)
+                                  GOTO next.line
+                      CASE 'C'  : prt.bits := prt.bits | #B00010000 ; ENDCASE
+                      CASE 'V'  : prt.bits := prt.bits | #B00001000 ; ENDCASE
+                      CASE 'X'  : prt.bits := prt.bits | #B00000100 ; ENDCASE
+                      CASE 'Y'  : prt.bits := prt.bits | #B00000010 ; ENDCASE
+                      CASE 'Z'  : prt.bits := prt.bits | #B00000001 ; ENDCASE
+                      CASE 'R'  : prt.bits := prt.bits | #B00000001 ; ENDCASE
+                      CASE 'W'  : prt.bits := prt.bits | #B00000010 ; ENDCASE
+                      CASE 'E'  : prt.bits := prt.bits | #B00000100 ; ENDCASE
+                      CASE 'D'  : prt.bits := prt.bits | #B10000000 ; ENDCASE
+                      CASE 'A'  : prt.bits := prt.bits | #B01000000 ; ENDCASE
+                      CASE 'U'  : prt.bits := prt.bits | #B00100000 ; ENDCASE
+                      CASE 'F'  : prt.bits := prt.bits | #B00100000 ; ENDCASE
+                   $)
+                   IF prt.bits=0 THEN
+                   $( writef ("No access specified for *"%S*"*N",prf.assn)
+                      GOTO next.line
+                   $)
+                $)
+
+      prf.assn%0 := prf.assn%0 - 1
+
+      UNLESS prf.mct =0 DO
+             UNLESS compstring(prf.mct , mctype)=0 DO GOTO next.line
+
+      UNLESS prf.syst=0 DO
+             UNLESS compstring(prf.syst,systype)=0 DO GOTO next.line
+
+      $( LET a = rootnode!rtn.info+info.assignments
+
+         UNTIL !a=0 DO
+         $( LET ass = !a
+            IF compstring(prf.assn, ass+ass.name)=0 THEN
+            $( TEST remove
+                    THEN $( !a := !ass
+                            UNLESS ass!ass.dir = 0 DO freeobj (ass!ass.dir)
+                            freevec (ass)
+                            GOTO next.line
+                         $)
+                    ELSE $( writef ("*"%S:*" is already assigned*n", prf.assn)
+                            GOTO next.line
+                         $)
+            $)
+            a := ass
+         $)
+      $)
+
+      IF remove THEN $( writef("Unable to find *"%S:*" for removal*N",prf.assn)
+                        GOTO next.line
+                     $)
+
+      obj.lock := locateobj (prf.name)
+      IF obj.lock=0 THEN $( writef("Can't find *"%S*" - ", prf.name)
+                            fault (result2)
+                            GOTO next.line
+                         $)
+
+/**/  UNLESS prt.bits=0 DO
+             UNLESS sendpkt(notinuse,obj.lock!lock.task,action.refine,
+                                                                  ?,?,
+                                                    obj.lock,prt.bits ) DO
+             $( writef ("refine on *"%S:*" failed - ",prf.assn)
+                fault  (result2)
+                freeobj(obj.lock)
+                GOTO next.line
+             $)
+
+      $( LET size = prf.assn%0/bytesperword
+         LET ass  = getvec(ass.name+size)
+
+         IF ass=0 THEN $( writes ("Run out of store for *"%S:*"*N",prf.assn)
+                          freeobj(obj.lock)
+                          GOTO next.line
+                       $)
+
+         ass!ass.link := rootnode!rtn.info!info.assignments
+         ass!ass.task := obj.lock!lock.task
+         ass!ass.type := dt.disc
+         ass!ass.dev  := 0
+         ass!ass.dir  := obj.lock
+
+         FOR i = 0 TO size DO ass!(ass.name+i) := prf.assn!i
+
+         rootnode!rtn.info!info.assignments := ass
+      $)
+
+      /**/ next.line : /**/
+
+   $) REPEAT
+
+   done: endstream  (prf.file)
+         selectinput(save.in)
+
+         TEST command THEN stop(0)
+                      ELSE RESULTIS TRUE
+$)
+
+AND substitute (unsub,subvec) = unsub=0 -> 0, VALOF
+$(  LET unsptr = 1
+    LET subptr = 0
+    LET infov  = rootnode!rtn.info
+    UNTIL unsptr > unsub%0 DO
+       $( LET  ch = unsub%unsptr
+          TEST ch = '<'
+               THEN $( LET optvec = VEC 20
+                       LET optptr = 0
+                       LET optwrd = "<error>"
+                       unsptr := unsptr+1
+                       UNTIL [unsptr>unsub%0] | [unsub%unsptr='>'] DO
+                          $( optptr := optptr+1
+                             optvec % optptr := unsub%unsptr
+                             unsptr := unsptr+1
+                          $)
+                       optvec%0 := optptr
+                       SWITCHON findarg("mctype,mcname,mctype2",optvec) INTO
+                             $( DEFAULT : writef("*"%S*" unknown*N",optvec)
+                                          RESULTIS 0
+                                CASE  0 : optwrd := infov!info.mctype
+                                          ENDCASE
+                                CASE  1 : optwrd := infov!rtninfo.ring!ri.myname
+                                          ENDCASE
+                                CASE  2 : optwrd :=
+                                          $<68000TRIPOS "m68k" $>68000TRIPOS
+                                          $<LSI4TRIPOS  "lsi4" $>LSI4TRIPOS
+                                          ENDCASE
+                             $)
+                       FOR i = 1 TO optwrd%0 DO $( subptr := subptr + 1
+                                                   subvec%subptr := optwrd%i
+                                                $)
+                    $)
+               ELSE $( subptr := subptr + 1
+                       subvec%subptr := ch
+                    $)
+          unsptr := unsptr+1
+       $)
+   subvec%0 := subptr
+   RESULTIS subvec
+$)
+
+

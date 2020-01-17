@@ -1,0 +1,40 @@
+.K v,obj,test/s
+.
+. Which version ?  As it uses :L to store the overlays, each version MUST have
+. a different identifying letter!
+.def v g
+.
+. Where are we going to put the little bits ?
+.def obj BCPobj:
+.
+
+IF NOT eq <obj> BCPobj: ; SKIP noassign
+FAILAT 21
+IF mctype=LSI4;  assign BCPobj: LSI4-OBJ;  assign PBobj: :PB.lobj
+IF mctype=68000; assign BCPobj: 68000-OBJ; assign PBobj: :PB.mobj
+FAILAT 10
+
+LAB noassign
+
+IF NOT EQ test <test$real> ; GOTO real
+
+rename SYS:l.test.bcp-<v>-err SYS:l.bcp-<v>-err
+rename SYS:l.test.bcp-<v>-syn SYS:l.bcp-<v>-syn
+rename SYS:l.test.bcp-<v>-trn SYS:l.bcp-<v>-trn
+rename SYS:l.test.bcp-<v>-cg  SYS:l.bcp-<v>-cg
+rename BCPobj:bcp-<v> :c.new.bcp
+
+SKIP completed
+
+LAB real
+
+echo "rename :c.new.nbcp :c.bcp"
+
+LAB completed
+
+ECHO "Released OK"
+
+ASSIGN PBobj:
+ASSIGN BCPobj:
+
+

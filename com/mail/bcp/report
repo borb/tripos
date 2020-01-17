@@ -1,0 +1,126 @@
+SECTION "REPORT"
+
+GET "header"
+
+//==============================================================================
+$$Z80 := TRUE
+
+LET post.to.z80(textfile, subject, recipients) BE
+$(
+    // This routine is used to send reports or messages from a demon to the
+    // "send" function of the Z80 mailserver.
+$<Z80'
+    LET nsvec   = VEC 3
+    LET txbuff  = VEC 200/rwpw
+    LET rxbuff  = VEC 10/rwpw
+$>Z80'
+    LET size = ?
+
+    // Terminate the text file:
+    flush.cache(textfile)
+
+    // Write size in bytes to Tripos format file header
+    write.tiny.block(textfile,
+                (textfile!start.of.block)*bprw + textfile!next.write - 50, 2)
+IF trace
+$( trace.file(textfile, "Text=")
+ FOR I = 0 TO textfile!cache.size DO WRITEF("%X4 ", textfile!cache.address %% i)
+   newline()
+   WRITEF( $<Z80 "Z80 !!*N" $>Z80 $<Z80' "Not Z80 (ok)..*N" $>Z80' )
+$)
+$<Z80'
+    // Set null TUID and PUID pair (for an "annonymous" message).
+    FOR i = 0 TO 7 DO txbuff %% (bb.ssp.args+1+i) := 0
+
+    // Set "unique" transaction timestamp.
+    txbuff %% bb.ssp.args := (rootnode!rtn.mins << 12) | (rootnode!rtn.ticks)
+
+    // Set recipients parameter
+    txbuff %% (bb.ssp.args+9) := (1 << 8) + 30
+    FOR i=0 TO recipients%0 DO txbuff%(60+i) := recipients%i
+
+    // Set Tripos file parameter:
+    txbuff %% (bb.ssp.args+10) := (3 << 8) + 40
+    copy.uid(textfile + uid, 0, txbuff, 40)
+
+    // Set subject parameter (if given).
+    TEST subject = 0
+    THEN txbuff %% (bb.ssp.args+11) := 0
+    ELSE $(
+        txbuff %% (bb.ssp.args+12) := 0
+        txbuff %% (bb.ssp.args+11) := (2 << 8) + 50
+        FOR i=0 TO subject%0 DO txbuff%(100+i) := subject%i
+    $)
+
+    lookup.name("MAIL", nsvec)
+
+    FOR i=0 TO 20 DO IF ssp(0,txbuff,180,rxbuff,10,0,2,nsvec!0,nsvec!2)  BREAK
+
+$>Z80'
+$<Z80
+    pp.z80send(0, 0,0, recipients, subject, textfile, 0,0,0,0,0,0,0,0,0,0, -1)
+$>Z80
+    IF trace THEN writef("Posted report to '%S'*N",recipients)
+$)
+
+//==============================================================================
+
+LET file.wrch(char) BE
+$(
+    // This routine is substituted for 'wrch' when the demon is running without
+    // a terminal and wishes to send a report to a file.
+    LET old.trace = trace
+    trace := FALSE       // Avoid tracing write.byte.to.file action
+    write.byte.to.file(report.file,char)
+    trace := old.trace
+$)
+
+//==============================================================================
+
+LET route.output.to.file() BE
+$(
+    // Reroute all output to a report file.
+    LET oldtrace                = trace
+
+    trace                       := FALSE         // To avoid "Create file" appearing
+    old.wrch                    := wrch
+    report.subject              := 0
+    report.file                 := perm.file()
+    create.file(root, workfile.base+workfile.report.slot, report.file, FALSE)
+    report.file!cache.address   := get.perm.vec(400/rwpw)
+    report.file!cache.size      := 400
+    report.file!next.write      := 50
+    wrch                        := file.wrch
+    trace                       := oldtrace
+$)
+
+//==============================================================================
+
+LET post.report(size) BE
+$(
+    // Post off the current report file to POSTMEN via the Z80 mailserver.
+    LET given.size = (report.file!start.of.block)*bprw + report.file!next.write - 50
+
+    TEST (size > given.size >= -2)
+    $(  LET was.start, was.write = ?, ?
+
+        WRITEF("*N<-- Report saved [%n<%n] -->*N", given.size, size)
+        TRACE := FALSE
+        flush.cache(report.file)        // Flush any REAL data that there might be
+        was.start, was.write := report.file!start.of.block, report.file!next.write
+        report.file!start.of.block      := (size  /  bprw)
+        report.file!next.write          := (size REM bprw)
+        post.to.z80(report.file, (report.subject = 0 | report.subject%0 = 0) -> 
+                        "Prelim Demon Report", report.subject, "Postmen")
+        report.file!start.of.block, report.file!next.write := was.start, was.write
+        TRACE := TRUE
+    $)
+    ELSE
+    $(  trace := FALSE     // No longer useful
+        post.to.z80(report.file,report.subject, "Postmen")
+    $)
+$)
+
+//==============================================================================
+
+

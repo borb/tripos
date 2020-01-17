@@ -1,0 +1,61 @@
+SECTION "RD51-Copy"
+
+GET "libhdr"
+GET "iohdr"
+
+LET start() BE
+$(
+    MANIFEST
+    $(
+        sectors = 21600
+        chunk = 10
+        dudev = -2
+        blksize = 256
+    $)
+
+    GLOBAL
+    $(
+        fromunit : ug
+        tounit : ug+1
+    $)
+
+    LET buffer = ?
+    LET argv = VEC 10
+
+    IF rdargs("FROM/A,TO/A/K", argv, 10) = 0 THEN $( writes("Bad args*N"); stop(16) $)
+    fromunit := unit(argv!0)
+    tounit := unit(argv!1)
+
+    buffer := getvec (chunk * blksize - 1)
+    IF buffer=0 THEN $( writes("cannot GETVEC buffer space*N"); stop(16) $)
+
+    FOR sector = 0 TO sectors-1 BY chunk DO
+    $(  LET rc = sendpkt (notinuse, dudev, act.read, 0, 0,
+                          buffer, chunk*blksize, fromunit, 0, 0, sector)
+        TEST rc ~= 0 THEN
+        $(  writef ("read error, sectors %N-%N, status %N*N",
+                    sector, sector+chunk-1, result2)
+        $)
+        ELSE
+        $(  rc := sendpkt (notinuse, dudev, act.write, 0, 0,
+                           buffer, chunk*blksize, tounit, 0, 0, sector)
+            IF rc ~= 0 THEN
+            $(  writef ("write error, sectors %N-%N, status %N*N",
+                        sector, sector+chunk-1, result2)
+            $)
+        $)
+    $)
+
+    freevec(buffer)
+$)
+
+AND unit(string) = VALOF
+$(
+    IF compstring(string, "0") = 0 THEN RESULTIS 0
+    IF compstring(string, "1") = 0 THEN RESULTIS 1
+    IF compstring(string, "2") = 0 THEN RESULTIS 2
+    writes("Bad unit number*N")
+    stop(16)
+$)
+
+

@@ -1,0 +1,543 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+  ######     #####     ####    ##    ##  #######   ##    ##  ########  ######   
+ ########   #######   ######   ###   ##  ########  ##    ##  ########  #######  
+ ##        ##        ##    ##  ####  ##  ##    ##  ##    ##     ##     ##    ## 
+ #######   ##        ########  ## ## ##  #######   ##    ##     ##     ##    ## 
+       ##  ##        ##    ##  ##  ####  ##        ##    ##     ##     ##    ## 
+       ##  ##        ##    ##  ##  ####  ##        ##    ##     ##     ##    ## 
+ ########   #######  ##    ##  ##   ###  ##        ########  ########  #######  
+  ######     #####   ##    ##  ##    ##  ##         ######   ########  ######   
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   01/03/85             *
+\*****************************************************************************/
+
+
+
+SECTION "SCANPUID"
+
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+GET "sys:idw.bcpl.fshdr"
+
+
+
+GLOBAL
+$(
+    storage.chunksize        :  ug + 0
+    storage.root             :  ug + 1
+    storage.high             :  ug + 2
+    storage.low              :  ug + 3
+    puidlist                 :  ug + 4
+    broken                   :  ug + 5
+    indexcount               :  ug + 6
+    filecount                :  ug + 7
+    indextotal               :  ug + 8
+    filetotal                :  ug + 9
+    sysout                   :  ug + 10
+$)
+
+
+
+MANIFEST
+$(
+    p.link                   =  0
+    p.puid                   =  1
+    p.size                   =  4
+
+    a.puid                   =  0
+    a.to                     =  1
+
+    NIL                      =  -1
+$)
+
+
+
+LET start()  BE
+$(
+//  Program to scan the fileserver strarting at a given puid, printing out
+//  information about the object, and any other objects in the same data
+//  structure.  Loops are handled, and the sizes of indices and files is
+//  printed out.
+
+    LET args     =  "PUID/A,TO/K"
+    LET argv     =  VEC 50
+    LET root     =  VEC 3
+
+    LET puid     =  0
+    LET tfile    =  0
+    LET tstream  =  0
+
+    sysout  :=  output()
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        message( "Bad arguments for string *"%S*"", args )
+        
+        stop( 20 )
+    $)
+
+    puid   :=  argv!a.puid
+    tfile  :=  argv!a.to
+
+    //  Convert the puid we have been given into its binary equivalent.  If
+    //  this fails, then we should stop now.
+
+    UNLESS  convertpuid( puid, root )  DO
+    $(
+        message( "Invalid PUID *"%S*"", puid )
+        
+        stop( 20 )
+    $)
+    
+    UNLESS  initialise( root )  DO
+    $(
+        message( "Cannot initialise FSLIB" )
+        
+        stop( 20 )
+    $)
+
+    //  Attempt to open the TO output stream if we have been given one,
+    //  and ensure that the open succeeds.
+    
+    UNLESS  tfile = 0  DO
+    $(
+        tstream  :=  findoutput( tfile )
+        
+        IF  tstream = 0  THEN
+        $(
+            message( "Cannot open *"%S*"", tfile )
+            
+            stop( 20 )
+        $)
+    $)
+
+    //  Having got this far, we can initialise the system variables, and then
+    //  start the scanning process.
+
+    puidlist    :=  NIL
+    broken      :=  FALSE
+    
+    filecount   :=  0
+    indexcount  :=  0
+    
+    filetotal   :=  0
+    indextotal  :=  0
+    
+    initstore( 500 )
+    
+    UNLESS  tstream = 0  DO  selectoutput( tstream )
+    
+    scan( root, 0 )
+    writestats()
+    
+    UNLESS  tstream = 0  DO  endwrite()
+
+    uninitstore()
+$)
+
+
+
+AND initialise( puid )  =  VALOF
+$(
+//  Initialise the FS library.  Before we can do this, we must call Packserver
+//  to tell us which file server is the correct one.
+
+    LET fileserve  =  VEC 20 / ringwordsperword
+    LET txblock    =  VEC  7 / ringwordsperword
+
+    //  Copy the puid into the SSP request block.
+
+    FOR  i = 0  TO  3  DO  put2bytes( txblock, i+3, puid!i )
+
+    TEST  ssp( "PUID.LOCATE", txblock, 7, fileserve, 20, 0 )  THEN
+    $(
+        //  We have succeeded in looking up the puid, so see if we can
+        //  initialise the FS library.
+
+        LET length  =  fileserve % 16
+
+        //  Copy the string down from the middle of the reply buffer,
+        //  so that we can pass it to "fslib.initialize"
+
+        FOR  i = 0  TO  length  DO
+             fileserve % i  :=  fileserve % (16 + i)
+
+        RESULTIS  fslib.initialize( fileserve )
+    $)
+    ELSE  RESULTIS  FALSE
+$)
+
+
+
+AND convertpuid( string, puid )  =  VALOF
+$(
+//  Convert the string representation of a puid into its binary form.  The
+//  result is a boolean saying whether all is correct.
+
+    UNLESS  string % 0  =  16  DO  RESULTIS  FALSE
+
+    FOR  i = 0  TO  3  DO
+    $(
+        LET work    =  0
+        LET offset  =  i * 4  +  1
+        
+        FOR  j = offset  TO  offset+3  DO
+        $(
+            LET ch     =  string % j
+            LET value  =  chval( ch )
+            
+            IF  value = -1  THEN  RESULTIS  FALSE
+            
+            work  :=  (work << 4)  +  value
+        $)
+        
+        puid!i  :=  work
+    $)
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND chval( ch )  =  '0' <= ch <= '9'  ->  ch - '0',
+                    'A' <= ch <= 'F'  ->  ch - 'A' + 10,
+                    'a' <= ch <= 'f'  ->  ch - 'a' + 10,  -1
+
+
+
+AND writestats()  BE
+$(
+//  Write the statistics associated with this run.
+
+    writes( "*NTotal: " )
+
+    writeplural( indextotal, "slot", "slots" )
+    writes( " in " )
+    writeplural( indexcount, "index", "indices" )
+
+    writes( ", " )
+
+    writeplural( filetotal, "word", "words" )
+    writes( " in " )
+    writeplural( filecount, "file", "files" )
+
+    writes( ".*N" )
+$)
+
+
+
+AND writeplural( value, single, other )  BE
+
+//  Write out the value getting the pluralistion right.
+
+    writef( "%N %S", value, value = 1  ->  single, other )
+
+
+
+AND scan( puid, depth )  BE
+$(
+//  Scan the part of the filing system which hangs from the puid given.
+//  We first check to see whether the puid has already been looked at,
+//  and if so, then we return.  Otherwise, look to see whether it is a
+//  file or an index, and handle it appropriately.
+
+    writepuid( puid, depth )
+    
+    TEST  isinpuidlist( puid )  THEN  writes( "***N" )
+    ELSE
+    $(
+        //  Not already handled, so look at the data type of the puid, and
+        //  do the appropriate thing.
+        
+        LET root  =  putinpuidlist( puid )
+
+        TEST  indexpuid( root )  THEN
+        $(
+            //  Index puid, so find the size of the index, and then call
+            //  ourselves recursively on the entries.
+            
+            LET size  =  indexsize( root )
+            LET null  =  0
+
+            writef( " index size %N*N" )
+            
+            FOR  i = 0  TO  size-1  DO
+            $(
+                //  Look at each slot in turn, and if the slot is not empty,
+                //  call ourselves recursively to handle the puid.
+                
+                IF  checkbreak()  THEN  BREAK
+                IF  null = 20     THEN  BREAK     //  Abitrary ...
+                
+                retrieve( root, i, puid )
+                
+                TEST  nullpuid( puid )  THEN  null  :=  null + 1
+                ELSE
+                $(
+                    scan( puid, depth+1 )
+                    
+                    null  :=  0
+                $)
+            $)
+            
+            indextotal  :=  indextotal + size
+            indexcount  :=  indexcount + 1
+        $)
+        ELSE
+        $(
+            //  This is a file, which should be examined, and its size
+            //  printed out.
+            
+            LET size  =  filesize( root )
+            
+            writef( " file size %N*N", size )
+            
+            filetotal  :=  filetotal + size
+            filecount  :=  filecount + 1
+        $)
+    $)
+$)
+
+
+
+AND writepuid( puid, depth )  BE
+$(
+//  Write the puid given with the correct amount of indentation.
+
+    FOR  i = 0  TO  depth-1  DO  writes( "  " )
+
+    FOR  i = 0  TO  3  DO  writehex( puid!i, 4 )
+$)
+
+
+
+AND isinpuidlist( puid )  =  VALOF
+$(
+//  Scan the puid list, and see whether this puid is already in there.  The
+//  result is a boolean saying whether it is or not.
+
+    LET list  =  puidlist
+    
+    UNTIL  list = NIL  DO
+    $(
+        LET link   =  list!p.link
+        LET luid   =  list+p.puid
+        LET found  =  TRUE
+        
+        FOR  i = 0  TO  3  DO
+            UNLESS  puid!i = luid!i  DO
+                found  :=  FALSE
+                
+        IF  found  THEN  RESULTIS  TRUE
+        
+        list  :=  link
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND putinpuidlist( puid )  =  VALOF
+$(
+//  Add the puid given to the list of puids already found.
+
+    LET list  =  getstore( p.size )
+    LET luid  =  list+p.puid
+
+    FOR  i = 0  TO  3  DO  luid!i  :=  puid!i
+    
+    list!p.link  :=  puidlist
+    puidlist     :=  list
+
+    RESULTIS  luid
+$)
+
+
+
+AND indexpuid( puid )  =  
+
+//  Return TRUE if the puid given is that of an Index rather than a File.
+
+    (puid!0 & #X8000) \= 0
+
+
+
+AND nullpuid( puid )  =  VALOF
+$(
+//  Return TRUE if the puid given refers to a null object.
+
+    LET null  =  TRUE
+
+    FOR  i = 0  TO  3  DO
+        UNLESS  puid!i = 0  DO
+            null  :=  FALSE
+
+    RESULTIS  null
+$)
+
+
+
+AND indexsize( puid )  =  VALOF
+$(
+//  Read the index size, and return its value as one 32 bit number.
+
+    LET result  =  VEC 1
+    
+    result!0  :=  0
+    result!1  :=  0
+
+    UNLESS  fs.read.index.size( puid )  DO  message( "RIS failed" )
+
+    RESULTIS  (result!0 << 16) + result!1
+$)
+
+
+
+AND filesize( puid )  =  VALOF
+$(
+//  Read the file high water mark, and return its value as one 32 bit number.
+
+    LET result  =  VEC 1
+
+    result!0  :=  0
+    result!1  :=  0
+
+    UNLESS  fs.read.file.hwm( puid )  DO  message( "RFHWM failed" )
+
+    RESULTIS  (result!0 << 16) + result!1
+$)
+
+
+
+AND retrieve( indexuid, slot, puid )  BE
+$(
+//  Retrieve the puid which is at slot "slot" in the index given.
+
+    puid!0  :=  0
+    puid!1  :=  0
+    puid!2  :=  0
+    puid!3  :=  0
+
+    UNLESS  fs.retrieve( indexuid, slot, puid )  DO  message( "RETRIEVE failed" )
+$)
+
+
+
+AND checkbreak()  =  VALOF
+$(
+//  Look at see whether the user has typed BREAK or not.  If so, then we should
+//  wind up in a sensible manner.
+
+    UNLESS  broken  DO
+    $(
+        broken  :=  testflags( #B0001 )
+        
+        IF  broken  THEN  message( "BREAK" )
+    $)
+
+    RESULTIS  broken
+$)
+
+
+
+AND initstore( chunksize )  BE
+$(
+//  Initialise the storage package, defining the size of chunks which will
+//  be grabbed from the standard storage manager.
+
+    storage.chunksize  :=  chunksize
+    storage.root       :=  NIL
+    storage.high       :=  0
+    storage.low        :=  0
+$)
+
+
+
+AND getstore( upb )  =  VALOF
+$(
+//  Analagous to "getvec"  -  allocate a vector whose word upperbound
+//  is "upb" from the heap.  If there is not enough room in the current
+//  chunk, then allocate a new chunk.
+
+    LET size   =  upb + 1
+    LET chunk  =  0
+
+    IF  size > storage.chunksize  THEN  panic( "Bad store request" )
+
+    IF  (storage.high - storage.low)  <  size  THEN
+    $(
+        //  Not enough room left in the current chunk, so allocate a
+        //  new chunk, and try again.
+
+        LET newchunk  =  getvec( storage.chunksize + 1 )
+
+        IF  newchunk = 0  THEN  panic( "No more store" )
+
+        newchunk!0    :=  storage.root
+        storage.root  :=  newchunk
+        storage.low   :=  newchunk + 1
+        storage.high  :=  storage.low + storage.chunksize + 1
+    $)
+
+    chunk        :=  storage.low
+    storage.low  :=  storage.low + size
+
+    RESULTIS  chunk
+$)
+
+
+
+AND uninitstore()  BE
+$(
+//  Free all the storage in use by the storage package.  The base of the
+//  storage chain is pointed to by "storage.root".
+
+    UNTIL  storage.root = NIL  DO
+    $(
+        LET next  =  storage.root!0
+
+        freevec( storage.root )
+
+        storage.root  :=  next
+    $)
+$)
+
+
+
+AND message( format, arg1, arg2 )  BE
+$(
+//  Write out a message to the standard output stream.
+
+    LET o  =  output()
+
+    selectoutput( sysout )
+
+    writes( "****** " )
+    writef( format, arg1, arg2 )
+    newline()
+    
+    selectoutput( o )
+$)
+
+
+
+AND panic( format, arg1, arg2 )  BE
+$(
+//  Oh dear.  Something is drastically wrong ...
+
+    message( format, arg1, arg2 )
+
+    abort( 9999 )
+$)
+
+

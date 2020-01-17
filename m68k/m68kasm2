@@ -1,0 +1,2212 @@
+//******************************************************************************
+//*   Assembler for the Motorola MC68000 Microprocessor:  Section 2            *
+//******************************************************************************
+
+
+SECTION "M68KASM2"
+
+
+GET "LIBHDR"
+
+GET "M68KHDR"
+
+
+
+LET specialinstruction( inum )  BE
+$(
+    LET ofwd    =  0
+    LET r.m     =  0
+    LET regs    =  0
+    LET opmode  =  0
+    LET sz      =  0
+
+    SWITCHON  inum  INTO
+    $(
+        CASE  1 :  //  ABCD  ADDX  SBCD  SUBX
+                   //  Possible operands are:
+                   //
+                   //      a)      Dy,Dx
+                   //      b)    -(Ay),-(Ax)
+
+                   checkshort()
+                   nextsymb()
+
+                   evaluate( effective.address() )
+                   checkfor( s.comma, 10 )
+
+                   r.m  :=  op.ea  =  am.Dr     ->  0,
+                            op.ea  =  am.Ar.pd  ->  1,
+                                      complain( 8 )
+
+                   swapoperands()
+
+                   evaluate( effective.address() )
+
+                   TEST  op.ea = op1.ea  THEN
+                   $(
+                       checkfor( s.none, 12 )
+
+                       codeword(  instr.mask                          |
+                                  (exp << 9)                          |
+                                  (sizefield( instr.size ) << 6)      |
+                                  (r.m << 3)                          |
+                                  (op1.exp)                           )
+                   $)
+                   ELSE  complain( 9 )
+
+                   ENDCASE
+
+
+        CASE  2 :  //  AND  OR
+                   //  Possible operand types:
+                   //
+                   //  <ea>,Dn                  <ea> = data.
+                   //  Dn,<ea>                  <ea> = mem  alt.
+
+                   checkshort()
+                   nextsymb()
+
+                   evaluate( effective.address() )
+                   checkfor( s.comma, 10 )
+                   swapoperands()
+
+                   evaluate( effective.address() )
+                   checkfor( s.none, 12 )
+
+                   TEST  op.ea = am.Dr  THEN
+                   $(
+                       r.m  :=  0
+
+                       TEST  (op1.ea & am.data) = 0
+                           THEN  complain( 13 )
+                           ELSE  swapoperands()
+                   $)
+                   ELSE
+
+                   TEST  op1.ea \= am.Dr           THEN  complain( 14 )   ELSE
+                   TEST  (op.ea & am.mem.alt) = 0  THEN  complain( 15 )
+
+                   ELSE  r.m  :=  1
+
+                   codeword(  instr.mask                                  |
+                              (op1.exp  <<  9)                            |
+                              (r.m      <<  8)                            |
+                              (sizefield( instr.size )  <<  6)            |
+                              (eafield() )                                )
+
+                   genea()
+
+                   ENDCASE
+
+
+        CASE  3 :  //  ADD  SUB
+                   //  Possible operands are:
+                   //
+                   //       a)    <ea>,Dr                    <ea> = all
+                   //       b)    Dr,<ea>                    <ea> = mem alt.
+
+                   checkshort()
+                   nextsymb()
+
+                   evaluate( effective.address() )
+                   checkfor( s.comma, 10 )
+                   swapoperands()
+
+                   evaluate( effective.address() )
+                   checkfor( s.none, 12 )
+
+                   TEST  op.ea = am.Dr THEN
+                   $(
+                       r.m  :=  0
+
+                       IF  (op1.ea & am.all) = 0  THEN  complain( 8 )
+
+                       swapoperands()
+                   $)
+                   ELSE
+                   $(
+                       r.m  :=  1
+
+                       TEST  op1.ea \= am.Dr  THEN  complain( 14 )
+                       ELSE
+
+                           IF  (op.ea & am.mem.alt) = 0  THEN  complain( 15 )
+                   $)
+
+                   codeword(  instr.mask                                    |
+                              (op1.exp  <<  9)                              |
+                              (r.m      <<  8)                              |
+                              (sizefield( instr.size ) << 6)                |
+                              (eafield())                                   )
+
+                   genea()
+
+                   ENDCASE
+
+
+        CASE  4 :  //  Bcc  DBcc  BRA   BSR   DBRA
+                   //  The condition codes required for this instruction is
+                   //  in fact held in "source.ea"
+
+                   nextsymb()
+
+                   IF  nargs = 2  THEN     // A DB.. type instruction
+                   $(
+                       checkshort()
+                       evaluate( effective.address() )
+                       checkfor( s.comma, 10 )
+
+                       IF  op.ea \= am.Dr  THEN  complain( 14 )
+
+                       swapoperands()
+                   $)
+
+                   //  We must allow for the possibility of a forward
+                   //  reference to a 32 bit value.  This is illegal in most
+                   //  cases, but not here.
+
+                   ofwd            :=  forwardreftype
+                   forwardreftype  :=  s.abs32
+
+                   evaluate( effective.address() )
+
+                   forwardreftype  :=  ofwd
+
+                   //  Having read the effective address, make sure that it
+                   //  is compatible with the current program counter.
+
+                   checkfor( s.none, 12 )
+
+                   //  We cannot allow external references in Branch
+                   //  instructions (as we require a displacement).
+
+                   IF  externalref  THEN  complain( 152 )
+
+                   TEST  op.ea = am.PC.disp   THEN
+                       UNLESS  locmode = s.rel  DO  complain( 18 )
+
+                   ELSE
+
+                   TEST  (op.ea = am.abs16 | op.ea = am.abs32)    THEN
+                       UNLESS  pass1  DO
+                           UNLESS  locmode = s.abs  DO  complain( 17 )
+
+                   ELSE  complain( 16 )
+
+                   //  We can perform an optimisation here, if the reference is
+                   //  backward, and we are assembling a Bcc instruction, and
+                   //  the user has not asked for a LONG branch explicitly.
+
+                   IF  nargs = 1  &  instr.size = ts.none  THEN
+                   $(
+                       LET offset   =  exp - (location + 2)
+                       LET inrange  =  -128 <= offset <= +127
+
+                       IF  inrange  &  offset \= 0  &  NOT forwardref  THEN
+                           instr.size  :=  ts.short
+                   $)
+
+                   TEST  instr.size = ts.short  THEN
+                   $(
+                       LET offset  =  exp - (location + 2)
+
+                       IF  offset = 0  &  pass2  THEN  complain( 19 )
+
+                       codeword(  instr.mask                           |
+                                  (source.ea  <<  8)                   |
+                                  (offset  &  #XFF)                    )
+
+                       UNLESS  (-128 <= offset <= +127)  |  pass1  DO
+                           complain( 20 )
+                   $)
+                   ELSE
+                   $(
+                       //  Long branch, either because this is a forward
+                       //  reference, or because the user asked for it
+                       //  explicitly using a ".L" size specifier.
+
+                       LET offset  =  exp - (location + 2)
+
+                       TEST  (-32768 <= offset <= +32767)  |  pass1  THEN
+                       $(
+                           codeword(  instr.mask                             |
+                                      (source.ea  <<  8)                     |
+                                      (nargs = 2  ->  op1.exp, #B000)        )
+
+                           codeword(  offset  &  #XFFFF                      )
+                       $)
+                       ELSE  complain( 21 )
+                   $)
+
+                   ENDCASE
+
+
+        CASE  5  : //  ASL  ASR  LSL  LSR   ROL  ROR  ROXL  ROXR
+                   //  The identifier for the particular instruction
+                   //  is again held in "source.ea"
+                   //
+                   //  There are various types of addressing modes:
+                   //
+                   //     a)    Dr,Dr
+                   //     b) #imm3,Dr
+                   //     c)    <ea>                  mem alt.
+
+
+                   checkshort()
+                   nextsymb()
+
+                   evaluate( effective.address() )
+
+                   TEST  op.ea = am.Dr  |  (op.ea & am.imm3) \= 0  THEN
+                   $(
+                       LET r    =  exp & #B111
+                       LET i.r  =  op.ea = am.Dr  ->  1, 0
+                       LET dr   =  source.ea & 1
+
+                       checkfor( s.comma, 10 )
+
+                       swapoperands()
+
+                       evaluate( effective.address() )
+                       checkfor( s.none, 12 )
+
+                       TEST  op.ea = am.Dr  THEN
+                             codeword(  instr.mask                           |
+                                        (r  <<  9)                           |
+                                        (dr <<  8)                           |
+                                        (sizefield( instr.size )  << 6)      |
+                                        (i.r << 5)                           |
+                                        (exp)                                )
+
+                       ELSE  complain( 22 )
+                   $)
+                   ELSE
+
+                   TEST  (op.ea & am.mem.alt) \= 0  THEN
+                   $(
+                       LET mask  =  source.ea!(TABLE   #XE0C0, #XE0C0,
+                                                       #XE2C0, #XE2C0,
+                                                       #XE6C0, #XE6C0,
+                                                       #XE4C0, #XE4C0)
+
+                       LET dr    =  source.ea & 1
+
+                       checkfor( s.none, 12 )
+
+                       codeword(  mask                                      |
+                                  (dr  <<  8)                               |
+                                  (eafield() )                              )
+
+                       genea()
+                   $)
+                   ELSE  complain( 8 )
+
+                   ENDCASE
+
+
+        CASE  6  : //  BCHG  BCLR  BSET  BTST
+                   //  Possible operands are:
+                   //
+                   //     a)     Dr,<ea>                          data alt.
+                   //     b)   #imm,<ea>                          data alt.
+                   //                                             (data if BTST)
+
+                   checkshort()
+                   nextsymb()
+
+                   evaluate( effective.address() )
+                   checkfor( s.comma, 10 )
+
+                   swapoperands()
+
+                   TEST  op1.ea = am.Dr  THEN
+                   $(
+                       LET btst  =  source.ea = #B00
+
+                       evaluate( effective.address() )
+                       checkfor( s.none, 12 )
+
+                       TEST  (op.ea & (btst  ->  am.data, am.data.alt) = 0)  THEN
+                           complain( btst  ->  33, 23 )
+
+                       ELSE
+                       $(
+                           codeword(  #X0100                                 |
+                                      (op1.exp  <<  9)                       |
+                                      (source.ea << 6)                       |
+                                      (eafield() )                           )
+                           genea()
+                       $)
+                   $)
+                   ELSE
+
+                   TEST  (op1.ea & am.imm16) \= 0  THEN
+                   $(
+                       evaluate( effective.address() )
+                       checkfor( s.none, 12 )
+
+                       TEST  (op.ea & am.data.alt) = 0  THEN  complain( 23 )
+                       ELSE
+                       $(
+                           codeword(  #X0800                                 |
+                                      (source.ea  <<  6)                     |
+                                      (eafield() )                           )
+
+                           codeword( op1.exp & #XFF )
+                           genea()
+                       $)
+                   $)
+                   ELSE  complain( 8 )
+
+                   ENDCASE
+
+
+        CASE  7  : //  EXG  EXGA  EXGM  EXGD
+                   //  Possible operands are <register>,<register>,
+                   //  but various restrictions are placed depending on
+                   //  then mnemonic used.
+
+                   checkshort()
+
+                   UNLESS  (source.ea & #B01) = 0  DO  regs := regs | am.Dr
+                   UNLESS  (source.ea & #B10) = 0  DO  regs := regs | am.Ar
+
+                   nextsymb()
+
+                   evaluate( effective.address() )
+                   checkfor( s.comma, 10 )
+
+                   IF  (op.ea & regs) = 0  THEN  complain( 24 )
+
+                   swapoperands()
+
+                   evaluate( effective.address() )
+                   checkfor( s.none, 12 )
+
+                   IF  (op.ea & regs) = 0  THEN  complain( 24 )
+
+                   opmode   :=  op.ea  =  op1.ea  ->  (op.ea = am.Dr -> #B01000,
+                                                                        #B01001),
+                                                                        #B10001
+
+                   UNLESS  op.ea = op1.ea  DO
+                       IF  op1.ea = am.Ar  THEN
+                           swapoperands()
+
+                   codeword(  instr.mask                                |
+                              (op1.exp  <<  9)                          |
+                              (opmode   <<  3)                          |
+                              (exp)                                     )
+
+                   ENDCASE
+
+
+        CASE  8  : //  All the MOVE instructions.   These require MUCH more
+                   //  decoding...
+                   //  The values of "source.ea" represent:
+                   //
+                   //       0   -   MOVE
+                   //       1   -   MOVEA
+                   //       2   -   MOVEM
+                   //       3   -   MOVEP
+                   //       4   -   MOVEQ
+
+                   checkshort()
+
+                   SWITCHON  source.ea  INTO
+                   $(
+                       CASE  0 :  genmove()                  ; ENDCASE
+                       CASE  1 :  genmovea()                 ; ENDCASE
+
+                       CASE  2 :  in.movem  :=  yes
+                                  genmovem()
+                                  in.movem  :=  no           ; ENDCASE
+
+                       CASE  3 :  genmovep()                 ; ENDCASE
+                       CASE  4 :  genmoveq()                 ; ENDCASE
+
+
+                       DEFAULT :  complain( 0 )
+                   $)
+
+                   ENDCASE
+
+
+        CASE  9  : //  JMP  JSR
+                   //  These are perfectly innocuous instructions, but Motorola
+                   //  in their infinite wisdon have decided that they should
+                   //  have ".S" and ".L" addressing modes, just like BRA.
+
+                   nextsymb()
+                   evaluate( effective.address() )
+
+                   checkfor( s.none, 12 )
+
+                   IF  (op.ea & am.contr) = 0  THEN  complain( 180 )
+
+                   //  Ok.  We have something which is approximately the
+                   //  right shape.  We should now look at the instruction
+                   //  size to make sure that everything matches.
+
+                   TEST  instr.size = ts.none  THEN
+                   $(
+                       //  No size given, so this is the same instruction as
+                       //  before.
+
+                       codeword(  instr.mask     |
+                                  eafield()      )
+
+                       genea()
+                   $)
+                   ELSE
+                   $(
+                       //  More tricky.  This instruction has a specific size,
+                       //  and so we should check that all is well.
+
+                       LET ea    =  0
+                       LET size  =  0
+                       LET type  =  0
+
+                       UNLESS  op.ea = am.abs16    |
+                               op.ea = am.abs32    |
+                               op.ea = am.PC.disp  DO  complain( 181 )
+
+                       TEST  instr.size = ts.short  THEN
+                       $(
+                           //  Short addressing mode.  This is OK, providing
+                           //  that we have not got a 32 bit absolute argument!
+
+                           IF  op.ea = am.abs32  THEN  complain( 182 )
+
+                           ea     :=  op.ea
+                           size   :=  bytesize( ts.word )
+                           type   :=  s.abs16
+                           op.ea  :=  am.abs16
+                       $)
+                       ELSE
+                       $(
+                           //  Long addressing mode.  Everything can be fitted
+                           //  into this.
+
+                           ea     :=  op.ea
+                           size   :=  bytesize( ts.long )
+                           type   :=  s.abs32
+                           op.ea  :=  am.abs32
+                       $)
+
+                       IF  pass1 & forwardref  THEN  relocate( 0, size )
+
+                       //  Having worked out what the changes should be, we can
+                       //  generate the opcode word, and then stack the address
+                       //  we have calculated.
+
+                       codeword(  instr.mask     |
+                                  eafield()      )
+
+                       TEST  ea = am.PC.disp
+                           THEN  stackvalue( s.rel, size, exp, externalref, externalsymb )
+                           ELSE  stackvalue( type,  size, exp, externalref, externalsymb )
+                   $)
+
+                   ENDCASE
+
+
+        CASE 11  : //  TRAP
+                   //  Operand type:    #imm  (4 bit)
+
+                   checkshort()
+                   nextsymb()
+
+                   evaluate( effective.address() )
+                   checkfor( s.none, 12 )
+
+                   TEST  (op.ea & am.imm) = 0     THEN  complain( 25 )   ELSE
+                   TEST  NOT (0 <= exp <= 15)     THEN  complain( 26 )
+
+                   ELSE  codeword( instr.mask  |  exp )
+
+                   ENDCASE
+
+
+        CASE 12  : //  ANDI   EORI   ORI
+                   //  These are special, because the destination operand
+                   //  may be the CCR or SR.  A ".B" size is implied
+                   //  for the CCR and a ".W" is implied for the SR.
+                   //  ".L" sizes are flagged as errors.
+
+                   checkshort()
+                   nextsymb()
+
+                   evaluate( effective.address() )
+                   checkfor( s.comma, 10 )
+
+                   IF  (op.ea & am.imm) = 0  THEN  complain( 27 )
+
+                   swapoperands()
+
+                   evaluate( effective.address() )
+                   checkfor( s.none, 12 )
+
+                   TEST  op.ea = am.special  THEN
+                   $(
+                       LET size  =  exp = s.SR   ->  ts.word,
+                                    exp = s.CCR  ->  ts.byte,
+                                                     complain( 9 )
+
+                       UNLESS  instr.size = ts.none  DO
+                           UNLESS  instr.size = size  DO
+                               complain( 28 )
+
+                       codeword(  instr.mask                            |
+                                  (sizefield( size )  <<  6)            |
+                                  (#B111100)                            )
+
+                       codeword(  op1.exp )
+                   $)
+                   ELSE
+
+                   TEST  (op.ea & am.data.alt) = 0  THEN  complain( 23 )
+
+                   ELSE
+                   $(
+                       codeword(  instr.mask                          |
+                                  (sizefield( instr.size )  <<  6)    |
+                                  (eafield() )                        )
+
+                       IF  instr.size = ts.long  THEN
+                           codeword( op1.exp >> 16 )
+
+                       TEST  instr.size = ts.byte
+                             THEN  codeword( op1.exp & #XFF )
+                             ELSE  codeword( op1.exp & #XFFFF )
+
+                       genea()
+                   $)
+
+                   ENDCASE
+
+
+
+        CASE 13  : //  ADDA, SUBA, CMPA
+                   //  Must check, as BYTE mode is not allowed, and this
+                   //  Is banked on on the bit pattern.
+
+                   checkshort()
+
+                   sz  :=  instr.size = ts.word  ->  0,
+                           instr.size = ts.none  ->  0,
+                           instr.size = ts.long  ->  1,
+                           instr.size = ts.byte  ->  complain( 29 ),
+                                                     complain( 6 )
+
+                   nextsymb()
+
+                   evaluate( effective.address() )
+                   checkfor( s.comma, 10 )
+
+                   TEST  (op.ea & am.all) = 0  THEN  complain( 8 )
+                   ELSE
+                   $(
+                       swapoperands()
+
+                       evaluate( effective.address() )
+                       checkfor( s.none, 12 )
+
+                       TEST  op.ea \= am.Ar  THEN  complain( 30 )
+                       ELSE
+                       $(
+                           swapoperands()
+                           codeword(  instr.mask                       |
+                                      (op1.exp  <<  9)                 |
+                                      (sz       <<  8)                 |
+                                      (eafield() )                     )
+
+                           genea()
+                       $)
+                   $)
+
+                   ENDCASE
+
+
+        CASE 14  : //  CMPM
+                   //  A silly instruction if ever there was one!
+                   //  The operand types are:
+                   //
+                   //    (Ay)+,(Ax)+
+
+                   checkshort()
+                   nextsymb()
+
+                   evaluate( effective.address() )
+                   checkfor( s.comma, 10 )
+
+                   IF  op.ea  \=  am.Ar.pi  THEN   complain( 31 )
+
+                   swapoperands()
+
+                   evaluate( effective.address() )
+                   checkfor( s.none, 12 )
+
+                   IF  op.ea  \=  am.Ar.pi  THEN  complain( 32 )
+
+                   codeword(  instr.mask                                 |
+                              (exp  <<  9)                               |
+                              (sizefield( instr.size )  <<  6)           |
+                              (op1.exp)                                  )
+
+                   ENDCASE
+
+
+        CASE 15  : //  EOR
+                   //  Operands are:   Dr,<ea>
+                   //  where <ea> is data alterable.
+
+                   checkshort()
+                   nextsymb()
+
+                   evaluate( effective.address() )
+                   checkfor( s.comma, 10 )
+
+                   IF  op.ea \= am.Dr  THEN  complain( 14 )
+
+                   swapoperands()
+
+                   evaluate( effective.address() )
+                   checkfor( s.none, 12 )
+
+                   IF  (op.ea & am.data.alt) = 0  THEN  complain( 23 )
+
+                   codeword( instr.mask                     |
+                             (op1.exp << 9)                 |
+                             (sizefield( instr.size ) << 6) |
+                             (eafield())                    )
+
+                   genea()
+
+                   ENDCASE
+
+
+        DEFAULT  : complain( 0 )
+    $)
+
+    skiprest()
+$)
+
+
+
+AND checkshort()  BE  IF  instr.size = ts.short  THEN  complain( 86 )
+
+
+
+AND genmove()  BE
+$(
+//  Generate code for a general MOVE instruction.
+//  This can take quite a few forms,  viz:
+//
+//      a)    <ea>,<ea>               all,data alt        BWL
+//      b)    <ea>,CCR                data                .W.
+//      c)    <ea>,SR                 data                .W.
+//      d)    SR,<ea>                 data alt            .W.
+//      e)    USP,Ar                                      ..L
+//      f)    Ar,USP                                      ..L
+
+    nextsymb()
+
+    evaluate( effective.address() )
+    checkfor( s.comma, 10 )
+
+    swapoperands()
+
+    evaluate( effective.address() )
+    checkfor( s.none, 12 )
+
+    //  The   ...,CCR  and  ...,SR  can be picked out easily.
+
+    IF  op.ea = am.special  THEN
+    $(
+        LET size  =  exp = s.SR  ->  ts.word,
+                     exp = s.CCR ->  ts.byte,
+                                           -1
+
+        UNLESS  size = -1  DO
+        $(
+            TEST  (op1.ea & am.data) = 0  THEN  complain( 13 )
+            ELSE
+            $(
+                UNLESS  instr.size = ts.none  DO
+                        UNLESS  instr.size = ts.word  DO  complain( 28 )
+
+                swapoperands()
+
+                codeword(  #X44C0                              |
+                           (sizefield( size ) << 9)            |
+                           (eafield())                         )
+                genea()
+
+                RETURN
+            $)
+        $)
+    $)
+
+    //  Next, the move FROM SR instruction.
+
+    IF  op1.ea = am.special  THEN
+    $(
+        IF  op1.exp = s.SR  THEN
+        $(
+            UNLESS  instr.size = ts.word | instr.size = ts.none  DO  complain( 34 )
+
+            TEST  (op.ea & am.data.alt) = 0  THEN  complain( 23 )
+            ELSE
+            $(
+                codeword(  #X40C0                            |
+                           (eafield() )                      )
+                genea()
+
+                RETURN
+            $)
+        $)
+    $)
+
+    //  Now the Ar,USP and USP,Ar instructions.
+
+    IF    (op1.ea = am.special & op1.exp = s.USP) |
+          (op.ea  = am.special & exp     = s.USP)    THEN
+    $(
+        LET dr  =  op1.ea = am.special  ->  1, 0
+
+        UNLESS  instr.size = ts.long  |  instr.size = ts.none  DO  complain( 35 )
+
+        IF  op.ea  =  am.special  THEN  swapoperands()
+
+        TEST  op.ea = am.Ar  THEN
+              codeword(  #X4E60                               |
+                         (dr  <<  3)                          |
+                         (exp)                                )
+
+        ELSE  complain( dr = 1  ->  30, 36 )
+
+        RETURN
+    $)
+
+    //  This leaves  the good old MOVE <ea>,<ea> instruction!
+
+    TEST  (op1.ea & am.all) = 0      THEN  complain( 8 )                ELSE
+    TEST  (op.ea & am.alt) = 0       THEN  complain( 99 )               ELSE
+
+          generalmove()
+$)
+
+
+
+AND genmovea()  BE
+$(
+//  Move address into address register
+//  First, read in the operands:
+
+    nextsymb()
+
+    evaluate( effective.address() )
+    checkfor( s.comma, 10 )
+
+    swapoperands()
+
+    evaluate( effective.address() )
+    checkfor( s.none, 12 )
+
+    TEST  (op1.ea & am.all) = 0     THEN  complain( 8 )                ELSE
+    TEST  (op.ea \= am.Ar)          THEN  complain( 30 )               ELSE
+
+          generalmove()
+$)
+
+
+
+AND generalmove()  BE
+$(
+    LET operand1  =  0
+    LET operand2  =  0
+
+    swapoperands()
+
+    operand2  :=  eafield()
+
+    swapoperands()
+
+    operand1  :=  eafield()
+    operand1  :=  ((operand1 << 3) | (operand1 >> 3))  &  #X3F
+
+    codeword(  #X0000                                   |
+               (movesize( instr.size )  <<  12)         |
+               (operand1  <<  6)                        |
+               (operand2)                               )
+
+    swapoperands()
+    genea()
+
+    swapoperands()
+    genea()
+$)
+
+
+
+AND movesize( size )  =  VALOF
+$(
+    SWITCHON  size  INTO
+    $(
+        CASE ts.byte     :  RESULTIS  #B01
+        CASE ts.word     :  RESULTIS  #B11
+        CASE ts.long     :  RESULTIS  #B10
+        CASE ts.none     :  RESULTIS  movesize( ts.default )
+
+        DEFAULT          :  complain( 37 )
+    $)
+$)
+
+
+
+AND genmovem()  BE
+$(
+    LET dr     =  0
+    LET sz     =  0
+    LET rbits  =  0
+
+    nextsymb()
+
+    TEST  symb = s.Ar  |  symb = s.Dr  |  symb = s.reg  THEN
+    $(
+        LET bits  =  readregisters()
+
+        checkfor( s.comma, 10 )
+
+        evaluate( effective.address() )
+        checkfor( s.none, 12 )
+
+        TEST  (op.ea & am.contr.alt) \= 0  THEN  rbits  :=  bits    ELSE
+        TEST  (op.ea & am.Ar.pd) \= 0      THEN  rbits  :=  reverse( bits )
+
+              ELSE  complain( 9 )
+
+        dr  :=  0
+    $)
+    ELSE
+    $(
+        LET bits  =  0
+
+        evaluate( effective.address() )
+        checkfor( s.comma, 10 )
+
+        bits  :=  readregisters()
+
+        checkfor( s.none, 12 )
+
+        TEST  (op.ea & am.contr)  \=  0         THEN  rbits  :=  bits  ELSE
+        TEST  (op.ea & am.Ar.pi)  \=  0         THEN  rbits  :=  bits  ELSE
+
+              complain( 8 )
+
+        dr  :=  1
+    $)
+
+    sz  :=  instr.size  =  ts.long   ->  1,
+            instr.size  =  ts.word   ->  0,
+            instr.size  =  ts.none   ->  0,
+                                         complain( 38 )
+
+    codeword(  #X4880                                                  |
+               (dr  <<  10)                                            |
+               (sz  <<  6)                                             |
+               (eafield() )                                            )
+
+    codeword(  rbits  &  #XFFFF )
+
+    genea()
+$)
+
+
+
+AND reverse( bits )  =  VALOF
+$(
+    LET newbits  =  0
+
+    FOR  i = 1  TO  16  DO
+    $(
+        newbits  :=  (newbits << 1)  +  (bits & 1)
+        bits     :=  bits >> 1
+    $)
+
+    RESULTIS newbits
+$)
+
+
+
+
+AND evalm( ptr )  =  VALOF
+$(
+    LET ptr0    =  ptr!p.ptr0
+    LET ptr1    =  ptr!p.ptr1
+    LET ptr2    =  ptr!p.ptr2
+
+    LET r1      =  0
+    LET r2      =  0
+    LET rtype1  =  0
+    LET rtype2  =  0
+    LET rnum1   =  0
+    LET rnum2   =  0
+
+    SWITCHON  ptr0  INTO
+    $(
+        CASE s.Ar     : RESULTIS  #B0000000100000000  <<  ptr1
+        CASE s.Dr     : RESULTIS  #B0000000000000001  <<  ptr1
+
+        CASE s.slash  : RESULTIS  evalm( ptr1 )  |  evalm( ptr2 )
+
+        CASE s.hyphen : r1      :=  evalm( ptr1 )
+                        r2      :=  evalm( ptr2 )
+
+                        rtype1  :=  ptr1!p.ptr0
+                        rtype2  :=  ptr2!p.ptr0
+                        rnum1   :=  ptr1!p.ptr1
+                        rnum2   :=  ptr2!p.ptr1
+
+                        TEST  rtype1 = rtype2  THEN
+                        $(
+                            LET result  =  0
+
+                            IF  rnum2 < rnum1  THEN
+                            $(
+                                LET t  =  r1
+
+                                r1  :=  r2
+                                r2  :=  t
+                            $)
+
+                            result  :=  r1
+
+                            UNTIL  r1 = r2  DO
+                            $(
+                                r1      :=  r1 << 1
+                                result  :=  result | r1
+                            $)
+
+                            RESULTIS  result
+                        $)
+                        ELSE  complain( 39 )
+
+                        RESULTIS 0
+
+
+        DEFAULT       : complain( 0 )
+    $)
+$)
+
+
+
+AND readregisters()  =  VALOF
+$(
+//  Read either a single REG type symbol, or a list of registers separated
+//  by "-" or "/".
+
+    TEST  symb = s.reg  THEN
+    $(
+        //  The current symbol has exactly the right shape, and so we should
+        //  remember its value, and read the next symbol.  Check here for
+        //  a forward reference (which is illegal).
+
+        LET bits  =  symbtype!st.value
+
+        IF  (symbtype!st.flags & stb.setnow) = 0  THEN  complain( 183 )
+
+        readsymb()
+
+        RESULTIS  bits
+    $)
+    ELSE
+
+    //  Not a special symbol, so we should read the register mask now, and
+    //  return the corresponding bit pattern.
+
+    RESULTIS  evalm( readmult() )
+$)
+
+
+
+AND readmult()  =  VALOF
+$(
+    LET result  =  readreg()
+
+    $(  //  Repeat loop to read a list of registers separated by either
+        //  hyphens or slashes.
+
+        TEST  symb = s.over    THEN
+        $(
+            readsymb()
+
+            RESULTIS  block3( s.slash, result, readmult() )
+        $)
+        ELSE
+
+        TEST  symb = s.minus    THEN
+        $(
+            readsymb()
+
+            result  :=  block3( s.hyphen, result, readreg() )
+
+            IF  symb = s.over  THEN  LOOP
+
+            RESULTIS  result
+
+        $)
+
+        ELSE  RESULTIS  result
+    $)
+    REPEAT
+$)
+
+
+
+AND readreg()  =  VALOF
+$(
+//  Read a register definition.  Since we are not going through the normal
+//  evaluation channels, we should check to see that we are not using a
+//  register which was defined using a forward reference.
+
+    TEST  symb = s.Ar  |  symb = s.Dr  THEN
+    $(
+        IF  (symbtype!st.flags & stb.setnow) = 0  THEN  complain( 148 )
+
+        TEST  tagsize.given  \=  ts.none  THEN  complain( 40 )
+        ELSE
+        $(
+            LET result  =  block3( symb, regnum, 0 )
+
+            readsymb()
+
+            RESULTIS  result
+        $)
+    $)
+    ELSE  complain( 41 )
+
+    RESULTIS  0
+$)
+
+
+
+AND genmovep()  BE
+$(
+//  The possible address modes allowed are:
+//
+//    d(Ay),Dx
+//    Dx,d(Ay)
+
+    LET dr  =  0
+    LET sz  =  0
+
+    nextsymb()
+
+    evaluate( effective.address() )
+    checkfor( s.comma, 10 )
+
+    swapoperands()
+
+    evaluate( effective.address() )
+    checkfor( s.none, 12 )
+
+    TEST  op1.ea = am.Dr  THEN
+
+          TEST  op.ea = am.Ar.disp  THEN
+          $(
+              dr  :=  1
+
+              swapoperands()
+          $)
+          ELSE  complain( 42 )
+
+    ELSE
+
+    TEST  op1.ea \= am.Ar.disp      THEN   complain( 43 )            ELSE
+    TEST  op.ea  \= am.Dr           THEN   complain( 22 )            ELSE
+
+          dr  :=  0
+
+    sz  :=  instr.size  =  ts.long        ->  1,
+            instr.size  =  ts.word        ->  0,
+            instr.size  =  ts.none        ->  0,
+                                              complain( 44 )
+
+    codeword(  #X0108                          |
+               (exp   <<  9)                   |
+               (dr    <<  7)                   |
+               (sz    <<  6)                   |
+               (op1.registers!p.ptr1)          )
+
+    codeword( op1.exp & #XFFFF )
+$)
+
+
+
+AND genmoveq()  BE
+$(
+//  The Ubiquitous MOVEQ instruction.
+//  The possible operands are:
+//
+//    #imm,Dr
+
+    nextsymb()
+
+    evaluate( effective.address() )
+    checkfor( s.comma, 10 )
+
+    IF  (op.ea & am.imm) = 0  THEN  complain( 27 )
+
+    swapoperands()
+
+    evaluate( effective.address() )
+    checkfor( s.none, 12 )
+
+    UNLESS  op.ea = am.Dr  DO  complain( 22 )
+
+    UNLESS  -128 <= op1.exp <= +127  DO  complain( 45 )
+
+    codeword(  #X7000                                   |
+               (exp  <<  9)                             |
+               (op1.exp  &  #XFF)                       )
+$)
+
+
+
+AND dodir()  BE
+$(
+//  Deal with the assembler directives.
+
+    LET restype  =  0
+    LET ressize  =  0
+    LET skip     =  0
+    LET tempvec  =  VEC 256/bytesperword
+
+    instr.size  :=  tagsize.given
+    directive   :=  symbtype!st.value
+
+    UNLESS  directive = d.org     |
+            directive = d.dc      |
+            directive = d.dcb     |
+//          directive = d.size    |
+            directive = d.ds      DO  checktagsize()
+
+    UNLESS  directive = d.org     DO  checkshort()
+
+    SWITCHON  directive  INTO
+    $(
+        CASE d.set    :
+        CASE d.equ    :
+        CASE d.equr   :
+        CASE d.reg    : checklabel( yes )
+                        nextsymb()
+
+                        TEST  directive = d.reg  THEN
+                        $(
+                            //  This does not take a simple expression, but
+                            //  a set of registers.
+
+                            restype  :=  s.reg
+                            value    :=  readregisters()
+                        $)
+                        ELSE
+                        $(
+                            //  Just a simple expression, so we can read it
+                            //  and look at its data type.
+
+                            restype  :=  evalexp( expression() )
+
+                            checkexpression( restype, TRUE )
+                        $)
+
+                        setlabel( restype, value,  directive = d.set )
+
+                        IF  pass2  &  (listing | error.found)  THEN
+                        $(
+                            clearbuffer()
+
+                            linepos  :=  10
+                            writechar( directive = d.set  ->  '>', '=' )
+
+                            linepos  :=  11
+
+                            IF  restype = s.Dr   THEN  writechar( 'D' )
+                            IF  restype = s.Ar   THEN  writechar( 'A' )
+
+                            writehexvalue( value, (restype = s.abs32  ->  8,
+                                                   restype = s.Ar  |
+                                                   restype = s.Dr     ->  1,
+                                         /* s.rel, s.abs16 or s.reg */    4) )
+
+                            IF  restype = s.rel  THEN  writechar( '*'' )
+                            IF  restype = s.reg  THEN  writechar( 'R' )
+
+                            IF  error.found  THEN
+                            $(
+                                linepos  :=  35
+                                writechar( 'E' )
+
+                                error.found  :=  no
+                            $)
+
+                            linepos  :=  38
+                            writenumber( linenumber, 5 )
+
+                            IF  macrodepth > 0  &  NOT inmacro  THEN
+                            $(
+                                linepos  :=  43
+                                writechar( '+' )
+                            $)
+
+                            linepos  :=  44
+                            FOR  i = 0  TO length-1  DO  writechar( inputbuff % i )
+
+                            printbuffer()
+
+                            listed  :=  yes
+                        $)
+
+                        ENDCASE
+
+
+        CASE d.org    : ressize  :=  VALOF
+                            SWITCHON  instr.size  INTO
+                            $(
+                                CASE ts.long    : RESULTIS s.abs32
+
+                                CASE ts.none    :
+                                CASE ts.short   :
+                                CASE ts.word    : RESULTIS s.abs16
+
+                                DEFAULT         : complain( 46 )
+                            $)
+
+                        nextsymb()
+                        restype  :=  evalexp( expression() )
+
+                        checkexpression( restype, TRUE )
+
+                        UNLESS  (value & addressmask) = 0  DO  complain( 138 )
+
+                        changemode( s.abs )
+
+                        forwardreftype  :=  ressize
+
+                        setloc( value )
+
+                        IF  labelset  THEN  setlabel( locmode, location, no )
+
+                        ENDCASE
+
+
+        CASE d.rorg   : nextsymb()
+
+                        checkexpression( evalexp( expression() ), TRUE )
+                        changemode( s.rel )
+
+                        forwardreftype  :=  s.abs16
+
+                        setloc( value )
+
+                        IF  labelset  THEN  setlabel( locmode, location, no )
+
+                        ENDCASE
+
+
+        CASE d.dc     : defineconstants( instr.size )
+
+                        ENDCASE
+
+
+        CASE d.ds     : definestorage( instr.size )
+
+                        ENDCASE
+
+
+        CASE d.dcb    : defineblock( instr.size )
+
+                        ENDCASE
+
+
+        CASE d.list   : checklabel( no )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        listing  :=  parmlisting
+                        listed   :=  yes
+
+                        ENDCASE
+
+
+        CASE d.nolist : checklabel( no )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        listing  :=  no
+                        listed   :=  yes
+
+                        ENDCASE
+
+
+        CASE d.spc    : checklabel( no )
+                        nextsymb()
+
+                        checkexpression( evalexp( expression() ), TRUE )
+                        spacelines( value )
+
+                        listed  :=  yes
+
+                        ENDCASE
+
+
+        CASE d.page   : checklabel( no )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        onpage  :=  0
+                        listed  :=  yes
+
+                        ENDCASE
+
+
+        CASE d.nopage : checklabel( no )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        paging       :=  no
+                        commentline  :=  yes
+
+                        ENDCASE
+
+
+        CASE d.plen   :
+        CASE d.llen   : checklabel( no )
+                        nextsymb()
+
+                        checkexpression( evalexp( expression() ), TRUE )
+
+                        TEST  directive = d.plen  THEN
+                              TEST  plenfixed   THEN  complain( 124 )
+                              ELSE
+
+                              TEST  minplen <= value <= maxplen  THEN
+                              $(
+                                  linesperpage  :=  value
+                                  plenfixed     :=  yes
+                              $)
+                              ELSE  complain( 100 )
+
+                        ELSE  TEST  llenfixed  THEN  complain( 125 )
+                              ELSE
+
+                              TEST  minllen <= value <= maxllen  THEN
+                              $(
+                                  charsperline  :=  value
+                                  llenfixed     :=  yes
+                              $)
+                              ELSE  complain( 101 )
+
+                        listed  :=  yes
+
+                        ENDCASE
+
+
+        CASE d.ttl    : checklabel( no )
+                        skiplayout()
+
+                        ressize  :=  1
+
+                        UNTIL  ressize > titlecharsmax  |  ch = '*N'  DO
+                        $(
+                            tempvec % ressize  :=  ch
+                            ressize            :=  ressize + 1
+
+                            rch()
+                        $)
+
+                        tempvec % 0  :=  ressize - 1
+
+                        UNLESS  ch = '*N'  DO   warning( 49 )
+
+                        settitle( tempvec )
+
+                        listed  :=  yes
+
+                        ENDCASE
+
+
+        CASE d.noobj  : checklabel( no )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        noobj        :=  yes
+                        commentline  :=  yes
+
+                        ENDCASE
+
+
+        CASE d.ifeq   :
+        CASE d.ifne   :
+        CASE d.iflt   :
+        CASE d.ifle   :
+        CASE d.ifgt   :
+        CASE d.ifge   : checklabel( no )
+
+                        //  There are two possibilities here.  There is:
+                        //
+                        //          IFxx  <expression>
+                        //      or  IFxx  '<string1>','<string2>'
+                        //
+                        //  We must look at the first character of the operand
+                        //  to see which case it is.
+
+                        skiplayout()
+
+                        TEST  ch = '*''
+                            THEN  skip  :=  do.ifstrings()
+                            ELSE  skip  :=  do.ifvalue()
+
+                        skipping  :=  skipping + 1
+
+                        UNLESS  skiplevel > 0  DO
+                            IF  skip  THEN
+                                skiplevel  :=  skipping
+
+                        IF  pass2  &  (listing | error.found)  THEN
+                        $(
+                            clearbuffer()
+
+                            linepos  :=  10
+                            writechar( '=' )
+
+                            writehexvalue( value, 8 )
+
+                            IF  error.found  THEN
+                            $(
+                                linepos  :=  35
+                                writechar( 'E' )
+                            $)
+
+                            linepos  :=  38
+                            writenumber( linenumber, 5 )
+
+                            IF  macrodepth > 0  &  NOT inmacro  THEN
+                            $(
+                                linepos  :=  43
+                                writechar( '+' )
+                            $)
+
+                            linepos  :=  44
+                            FOR  i = 0  TO  length-1  DO  writechar( inputbuff % i )
+
+                            printbuffer()
+
+                            listed  :=  yes
+                        $)
+
+                        ENDCASE
+
+
+
+        CASE d.endc   : checklabel( no )
+                        readsymb()
+
+                        TEST  symb \= s.none  THEN  complain( 47 )        ELSE
+                        TEST  skipping = 0    THEN  complain( 107 )       ELSE
+
+                              skipping  :=  skipping - 1
+
+                        IF  skipping < skiplevel  THEN  skiplevel  :=  0
+
+                        commentline  :=  yes
+
+                        ENDCASE
+
+
+        CASE d.macro  : checklabel( yes )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        IF  inmacro  THEN   complain( 110 )
+
+                        IF  macrodepth > 0  THEN  complain( 121 )
+
+                        FOR  i = 0  TO  tagsize-1  DO  macroname!i  :=  labelvec!i
+
+                        macrobase    :=  pass1  ->  heap3( 0, 0, 0 ),  0
+                        macroend     :=  macrobase
+                        macrodepth   :=  macrodepth + 1
+                        inmacro      :=  yes
+
+                        commentline  :=  yes
+
+                        ENDCASE
+
+
+        CASE d.endm   : checklabel( no )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        TEST  inmacro
+                            THEN  macrodepth  :=  macrodepth - 1
+                            ELSE  complain( macrodepth = 0  ->  111, 120 )
+
+                        FOR  i =  0  TO  tagsize-1  DO  labelvec!i  :=  macroname!i
+
+                        inmacro  :=  no
+
+                        setlabel( s.macro, macrobase, no )
+
+                        commentline  :=  yes
+
+                        ENDCASE
+
+
+        CASE d.mexit  : checklabel( no )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        TEST  macrodepth = 0
+                            THEN  complain( 112 )
+                            ELSE  macrodepth  :=  macrodepth - 1
+
+                        listed  :=  yes
+
+                        ENDCASE
+
+
+//      CASE  d.size  : //  this is a non-standard feature, and hence if it
+//                      //  does not work, nothing will be done to fix it.
+//
+//                      checklabel( no )
+//                      readsymb()
+//
+//                      TEST  symb = s.none  THEN
+//                          TEST  tagsize.given = ts.none  |  tagsize.given = ts.short  THEN
+//                                complain( 98 )
+//                          ELSE  ts.default  :=  tagsize.given
+//
+//                      ELSE  complain( 47 )
+//                      commentline  :=  yes
+//                      ENDCASE
+
+
+
+        CASE d.end    : IF  labelset  THEN  setlabel( locmode, location, no )
+                        readsymb()
+
+                        checkfor( s.none, 47 )
+
+                        IF  macrodepth > 0  THEN  complain( 119 )
+                        IF  getlevel   > 0  THEN  complain( 126 )
+
+                        ended        :=  yes
+                        commentline  :=  NOT  labelset
+
+                        ENDCASE
+
+
+        CASE d.get    : checklabel( no )
+                        skiplayout()
+
+                        TEST  ch = '*''  |  ch = '*"'  THEN
+                        $(
+                            LET quote  =  ch
+
+                            rch()
+                            ressize  :=  0
+
+                            UNTIL  ch = quote  |  ch = '*N'  DO
+                            $(
+                                ressize            :=  ressize + 1
+                                tempvec % ressize  :=  ch
+
+                                rch()
+                            $)
+
+                            IF  ch = '*N'  THEN  complain( 127 )
+
+                            //  The following line used to be in the assembler,
+                            //  but for no readily apparent reason.  It should
+                            //  be reinstated if the (now forgotten) problem
+                            //  comes to light again!
+                            //
+                            //  IF  macrodepth > 0  THEN  complain( 133 )
+
+                            tempvec % 0  :=  ressize
+
+                            rch()
+                            readsymb()
+                            checkfor( s.none, 47 )
+
+$<370
+                            UNLESS  doget( tempvec )  DO               /* 370 */
+                            $(                                         /* 370 */
+                                selectoutput( sysout )                 /* 370 */
+                                writef( "******  Cannot open *"%S*"*N",/* 370 */
+                                         tempvec )                     /* 370 */
+                                selectoutput( liststream )             /* 370 */
+                                                                       /* 370 */
+                                error( 128 )                           /* 370 */
+                            $)                                         /* 370 */
+$>370
+
+$<CAP
+                            UNLESS  doget( tempvec )  DO               /* CAP */
+                            $(                                         /* CAP */
+                                selectoutput( sysout )                 /* CAP */
+                                writef( "******  Cannot open *"%S*"*N",/* CAP */
+                                         tempvec )                     /* CAP */
+                                selectoutput( liststream )             /* CAP */
+                                                                       /* CAP */
+                                error( 128 )                           /* CAP */
+                            $)                                         /* CAP */
+$>CAP
+
+$<68K
+                            UNLESS  triposget( tempvec )  DO           /* 68K */
+                            $(                                         /* 68K */
+                                selectoutput( sysout )                 /* 68K */
+                                writef( "******  Cannot open *"%S*": ",/* 68K */
+                                         tempvec )                     /* 68K */
+                                fault( result2 )                       /* 68K */
+                                selectoutput( liststream )             /* 68K */
+                                                                       /* 68K */
+                                error( 128 )                           /* 68K */
+                            $)                                         /* 68K */
+$>68K
+
+                            listed  :=  NOT  error.found
+                        $)
+                        ELSE  complain( 129 )
+
+                        ENDCASE
+
+
+        CASE d.cnop   : $(  //  Conditional No-Op (c.f. the IBM 370).  Due to
+                            //  a problem with DS.L only performing WORD
+                            //  alignments, CNOP  offset,base aligns the code
+                            //  to an offset "offset" from the nearest position
+                            //  "base".
+
+                            LET offset  =  0
+                            LET base    =  0
+
+                            nextsymb()
+                            checkexpression( evalexp( expression() ), FALSE )
+
+                            offset  :=  value
+
+                            checkexpression( evalexp( expression() ), TRUE )
+
+                            base    :=  value
+
+                            checkfor( s.none, 12 )
+
+                            TEST  base = 0  THEN  complain( 150 )
+                            ELSE
+                            $(
+                                LET loc  =  location
+
+                                align( base )
+
+                                UNLESS  offset = 0  DO
+                                $(
+                                    setloc( location + offset )
+
+                                    UNLESS  (location - loc)  <  base  DO
+                                        setloc( location - base )
+                                $)
+                            $)
+
+                            IF  labelset  THEN  setlabel( locmode, location, no )
+                        $)
+                        ENDCASE
+
+
+        CASE d.entry  : //  Define a symbol to be internal to the current
+                        //  section.  We ignore this line in the first pass,
+                        //  and wait until all the symbols on the line are
+                        //  (Hopefully) defined.
+
+                        IF  pass2  THEN
+                        $(
+                            checklabel( no )
+                            nextsymb()
+
+                            $(  //  Now the loop to read a list of names
+                                //  valid data types are:
+                                //
+                                //      abs32
+                                //      abs16
+                                //      rel
+
+                                TEST  symb = s.abs32  |  symb = s.abs16  |  symb = s.rel  THEN
+                                $(
+                                    IF  (symbtype+st.name) % 0  >  maxextlength  THEN
+                                            warning( 165 )
+
+                                    entrysymbols  :=  heap2( entrysymbols, symbtype )
+                                $)
+
+                                ELSE
+
+                                    complain( symb = s.new  ->  153,
+                                              symb = s.ext  ->  154, 155 )
+
+                                readsymb()
+
+                                TEST  symb = s.comma
+                                    THEN  readsymb()
+                                    ELSE  BREAK
+                            $)
+                            REPEAT
+
+                            checkfor( s.none, 156 )
+                        $)
+
+                        commentline  :=  yes
+
+                        ENDCASE
+
+
+        CASE d.extrn  : //  Symbols defined as external.  These must NOT exist
+                        //  when we look them up, and if they do, then this is
+                        //  an error.
+
+                        checklabel( no )
+                        nextsymb()
+
+                        $(  //  Loop to read a list of symbols.
+                            //  On the first pass, the symbols MUST be new,
+                            //  and on the second pass, they must be EXT.
+
+                            LET correct  =  pass1  ->  s.new,  s.ext
+                            LET type     =  symbtype!st.type  &  st.type.mask
+                            LET flags    =  symbtype!st.flags
+
+                            TEST  symb = correct  THEN
+                            $(
+                                IF  pass2  THEN
+                                    IF  (symbtype+st.name) % 0  >  maxextlength  THEN
+                                            warning( 166 )
+
+                                IF  pass1  THEN
+                                $(
+                                    LET space  =  getstore( e.size )
+
+                                    type              :=  s.ext
+                                    flags             :=  stb.setever
+                                    space!e.link      :=  extrnsymbols
+                                    space!e.symbol    :=  symbtype
+                                    space!e.countr    :=  0
+                                    space!e.refsr     :=  0
+                                    space!e.counta    :=  0
+                                    space!e.refsa     :=  0
+                                    extrnsymbols      :=  space
+                                $)
+                            $)
+                            ELSE  complain( (symb = s.abs16  |
+                                             symb = s.abs32  |
+                                             symb = s.rel)    ->  157, 158 )
+
+                            symbtype!st.type   :=  type
+                            symbtype!st.flags  :=  flags | stb.setnow
+
+                            readsymb()
+
+                            TEST  symb = s.comma
+                                THEN  readsymb()
+                                ELSE  BREAK
+                        $)
+                        REPEAT
+
+                        checkfor( s.none, 159 )
+
+                        commentline  :=  yes
+
+                        ENDCASE
+
+
+        CASE d.fail   : complain( 122 )
+
+                        ENDCASE
+
+
+        DEFAULT       : complain( 0 )
+    $)
+
+    skiprest()
+$)
+
+
+
+AND do.ifstrings()  =  VALOF
+$(
+//  Read the two strings, and compare them for lexical equality.  Only the
+//  IFEQ and IFNE directives have a meaning with strings ...
+
+    LET buff1  =  VEC maxllen/bytesperword
+    LET buff2  =  VEC maxllen/bytesperword
+    LET len1   =  0
+    LET len2   =  0
+    LET equal  =  TRUE
+
+    len1  :=  readstring( buff1 )
+
+    UNLESS  ch = ','  DO  complain( 10 )
+
+    rch()
+
+    len2  :=  readstring( buff2 )
+
+    readsymb()
+    checkfor( s.none, 47 )
+
+    //  Having read the strings into the two buffers, we should compare the
+    //  lengths, and if equal, compare the characters.
+
+    TEST  len1 = len2  THEN
+
+        //  The lengths are equal, and so we should compare the rest of the
+        //  buffers.
+
+        FOR  i = 0  TO  len1-1  DO
+            UNLESS  buff1 % i  =  buff2 % i  DO
+                equal  :=  FALSE
+
+    ELSE  equal  :=  FALSE
+
+    //  Having decided whether the strings are equal or not, we should
+    //  set the variable "value" so it can be printed out, and return a boolean
+    //  saying whether we should skip or not.
+
+    value  :=  equal  ->  0,  (NOT 0)
+
+    RESULTIS  NOT(  directive = d.ifeq  ->  equal,
+                    directive = d.ifne  ->  NOT equal,
+                 /* Anything else ... */    complain( 186 )  )
+$)
+
+
+
+AND readstring( buffer )  =  VALOF
+$(
+//  Read a quoted string into a buffer, and return the length of the buffer.
+
+    LET length  =  0
+
+    UNLESS  ch = '*''  DO  complain( 187 )
+
+    $(  //  Repeat loop to read the string into the buffer.  We break when we
+        //  find a quote which is not followed by another quote.
+
+        rch()
+
+        IF  ch = '*N'  THEN  complain( 188 )
+
+        IF  ch = '*''  THEN
+        $(
+            rch()
+
+            UNLESS  ch = '*''  DO  BREAK
+        $)
+
+        buffer % length  :=  ch
+        length           :=  length + 1
+    $)
+    REPEAT
+
+    RESULTIS  length
+$)
+
+
+
+AND do.ifvalue()  =  VALOF
+$(
+//  Look at the expression given, and return a boolean saying whether,
+//  depending on the value read, the following items should be skipped.
+
+    readsymb()
+
+    checkexpression( evalexp( expression() ), TRUE )
+
+    RESULTIS  NOT(  directive = d.ifeq  ->  value =  0,
+                    directive = d.ifne  ->  value \= 0,
+                    directive = d.iflt  ->  value <  0,
+                    directive = d.ifle  ->  value <= 0,
+                    directive = d.ifgt  ->  value >  0,
+                 /* directive = d.ifge  */  value >= 0  )
+$)
+
+
+
+
+
+$<68K
+AND triposget( file )  =  VALOF
+$(
+    LET defaultdir  =  "SYS:G.ASM"
+    LET stream      =  findinput( file )
+
+    IF  stream = 0  THEN
+    $(
+        //  Can't open the file, so look in the default place.
+
+        LET save  =  currentdir
+        LET lock  =  locateobj( defaultdir )
+
+        UNLESS  lock = 0  DO
+        $(
+            currentdir  :=  lock
+            stream      :=  findinput( file )
+            currentdir  :=  save
+
+            freeobj( lock )
+        $)
+    $)
+
+    RESULTIS  streamget( file, stream )
+$)
+$>68K
+
+
+
+AND doget( file )  =  streamget( file, findinput( file ) )
+
+
+
+AND streamget( filename, inputstream )  =   inputstream = 0  ->  no,  VALOF
+$(
+    LET oldinput  =  input()
+    LET oldgl     =  getlevel
+    LET oldln     =  linenumber
+    LET oldcf     =  currentfile
+
+    IF  getlevel = maxgetlevel  THEN
+    $(
+        selectinput( inputstream )
+        endread()
+        selectinput( oldinput )
+
+        warning( 130 )
+
+        RESULTIS  yes
+    $)
+
+    commentline  :=  yes
+    currentfile  :=  makefile( filename )
+
+    listline()
+
+    getlevel    :=  getlevel + 1
+    linenumber  :=  0
+
+    selectinput( inputstream )
+
+    UNTIL  getlevel = oldgl  |  ended  DO
+    $(
+        resetflags()
+
+        doline()
+    $)
+
+    endread()
+    selectinput( oldinput )
+
+    linenumber   :=  oldln
+    currentfile  :=  oldcf
+
+    IF  inmacro  THEN
+    $(
+        inmacro  :=  no
+
+        warning( 132 )
+    $)
+
+    RESULTIS  yes
+$)
+
+
+
+AND settitle( string )  BE
+$(
+    LET l  =  string % 0
+    LET m  =  (titlecharsmax - l)/2 - 1
+
+    FOR  i = 0  TO  titlecharsmax-1  DO  titlevec % i      :=  '*S'
+    FOR  i = 1  TO  l                DO  titlevec % (m+i)  :=  string % i
+$)
+
+
+
+AND setlabel( type, value, alterable )  BE
+$(
+//  Set the label held in "labelvec" if the flag "labelset" is set to
+//  TRUE
+
+    LET savesymb  =  symb
+    LET savest    =  symbtype
+    LET muldef    =  no
+    LET tagtable  =  type = s.macro  ->  tagtable1, tagtable2
+
+    undefined  :=  no
+
+    //  We must first translate all "s.abs" into "s.abs16" or "s.abs32"
+
+    IF  type = s.abs  THEN
+        type  :=  wordsized( value )  ->  s.abs16, s.abs32
+
+    //  Look this label up in the relevant symbol table, so that we can update
+    //  the symbol table entry.
+
+    lookup( labelvec, tagtable )
+
+    //  Having done that, we had better check that all is in order.  The only
+    //  likely error is that we are redefining a symbol.
+
+    UNLESS  symb = s.new  DO
+
+            //  Check to see that the definition is compatible with
+            //  what has gone before.
+
+            TEST  alterable
+                  THEN  UNLESS  (symbtype!st.flags & stb.equ) = 0  DO
+                                 complain( 104 )
+                  ELSE  UNLESS  (symbtype!st.flags & stb.set) = 0  DO
+                                 complain( 105 )
+
+
+    SWITCHON  alterable  ->  s.new, symb  INTO
+    $(
+        CASE s.Ar           :
+        CASE s.Dr           :
+        CASE s.reg          :
+        CASE s.abs16        :
+        CASE s.abs32        :
+        CASE s.rel          :  //  An "EQU" directive is being used.  This is only
+                               //  valid if it is pass2, and the symbol this
+                               //  time has the same value as last time.
+
+                               IF  symb = s.Ar  |  symb = s.Dr  THEN
+                                   UNLESS  directive = d.equr  DO
+                                       complain( 52 )
+
+                               IF  symb = s.reg  THEN
+                                   UNLESS  directive = d.reg  DO
+                                       complain( 184 )
+
+                               TEST  pass2  THEN
+                               $(
+                                   LET otype   =  symbtype!st.type  &  st.type.mask
+                                   LET ovalue  =  symbtype!st.value
+
+                                   UNLESS  errors > 0  DO
+                                       UNLESS  otype = type  &  ovalue = value  DO
+                                           complain( 51 )
+
+                                   symbtype!st.flags  :=  symbtype!st.flags  |
+                                                          stb.setnow
+                               $)
+                               ELSE
+                               $(
+                                   // Is he just redefining the system
+                                   // parameters given to him (e.g. SP) ?
+                                   // Allow this, providing that he is
+                                   // defining it to the value it used
+                                   // to be.
+
+                                   LET otype   =  symbtype!st.type & st.type.mask
+                                   LET ovalue  =  symbtype!st.value
+
+                                   UNLESS  otype  = type    &
+                                           ovalue = value   &
+                                           symbtype!st.definition = 0  DO
+                                   $(
+                                       symbtype!st.flags  :=  symbtype!st.flags |
+                                                              stb.muldef
+
+                                       muldef             :=  yes
+                                   $)
+                               $)
+
+                               ENDCASE
+
+
+        CASE s.macro        :  TEST  pass2  THEN
+                                     symbtype!st.flags  :=  symbtype!st.flags  |
+                                                            stb.setnow
+
+                               ELSE
+                               $(
+                                   symbtype!st.flags  :=  symbtype!st.flags  |
+                                                          stb.muldef
+
+                                   muldef             :=  yes
+                               $)
+                               ENDCASE
+
+
+        CASE s.new          :  symbtype!st.type   :=  (symbtype!st.type-symb)    |
+                                                      type
+
+                               symbtype!st.flags  :=  symbtype!st.flags          |
+                                                      (stb.setnow + stb.setever) |
+                                                      (alterable  ->  stb.set,
+                                                                      stb.equ)
+
+                               symbtype!st.value  :=  value
+
+                               ENDCASE
+
+
+        CASE s.ext          :  complain( 160 )
+        CASE s.instr        :  complain( 53 )
+        CASE s.dir          :  complain( 54 )
+
+        DEFAULT             :  complain( 55 )
+    $)
+
+    IF  undefined  &  pass2  THEN  complain( 95 )
+
+    IF  pass1  &  NOT systemwords  THEN
+        symbtype!st.definition  :=  muldef     ->  cr.multiple,
+                                    alterable  ->  cr.setsymbol,
+                                                   linenumber
+
+    symb      :=  savesymb
+    symbtype  :=  savest
+$)
+
+
+
+AND resetflags()  BE
+$(
+//  Reset all pointers, etc. at the beginning of a line.
+
+    error.found      :=  no
+    listed           :=  no
+    commentline      :=  no
+    undefined        :=  no
+    forwardref       :=  no
+    externalref      :=  no
+    op1.externalref  :=  no
+    expvecp          :=  expvec + expsize
+    codewords        :=  0
+    bytesonline      :=  0
+    nitems           :=  0
+    op.ea            :=  0
+    op1.ea           :=  0
+$)
+
+

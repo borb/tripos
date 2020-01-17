@@ -1,0 +1,321 @@
+;*********************************************************
+;                                                        *
+; Driver for MSCP discs.                                 *
+; The only actions recognised by this version are read   *
+; block, write block, and dummy (gets status).           *
+;                                                        *
+;  Martyn Johnson  5 Mar 1984, based on RK05 driver      *
+;  Brian Knight   14 May 1979                            *
+;                                                        *
+; Some code lifted from RT-11 driver                     *
+;                                                        *
+;*********************************************************
+;
+; Constants
+;
+ERRVEC  =            4          ; error trap vector
+;
+OWN     =       100000          ; UDA owns ring buffer entry
+FLAG    =        40000          ; UDA should interrupt on ring transition
+ISTEP1  =         4000          ; initialisation step 1
+;
+C.CSIZ  =           60          ; size of command
+C.MSIZ  =           60          ; size of message
+;
+C.CRF   =            0          ; command reference number
+C.UNIT  =            4          ; unit
+C.OPCD  =           10          ; opcode
+C.STS   =           12          ; status
+C.BCNT  =           14          ; byte count
+C.BUFF  =           20          ; buffer descriptor
+C.LBN   =           34          ; logical block number
+;
+OP.SCC  =            4          ; set controller characteristics
+OP.ONL  =           11          ; online command
+OP.RD   =           41          ; read command
+OP.WR   =           42          ; write command
+;
+ST.SUC  =            0          ; 'success' status
+ST.AVL  =            4          ; unit 'available' (needs 'onlining')
+;
+; Device control block symbols
+;
+;               0               ; device driver ptr (BCPL)
+D.ID    =       2               ; id
+D.WKQ   =       4               ; work queue
+D.START =       6               ; start routine - for QPKT
+D.STOP  =       8.              ; stop routine - for DQPKT
+D.JSR   =      10.              ; subroutine jump to
+D.INT   =      12.              ; interrupt routine
+D.I     = D.JSR+4               ; offset for interrupt rtn
+D.VEC   =      14.              ; interrupt vector
+D.UDAIP =      16.              ; -> address and polling register
+D.UDASA =      18.              ; -> status and address register
+D.ISTEP =      20.              ; next init step bit
+D.ISEQ  =      22.              ; init list pointer
+D.ILST  =      24.              ; init list
+D.MRPTR =      26.              ; message ring pointer ls
+;       =      28.              ; message ring pointer ms
+;       =      30.              ; 'go' command
+D.LCMD  =      32.              ; length of command
+D.VCMD  =      34.              ; command virtual circuit id
+D.CBUFF =      36.              ; command buffer
+D.LRSP  =      36.+C.CSIZ       ; length of response
+D.VRSP  =      38.+C.CSIZ       ; response virtual circuit id
+D.MBUFF =      40.+C.CSIZ       ; message buffer
+
+D.IID   =      40.+C.CSIZ+C.MSIZ; interrupt identity area
+D.MRING =      44.+C.CSIZ+C.MSIZ; message ring
+D.CRING =      48.+C.CSIZ+C.MSIZ; command ring
+
+D.FLAG  =      52.+C.CSIZ+C.MSIZ; flag word
+DF.ONL  =       1               ; trying to 'online' a unit
+DF.INI  =       2               ; just initialised (ignore next interrupt)
+;
+; Packet symbols
+;
+P.ID    =       2               ; task or device id
+P.TYPE  =       4               ; type or action
+P.RES1  =       6               ; first result
+P.RES2  =       8.              ; second result
+P.A1    =      10.              ; argument 1
+P.A2    =      12.
+P.A3    =      14.
+P.A4    =      16.
+P.A5    =      18.
+P.A6    =      20.
+P.ACT   =    P.TYPE             ; controller action
+P.DERR  =    P.RES1             ; controller error code
+P.STAT  =    P.RES2             ; drive status
+P.BUFF  =    P.A1               ; store buffer addr
+P.WCNT  =    P.A2               ; word count
+P.DRIV  =    P.A3               ; drive number
+P.CYL   =    P.A4               ; disc cylinder
+P.SUR   =    P.A5               ; disc surface
+P.SEC   =    P.A6               ; disc sector
+;
+; Device actions
+;
+A.DUMMY   =     1000.           ; dummy - gets status
+A.READ    =     1001.           ; read from disc
+A.WRITE   =     1002.           ; write to disc
+A.STO     =     2000.           ; set host timeout infinite
+;
+; The rootnode
+;
+CRNTSK  =  456
+DEVMVP  =  502 ; MOVPKT for device drivers (MC addr)
+DEVINT  =  504 ; INTENT for device drivers (MC addr)
+DEVRET  =  506 ; INTRET for device drivers (MC addr)
+
+        .WORD   DUINIT          ; initialisation rtn
+        .WORD   DUUNIN          ; uninitialisation rtn
+
+; Controller initialisation subroutine.  Uses R4 and R5
+
+
+CTINIT: CLR     R5
+
+CTI0:   MOV     R5,@D.UDAIP(R2) ; poke the UDA to start init
+        MOV     R2,R4
+        ADD     #D.ISTEP,R4     ; R4 -> init parameters
+        MOV     #ISTEP1,(R4)+   ; set step bit for step 1
+        MOV     R4,@R4          ; point ISEQ at ILST-2
+        CMP     (R4)+,(R4)+     ; point to message ring pointer
+        MOV     R4,@R4          ; set up ptr to message ring
+        ADD     #D.MRING-D.MRPTR,@R4
+
+CTI1:   MOV     R2,R4
+        ADD     #D.UDASA,R4     ; address of ASA address
+        MOV     @(R4)+,R5       ; get contents
+        BMI     CTI0            ; retry on error
+
+        BIT     R5,@R4          ; desired step bit on?
+        BEQ     CTI1            ; no, wait for it
+
+        ASL     (R4)+           ; set next stop for next time
+        ADD     #2,(R4)         ; advance parameter pointer
+        MOV     @0(R4),@D.UDASA(R2) ; set the next word
+        TST     -(R4)           ; which step?
+        BPL     CTI1            ; loop if not done
+
+        MOV     #-1,D.CBUFF(R2) ; init sequence number
+        MOV     #DF.INI,D.FLAG(R2) ; mark as just initialised
+        RTS     PC              ;
+
+; Device initialisation routine. It is entered with the
+; address of the DCB in R2, and the DEVID in R0, which
+; must be preserved.
+
+
+DUINIT: MOV     #DUINT,D.INT(R2); fill in rest of DCB
+        MOV     #DUSTART,D.START(R2)
+        MOV     #DUSTOP,D.STOP(R2)
+        MOV     D.VEC(R2),R1    ; get interrupt vector
+        MOV     R2,(R1)         ; plug it with address
+        ADD     #D.JSR,(R1)     ; of interrupt JSR
+
+        MOV     R4,-(SP)
+        MOV     R5,-(SP)
+        JSR     PC,CTINIT       ; initialise controller
+        MOV     (SP)+,R5        ;
+        MOV     (SP)+,R4        ;
+
+        RTS     PC
+
+; Device uninitialisation routine. It is entered with
+; the address of the DCB in R2, which must be preserved.
+
+DUUNIN: MOV     @#ERRVEC,@D.VEC(R2) ; restore int vec
+        RTS     PC
+
+; Device start routine. This is entered whenever a pkt
+; is sent to the device and its work queue is empty. It
+; is entered with the address of the DCB in R2, and the
+; BCPL address of the packet in R0. It returns non-zero.
+
+DUSTART:ASL     R0              ; MC head pkt ptr
+        MOV     @#CRNTSK,R1     ; in case MOVPKT required
+        ASL     R1
+        JSR     PC,DUACT        ; initiate disc action
+        RTS     PC
+
+; Device stop routine. This is entered if the head pkt
+; is dequeued from the device. It is entered with the
+; address of the packet in R1 and the DCB in R2, which
+; must be preserved.
+
+DUSTOP: RTS     PC
+
+; Disc interrupt routine.
+; This is entered whenever the disc completes the last
+; requested action.  This can be when a read or write
+; is complete, in which case the packet which requested
+; it is returned. If the disc interrupts to give an error,
+; the error field of the packet will be set non-zero.
+; It is entered with R2 saved on the system stack and
+; the address of the DCB word following the interrupt
+; subroutine jump in R2.
+
+DUINT:  MOV     R1,-(SP)        ; R2 already on stack
+        MOV     R0,-(SP)
+        MOV     R3,-(SP)
+        SUB     #D.I,R2         ; correct DCB ptr
+        MOV     @#CRNTSK,R1     ; R1 holds highest pri
+        ASL     R1              ; TCB ptr
+        BIT     #DF.INI,D.FLAG(R2) ; just initialised?
+        BEQ     DIN0            ; no
+        BIC     #DF.INI,D.FLAG(R2) ; clear the bit
+        BR      DUINT4          ; and ignore this interrupt
+
+DIN0:   MOV     D.WKQ(R2),R0    ; head packet
+        BNE     PKTOK           ; ensure there is one
+        TRAP    1
+PKTOK:  ASL     R0              ; MC head pkt ptr
+        MOV     D.MRING(R2),R3  ; point to message buffer
+        BIT     #DF.ONL,D.FLAG(R2) ; are we onlining?
+        BEQ     DUINOL          ; no
+        BIC     #DF.ONL,D.FLAG(R2) ; clear the onlining flag
+        TST     C.STS(R3)       ; test the return code
+        BNE     DUIRET          ; 'online' failed, return the packet
+        JSR     PC,DUACT        ; have another go at the transfer
+        BR      DUINT4          ; return (packet not sent back)
+
+DUINOL: CMP     #ST.AVL,C.STS(R3) ; does unit need 'onlining'?
+        BNE     DUIRET          ; no, return packet
+        BIS     #DF.ONL,D.FLAG(R2) ; flag that we are 'onlining'
+        JSR     PC,DUACT        ; try it
+        BR      DUINT4          ; return (packet not sent back)
+
+DUIRET: MOV     C.STS(R3),P.DERR(R0) ; return status
+        MOV     C.STS(R3),P.STAT(R0) ;  in both result fields
+
+; Have completed a read/write, so send the packet back.
+
+        JSR     PC,SNDPKT       ; send pkt back
+DUINT1: MOV     D.WKQ(R2),R0    ; any more packets?
+        BEQ     DUINT2          ; no
+        ASL     R0              ; next pkt ptr
+        JSR     PC,DUACT        ; initiate next action
+        BEQ     DUINT1          ; pkt was sent back
+        BR      DUINT3
+
+DUINT2:
+DUINT3: MOV     @#DEVINT,PC     ; exit via INTENT
+
+DUINT4: MOV     @#DEVRET,PC     ; return from interrupt
+
+; This routine initiates a disc action or returns a status
+; request pkt. It is entered with the MC pkt address in R0
+; and the MC DCB address in R2.  R0, R1, R2 are preserved
+; unless the pkt is sent back, in which case it exits via
+; SNDPKT with the Z bit set.
+
+DUACT:  MOV     R4,-(SP)           ; save a couple of registers
+        MOV     R5,-(SP)
+        CLR     P.DERR(R0)         ; clear result fields
+        CLR     P.STAT(R0)
+
+DUTSTP: MOV     @D.UDASA(R2),R5    ; is the port running?
+        BEQ     DUNINI             ; yes
+        JSR     PC,CTINIT          ; no, initialise it again
+        BR      DUTSTP             ; and retry
+
+DUNINI: MOV     R2,R4
+        ADD     #D.MBUFF,R4        ; R4 -> message buffer
+        MOV     R4,D.MRING(R2)     ; Tell MSCP server where it is
+        MOV     #C.CSIZ/2,-(SP)    ; Stack count of words to clear
+
+DUACT0: CLR     -(R4)              ; Clear out a word
+        DEC     (SP)               ;
+        BPL     DUACT0             ; Loop until done
+
+        SUB     (SP)+,-(R4)        ; Increment the sequence number
+        MOV     R4,D.CRING(R2)     ; Save ring pointer
+        MOV     P.DRIV(R0),C.UNIT(R4) ; set drive number
+        MOV     P.WCNT(R0),C.BCNT(R4)
+        ASL     C.BCNT(R4)         ; byte count
+        MOV     P.BUFF(R0),C.BUFF(R4)
+        ASL     C.BUFF(R4)         ; buffer address
+        MOV     P.SEC(R0),C.LBN(R4); set logical block number
+        MOV     #OP.ONL,C.OPCD(R4) ; set 'online' op code
+        BIT     #DF.ONL,D.FLAG(R2) ; are we 'onlining' ?
+        BNE     DUACT1             ; yes, do it
+        MOV     #OP.RD,C.OPCD(R4)  ; set read op code
+        CMP     #A.READ,P.ACT(R0)  ; read ?
+        BEQ     DUACT1             ; yes, do it
+        MOV     #OP.WR,C.OPCD(R4)  ; set write op code
+        CMP     #A.WRITE,P.ACT(R0) ; write?
+        BEQ     DUACT1             ; yes, do it
+        MOV     #OP.SCC,C.OPCD(R4) ; set controller characteristics?
+        CMP     #A.STO,P.ACT(R0)   ; set timeout?
+        BEQ     DUACT1             ; yes, do it
+        MOV     (SP)+,R5           ;
+        MOV     (SP)+,R4           ;
+        BR      SNDPKT             ; invalid action
+
+DUACT1: MOV     #OWN,D.CRING+2(R2) ; Give the command to start polling
+        MOV     @D.UDAIP(R2),R4    ; read the AIP to start it
+        MOV     #OWN!FLAG,D.MRING+2(R2) ; Give the port a reply buffer
+        MOV     (SP)+,R5           ;
+        MOV     (SP)+,R4           ;
+        MOV     (SP)+,PC           ; return with Z clear
+
+; This routine sends back the head packet, returning the
+; status info. It is entered with R0, R1, and R2 holding
+; the pkt ptr, highest priority task TCB ptr, and the DCB
+; ptr. R1 is updated and R2 preserved on exit.
+
+SNDPKT: MOV     D.ID(R2),R3    ; DEVID for MOVPKT
+        MOV     (R0),D.WKQ(R2)  ; DQ packet
+        MOV     R2,-(SP)        ; save DCB ptr
+        MOV     R0,R2           ; for MOVPKT
+        MOV     @#DEVMVP,R0     ; get MOVPKT routine
+        JSR     PC,(R0)         ; send packet back
+        MOV     (SP)+,R2        ; restore DCB ptr
+        SEZ
+        RTS     PC              ; return with Z set
+
+        .END
+
+

@@ -1,0 +1,74 @@
+SECTION "OwnName"
+GET "libhdr"
+GET "ringhdr"
+GET "BCPL.SSPLIB"
+
+MANIFEST $( dibytesperword = BYTESPERWORD / 2 $)
+
+LET start() BE
+$(      LET args = "mcname/a,try-ring/s,quiet/s,verbose/s"
+        LET argv = VEC 2+255/bytesperword
+        LET nsv  = VEC 3
+        LET name = ?
+
+        IF rdargs (args,argv,2+255/bytesperword) = 0
+        $(      writef ("Unsuitable args for *"%S*"*N", args)
+                stop (20)
+        $)
+
+        name := getvec((argv!0)%0 / BYTESPERWORD)
+        IF name = 0
+        $(      WRITEF("Failed to allocate a vector*N")
+                stop(20)
+        $)
+
+        FOR i = 0 TO (argv!0)%0 DO name%i := (argv!0)%i
+
+        freevec(rootnode!rtn.info!rtninfo.ring!ri.myname)
+
+        IF argv!1 THEN name := ownname(name)
+
+        rootnode!rtn.info!rtninfo.ring!ri.myname := name
+        //  Now do a forward lookup to get our device number.  (Ugh!)
+
+        lookup.name( name, nsv )
+        rootnode!rtn.info!rtninfo.ring!ri.myaddr  :=  nsv.machine.id!nsv
+
+        UNLESS argv!2
+        DO WRITEF("%s%s*N", (argv!3) -> "Machine name set to ", "", name)
+$)
+
+AND ownname(defalt) = VALOF
+$(
+    LET info.vec = rootnode ! rtn.info ! rtninfo.ring
+    LET rhtaskid = info.vec ! ri.rhtaskid
+    LET newname  = ?
+    LET len      = ?
+    LET tx.block = VEC bb.ssp.args / dibytesperword
+    LET rx.buff  = VEC 64          / dibytesperword
+    LET nsv      = VEC 3
+
+    IF rhtaskid = 0
+    $(  writes("Ring handler not loaded*n")
+        resultis defalt
+    $)
+
+    UNLESS  ssp( "OWNNAME", tx.block, bb.ssp.args+1, rx.buff, 64, nsv )  DO
+    $(  WRITEF("****** OWNNAME failed*n")
+        RESULTIS defalt
+    $)
+
+    len := rx.buff % (bb.ssp.arg1*bytesperringword)
+    newname := getvec(len/bytesperword)
+    IF newname = 0
+    $(  WRITEF("Getvec faile*N")
+        RESULTIS defalt
+    $)
+    FOR i=0 TO len DO newname%i := rx.buff % (bb.ssp.arg1*bytesperringword + i)
+
+    freevec(defalt)
+
+    RESULTIS newname
+$)
+
+

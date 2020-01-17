@@ -1,0 +1,379 @@
+SECTION "MAIL"
+
+GET "header"
+GET "TERMHDR"
+GET "bcp.printheader"
+
+//=============================================================================
+
+LET get.mail.list(full, first, uid.base, uid.offset, end) = VALOF
+$(
+    // Search the current client's Message Directory for undeleted items and
+    // store descriptions of the ten oldest items in the array "mail.list".
+    // IF Limited.access is TRUE, then only pick up those items
+    //  SENT by User.puid
+    // The result is the total number of mail items found (also in MAIL.count)
+
+    LET md.cache        = Client.md ! cache.address
+    LET md.disp         = 0
+    LET ml.disp         = 0
+    LET md.byte.off     = ?
+    LET md.dibyte.offset= ?
+    LET md.chain        = ?
+    LET ml.address      = ?
+    LET sender.disp     = ?
+    LET subject.disp    = ?
+    LET length          = ?
+    LET fs.lev, fs.link = Ms.fs.fail.level, ms.fs.fail.link
+    LET first.unread    = -1
+    LET z80.failure     = FALSE
+    LET ms.get.Success  = 0             // What to return if it all worked...
+
+    FOR i = @first to @end
+                IF !I = -1 THEN FOR ptr = I TO @end DO !ptr := 0
+//  ******************************** TEMP CHECK ****************************
+    UNLESS 0 < first < 400 DO first := 0
+//  ******************************** TEMP CHECK ****************************
+
+    // Initialize the mail list:
+    FOR i=0 TO ml.size-1 DO mail.list!(i*ml.element.size + ml.entry.disp) := -1
+
+    selected := 0
+    Mail.count := -1
+    Remaining.Mail.count := Mail.count
+
+    UNLESS FULL RESULTIS -1
+
+    ms.get.failure      := ms.get.rc.break
+
+    MS.fs.fail.level    := level()
+    ms.fs.fail.link     := mail.fs.fail
+    // If the client has no message directory then no further action is needed
+
+    TEST uid.base=0 & uid.offset=0
+    $(  LET UM.Id = find.puid.in.user.map(client.puid, client.index, client.md)
+
+        Mail.count := 0
+        Remaining.Mail.count := Mail.count
+        IF UM.ID < 0
+        $(  IF UM.ID = -2
+            $(  z80.failure := TRUE
+                ms.get.failure := ms.get.rc.locate
+                GOTO mail.fs.fail       // Failed to contact Z80
+            $)
+            Ms.fs.fail.level, ms.fs.fail.link := fs.lev, fs.link
+            ms.get.failure := ms.get.rc.no.dir
+            RESULTIS 0          // Not Known user
+        $)
+
+        // Otherwise clear the "new mail" boolean in the client's user map entry
+        // if running as Dynamic Mail Server .....
+        IF Dynamic & NOT trusted & limited.access=limit.none
+        $(
+    // This routine does an SSP to the Z80 mail server to find the PUID of the
+    // current users's Message Directory.  Then discard it !!
+
+            LET uidset          = rootnode!rtn.info!rtninfo.ring!ri.uidset
+            LET rc = z80prod(ssp.enquire.request, uidset + uidset.tuid,0,
+                                         uidset + uidset.puid,0, -1)
+            IF TRACE WRITEF("Z80 prod gave %N, %X4*N", rc, RESULT2)
+//TEMP      UNLESS rc = TRUE
+            $(
+//              LET bool = ?
+//              read.little.block(um, @bool,
+//                              UM.ID*um.element.size +User.um.Base+um.mail, 1)
+//              IF bool
+                write.tiny.block(um, FALSE,
+                                UM.ID*um.element.size +User.um.Base+um.mail)
+            $)
+        $)
+    $)
+    ELSE
+    $(  copy.uid(uid.base, uid.offset, client.md+uid, 0)
+        Mail.count := 0
+        Remaining.Mail.count := Mail.count
+    $)
+
+    item1 := first+1
+
+    read.cache(client.md, 0)
+//  IF limited.access
+//      THEN convert..puid.to.name(User.puid, 0, user.name)
+
+    // Loop for each entry in the client's Message Directory.
+    $(  LET flags       = ?
+        md.dibyte.offset := address.offset(client.md, md.disp, md.first.free)
+        // End of entry chain ?
+        md.chain := md.cache %% md.dibyte.offset
+
+        IF md.chain = #XFFFF THEN BREAK
+
+        IF md.chain <= md.disp
+        $(
+                IF TRACE WRITEF("Chain corrupt:  %N < %N*N", md.chain, md.disp)
+                BREAK
+        $)
+
+        flags   := md.cache %% (md.dibyte.offset + md.flags)
+
+        TEST (flags & md.notmail.flag) = md.notmail.flag
+        $(notmail
+           LET type     = md.cache %% (md.dibyte.offset + md.nm.type)
+           SWITCHON type INTO
+           $(sw.type
+              CASE md.nm.type.mbox:
+              $(mbox
+                LET last = @mbox.chain
+                LET chain= mbox.chain
+                LET sendb= ?
+                LET name.bytes  = ?
+
+                md.dibyte.offset :=
+                       address.offset(client.md, md.disp, md.error.first.free+50/bprw)
+                sendb := ((md.cache %% md.sender) + md.dibyte.offset) * bprw
+                name.bytes      := md.cache%sendb
+
+                UNTIL chain=0
+                $(  LET string  = chain+mbox.string
+                    LET match   = TRUE
+                    FOR i = 0 TO string%0
+                    UNLESS compch(string%i, md.cache % (i + sendb) )=0
+                    DO $( match := FALSE; BREAK $)
+                    IF match BREAK
+                    last        :=  chain
+                    chain       := !chain
+                $)
+
+                IF chain=0
+                $(  chain := GET.perm.vec(mbox.string + name.bytes/BYTESPERWORD)
+                    !chain      := 0
+                    !last       := chain
+                $)
+                chain!mbox.ver          := md.cache %%
+                                           (md.dibyte.offset + md.nm.version)
+                 chain!mbox.flags       := flags
+
+                 copy.uid(md.cache,     md.dibyte.offset+md.nm.PUID1,
+                             chain+mbox.md,     0)
+                 TEST limited.access = limit.none
+                 THEN copy.uid(md.cache, md.dibyte.offset+md.nm.PUID2,
+                             chain+mbox.index,  0)
+                 ELSE copy.uid(( TABLE 0, 0 $<LSI4 ,0,0 $>LSI4 ), 0,
+                             chain+mbox.index,  0)
+
+                 $(name
+                    LET offset = address.offset(client.md,
+                        md.cache %% (md.dibyte.offset + md.sender ) + md.disp,
+                                        name.bytes/bprw)
+                    LET name = chain + mbox.string
+                    FOR i = 0 TO md.cache % (offset*bprw)
+                    DO name%i := md.cache % (i + offset*bprw)
+                 $)name
+              $)mbox
+           $)sw.type
+        $)notmail
+        ELSE IF (flags & md.deleted.flag)=0
+        $(  LET entry.ok = TRUE
+
+            // An undeleted item has now been found.
+            Mail.count := Mail.count + 1
+
+            IF ml.disp < (ml.size*ml.element.size)
+            $(
+                LET error       = (flags & md.error.flag) ~= 0
+                LET this.ml.disp        = mail.list + ml.disp
+
+                Remaining.Mail.count := Mail.count
+                // Copy the file PUIDs
+                copy.uid(md.cache,      md.dibyte.offset+md.message.puid,
+                          this.ml.disp + ml.message.puid, 0)
+                copy.uid(md.cache,      md.dibyte.offset+md.header.puid,
+                          this.ml.disp + ml.header.puid, 0)
+                copy.uid(error -> md.cache, (TABLE 0, 0 $<LSI4 ,0,0 $>LSI4 ) ,
+                         error -> md.dibyte.offset+md.error.header, 0,
+                          this.ml.disp + ml.error.puid, 0)
+
+                FOR i = 0 TO umid.size-1 DO
+                   (this.ml.disp + ml.umid) %% i :=
+                                md.cache %% (md.dibyte.offset + md.umid + i)
+
+                this.ml.disp ! ml.flags := flags
+                $(  LET version = md.cache %% (md.dibyte.offset + md.version)
+                    LET size    = md.sizebytes.version <= version <= md.max.version
+                    this.ml.disp ! ml.message.size := size ->
+                                md.cache %% (md.dibyte.offset+md.message.bytes),
+                                -1
+                    this.ml.disp ! ml.header.size := size ->
+                                md.cache %% (md.dibyte.offset+md.header.bytes),
+                                -1
+                    this.ml.disp ! ml.error.size := (size & error) ->
+                                md.cache %% (md.dibyte.offset+md.error.bytes),
+                                -1
+                $)
+                sender.disp  := md.cache %% (md.dibyte.offset + md.sender ) + md.disp
+                subject.disp := md.cache %% (md.dibyte.offset + md.subject) + md.disp
+
+                // Get the "sender" and "subject" strings into store if needed
+                md.byte.off := address.offset(client.md, sender.disp,
+                                        subject.disp+21 - sender.disp) * bprw
+                // First copy up to MAX.sender.len bytes of the sender string
+                ml.address := this.ml.disp + ml.sender
+
+                // Check he sent it ...
+                IF limited.access=limit.read & (flags & md.public.flag)=0
+                $(
+                    FOR I = 0 TO client.name%0
+                    DO  UNLESS compch(client.name%i, md.cache%(md.byte.off+i))=0
+                        DO entry.ok := FALSE
+                $)
+                length := md.cache % md.byte.off
+                IF length > MAX.sender.len THEN length := MAX.sender.len
+                ml.address%0 := length
+                FOR i=1 TO length DO ml.address%i := md.cache % (md.byte.off+i)
+
+                // Now copy up to 39 bytes of the subject string
+                md.byte.off := (subject.disp-client.md!start.of.block)  * bprw
+                ml.address  := this.ml.disp + ml.subject
+                TEST subject.disp=md.disp
+                THEN ml.address%0 := 0
+                ELSE
+                $(  length := md.cache % md.byte.off
+                    IF length >39 THEN length := 39
+                    ml.address%0 := length
+                    FOR i=1 TO length ml.address%i := md.cache%(md.byte.off+i)
+                $)
+
+                TEST entry.ok & first=0
+                $(
+                    this.ml.disp ! ml.entry.disp := md.disp
+                    IF first.unread < 0 & (flags & md.read.flag) = 0
+                    THEN first.unread   := mail.count-1 // +- 1 ?????
+                    ml.disp := ml.disp + ml.element.size
+                $)
+                ELSE
+                $(  mail.count := mail.count-1
+                    remaining.mail.count := mail.count
+                    IF entry.ok THEN first := first-1
+                    this.ml.disp ! ml.entry.disp := -1  // ?????????????
+                $)
+            $)
+        $)
+        md.disp := md.chain
+    $) REPEAT
+
+$<TRACE IF trace THEN ptrace("Got mail list for",client.puid,Mail.count,-1) $>TRACE
+
+    UNLESS first.unread=-1 THEN selected := first.unread
+    Ms.fs.fail.level, ms.fs.fail.link := fs.lev, fs.link
+    ms.get.failure := ms.get.Success
+    RESULTIS Mail.count
+
+Mail.fs.fail:
+    Ms.fs.fail.level, ms.fs.fail.link := fs.lev, fs.link
+        UNLESS z80.failure
+        $(      WRITEF("Failure reading user directory - Demon may be running*N")
+                WRITEF("Try again soon*N")
+                ms.get.failure := ms.get.rc.read.fail
+        $)
+        Mail.count := -1
+        Remaining.Mail.count := Mail.count
+        RESULTIS mail.count
+$)
+
+//=============================================================================
+
+LET ms.mail(re.read) BE
+$(MS.MAIL
+    // Carry out a mail server "mail" command
+
+    LET datvec          = VEC 2
+    LET list.upb        = ml.size
+    LET display.no      = ml.size
+    LET item.descriptor = ?
+    LET umid            = ?
+    LET in.mbox         = mbox.name%0 ~= 0
+    LET lookat          = limited.access = limit.read
+    LET own             = NOT (lookat | in.mbox)
+    LET from            = lookat &  NOT in.mbox -> " that you can read", ""
+    LET in              =               in.mbox -> " in mbox ", ""
+    LET mbox            =               in.mbox -> mbox.name, ""
+    LET mail.rc         = 0
+
+    // First of all (re)establish the mail list of the x oldest items
+    UNLESS re.read=FALSE DO mail.rc := get.mail.list(re.read=TRUE)
+
+    WRITEF((lookat & NOT in.mbox) -> "%S has ", "You have ", lookat.name)
+
+    TEST ms.get.failure ~= 0 & (ms.get.failure ~= ms.get.rc.dir.broken)
+    THEN SWITCHON ms.get.failure INTO
+    $(  DEFAULT:
+                WRITEF("found mail failure %n. Please tell pb*N",
+                                 ms.get.failure);       ENDCASE
+        CASE ms.get.rc.locate:
+                WRITEF("failed to locate the mail directory. (z80 problems?)*N");       ENDCASE
+        CASE ms.get.rc.no.dir:
+                WRITEF("no mail Directory.  See 'HELP CREATE'*N");      ENDCASE
+        CASE ms.get.rc.read.fail:
+                WRITEF("failed to read Directory.  Try again soon.*N"); ENDCASE
+        CASE ms.get.rc.break:
+                WRITEF("broken in while reading Directory.*N");         ENDCASE
+        CASE ms.get.rc.no.read:
+                WRITEF("never read the mail Directory.*N");             ENDCASE
+    $)
+    ELSE TEST mail.count <= 0 | (remaining.mail.count=0 & mail.count <= ml.size)
+    $(  IF remaining.mail.count=0 & mail.count > 0 THEN mail.count := 0
+        WRITEF(mail.count=0 -> "no mail%S%S%S*N",
+                                lookat -> "(?) a problem directory%$%S%S*N",
+                                          "(?) not looked at your mail%$%S%S*N",
+                from, in, mbox
+              )
+    $)
+    ELSE
+    $(DISPLAY.MAIL
+        IF mail.count < list.upb THEN list.upb := mail.count
+        IF remaining.mail.count < display.no
+        THEN display.no := Remaining.mail.count
+        WRITEF("%sthe following ",
+                ms.get.failure = ms.get.rc.dir.broken -> "corruption & ", "")
+        writef(remaining.mail.count=1 -> "item", "%N items",
+                                        display.no)
+        WRITEF(" of mail%S%S%S*212*215", from, in, mbox)
+        UNLESS display.no=0
+        $(
+                LET first       = "*212No   Date    Time  Sender      Subject"
+                LET last        = "Bytes*212*215"
+                LET f.len       = first%0 -1
+                LET b.len       = last %0 -2
+                LET spare       = terminal.width - (f.len + b.len)
+
+                TEST spare<0
+                THEN FOR i=b.len+1 TO terminal.width DO WRCH(first%i)
+                ELSE writes(first)
+
+                for i = 1 TO spare DO WRCH(' ')
+                writes(last)
+        $)
+
+        FOR i= 0 TO list.upb-1
+        $(  item.descriptor := mail.list + i*ml.element.size
+
+            // Check for the end of the list:
+            IF item.descriptor!ml.entry.disp = -1 THEN LOOP
+            print.header(item.descriptor, 0,
+                                i+item1,
+                                ml.umid         * rwpw,
+                                ml.sender       * rwpw,
+                                ml.subject      * rwpw,
+                                0,                      // ml.version   * rwpw,
+                                ml.header.size  * rwpw + rwpw-1,
+                                ml.message.size * rwpw + rwpw-1,
+                                item.descriptor!ml.flags)
+        $)            // Repeat for next list entry
+
+        IF mail.count > ml.size THEN
+                     writef("   ... plus %n other item%S*212*215",
+                        mail.count-ml.size, mail.count-ml.size = 1 -> "", "s")
+    $)DISPLAY.MAIL
+$)MS.MAIL
+
+

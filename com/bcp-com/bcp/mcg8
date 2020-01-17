@@ -1,0 +1,137 @@
+SECTION "MCG8"
+
+GET "CG68HDR"
+
+LET outputsection(last, generate) BE
+$(
+   IF (CGFLAGS & cgf.CGstarted) =0
+   $( codeout := FINDOUTPUT(codefile)
+      CGFLAGS := CGFLAGS | cgf.CGstarted
+   $)
+   IF codeout=0
+   $( LET def = "t:code"
+      codeout := FINDOUTPUT(def)
+      TEST codeout=0
+      THEN CGERROR(-20, "Failed to open %S or %S - %N",  codefile,def,RESULT2)
+      ELSE CGERROR(5,  "Couldn't open '%S', so %S used", codefile,def)
+   $)
+   selectoutput(codeout)
+
+   TEST (CGFLAGS & cgf.hexlist) ~= 0                            //PBaltobj
+   $(   UNLESS maxgn=0 & NOT generate
+        $(  objword(t.hunk)
+            objword(stvp/4)
+            FOR p=0 TO stvp/BYTESPERWORD-1 DO
+            $(  IF p REM 8 = 0 DO newline()
+                objword(stv!p)
+            $)
+            progsize := progsize + stvp/BYTESPERWORD
+        $)
+        UNLESS needslist = 0
+        $(
+            objword(t.ext)
+            UNTIL needslist=0
+            $(  FOR I = needslist+1 TO needslist + 7/bytesperword+1
+                DO objword(!I)
+                objword(0)
+                needslist := !needslist
+            $)
+            objword(0)
+        $)
+        IF last THEN objword(t.end)
+        newline()
+    $)
+    ELSE
+    $(  LET hu, size, en = t.hunk, stvp/4, t.end
+        UNLESS maxgn=0 & NOT generate
+        $(  writewords(@ hu, 1)
+            writewords(@ size, 1)
+            writewords(stv, size)
+            progsize := progsize + stvp/BYTESPERWORD
+        $)
+        UNLESS needslist = 0
+        $(  LET ex = t.ext
+            LET ze = 0
+            writewords(@ex, 1)
+            UNTIL needslist=0
+            $(  writewords(needslist+1, 7/bytesperword+1);
+                writewords(@ze, 1)
+                needslist := !needslist
+            $)
+            writewords(@ze, 1)
+        $)
+        IF last DO writewords(@ en, 1)
+    $)
+
+   selectoutput(LISTOUT)
+$)
+
+
+
+AND objword(w) BE writef("%X8 ", w)
+
+//debug AND dboutput(lev) BE
+//debug $(1
+//debug     IF lev>3 DO
+//debug     $( LET p = rlist
+//debug        writes("*NRLIST:  ")
+//debug        UNTIL p=0 DO
+//debug        $( writef("%N:L%N ", h2!p, h3!p)
+//debug           p := !p
+//debug        $)
+//debug     $)
+//debug
+//debug     IF lev>2 DO
+//debug     $( writes("*NSLAVE: ")
+//debug        FOR r = r0 TO r7 DO
+//debug        $( LET p = slave!r
+//debug           IF p=0 LOOP
+//debug           writef("   R%N= ", r)
+//debug           UNTIL p=0 DO
+//debug           $( wrkn(h2!p, h3!p)
+//debug              p := !p
+//debug           $)
+//debug        $)
+//debug     $)
+//debug
+//debug     IF lev>1 DO
+//debug     $( writes("*NSTACK: ")
+//debug        FOR p=tempv TO arg1 BY 3 DO wrkn(h1!p,h2!p)
+//debug     $)
+//debug
+//debug     writef("*NOP=%I3/%I3  SSP=%N LOC=%N*N",
+//debug            op,pendingop,ssp,stvp)
+//debug $)1
+
+
+//debug AND wrkn(k,n) BE
+//debug $(1 LET s = VALOF SWITCHON k INTO
+//debug     $( DEFAULT:          RESULTIS "?"
+//debug        CASE k.numb:      RESULTIS "N%N"
+//debug        CASE k.loc:       RESULTIS "P%N"
+//debug        CASE k.glob:      RESULTIS "G%N"
+//debug        CASE k.lab:       RESULTIS "L%N"
+//debug        CASE k.locsh:     RESULTIS "PS%N"
+//debug        CASE k.globsh:    RESULTIS "GS%N"
+//debug        CASE k.labsh:     RESULTIS "LS%N"
+//debug        CASE k.lvloc:     RESULTIS "@P%N"
+//debug        CASE k.lvglob:    RESULTIS "@G%N"
+//debug        CASE k.lvlab:     RESULTIS "@L%N"
+//debug        CASE k.lvlocsh:   RESULTIS "@PS%N"
+//debug        CASE k.lvglobsh:  RESULTIS "@GS%N"
+//debug        CASE k.lvlabsh:   RESULTIS "@LS%N"
+//debug        CASE k.reg:       RESULTIS "R%N"
+//debug        CASE k.ir0:       RESULTIS "(R0,%N)"
+//debug        CASE k.ir1:       RESULTIS "(R1,%N)"
+//debug        CASE k.ir2:       RESULTIS "(R2,%N)"
+//debug        CASE k.ir3:       RESULTIS "(R3,%N)"
+//debug        CASE k.ir4:       RESULTIS "(R4,%N)"
+//debug        CASE k.ir5:       RESULTIS "(R5,%N)"
+//debug        CASE k.ir6:       RESULTIS "(R6,%N)"
+//debug        CASE k.ir7:       RESULTIS "(R7,%N)"
+//debug     $)
+//debug     writef(s,n)
+//debug     wrch('*S')
+//debug $)1
+
+

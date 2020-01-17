@@ -1,0 +1,583 @@
+/***************************************************************************
+**           (C) Copyright 1980  TRIPOS Research Group                    **
+**          University of Cambridge Computer Laboratory                   **
+****************************************************************************
+
+        #######             ##    ##    ####    ##    ##  ######
+        ########            ##    ##   ######   ###   ##  #######
+        ##    ##            ##    ##  ##    ##  ####  ##  ##    ##
+        #######    #######  ########  ########  ## ## ##  ##    ##
+        ##                  ##    ##  ##    ##  ##  ####  ##    ##
+        ##                  ##    ##  ##    ##  ##  ####  ##    ##
+        ##                  ##    ##  ##    ##  ##   ###  #######
+        ##                  ##    ##  ##    ##  ##    ##  ######
+
+***************************************************************************
+**     Author:   Mike Richardson                        April 1980       **
+**************************************************************************/
+
+SECTION "PIPEHAND"
+GET     "LIBHDR"
+GET     "IOHDR"
+GET     "MANHDR"
+
+
+GLOBAL
+$(
+   input.pipes              : ug + 0    // vector of input pipe SCBs
+   output.pipes             : ug + 1    // vector of output pipe SCBs
+   num.pipes                : ug + 2    // number of pipes available
+   pipes.inuse              : ug + 3    // number of pipes in use
+   pipe.deleted             : ug + 4    // pipe has been deleted
+
+   pipe.deplete             : ug + 5    // pipe deplete function
+   pipe.replenish           : ug + 6    // pipe replenish function
+   pipe.closein             : ug + 7    // pipe close input function
+   pipe.closeout            : ug + 8    // pipe clode output function
+
+   input.pkts               : ug + 9    // pended input side packets
+   output.pkts              : ug + 10   // pended output side packets
+
+   pipe.name                : ug + 11   // vector of pipe names
+$)
+
+MANIFEST
+$(
+   pipes.allocated          = 601       // pipe already allocated
+   pipes.closing            = 602       // pipe handler closing
+   pipes.nobuffer           = 603       // unable to get buffer
+   pipes.purging            = 604       // opposite pipe purging
+   pipes.badnumber          = 605       // illegal pipe name
+   pipes.busy               = 606       // pipe handler busy
+
+   pipe.running             = 0         // pipe is running
+   pipe.starting            = -1        // pipe half-started
+   pipe.waiting             = -2        // pipe waiting
+
+   act.closein              = 992
+   act.closeout             = 993
+   act.replenish            = 996
+   act.deplete              = 997
+   act.readwords            = 'R'
+   act.writewords           = 'W'
+$)
+
+LET start ( parm.pkt ) BE
+$(
+   LET endpipe (pkt) BE $( freevec   (  input.pipes )
+                           freevec   ( output.pipes )
+                           freevec   ( input.pkts   )
+                           freevec   ( output.pkts  )
+                           freevec   (   pipe.name  )
+                           freevec   ( pipe.deleted )
+
+                           UNLESS  pkt = 0  DO  returnpkt ( pkt, TRUE )
+
+                           deletetask( taskid)
+                        $)
+
+   LET pipenumber ( string ) = VALOF
+   $( LET str = VEC 30/bytesperword
+      LET ptr = splitname ( str, ':', string, 1 )
+      LET end = splitname ( str,   0, string, ptr )
+
+      UNLESS end = 0 & str%0 \= 0 DO $( result2 := pipes.badnumber
+                                        RESULTIS 0
+                                     $)
+
+      FOR i = 1 TO num.pipes DO IF pipe.name ! i \= 0 THEN
+          IF compstring ( pipe.name ! i, str ) = 0 THEN RESULTIS i
+
+
+      FOR i = 1 TO num.pipes DO IF pipe.name ! i  = 0 THEN
+      $( pipe.name ! i := getvec ( 30/bytesperword )
+         FOR j = 0 TO str%0 DO pipe.name ! i % j := str % j
+         RESULTIS i
+      $)
+
+      result2 := pipes.busy ; RESULTIS 0
+   $)
+
+   LET control.pkt = ?
+
+   num.pipes    := parm.pkt ! pkt.arg3 ! 0
+   input.pipes  := getvec ( num.pipes )
+   output.pipes := getvec ( num.pipes )
+   input.pkts   := getvec ( num.pipes )
+   output.pkts  := getvec ( num.pipes )
+   pipe.name    := getvec ( num.pipes )
+   pipe.deleted := getvec ( num.pipes )
+
+   IF ( input.pipes = 0 ) | ( output.pipes = 0 ) | ( pipe.deleted = 0 ) |
+      ( input.pkts  = 0 ) | ( output.pkts  = 0 ) | ( pipe.name    = 0 ) THEN
+   $(
+      returnpkt ( parm.pkt, 0, pipes.nobuffer )
+      endpipe   ( 0 )
+   $)
+
+   returnpkt ( parm.pkt, 1, 0 )
+
+   FOR i = 1 TO num.pipes DO $( input.pipes  ! i := 0
+                                output.pipes ! i := 0
+                                input.pkts   ! i := 0
+                                output.pkts  ! i := 0
+                                pipe.name    ! i := 0
+                                pipe.deleted ! i := FALSE
+                             $)
+
+   pipes.inuse := 0
+
+   $( control.pkt := pktwait ( 0 )
+
+      SWITCHON control.pkt ! pkt.type INTO
+      $(
+         DEFAULT : returnpkt ( control.pkt, FALSE, error.actionnotknown )
+                   ENDCASE
+
+         CASE action.die:
+
+              TEST ( pipes.inuse = 0 )
+                   THEN endpipe   (control.pkt)
+                   ELSE returnpkt (control.pkt, FALSE, pipes.busy )
+
+              ENDCASE
+
+         CASE action.deleteobject :
+
+              $( LET pipe.no = pipenumber ( control.pkt ! pkt.arg2 )
+                 LET in.scb  = input.pipes ! pipe.no
+                 LET out.scb = output.pipes ! pipe.no
+                 LET in.pkt  = input.pkts ! pipe.no
+                 LET out.pkt = output.pkts ! pipe.no
+
+                 IF pipe.no = 0 THEN $( returnpkt ( control.pkt, 0, result2 )
+                                        ENDCASE
+                                     $)
+
+                 IF in.scb \= 0 & out.scb \= 0 THEN
+                 $( returnpkt ( control.pkt, FALSE, pipes.allocated )
+                    ENDCASE
+                 $)
+
+                 IF in.scb = 0 & out.scb = 0 THEN
+                 $( freevec ( pipe.name ! pipe.no )
+                    pipe.name ! pipe.no := 0
+                    returnpkt ( control.pkt, FALSE, pipes.badnumber )
+                    ENDCASE
+                 $)
+
+                 TEST in.scb \= 0
+                 THEN TEST in.pkt = 0
+                      THEN pipe.deleted ! pipe.no := TRUE
+                      ELSE $( zapscb    ( in.scb, 0 )
+                              freevec   ( pipe.name ! pipe.no )
+                              pipe.name ! pipe.no   := 0
+                              input.pipes ! pipe.no := 0
+                              input.pkts ! pipe.no  := 0
+                              pipes.inuse          -:= 1
+                              returnpkt ( in.pkt, TRUE, 0 )
+                           $)
+                 ELSE TEST out.pkt = 0
+                      THEN pipe.deleted ! pipe.no := TRUE
+                      ELSE $( zapscb    ( out.scb, 200 )
+                              freevec   ( pipe.name ! pipe.no )
+                              pipe.name ! pipe.no    := 0
+                              output.pipes ! pipe.no := 0
+                              output.pkts ! pipe.no  := 0
+                              pipes.inuse           -:= 1
+                              returnpkt ( out.pkt, TRUE, 0 )
+                           $)
+
+                 returnpkt ( control.pkt, TRUE, 0 )
+                 ENDCASE
+              $)
+
+
+         CASE act.findinput :
+
+              $( LET pipe.no = pipenumber ( control.pkt ! pkt.arg3 )
+                 LET scb     = control.pkt ! pkt.arg1
+                 LET buf     = getvec ( 200/bytesperword )
+                 LET out.scb = output.pipes ! pipe.no
+                 LET out.pkt = output.pkts ! pipe.no
+
+                 IF pipe.no = 0 THEN $( returnpkt ( control.pkt, 0, result2 )
+                                        freevec   ( buf )
+                                        ENDCASE
+                                     $)
+
+                 IF input.pipes ! pipe.no \= 0 | pipe.deleted ! pipe.no THEN
+                 $( returnpkt ( control.pkt, 0, pipes.allocated )
+                    freevec   ( buf )
+                    ENDCASE
+                 $)
+
+                 IF out.scb \= 0 THEN TEST out.scb!scb.arg2 = pipe.starting
+                    THEN IF out.pkt \= 0 & out.pkt!pkt.type = act.closeout THEN
+                         $( output.pkts  ! pipe.no := 0
+                            output.pipes ! pipe.no := 0
+                            zapscb    ( scb, 0 )
+                            freevec   ( pipe.name ! pipe.no )
+                            pipe.name ! pipe.no := 0
+                            returnpkt ( out.pkt, TRUE, 0 )
+                            returnpkt ( control.pkt, scb, 0 )
+                            ENDCASE
+                         $)
+                    ELSE $( returnpkt ( control.pkt, 0, pipes.purging )
+                            freevec   ( buf )
+                            ENDCASE
+                         $)
+
+                 makescb ( scb, pipe.no, id.inscb, buf )
+                 input.pipes ! pipe.no := scb
+                 input.pkts  ! pipe.no := 0
+
+                 returnpkt ( control.pkt, scb, 0 )
+
+                 IF output.pipes ! pipe.no = 0 THEN pipes.inuse +:= 1
+              $)
+
+              ENDCASE
+
+         CASE act.findoutput :
+
+              $( LET pipe.no = pipenumber ( control.pkt ! pkt.arg3 )
+                 LET scb     = control.pkt ! pkt.arg1
+                 LET buf     = getvec ( 200/bytesperword )
+                 LET in.scb  = input.pipes ! pipe.no
+                 LET in.pkt  = input.pkts ! pipe.no
+
+                 IF pipe.no = 0 THEN $( returnpkt ( control.pkt, 0, result2 )
+                                        freevec   ( buf )
+                                        ENDCASE
+                                     $)
+
+                 IF output.pipes ! pipe.no \= 0 | pipe.deleted ! pipe.no THEN
+                 $( returnpkt ( control.pkt, 0, pipes.allocated )
+                    freevec   ( buf )
+                    ENDCASE
+                 $)
+
+                 IF in.scb \= 0 THEN TEST in.scb!scb.arg2 = pipe.starting
+                    THEN IF in.pkt \= 0 & in.pkt!pkt.type = act.closein THEN
+                         $( input.pkts  ! pipe.no := 0
+                            input.pipes ! pipe.no := 0
+                            zapscb    ( scb, 200 )
+                            freevec   ( pipe.name ! pipe.no )
+                            pipe.name ! pipe.no := 0
+                            returnpkt ( in.pkt, TRUE, 0 )
+                            returnpkt ( control.pkt, scb, 0 )
+                            ENDCASE
+                         $)
+                    ELSE $( returnpkt ( control.pkt, 0, pipes.purging )
+                            freevec   ( buf )
+                            ENDCASE
+                         $)
+
+                 makescb ( scb, pipe.no, id.outscb, buf )
+                 output.pipes ! pipe.no := scb
+                 output.pkts  ! pipe.no := 0
+
+                 returnpkt ( control.pkt, scb, 0 )
+
+                 IF input.pipes ! pipe.no = 0 THEN pipes.inuse +:= 1
+              $)
+
+              ENDCASE
+
+         CASE act.deplete :
+         CASE act.writewords :
+
+              $( LET out.scb = VALOF $( LET act = control.pkt ! pkt.type
+                                        LET arg = control.pkt ! pkt.arg1
+
+                                        RESULTIS act = act.deplete -> arg,
+                                                       output.pipes ! arg
+                                     $)
+
+                 LET pipe.no = out.scb ! scb.arg1
+                 LET in.scb  = input.pipes ! pipe.no
+
+                 control.pkt ! pkt.res1 := 0
+
+                 IF in.scb = 0 THEN
+                 $( TEST pipe.deleted!pipe.no | out.scb!scb.arg2\=pipe.starting
+                         THEN $( zapscb ( out.scb, 0 )
+                                 output.pipes ! pipe.no := 0
+                                 freevec ( pipe.name ! pipe.no )
+                                 pipe.name ! pipe.no    := 0
+                                 pipe.deleted ! pipe.no := FALSE
+                                 pipes.inuse           -:= 1
+
+                                 returnpkt ( control.pkt, TRUE, 0 )
+                              $)
+                         ELSE output.pkts ! pipe.no := control.pkt
+
+                    ENDCASE
+                 $)
+
+                 output.pkts ! pipe.no := control.pkt
+                 out.scb ! scb.arg2    := pipe.waiting
+
+                 IF input.pkts ! pipe.no \= 0 THEN transfer ( pipe.no )
+
+                 ENDCASE
+              $)
+
+         CASE act.replenish :
+         CASE act.readwords :
+
+              $( LET  in.scb = VALOF $( LET act = control.pkt ! pkt.type
+                                        LET arg = control.pkt ! pkt.arg1
+
+                                        RESULTIS act = act.replenish -> arg,
+                                                       input.pipes ! arg
+                                     $)
+
+                 LET pipe.no = in.scb ! scb.arg1
+                 LET out.scb = output.pipes ! pipe.no
+
+                 control.pkt ! pkt.res1 := 0
+
+                 IF out.scb = 0 THEN
+                 $( TEST pipe.deleted!pipe.no | in.scb!scb.arg2\=pipe.starting
+                         THEN $( zapscb ( in.scb, 200 )
+                                 input.pipes ! pipe.no  := 0
+                                 freevec ( pipe.name ! pipe.no )
+                                 pipe.name ! pipe.no    := 0
+                                 pipe.deleted ! pipe.no := 0
+                                 pipes.inuse           -:= 1
+
+                                 returnpkt ( control.pkt, FALSE, 0 )
+                              $)
+                         ELSE input.pkts ! pipe.no := control.pkt
+
+                    ENDCASE
+                 $)
+
+                 input.pkts ! pipe.no := control.pkt
+                 in.scb ! scb.arg2    := pipe.waiting
+
+                 IF output.pkts ! pipe.no \= 0 THEN transfer ( pipe.no )
+
+                 ENDCASE
+              $)
+
+         CASE act.closein :
+
+              $( LET  in.scb = control.pkt ! pkt.arg1
+                 LET pipe.no = in.scb ! scb.arg1
+                 LET out.scb = output.pipes ! pipe.no
+
+                 IF out.scb = 0 & in.scb!scb.arg2 = pipe.starting &
+                    NOT pipe.deleted!pipe.no THEN
+                 $( input.pkts ! pipe.no := control.pkt
+                    ENDCASE
+                 $)
+
+                 pipe.no ! input.pipes  := 0
+                 pipe.no ! input.pkts   := 0
+                 pipe.no ! pipe.deleted := FALSE
+                 freevec   ( in.scb ! scb.buf )
+                 returnpkt ( control.pkt, TRUE, 0 )
+
+                 IF ( out.scb \= 0 ) & ( out.scb!scb.arg2 \= pipe.running ) THEN
+                 $( out.scb ! scb.arg2 := pipe.running
+                    IF output.pkts ! pipe.no \= 0 THEN
+                    $( out.scb ! scb.pos := 0
+                       returnpkt ( output.pkts ! pipe.no, TRUE, 0 )
+                    $)
+                 $)
+
+                 IF out.scb = 0 THEN
+                 $( pipes.inuse  := pipes.inuse - 1
+                    freevec ( pipe.name ! pipe.no )
+                    pipe.name ! pipe.no := 0
+                 $)
+              $)
+
+              ENDCASE
+
+         CASE act.closeout :
+
+              $( LET out.scb = control.pkt ! pkt.arg1
+                 LET pipe.no = out.scb ! scb.arg1
+                 LET  in.scb = input.pipes ! pipe.no
+                 LET  in.pkt = input.pkts ! pipe.no
+
+                 IF in.scb = 0 & out.scb!scb.arg2 = pipe.starting &
+                    NOT pipe.deleted!pipe.no THEN
+                 $( output.pkts ! pipe.no := control.pkt
+                    ENDCASE
+                 $)
+
+                 pipe.no ! output.pipes := 0
+                 pipe.no ! output.pkts  := 0
+                 pipe.no ! pipe.deleted := FALSE
+                 freevec   ( out.scb ! scb.buf )
+                 returnpkt ( control.pkt, TRUE, 0 )
+
+                 IF ( in.scb \= 0 ) & ( in.scb!scb.arg2 \= pipe.running ) THEN
+                 $( in.scb ! scb.arg2 := pipe.running
+                    IF in.pkt \= 0 THEN
+                       returnpkt ( in.pkt, in.pkt ! pkt.type = act.replenish ->
+                                           FALSE, in.pkt ! pkt.res1, 0 )
+                 $)
+
+                 IF input.pipes ! pipe.no = 0 THEN
+                 $( pipes.inuse := pipes.inuse - 1
+                    freevec ( pipe.name ! pipe.no )
+                    pipe.name ! pipe.no := 0
+                 $)
+              $)
+
+              ENDCASE
+      $)
+   $) REPEAT
+$)
+
+
+AND transfer ( pipe ) BE
+$(
+   LET  out.pkt =  output.pkts ! pipe
+   AND   in.pkt =   input.pkts ! pipe
+   AND  out.scb = output.pipes ! pipe
+   AND   in.scb =  input.pipes ! pipe
+
+   LET  out.act = out.pkt ! pkt.type
+   AND   in.act =  in.pkt ! pkt.type
+
+   IF ( out.act = act.deplete ) & ( in.act = act.replenish ) THEN
+   $(
+      LET out.buf = out.scb ! scb.buf
+      AND  in.buf =  in.scb ! scb.buf
+
+      out.scb ! scb.buf  := in.buf
+       in.scb ! scb.buf  := out.buf
+       in.scb ! scb.end  := out.scb ! scb.end
+      out.scb ! scb.pos  := 0
+       in.scb ! scb.pos  := 1
+      out.scb ! scb.arg2 := pipe.running
+       in.scb ! scb.arg2 := pipe.running
+
+      returnpkt ( in.pkt, in.scb ! scb.end \= 0, 0 )
+      returnpkt ( out.pkt, TRUE, 0 )
+
+      output.pkts ! pipe := 0
+       input.pkts ! pipe := 0
+
+      RETURN
+   $)
+
+   IF ( out.act = act.writewords ) & ( in.act = act.readwords ) THEN
+   $(
+      LET out.buf = out.pkt ! pkt.arg2
+      AND out.siz = out.pkt ! pkt.arg3
+      AND out.ptr = out.pkt ! pkt.res1
+
+      LET  in.buf =  in.pkt ! pkt.arg2
+      AND  in.siz =  in.pkt ! pkt.arg3
+      AND  in.ptr =  in.pkt ! pkt.res1
+
+      IF ( in.siz - in.ptr ) = ( out.siz - out.ptr ) THEN
+      $(
+         FOR i = 0 TO in.siz - in.ptr - 1 DO
+             in.buf ! ( in.ptr + i ) := out.buf ! ( out.ptr + i )
+
+         out.scb ! scb.arg2 := pipe.running
+          in.scb ! scb.arg2 := pipe.running
+
+         returnpkt ( out.pkt, TRUE, 0 )
+         returnpkt ( in.pkt, in.siz, 0 )
+
+         output.pkts ! pipe := 0
+          input.pkts ! pipe := 0
+
+         RETURN
+      $)
+
+      TEST ( in.siz - in.ptr ) < ( out.siz - out.ptr )
+      THEN
+        $(
+           FOR i = 0 TO in.siz - in.ptr - 1 DO
+               in.buf ! ( in.ptr + i ) := out.buf ! ( out.ptr + i )
+
+            in.scb ! scb.arg2 := pipe.running
+           input.pkts ! pipe  := 0
+
+           returnpkt ( in.pkt, in.siz, 0 )
+
+           out.scb ! scb.arg2 := pipe.waiting
+           out.pkt ! pkt.res1 := out.ptr + ( in.siz - in.ptr )
+
+           RETURN
+        $)
+      ELSE
+        $(
+           FOR i = 0 TO out.siz - out.ptr - 1 DO
+               in.buf ! ( in.ptr + i ) := out.buf ! ( out.ptr + i )
+
+           out.scb ! scb.arg2 := pipe.running
+           output.pkts ! pipe := 0
+
+           returnpkt ( out.pkt, TRUE, 0 )
+
+           in.scb ! scb.arg2 := pipe.waiting
+           in.pkt ! pkt.res1 := in.ptr + ( out.siz - out.ptr )
+
+           RETURN
+        $)
+   $)
+
+   output.pkts ! pipe := 0
+    input.pkts ! pipe := 0
+   out.scb ! scb.arg2 := pipe.running
+    in.scb ! scb.arg2 := pipe.running
+   out.scb ! scb.pos  := 0
+
+   returnpkt ( out.pkt, TRUE, 0 )
+   returnpkt ( in.pkt, in.act = act.replenish -> FALSE, 0, 0 )
+$)
+
+AND makescb ( scb, no, id, buf ) BE
+$( scb ! scb.type  := taskid
+   scb ! scb.func1 := pipe.replenish
+   scb ! scb.func2 := pipe.deplete
+   scb ! scb.func3 := id=id.inscb -> pipe.closein,pipe.closeout
+   scb ! scb.arg1  := no
+   scb ! scb.arg2  := pipe.starting
+   scb ! scb.buf   := buf
+   scb ! scb.end   := 200
+   scb ! scb.pos   := id=id.inscb -> 201,0
+   scb ! scb.id    := id
+$)
+
+AND zapscb ( scb, end ) BE
+$( scb ! scb.pos      := 0
+   scb ! scb.end      := end
+   scb ! scb.func1    := 0
+   scb ! scb.func2    := 0
+   scb ! scb.func3    := 0
+   scb ! scb.type     := 0
+$)
+
+LET pipe.replenish ( scb ) =
+    sendpkt ( -1, scb ! scb.type, act.replenish, ?, ?, scb )
+
+AND pipe.deplete ( scb ) =
+    sendpkt ( -1, scb ! scb.type, act.deplete, ?, ?, scb )
+
+AND pipe.closein ( scb ) =
+    sendpkt ( -1, scb ! scb.type, act.closein, ?, ?, scb )
+
+AND pipe.closeout ( scb ) = VALOF
+$(
+   IF scb ! scb.pos \= 0 THEN
+   $( scb ! scb.end := scb ! scb.pos
+      sendpkt ( -1, scb ! scb.type, act.deplete, ?, ?, scb )
+   $)
+
+   RESULTIS sendpkt ( -1, scb ! scb.type, act.closeout, ?, ?, scb )
+$)
+
+

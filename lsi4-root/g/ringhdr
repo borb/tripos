@@ -1,0 +1,264 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+  #######   ########  ##    ##   ######   ##    ##  ######    #######
+  ########  ########  ###   ##  ########  ##    ##  #######   ########
+  ##    ##     ##     ####  ##  ##        ##    ##  ##    ##  ##    ##
+  ########     ##     ## ## ##  ##  ####  ########  ##    ##  ########
+  #######      ##     ##  ####  ##    ##  ##    ##  ##    ##  #######
+  ##  ##       ##     ##  ####  ##    ##  ##    ##  ##    ##  ##  ##
+  ##   ##   ########  ##   ###  ########  ##    ##  #######   ##   ##
+  ##    ##  ########  ##    ##   ######   ##    ##  ######    ##    ##
+
+************************************************************************
+**    Author:   Brian Knight                            May 1979      **
+***********************************************************************/
+
+
+// Header of manifests for the ring handler task, and for programs which
+// use it.  Manifests are also included applying to SSPLIB, BSPLIB, CR82LIB
+// etc. source libraries.
+
+// 03-oct-84 NJO:  Mod record begun (rather late in the day!)
+// 03-oct-84 IDW:  Manifest 'ringwordsperword' reinstated in this header
+//                 after being abolished from SSPLIB by NJO (unilaterally!)
+// 05-nov-84 NJO:  Preferred BSP block sizes increased to 512 words.
+//                 Manifests for timeout values moved from SSPLIB, names
+//                 changed to begin with "ssp.".  Names for byte offsets
+//                 in basic blocks added.
+// 16-nov-84 NJO:  Manifest MAX.MC.NAME.SIZE added - set to 15 bytes.
+// 16-nov-86 DLT:  Add act codes for ring tx & rx packets with block
+//                 length argument as a byte specification instead of
+//                 a dibyte spec. (requires dlt version of rh68k).
+//              => Add act code to tx & rx universe style datagrams
+//                 (not that they are used).  Only supported by
+//                 USERVE mace/6809 prom with dlt verison of rh68k.
+//              => Add act code to set transmission block type to be
+//                 set to type3 or type0. (requires USERVE & dlt rh68k).
+//              => Add act codes for interface between fast ring
+//                 driver and its handler.
+//              => Add rxst codes returned by fast ring driver in RES2
+//                 when RES1 = 0
+//              => Add frst codes returned from fast ring driver to its
+//                 handler (in RES1)
+// 19-jan-87 DLT:  Add pkt defs for frpkt (fast ring)
+// 17-feb-87 DLT:  Add alias: act.cancel.assoc=act.cancel.rx
+
+MANIFEST
+    $(
+    // Ring handler packet types
+
+    act.findfreeport            = 998  // Request for unused port no.
+    act.reserveport             = 997  // Reserve given port no.
+    act.releaseport             = 996  // Release given port
+    act.ringrx                  = 995  // Pkt to ring rx device
+    act.ringtx                  = 992  // Pkt to ring tx device
+    act.timer                   = 991  // Timer packet
+    act.make.bytestreampair     = 989
+    act.close                   = 988
+
+    // *** 987 & 986 used in BSP handler
+
+    act.reset                   = 985
+    act.replug                  = 984
+
+    act.rx.bb                   = 983  // Receive basic block
+    act.tx                      = 982  // Transmit single block or chain
+    act.rx.chain                = 981  // Receive chain of basic blocks
+    act.cancel.rx               = 980  // Cancel reception request(s)
+    act.cancel.assoc            = act.cancel.rx         // cfr version
+
+    act.rx.bb.bs                = 963  // 3 actions similar to those
+    act.tx.bs                   = 962  // above but using ...
+    act.rx.chain.bs             = 961  // ... byte size specification
+
+    act.rx.dgrm.bs              = 960  // Receive single dgrm
+    act.tx.dgrm.bs              = 959  // Transmit single dgrm
+
+    act.rh.settx.type0          = 958  // set rh to transmit type 0 blocks
+    act.rh.settx.type3          = 957  // set rh to transmit type 3 blocks
+
+    act.fr.start                = 956  // handler request to start fast ring
+    act.fr.stop                 = 955  // handler request to stop fast ring
+
+
+    // Packet offsets
+
+    rhpkt.buff          = pkt.arg1  // User-supplied buffer
+    rhpkt.size          = pkt.arg2  // Number of words in buffer
+    rhpkt.station       = pkt.arg3  // Ring station address
+    rhpkt.port          = pkt.arg4  // Port number for basic block
+    rhpkt.lifetime      = pkt.arg5  // Expiry time (reception only)
+
+    // Packet offsets - fast ring
+    frpkt.buff          = pkt.arg1  // User-supplied buffer
+    frpkt.size          = pkt.arg2  // (Usually) Number of bytes in buffer
+    frpkt.assoc         = pkt.arg4  // Association ID
+    frpkt.lifetime      = pkt.arg5  // Expiry time (reception only)
+
+
+    // Packet offsets for current ring drivers
+    rpkt.buff           = pkt.arg3  // Buffer
+    rpkt.wcnt           = pkt.arg2
+    rpkt.sar            = pkt.arg1  // SAR
+    rpkt.dest           = pkt.arg1  // Destination
+
+    // Transmission status codes
+
+    txst.accepted       = 0    // Block accepted
+    txst.ignored        = 410  // Ignored
+    txst.ring.error     = 411  // Ring error
+    txst.unsel.hdr      = 412  // Destination was unselected
+                               // for header packet of block
+    txst.unsel.in.blk   = 413  // Destination went unselected during block
+    txst.busy           = 414  // Destination busy - block tx timed out
+    txst.bad.dest       = 415  // Invalid destination address
+    txst.bad.tx.req     = 416  // Bad transmission request
+    txst.ring.broken    = 417  // Ring not working
+
+    // fast ring rx status codes returned in RES2 when RES1 = 0
+
+    rxst.timeout        = 460    // request timed out
+    rxst.bad.rx.req     = 461
+    rxst.bad.assoc      = 462
+    rxst.missing        = 463    // Too many slots missing from block
+    rxst.udl.error      = 464    // udl protocol error
+    rxst.ring.broken    = 465
+  
+    // fast ring driver status codes returned to handler in RES1
+
+    frst.ring.broken    = 430   // driver stopped - ring broken interrupt
+    frst.dead           = 431   // driver stopped - deadman's handle timeout
+    frst.stop           = 432   // driver stopped - handler request
+    frst.nostart        = 433   // cannot stop driver because not started
+    frst.int.err        = 436   // invalid interrupt status
+
+    // Single shot protocol block offsets etc.
+
+    bb.ssp.type         = 0   // ring-word offsets  *** Use byte offsets
+    bb.ssp.replyport    = 1   // defined below for new programs
+    bb.ssp.func         = 2
+    bb.ssp.args         = 3
+    bb.ssp.arg1         = 3
+    bb.ssp.arg2         = 4
+    bb.ssp.arg3         = 5
+    bb.ssp.arg4         = 6
+    bb.ssp.arg5         = 7
+    bb.ssp.rc           = 2
+
+    ssp.block.hdr.code  = 0   // byte offsets
+    ssp.block.hdr.flags = 1
+    ssp.block.replyport = 2   // ms byte of 2 byte quantity
+    ssp.block.func      = 4   // ditto
+    ssp.block.rc        = 4   // used in reply
+    ssp.block.user.data = 6   // first byte of next layer's data
+
+    ssp.short.timeout   = tickspersecond * 5   // used by SSPLIB
+    ssp.long.timeout    = tickspersecond * 25
+
+    max.ssp.size        = 64   // Words of data in max recommended SSP block
+
+    pref.blocksize      = 512  // data words for BSP
+    bsp.pref.tx.size    = 1023 // new size manifests for CR82...
+    bsp.pref.rx.size    = 1023 // *** They are BYTE UPPERBOUNDS ***
+
+    // Single shot protocol and BSP header decoding
+
+    code.open           = #X6A00
+    code.openack        = #X6500
+    code.sspreq         = #X6C00
+    code.ssprep         = code.openack
+    codemask            = #XFF00
+    flagmask            = #X00FF
+
+    bsp.flags.odd.bit       = #B00000001   //Bits in OPEN flag byte
+    bsp.flags.ts.bit        = #B00000010   //In interim Cambridge TSBSP
+    bsp.flags.complete.bit  = #B00000010   //Different meaning in CR82
+    bsp.flags.protocol.code = #B00100100
+
+    // Offsets in result vector from   lookup.name(name, result.vector)
+
+    nsv.machine.id      = 0
+    nsv.flags           = 1
+    nsv.port            = 2
+    nsv.func            = 3
+    nsv.site            = 4    //Extra results from global lookup
+    nsv.subnet          = 5
+
+    nsv.upb             = 5
+
+    // Maximum size of a machine name (bytes)
+
+    max.mc.name.size    = 15
+
+    // Types of call to the general.lookup function
+
+    gl.normal           = 1
+    gl.global           = 2
+
+
+    // Codes in nameserver flag byte
+
+    nsv.flags.pmask     = #X07 // Mask for protocol code
+    nsv.flags.nsp       = #X00 // Non-standard protocol
+    nsv.flags.bsp       = #X01 // BSP connection port
+    nsv.flags.ssp       = #X02 // SSP port
+    nsv.flags.mc.name   = #X03 // Machine name only
+    nsv.flags.datagram  = #X04 // Universe datagram service
+    nsv.flags.brg.name  = #X05 // Bridge - name only
+    nsv.flags.nofunc    = #X08 // No function code
+    nsv.flags.slow      = #X10 // Slow to respond
+    nsv.flags.extern    = #X20 // Name is on another net or subnet
+
+    // Well known station address
+
+    id.nameserver       = 240
+
+    // Global numbers
+
+    gn.bsp.handler      = ug + 20
+
+
+    // Byte to ring-word conversion
+
+    // *** Note:  these are included for historical compatibility.  New
+    // programs are recommended to access all data in terms of byte offsets
+    // within data, using the machine-independent routines BYTEGET & BYTEPUT.
+
+    bytesperringword    = 2      // For a 16-bit ring
+    ringwordsperword    = bytesperword/bytesperringword
+
+    // Header and port decoding for basic blocks
+
+    headpat             = #X9000 // Header for basic block
+    headmask            = #XF800 // Mask for header pattern in basic block
+    countmask           = #X03FF
+    headtypemask        = #X0400 // Type 0 or 1 ?
+    portmask            = #X0FFF // Mask port from route
+    max.block.body.size = 1024
+
+    // ????????????????
+
+    nil                 = 0
+
+    // Offsets in ring info vector (accessed from rootnode)
+
+    rtninfo.ring        = 5  // Offset of ring info vec in rootnode info vec
+
+    ri.rhtaskid         = 0  // Ring Handler taskid
+    ri.myaddr           = 1  // This station's address
+    ri.myname           = 2  // This station's name
+    ri.uidset           = 3  // User's UID set (TUID,TPUID,PUID) list
+//  *** next field no longer set (no good with multiple rings)
+//  ri.loaders.addr     = 4  // M/c which caused loading of this one (number)
+    ri.loaders.name     = 5  // M/c which caused loading of this one (string)
+    ri.term.no          = 6  // Terminal number used on loading machine
+    ri.term.revconn.name= 7  // Name for reverse connection to terminal
+    ri.load.data        = 8  // Data supplied by loader of machine
+    ri.codeid.number    = 9  // System Code ID as number (for Project Universe)
+    ri.codeid.string    = 10 // System Code ID as string (for Project Universe)
+    $)
+
+

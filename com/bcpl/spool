@@ -1,0 +1,36 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "SPOOL"
+
+GET "LIBHDR"
+GET "CLIHDR"
+
+LET start() BE
+  $( LET v = VEC 20
+     LET out = ?
+
+     IF rdargs("TO",v,20) = 0 THEN
+       $( writes("Bad args*N")
+          RETURN
+       $)
+
+     TEST v!0 = 0 THEN
+       out := cli.standardoutput
+      ELSE
+       $( out := findoutput(v!0)
+          IF out = 0 THEN
+            $( writef("Can't open %S*N",v!0)
+               RETURN
+            $)
+       $)
+
+     IF cli.currentoutput \= cli.standardoutput THEN
+       endwrite()
+
+     cli.currentoutput := out
+  $)
+
+               
+

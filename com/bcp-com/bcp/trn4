@@ -1,0 +1,76 @@
+SECTION "TRN4"
+
+GET "TRNHDR"
+
+LET transswitch(x) BE
+    $(1 LET p, b, dl = casep, caseb, defaultlabel
+        AND ecl = endcaselabel
+        LET l = nextparam()
+        endcaselabel := nextparam()
+        caseb := casep
+
+        compjump(l)
+        defaultlabel := 0
+        trans(h3!x)
+        compjump(endcaselabel)
+
+        complab(l)
+        load(h2!x, TRUE)
+        IF defaultlabel=0 DO defaultlabel := endcaselabel
+        out3(s.switchon, casep-p, defaultlabel)
+
+        FOR i = caseb TO casep-1 DO out2(casek!i, casel!i)
+
+        ssp := ssp - 1
+        complab(endcaselabel)
+        endcaselabel := ecl
+        casep, caseb, defaultlabel := p, b, dl
+    $)1
+
+AND transfor(x) BE
+     $( LET a = dvece
+        LET l, m = nextparam(), nextparam()
+        LET bl, ll = breaklabel, looplabel
+        LET k, n = 0, 0
+        LET step = 1
+        LET s = ssp
+        breaklabel, looplabel := 0, 0
+
+        addname(h2!x, s.local, s)
+        load(h3!x, TRUE)
+
+        k, n := s.ln, h4!x
+        UNLESS smallnumber(n) TEST h1!n=s.number
+            THEN n := h2!n
+            ELSE $( k, n := s.lp, ssp
+                    load(h4!x, TRUE)  $)
+
+        UNLESS h5!x=0 DO step := evalconst(h5!x, FALSE)
+
+        out1(s.store)
+        compjump(l)
+        decllabels(h6!x)
+        complab(m)
+        trans(h6!x)
+        UNLESS looplabel=0 DO complab(looplabel)
+        out2(s.lp, s); out2(s.ln, step)
+        out1(s.plus); out2(s.sp, s)
+        complab(l)
+        TEST step > 0 THEN
+          $( out2(s.lp,s)
+             out2(k,n)
+          $)
+         ELSE
+          $( out2(k,n)
+             out2(s.lp,s)
+          $)
+        out2(s.endfor, m)
+
+        UNLESS breaklabel=0 DO complab(breaklabel)
+        breaklabel, looplabel, ssp := bl, ll, s
+        out2(s.stack, ssp)
+        dvece := a
+    $)
+.
+
+

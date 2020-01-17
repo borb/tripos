@@ -1,0 +1,1939 @@
+
+
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*************************************************************************
+*  (C) Copyright 1980  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*                   Z - 8 0     A S S E M B L E R                       *
+*                                                                       *
+*************************************************************************
+**  C  Gray  Girling      COMPUTER LAB,  CAMBRIDGE           27.02.80  **
+*************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*/
+
+
+
+
+
+
+
+
+
+//  LOG OF CHANGES:
+//  ===============
+//
+//  Log entry is <date> <general assembler version no.> <initials> <change>
+//
+//  21.03.80  3.006  CGG   Changed from version 2 to version 3
+//                         (i.e. relocation & externals added)
+
+
+
+
+
+
+
+
+SECTION "Z80"
+
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+
+
+
+//
+//                     Error  messages
+//
+
+
+MANIFEST
+$(  e.ixyhl    =  e.e + 0
+    e.r        =  e.e + 1
+    e.dd       =  e.e + 3
+    e.qq       =  e.e + 4
+    e.rr       =  e.e + 5
+    e.pp       =  e.e + 6
+    e.cc       =  e.e + 7
+    e.regexp   =  e.e + 8
+    e.badreg   =  e.e + 9
+    e.rhxy     =  e.e + 10
+    e.badcc    =  e.e + 11
+    e.badim    =  e.e + 13
+    e.badds    =  e.e + 14
+    e.range    =  e.e + 15
+    e.bad16no  =  e.e + 16
+$)
+
+
+LET errormess(rc) = VALOF
+SWITCHON rc INTO
+$(  CASE e.ixyhl:     RESULTIS "HL, IX or IY register expected"
+    CASE e.r:         RESULTIS "B, C, D, E, H, L or A expected"
+    CASE e.dd:        RESULTIS "BC, DE, HL or SP expected"
+    CASE e.qq:        RESULTIS "BC, DE, HL or AF expected"
+    CASE e.rr:        RESULTIS "BC, DE, IX or SP expected"
+    CASE e.pp:        RESULTIS "BC, DE, IY or SP expected"
+    CASE e.cc:        RESULTIS
+                      "NZ, Z, NC, C, PO, PE, P, V, M, or NV expected"
+    CASE e.regexp:    RESULTIS "register name expected"
+    CASE e.badreg:    RESULTIS "not a valid register"
+    CASE e.rhxy:      RESULTIS "(IX+d),(IY+d),(HL) or single reg expected"
+    CASE e.badcc:     RESULTIS "NZ, Z, NC, or C expected"
+    CASE e.badim:     RESULTIS "bad immediate mode specification"
+    CASE e.badds:     RESULTIS "amount of store must be positive"
+    CASE e.range:     RESULTIS "label is out of range"
+    CASE e.bad16no:   RESULTIS "16 bit address or immediate value expected*N"
+    DEFAULT:          RESULTIS "unknown return code given"
+$)
+
+
+
+
+
+//
+//                    Register  Descriptions
+//
+
+
+
+
+MANIFEST
+$(  r.bad       =  0            // bad register
+    b.r         =  bit15        // B, C, D, E, H, L, or A
+    b.dd        =  bit14        // BC, DE, HL or SP
+    b.qq        =  bit13        // BC, DE, HL or AF
+    b.pp        =  bit12        // BC, DE, IX or SP
+    b.rr        =  bit11        // BC, DE, IY or SP
+    b.cc        =  bit10        // NZ, Z, NC, C, PO, PE, P=V, or M=NV
+    b.ixyhl     =  bit9         // IX, IY, or HL
+    b.rori      =  bit8         // R or I
+    b.bcde      =  bit7         // BC or DE
+    b.ixiy      =  bit6         // IX or IY
+    r.b         =  b.r | #X0
+    r.c         =  b.r | #X1 | b.cc | (#X3<<3)
+    r.d         =  b.r | #X2
+    r.e         =  b.r | #X3
+    r.h         =  b.r | #X4
+    r.l         =  b.r | #X5
+    r.hl        =  b.dd | b.qq | b.ixyhl | #X6
+    r.a         =  b.r | #X7
+    r.bc        =  b.dd | b.qq | b.pp | b.rr | b.bcde | #X0
+    r.de        =  b.dd | b.qq | b.pp | b.rr | b.bcde | #X1
+    r.ix        =  b.pp | b.ixyhl | b.ixiy | #X6
+    r.iy        =  b.rr | b.ixyhl | b.ixiy | #X6
+    r.sp        =  b.dd | b.pp | b.rr | #X3
+    r.af        =  b.qq | #X3
+    r.r         =  b.rori | 1
+    r.i         =  b.rori | 0
+    cc.nz       =  b.cc | (#X0<<3)
+    cc.z        =  b.cc | (#X1<<3)
+    cc.nc       =  b.cc | (#X2<<3)
+    cc.c        =  r.c
+    cc.po       =  b.cc | (#X4<<3)
+    cc.pe       =  b.cc | (#X5<<3)
+    cc.p        =  b.cc | (#X6<<3)
+    cc.m        =  b.cc | (#X7<<3)
+    cc.v        =  cc.p
+    cc.nv       =  cc.m
+$)
+
+
+
+
+LET initsyms() BE
+$(  reg.put("IY", r.iy)
+    reg.put("DE", r.de)
+    reg.put("BC", r.bc)
+    reg.put("AF", r.af)
+    reg.put("A",  r.a)
+    reg.put("B",  r.b)
+    reg.put("C",  r.c)
+    reg.put("D",  r.d)
+    reg.put("HL", r.hl)
+    reg.put("H",  r.h)
+    reg.put("E",  r.e)
+    reg.put("I",  r.i)
+    reg.put("IX", r.ix)
+    reg.put("R",  r.r)
+    reg.put("PE", cc.pe)
+    reg.put("V",  cc.v)
+    reg.put("P",  cc.p)
+    reg.put("PO", cc.po)
+    reg.put("SP", r.sp)
+    reg.put("Z",  cc.z)
+    reg.put("NC", cc.nc)
+    reg.put("L",  r.l)
+    reg.put("M",  cc.m)
+    reg.put("NV", cc.nv)
+    reg.put("NZ", cc.nz)
+$)
+
+
+
+
+
+//
+//                    Code   for   Opcode   Formats
+//
+
+
+
+GLOBAL
+$(  f.rinfo   :  ag + 0   //   'r' symbol information field
+    f.ccinfo  :  ag + 1   //   'cc' symbol information field
+    f.ddinfo  :  ag + 2   //   'dd','rr','pp' and 'qq' information field
+    f.source  :  ag + 3   //   source field
+    f.ddsource:  ag + 4   //   destination field for double regs
+    f.dest    :  ag + 5   //   destination field
+    f.top     :  ag + 6   //   top two bits field
+    f.ccsmall :  ag + 7   //   field for condition code in JR
+
+    /*    These fields are layed out as folows:
+
+    -------------------------------------
+    | f.top |   f.source  |   f.dest    |
+    -------------------------------------
+
+    -------------------------------------
+    |       |f.ddsource|                |
+    -------------------------------------
+
+    */
+
+    getrset  :  ag + 8
+    scanreg  :  ag + 9
+    getind   :  ag + 10
+    getrorind:  ag + 11
+    getixyhl :  ag + 12
+    dwproc   :  ag + 13
+    fmt0     :  ag + 15
+    fmt1     :  ag + 16
+    fmt2     :  ag + 17
+    fmt3     :  ag + 18
+    fmt4     :  ag + 19
+    fmt5     :  ag + 20
+    fmt6     :  ag + 21
+    fmt7     :  ag + 22
+    fmt8     :  ag + 23
+    fmt9     :  ag + 24
+
+$)
+
+
+
+MANIFEST
+$(  fn.bit      = 0
+    fn.normal   = 1
+$)
+
+
+
+
+
+LET getrset(symtype) = VALOF
+$(  LET ans=r.bad
+    IF item.type=i.iden DO
+       $(  LET r=getreg(item.info)
+           UNLESS 0=(symtype&r) DO ans:=r
+       $)
+    UNLESS ans=r.bad DO getitem()
+    RESULTIS ans
+$)
+
+
+
+
+LET putaddress(n) BE
+$(  LET sign=n&~#XFFFF
+    putword(n&255)
+    putword( (n&(255<<8)) >> 8)
+    UNLESS sign=(-1&~#XFFFF) | sign=0 THEN error(e.badbyte)
+$)
+
+
+
+AND scanreg(reg) = VALOF
+$(  UNLESS item.type=i.iden RESULTIS FALSE
+    UNLESS reg=getreg(item.info) RESULTIS FALSE
+    getitem ()
+    RESULTIS TRUE
+$)
+
+
+
+AND getind(shel, fntype) = VALOF
+$(  LET r=getrset(b.ixyhl)
+    TEST r=r.hl
+    THEN $(  IF fntype=fn.bit DO putword(#XCB)
+             putword(shel)
+         $)
+    ELSE TEST r=r.ix | r=r.iy
+         THEN $(  LET i=0
+                  putword(r=r.ix->#XDD, #XFD)
+                  IF fntype=fn.bit DO putword(#XCB)
+                  IF item.type=i.plus | item.type=i.minus THEN
+                  $(  LET neg=(item.type=i.minus)
+                      getitem()
+                      i:= (neg -> -expression(),expression())
+                  $)
+                  TEST fntype=fn.bit
+                  THEN $(  putword(i)
+                           putword(shel)
+                       $)
+                  ELSE $(  putword(shel)
+                           putword(i)
+                       $)
+              $)
+         ELSE RESULTIS FALSE
+    checkandskip(i.rbkt,')')
+    RESULTIS TRUE
+$)
+
+
+
+
+
+AND getrorind( shel, rfield, fntype ) = VALOF
+$(  /* 'fntype' is fn.normal, fn.bit
+       'shel' is the template binary to be output
+       'rfield' is the field in 'shel' in which the register spec is placed
+                this field of 'shel' should be initialy 6 (#B110)
+    */
+    IF item.type=i.iden
+    DO $(  LET r=getrset(b.r)
+           IF r=r.bad RESULTIS FALSE
+           IF fntype=fn.bit DO putword(#XCB)
+           putword(shel)
+           putwordf(getf(r,f.rinfo), rfield)
+           RESULTIS TRUE
+       $)
+    UNLESS scan(i.lbkt) DO RESULTIS FALSE
+    IF getind(shel, fntype)
+    DO RESULTIS TRUE
+    error(e.ixyhl)
+$)
+
+
+
+LET getixyhl(shel) = VALOF
+$(  UNLESS (item.type=i.iden) RESULTIS FALSE
+    $(  LET r=getreg(item.info)
+        UNLESS r=r.hl | r=r.ix | r=r.iy RESULTIS FALSE
+        TEST r=r.ix
+        THEN putword(#XDD)
+        ELSE IF r=r.iy DO putword(#XFD)
+        putword(shel)
+        getitem()
+        RESULTIS TRUE
+    $)
+$)
+
+
+
+
+AND dwproc(lab) BE
+$(  LET spec=VEC spec.size
+    get.and.declare(lab)
+    putlabelspec(label.expression(spec)) REPEATWHILE scan(i.comma)
+$)
+
+
+
+
+
+
+
+
+
+
+
+
+
+.
+
+
+
+
+SECTION "Z80a"
+
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "SYS:Grasm.BCPL.asmhdr"
+/*TRIPOS>*/
+
+
+
+
+//
+//              In - line   Header   For  Z80  Assembler
+//
+
+
+
+
+
+MANIFEST
+$(  e.ixyhl     =  e.e + 0
+    e.r         =  e.e + 1
+    e.dd        =  e.e + 3
+    e.qq        =  e.e + 4
+    e.rr        =  e.e + 5
+    e.pp        =  e.e + 6
+    e.cc        =  e.e + 7
+    e.regexp    =  e.e + 8
+    e.badreg    =  e.e + 9
+    e.rhxy      =  e.e + 10
+    e.badcc     =  e.e + 11
+    e.badim     =  e.e + 13
+    e.badds     =  e.e + 14
+    e.range     =  e.e + 15
+    e.bad16no   =  e.e + 16
+    r.bad       =  0            // bad register
+    b.r         =  bit15        // B, C, D, E, H, L, or A
+    b.dd        =  bit14        // BC, DE, HL or SP
+    b.qq        =  bit13        // BC, DE, HL or AF
+    b.pp        =  bit12        // BC, DE, IX or SP
+    b.rr        =  bit11        // BC, DE, IY or SP
+    b.cc        =  bit10        // NZ, Z, NC, C, PO, PE, P=V, or M=NV
+    b.ixyhl     =  bit9         // IX, IY, or HL
+    b.rori      =  bit8         // R or I
+    b.bcde      =  bit7         // BC or DE
+    b.ixiy      =  bit6         // IX or IY
+    r.b         =  b.r | #X0
+    r.c         =  b.r | #X1 | b.cc | (#X3<<3)
+    r.d         =  b.r | #X2
+    r.e         =  b.r | #X3
+    r.h         =  b.r | #X4
+    r.l         =  b.r | #X5
+    r.hl        =  b.dd | b.qq | b.ixyhl | #X6
+    r.a         =  b.r | #X7
+    r.bc        =  b.dd | b.qq | b.pp | b.rr | b.bcde | #X0
+    r.de        =  b.dd | b.qq | b.pp | b.rr | b.bcde | #X1
+    r.ix        =  b.pp | b.ixyhl | b.ixiy | #X6
+    r.iy        =  b.rr | b.ixyhl | b.ixiy | #X6
+    r.sp        =  b.dd | b.pp | b.rr | #X3
+    r.af        =  b.qq | #X3
+    r.r         =  b.rori | 1
+    r.i         =  b.rori | 0
+    cc.nz       =  b.cc | (#X0<<3)
+    cc.z        =  b.cc | (#X1<<3)
+    cc.nc       =  b.cc | (#X2<<3)
+    cc.c        =  r.c
+    cc.po       =  b.cc | (#X4<<3)
+    cc.pe       =  b.cc | (#X5<<3)
+    cc.p        =  b.cc | (#X6<<3)
+    cc.m        =  b.cc | (#X7<<3)
+    cc.v        =  cc.p
+    cc.nv       =  cc.m
+    fn.bit      = 0
+    fn.normal   = 1
+$)
+
+
+
+
+
+GLOBAL
+$(  f.rinfo   :  ag + 0   //   'r' symbol information field
+    f.ccinfo  :  ag + 1   //   'cc' symbol information field
+    f.ddinfo  :  ag + 2   //   'dd','rr','pp' and 'qq' information field
+    f.source  :  ag + 3   //   source field
+    f.ddsource:  ag + 4   //   destination field for double regs
+    f.dest    :  ag + 5   //   destination field
+    f.top     :  ag + 6   //   top two bits field
+    f.ccsmall :  ag + 7   //   field for condition code in JR
+    getrset   :  ag + 8
+    scanreg   :  ag + 9
+    getind    :  ag + 10
+    getrorind :  ag + 11
+    getixyhl  :  ag + 12
+    dwproc    :  ag + 13
+    fmt0      :  ag + 15
+    fmt1      :  ag + 16
+    fmt2      :  ag + 17
+    fmt3      :  ag + 18
+    fmt4      :  ag + 19
+    fmt5      :  ag + 20
+    fmt6      :  ag + 21
+    fmt7      :  ag + 22
+    fmt8      :  ag + 23
+    fmt9      :  ag + 24
+$)
+
+
+
+//
+//                           Code  Formats
+//
+
+
+
+
+
+
+
+
+LET fmt0(lab) BE get.and.declare(lab)
+
+
+
+
+AND fmt1(lab) BE
+$(  LET r=?             // a register
+    LET d=0             // a displacement
+    LET i=?             // the result of an expression evaluation
+    LET spec=VEC spec.size
+    get.and.declare(lab)
+    r:=getrset(b.r | b.rori | b.dd | b.ixyhl)
+    TEST r\=r.bad
+    THEN $(  checkandskip(i.comma,',')
+             SWITCHON r INTO
+             $(
+               CASE r.a:
+                 TEST scan(i.lbkt)
+                 THEN UNLESS getind(#X7E /* 01 111 110 */, fn.normal)
+                         $(  r:=getrset(b.bcde)
+                             TEST r=r.bad
+                             THEN $(  putword(#X3A /* 00 111 010 */)
+                                      putlabelspec(label.expression(spec))
+                                  $)
+                             ELSE putword(r=r.bc->#X0A, #X1A)
+                             checkandskip(i.rbkt, ')')
+                         $)
+                 ELSE $(  r:=getrset(b.rori | b.r)
+                          TEST r=r.bad
+                          THEN $(  putword(#X3E /* 00 111 110 */)
+                                   putword(expression())
+                               $)
+                          ELSE TEST 0=(r&b.r)
+                               THEN $(  putword(#XED /* 11 110 101 */)
+                                        putword(r=r.i->#X57, #X5F)
+                                    $)
+                               ELSE $(  putword(#X78 /* 01 aaa rrr */)
+                                        putwordf(getf(r,f.rinfo), f.dest)
+                                    $)
+                      $)
+                 ENDCASE
+               DEFAULT:   /* b.r set */
+                 $(  LET shel=putf( getf(r, f.rinfo), f.source, #X46 )
+                     /* i.e.:  01 rrr xxx */
+                     UNLESS getrorind(shel, f.dest, fn.normal) DO
+                        $(  putword(#X06 /* 00 rrr 110 */)
+                            putwordf(getf(r, f.rinfo), f.source)
+                            putword(expression())
+                        $)
+                 $)
+                 ENDCASE
+               CASE r.i:  CASE r.r:
+                 $(  UNLESS scanreg(r.a) DO error(e.badreg)
+                     putaddress(#X47ED)
+                     putwordf( getf(r, f.rinfo), f.source )
+                 $)
+                 ENDCASE
+               CASE r.ix: CASE r.iy: CASE r.hl:
+               CASE r.bc: CASE r.de: CASE r.sp:      // i.e. 'dd'
+                 $(  LET dd=(r=r.sp -> getrset(b.ixyhl), r.bad)
+                     TEST dd=r.ix | r=r.ix
+                     THEN putword(#XDD)
+                     ELSE IF dd=r.iy | r=r.iy DO putword(#XFD)
+                     TEST (r=r.sp) & (dd\=r.bad)
+                     THEN putword(#XF9)
+                     ELSE TEST dd\=r.bad THEN error(e.bad16no)
+                     ELSE $(  label.expression(spec)
+                              TEST bracketed
+                              THEN TEST 0=(r&b.ixyhl)
+                                   THEN putaddress(#X4BED)
+                                   ELSE putword(#X2A)
+                              ELSE putword(#X21 /* 00 100 001 */)
+                              UNLESS 0\=(r&b.ixyhl)
+                                 putwordf( getf(r, f.ddinfo), f.ddsource )
+                              putlabelspec(spec)
+                          $)
+                 $)
+                 ENDCASE
+             $)
+         $)
+    ELSE $(  checkandskip(i.lbkt, '(')
+             r:=getrset(b.ixyhl | b.bcde)
+             TEST r=r.bad
+             THEN $(  label.expression(spec)
+                      checkandskip(i.rbkt, ')')
+                      checkandskip(i.comma, ',')
+                      TEST scanreg(r.a)
+                      THEN $(  putword(#X32)
+                               putlabelspec(spec)
+                           $)
+                      ELSE $(  r:=getrset(b.ixyhl | b.dd)
+                               IF r=r.bad DO error(e.badreg)
+                               TEST r=r.ix
+                               THEN putword(#XDD)
+                               ELSE IF r=r.iy DO putword(#XFD)
+                               TEST 0\=(r&b.ixyhl)
+                               THEN putword(#X22)
+                               ELSE $(  putword(#XED)
+                                        putword(#X43)
+                                        putwordf(getf(r,f.ddinfo), f.ddsource)
+                                    $)
+                               putlabelspec(spec)
+                           $)
+                  $)
+             ELSE $(  TEST 0\=(r&b.bcde)
+                      THEN   /* BC or DE */
+                           $(  putword(r=r.bc->#X02, #X12)
+                               checkandskip(i.rbkt, ')')
+                               checkandskip(i.comma, ',')
+                               UNLESS scanreg(r.a) DO error(e.badreg)
+                           $)
+                      ELSE /* IX, IY or HL */
+                           $(  TEST r=r.ix
+                               THEN putword(#XDD)
+                               ELSE IF r=r.iy DO putword(#XFD)
+                               UNLESS r=r.hl
+                               TEST scan(i.plus) THEN d:=expression() ELSE
+                               IF scan(i.minus) THEN d:=-expression()
+                               checkandskip(i.rbkt, ')')
+                               checkandskip(i.comma, ',')
+                               $(  LET s=getrset(b.r)
+                                   TEST s=r.bad
+                                   THEN $(  putword(#X36 /* 00 110 110 */)
+                                            UNLESS r=r.hl DO putword(d)
+                                            putword(expression())
+                                        $)
+                                   ELSE $(  putword(#X70 /* 01 110 000 */)
+                                            putwordf(getf(s,f.rinfo), f.dest)
+                                            UNLESS r=r.hl DO putword(d)
+                                        $)
+                               $)
+                           $)
+                  $)
+         $)
+$)
+
+
+
+
+
+AND fmt2(lab, info) BE
+$(  MANIFEST
+    $(  sheln = #XC6    /* 11xxx110   -  immediate */
+        sheli = #X86    /* 10xxx110   -  indirect or register */
+    $)
+    LET addopreg=r.a
+    LET add   = (0=info)
+    LET addop = (info<4 & info\=2)
+    LET regset=b.dd
+    get.and.declare(lab)
+    IF addop DO
+       $(  UNLESS scanreg(r.a) DO
+              $(  addopreg:=getrset(b.ixyhl)
+                  IF addopreg=r.bad DO error(e.badreg)
+              $)
+           checkandskip(i.comma, ',')
+       $)
+    TEST addopreg=r.a
+    THEN UNLESS getrorind(putf(info, f.source, sheli), f.dest, fn.normal)
+         /* not register or indirect */
+         DO TEST is.expression()
+            THEN $(  putword(putf(info, f.source, sheln))
+                     putword(expression())
+                 $)
+            ELSE error(e.r)
+         /* not immediate either */
+    ELSE $(  TEST add
+             THEN $(  TEST addopreg=r.ix
+                      THEN $(  putword(#XDD)
+                               regset:=b.pp
+                           $)
+                      ELSE IF addopreg=r.iy DO
+                              $(  putword(#XFD)
+                                  regset:=b.rr
+                              $)
+                      putword(#X09 /* 00 xx1 001 */)
+                  $)
+             ELSE $(  UNLESS addopreg=r.hl DO error(e.badreg)
+                      IF addop DO putword(#XED)
+                      putword(putf(\(info>>1), f.source, #X42 /* 01 xxi 010 */))
+                  $)
+             addopreg:=getrset(regset)
+             IF addopreg=r.bad THEN
+             error(regset=b.pp->e.pp, regset=b.rr->e.rr, e.dd)
+             putwordf(getf(addopreg,f.ddinfo), f.ddsource)
+         $)
+$)
+
+
+
+
+
+
+
+AND fmt3(lab, info) BE
+$(  /* deals with shifts and rotates */
+    LET shel=putf(info, f.source, #X06 /* 00 xxx 110 */)
+    get.and.declare(lab)
+    UNLESS getrorind(shel, f.dest, fn.bit /* shift formats */)
+    DO error(e.rhxy)
+$)
+
+
+
+
+
+AND fmt4(lab, info) BE
+$(  /* deals with bit operations */
+    LET shel=putf(info, f.top, #X46 /* 01 bbb xxx */)
+    get.and.declare(lab)
+    shel:=putf(expression(), f.source, shel)
+    checkandskip(i.comma, ',')
+    UNLESS getrorind(shel, f.dest, fn.bit) DO error(e.rhxy)
+$)
+
+
+
+.
+
+
+
+
+
+SECTION "Z80b"
+
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "SYS:Grasm.BCPL.asmhdr"
+/*TRIPOS>*/
+
+
+
+
+//
+//              In - line   Header   For  Z80  Assembler
+//
+
+
+
+
+
+MANIFEST
+$(  e.ixyhl     =  e.e + 0
+    e.r         =  e.e + 1
+    e.dd        =  e.e + 3
+    e.qq        =  e.e + 4
+    e.rr        =  e.e + 5
+    e.pp        =  e.e + 6
+    e.cc        =  e.e + 7
+    e.regexp    =  e.e + 8
+    e.badreg    =  e.e + 9
+    e.rhxy      =  e.e + 10
+    e.badcc     =  e.e + 11
+    e.badim     =  e.e + 13
+    e.badds     =  e.e + 14
+    e.range     =  e.e + 15
+    e.bad16no   =  e.e + 16
+    r.bad       =  0            // bad register
+    b.r         =  bit15        // B, C, D, E, H, L, or A
+    b.dd        =  bit14        // BC, DE, HL or SP
+    b.qq        =  bit13        // BC, DE, HL or AF
+    b.pp        =  bit12        // BC, DE, IX or SP
+    b.rr        =  bit11        // BC, DE, IY or SP
+    b.cc        =  bit10        // NZ, Z, NC, C, PO, PE, P=V, or M=NV
+    b.ixyhl     =  bit9         // IX, IY, or HL
+    b.rori      =  bit8         // R or I
+    b.bcde      =  bit7         // BC or DE
+    b.ixiy      =  bit6         // IX or IY
+    r.b         =  b.r | #X0
+    r.c         =  b.r | #X1 | b.cc | (#X3<<3)
+    r.d         =  b.r | #X2
+    r.e         =  b.r | #X3
+    r.h         =  b.r | #X4
+    r.l         =  b.r | #X5
+    r.hl        =  b.dd | b.qq | b.ixyhl | #X6
+    r.a         =  b.r | #X7
+    r.bc        =  b.dd | b.qq | b.pp | b.rr | b.bcde | #X0
+    r.de        =  b.dd | b.qq | b.pp | b.rr | b.bcde | #X1
+    r.ix        =  b.pp | b.ixyhl | b.ixiy | #X6
+    r.iy        =  b.rr | b.ixyhl | b.ixiy | #X6
+    r.sp        =  b.dd | b.pp | b.rr | #X3
+    r.af        =  b.qq | #X3
+    r.r         =  b.rori | 1
+    r.i         =  b.rori | 0
+    cc.nz       =  b.cc | (#X0<<3)
+    cc.z        =  b.cc | (#X1<<3)
+    cc.nc       =  b.cc | (#X2<<3)
+    cc.c        =  r.c
+    cc.po       =  b.cc | (#X4<<3)
+    cc.pe       =  b.cc | (#X5<<3)
+    cc.p        =  b.cc | (#X6<<3)
+    cc.m        =  b.cc | (#X7<<3)
+    cc.v        =  cc.p
+    cc.nv       =  cc.m
+    fn.bit      = 0
+    fn.normal   = 1
+$)
+
+
+
+
+
+GLOBAL
+$(  f.rinfo   :  ag + 0   //   'r' symbol information field
+    f.ccinfo  :  ag + 1   //   'cc' symbol information field
+    f.ddinfo  :  ag + 2   //   'dd','rr','pp' and 'qq' information field
+    f.source  :  ag + 3   //   source field
+    f.ddsource:  ag + 4   //   destination field for double regs
+    f.dest    :  ag + 5   //   destination field
+    f.top     :  ag + 6   //   top two bits field
+    f.ccsmall :  ag + 7   //   field for condition code in JR
+    getrset   :  ag + 8
+    scanreg   :  ag + 9
+    getind    :  ag + 10
+    getrorind :  ag + 11
+    getixyhl  :  ag + 12
+    dwproc    :  ag + 13
+    fmt0      :  ag + 15
+    fmt1      :  ag + 16
+    fmt2      :  ag + 17
+    fmt3      :  ag + 18
+    fmt4      :  ag + 19
+    fmt5      :  ag + 20
+    fmt6      :  ag + 21
+    fmt7      :  ag + 22
+    fmt8      :  ag + 23
+    fmt9      :  ag + 24
+    fmt10     :  ag + 25
+    fmt11     :  ag + 26
+    fmt12     :  ag + 27
+    fmt13     :  ag + 28
+    fmt14     :  ag + 29
+    fmt15     :  ag + 30
+    fmt16     :  ag + 31
+    nolistproc:  ag + 32
+$)
+
+
+
+
+
+//
+//               More  Code  Formats
+//
+
+
+
+LET fmt5(lab) BE
+$(  LET cc=?
+    /* This is JP */
+    get.and.declare(lab)
+    TEST scan(i.lbkt)
+    THEN $(  UNLESS getixyhl(#XE9 /* 11 101 011 */) DO error(e.ixyhl)
+             checkandskip(i.rbkt, ')')
+         $)
+    ELSE $(  LET spec=VEC spec.size
+             cc:=getrset(b.cc)
+             TEST cc=r.bad
+             THEN $(  putword(#XC3 /* 11 000 011 */)
+                      putlabelspec(label.expression(spec))
+                  $)
+             ELSE $(  putword(#XC2 /* 11 ccc 010 */)
+                      putwordf(getf(cc,f.ccinfo), f.source)
+                      checkandskip(i.comma, ',')
+                      putlabelspec(label.expression(spec))
+                  $)
+         $)
+$)
+
+
+
+
+AND fmt6(lab) BE
+$(  LET cc=?
+    LET spec=VEC spec.size
+    /* this is CALL */
+    get.and.declare(lab)
+    cc:=getrset(b.cc)
+    TEST cc=r.bad
+    THEN putword(#XCD /* 11 001 101 */)
+    ELSE $(  putword(#XCC /* 11 ccc 100 */)
+             putwordf(getf(cc,f.ccinfo), f.source)
+             checkandskip(i.comma, ',')
+         $)
+    putlabelspec(label.expression(spec))
+$)
+
+
+
+AND fmt7(lab) BE
+$(  LET cc=?
+    /* this is RET */
+    get.and.declare(lab)
+    cc:=getrset(b.cc)
+    TEST cc=r.bad
+    THEN putword(#XC9 /* 11 001 001 */)
+    ELSE $(  putword(#XC8 /* 11 ccc 000 */)
+             putwordf(getf(cc,f.ccinfo), f.source)
+         $)
+$)
+
+
+
+
+AND jmp(lab, ccsym) BE
+$(  LET cc=getf(ccsym, f.ccinfo)
+    get.and.declare(lab)
+    putword(#X20 /* 00 1cc 000 */)
+    UNLESS cc<4 DO error(e.badcc)
+    putwordf(cc, f.ccsmall)
+    putword(checkrange(expression()-2))
+$)
+
+
+
+
+AND fmt8(lab) BE
+$(  LET cc=?
+    /* this is JR */
+    get.and.declare(lab)
+    cc:=getrset(b.cc)
+    TEST cc=r.bad
+    THEN $(  putword(#X18 /* 00 011 000 */)
+             putword(checkrange(expression()-2))
+         $)
+    ELSE $(  UNLESS item.type=i.comma DO error(e.expected, ',')
+             jmp(null, cc)
+         $)
+$)
+
+
+
+AND checkrange(range) = VALOF
+$(
+    UNLESS -128<=range<127 DO warn(e.range)
+    RESULTIS range
+$)
+
+
+
+
+
+
+LET fmt9(lab) BE
+$(  get.and.declare(lab)
+    /* this is DJNZ */
+    putword(expression()-2)
+$)
+
+
+
+
+AND fmt10(lab) BE
+$(  get.and.declare(lab)
+    /* this is RST */
+    putwordf(expression()>>3, f.source)
+$)
+
+
+
+
+AND fmt11(lab,info) BE
+$(  LET shel=putf(info, f.dest, #X34 /* 00 rrr 110 */)
+    get.and.declare(lab)
+    /* this is INC and DEC */
+    UNLESS getrorind(shel, f.source, fn.normal) DO
+       $(  LET r=getrset(b.dd | b.ixiy)
+           IF r=r.bad DO error(e.badreg)
+           TEST r=r.ix
+           THEN putword(#XDD)
+           ELSE
+                IF   r=r.iy DO putword(#XFD)
+           putword(#X03 /* 00 rri 011 */)
+           putwordf(info, f.source)
+           UNLESS 0=(b.dd&r) DO putwordf(getf(r,f.ddinfo), f.ddsource)
+       $)
+$)
+
+
+
+AND fmt12(lab) BE
+$(  get.and.declare(lab)
+    /* This is EX */
+    TEST scan(i.lbkt)
+    THEN $(  UNLESS scanreg(r.sp) DO error(e.badreg)
+             checkandskip(i.rbkt,')')
+             checkandskip(i.comma,',')
+             UNLESS getixyhl(#XE3 /* 11 100 011 */) DO error(e.ixyhl)
+         $)
+    ELSE $(  TEST scanreg(r.de)
+             THEN $(  putword(#XEB)
+                      checkandskip(i.comma, ',')
+                      UNLESS scanreg(r.hl) DO error(e.badreg)
+                  $)
+             ELSE TEST scanreg(r.af)
+                  THEN $(  putword(#X08)
+                           checkandskip(i.comma, ',')
+                           UNLESS item.type=i.iden & r.af=getreg(item.info) DO
+                              error(e.badreg)
+                           /* Please look the other way ! */
+                           TEST ch='*''
+                           THEN rch() REPEATUNTIL ch\='*S'
+                           ELSE error(e.badreg)
+                           getitem()
+                       $)
+                  ELSE error(e.badreg)
+         $)
+$)
+
+
+
+
+
+
+
+AND fmt13(lab, info) BE
+$(  LET dd=?
+    LET shel=putf(info, f.dest, #XE0 /* 11 qq0 iii */)
+    get.and.declare(lab)
+    /* this is PUSH and POP */
+    dd:=getrset(b.qq | b.ixiy)
+    IF dd=r.bad DO error(e.badreg)
+    TEST dd=r.ix
+    THEN putword(#XDD)
+    ELSE IF dd=r.iy DO putword(#XFD)
+    putword(shel)
+    UNLESS 0=(dd&b.qq) DO putwordf(getf(dd,f.ddinfo), f.ddsource)
+$)
+
+
+
+
+.
+
+
+
+
+
+SECTION "Z80c"
+
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "SYS:Grasm.BCPL.asmhdr"
+/*TRIPOS>*/
+
+
+
+
+//
+//              In - line   Header   For  Z80  Assembler
+//
+
+
+
+
+
+MANIFEST
+$(  e.ixyhl     =  e.e + 0
+    e.r         =  e.e + 1
+    e.dd        =  e.e + 3
+    e.qq        =  e.e + 4
+    e.rr        =  e.e + 5
+    e.pp        =  e.e + 6
+    e.cc        =  e.e + 7
+    e.regexp    =  e.e + 8
+    e.badreg    =  e.e + 9
+    e.rhxy      =  e.e + 10
+    e.badcc     =  e.e + 11
+    e.badim     =  e.e + 13
+    e.badds     =  e.e + 14
+    e.range     =  e.e + 15
+    e.bad16no   =  e.e + 16
+    r.bad       =  0            // bad register
+    b.r         =  bit15        // B, C, D, E, H, L, or A
+    b.dd        =  bit14        // BC, DE, HL or SP
+    b.qq        =  bit13        // BC, DE, HL or AF
+    b.pp        =  bit12        // BC, DE, IX or SP
+    b.rr        =  bit11        // BC, DE, IY or SP
+    b.cc        =  bit10        // NZ, Z, NC, C, PO, PE, P=V, or M=NV
+    b.ixyhl     =  bit9         // IX, IY, or HL
+    b.rori      =  bit8         // R or I
+    b.bcde      =  bit7         // BC or DE
+    b.ixiy      =  bit6         // IX or IY
+    r.b         =  b.r | #X0
+    r.c         =  b.r | #X1 | b.cc | (#X3<<3)
+    r.d         =  b.r | #X2
+    r.e         =  b.r | #X3
+    r.h         =  b.r | #X4
+    r.l         =  b.r | #X5
+    r.hl        =  b.dd | b.qq | b.ixyhl | #X6
+    r.a         =  b.r | #X7
+    r.bc        =  b.dd | b.qq | b.pp | b.rr | b.bcde | #X0
+    r.de        =  b.dd | b.qq | b.pp | b.rr | b.bcde | #X1
+    r.ix        =  b.pp | b.ixyhl | b.ixiy | #X6
+    r.iy        =  b.rr | b.ixyhl | b.ixiy | #X6
+    r.sp        =  b.dd | b.pp | b.rr | #X3
+    r.af        =  b.qq | #X3
+    r.r         =  b.rori | 1
+    r.i         =  b.rori | 0
+    cc.nz       =  b.cc | (#X0<<3)
+    cc.z        =  b.cc | (#X1<<3)
+    cc.nc       =  b.cc | (#X2<<3)
+    cc.c        =  r.c
+    cc.po       =  b.cc | (#X4<<3)
+    cc.pe       =  b.cc | (#X5<<3)
+    cc.p        =  b.cc | (#X6<<3)
+    cc.m        =  b.cc | (#X7<<3)
+    cc.v        =  cc.p
+    cc.nv       =  cc.m
+    fn.bit      = 0
+    fn.normal   = 1
+$)
+
+
+
+
+
+GLOBAL
+$(  f.rinfo   :  ag + 0   //   'r' symbol information field
+    f.ccinfo  :  ag + 1   //   'cc' symbol information field
+    f.ddinfo  :  ag + 2   //   'dd','rr','pp' and 'qq' information field
+    f.source  :  ag + 3   //   source field
+    f.ddsource:  ag + 4   //   destination field for double regs
+    f.dest    :  ag + 5   //   destination field
+    f.top     :  ag + 6   //   top two bits field
+    f.ccsmall :  ag + 7   //   field for condition code in JR
+    getrset   :  ag + 8
+    scanreg   :  ag + 9
+    getind    :  ag + 10
+    getrorind :  ag + 11
+    getixyhl  :  ag + 12
+    dwproc    :  ag + 13
+    fmt0      :  ag + 15
+    fmt1      :  ag + 16
+    fmt2      :  ag + 17
+    fmt3      :  ag + 18
+    fmt4      :  ag + 19
+    fmt5      :  ag + 20
+    fmt6      :  ag + 21
+    fmt7      :  ag + 22
+    fmt8      :  ag + 23
+    fmt9      :  ag + 24
+    fmt10     :  ag + 25
+    fmt11     :  ag + 26
+    fmt12     :  ag + 27
+    fmt13     :  ag + 28
+    fmt14     :  ag + 29
+    fmt15     :  ag + 30
+    fmt16     :  ag + 31
+    nolistproc:  ag + 32
+$)
+
+
+
+
+
+
+//
+//               Yet  More  Code  Formats
+//
+
+
+
+
+
+LET fmt14(lab) BE
+$(  /* this is IN */
+    LET r = ?
+    LET reg = ?
+    get.and.declare(lab)
+    TEST ~scan(i.lbkt) THEN
+    $(  reg:=getrset(b.r)
+        IF reg=r.bad DO error(e.r)
+        checkandskip(i.comma, ',')
+        checkandskip(i.lbkt, '(')
+        r := getf(reg,f.rinfo)
+    $) ELSE r := #X6                    // IN (C)
+    TEST scanreg(r.c)
+    THEN $(  putword(#XED)
+             putword(#X40 /* 01 rrr 000 */)
+             putwordf(r, f.source)
+         $)
+    ELSE $(  UNLESS reg=r.a DO error(e.expected, 'C')
+             putword(#XDB)
+             putword(expression())
+         $)
+    checkandskip(i.rbkt, ')')
+$)
+
+
+
+
+
+AND fmt15(lab) BE
+$(  /*  This is OUT  */
+    LET r=?
+    get.and.declare(lab)
+    checkandskip(i.lbkt, '(')
+    TEST scanreg(r.c)
+    THEN $(  checkandskip(i.rbkt, ')')
+             checkandskip(i.comma, ',')
+             r:=getrset(b.r)
+             IF r=r.bad DO error(e.r)
+             putword(#XED)
+             putword(#X41 /* 01 rrr 001 */)
+             putwordf(getf(r, f.rinfo), f.source)
+         $)
+    ELSE $(  putword(#XD3)
+             putword(expression())
+             checkandskip(i.rbkt, ')')
+             checkandskip(i.comma, ',')
+             UNLESS scanreg(r.a) DO error(e.badreg)
+         $)
+$)
+
+
+
+
+
+AND fmt16(lab) BE
+$(  get.and.declare(lab)
+    /* This is IM */
+    SWITCHON expression() INTO
+    $(  CASE 0:  putword(#X46); ENDCASE
+        CASE 1:  putword(#X56); ENDCASE
+        CASE 2:  putword(#X5E); ENDCASE
+        DEFAULT: error(e.badim)
+    $)
+$)
+
+
+
+
+AND nolistproc(lab) BE
+$(  get.and.declare(lab)
+    list:=list-1  // listing variable
+$)
+
+
+
+
+/*<68000INIT    07.01.82        Version 3.056
+LET initcodes() BE
+$(  // table for the Z80 assembler:
+    // this table must be regenerated if the globals change
+    LET tab = TABLE
+    #X000002D4, #X000000DD, #X00000000, #X0000000A, #X0000007A, #X000002D4,
+    #X00000000, #X000002D5, #X000000DD, #X00000000, #X00000011, #X0000003B,
+    #X000002D5, #X00000007, #X000002D7, #X00000144, #X00000000, #X00000034,
+    #X00000018, #X000002D7, #X0000000E, #X00000331, #X00000144, #X00000000,
+    #X00000026, #X0000001F, #X00000331, #X00000015, #X00000337, #X000000DD,
+    #X00000000, #X0000002D, #X0000005E, #X00000337, #X0000001C, #X00000333,
+    #X000000EC, #X00000000, #XFFFFFFFF, #X000000EB, #X00000333, #X00000023,
+    #X00000339, #X000000EC, #X00000000, #XFFFFFFFF, #XFFFFFFFF, #X00000339,
+    #X0000002A, #X000002D8, #X000000DF, #X00000000, #X00000042, #X0000009D,
+    #X000002D8, #X00000031, #X0000033D, #X000000E1, #X00000000, #XFFFFFFFF,
+    #X000002A3, #X0000033D, #X00000038, #X000002D9, #X000000E2, #X00000000,
+    #X00000049, #X00000050, #X000002D9, #X0000003F, #X000002DA, #X000000E3,
+    #X00000000, #X00000207, #X00000065, #X000002DA, #X00000046, #X000002FE,
+    #X000000E4, #X00000000, #X00000057, #X00000088, #X000002FE, #X0000004D,
+    #X00000300, #X000000E5, #X00000000, #X000002B2, #X00000073, #X00000300,
+    #X00000054, #X0000033B, #X000000E0, #X00000000, #XFFFFFFFF, #XFFFFFFFF,
+    #X0000033B, #X0000005B, #X000002DD, #X000000E6, #X00000000, #X0000006C,
+    #X00000081, #X000002DD, #X00000062, #X000002DF, #X000000DE, #X00000000,
+    #XFFFFFFFF, #XFFFFFFFF, #X000002DF, #X00000069, #X00000304, #X000000EB,
+    #X00000000, #X000000A4, #X00000096, #X00000304, #X00000070, #X0000033F,
+    #X000000E9, #X00000000, #X000000BB, #XFFFFFFFF, #X0000033F, #X00000077,
+    #X000002E1, #X000000EA, #X00000000, #X000000AB, #XFFFFFFFF, #X000002E1,
+    #X0000007E, #X00000316, #X000000E7, #X00000000, #X0000008F, #X000000B3,
+    #X00000316, #X00000085, #X00000317, #X000000EF, #X00000000, #XFFFFFFFF,
+    #X000000E3, #X00000317, #X0000008C, #X00000311, #X00000157, #X00000000,
+    #X000000DB, #X00000164, #X00000311, #X00000093, #X0000032F, #X000000E8,
+    #X00000000, #XFFFFFFFF, #X000000F3, #X0000032F, #X0000009A, #X00000305,
+    #X000000EE, #X00000000, #X000002BA, #X00000191, #X00000305, #X000000A1,
+    #X000002E2, #X000000ED, #X00000000, #X000001EF, #X000000D3, #X000002E2,
+    #X000000A8, #X0000032D, #X00000146, #X00000001, #X000000D9, #XFFFFFFFF,
+    #X000002AA, #X0000032D, #X000000AF, #X00000340, #X00000146, #X00000001,
+    #X00000027, #XFFFFFFFF, #X000000C3, #X00000340, #X000000B7, #X00000341,
+    #X00000146, #X00000001, #X0000002F, #XFFFFFFFF, #X000000CB, #X00000341,
+    #X000000BF, #X00000342, #X00000146, #X00000001, #X0000003F, #X00000140,
+    #X000001DF, #X00000342, #X000000C7, #X000002E7, #X00000146, #X00000001,
+    #X00000037, #X0000023F, #X000000FB, #X000002E7, #X000000CF, #X00000313,
+    #X00000146, #X00000001, #X00000000, #X0000020F, #XFFFFFFFF, #X00000313,
+    #X000000D7, #X00000319, #X00000146, #X00000001, #X00000076, #X0000011C,
+    #XFFFFFFFF, #X00000319, #X000000DF, #X00000334, #X00000146, #X00000001,
+    #X000000F3, #X0000028B, #XFFFFFFFF, #X00000334, #X000000E7, #X00000330,
+    #X00000146, #X00000001, #X000000FB, #XFFFFFFFF, #XFFFFFFFF, #X00000330,
+    #X000000EF, #X000002EA, #X00000146, #X00000001, #X00000017, #X00000103,
+    #X000001B5, #X000002EA, #X000000F7, #X000002EB, #X00000146, #X00000001,
+    #X00000007, #X0000010B, #X0000021F, #X000002EB, #X000000FF, #X000002ED,
+    #X00000146, #X00000001, #X0000001F, #X00000113, #X000001C7, #X000002ED,
+    #X00000107, #X000002EE, #X00000146, #X00000001, #X0000000F, #X000001D0,
+    #X00000227, #X000002EE, #X0000010F, #X0000031B, #X00000146, #X00000002,
+    #X000000ED, #X000000A0, #X00000125, #X0000012E, #X0000031B, #X00000117,
+    #X0000031C, #X00000146, #X00000002, #X000000ED, #X000000B0, #XFFFFFFFF,
+    #XFFFFFFFF, #X0000031C, #X00000120, #X0000031E, #X00000146, #X00000002,
+    #X000000ED, #X000000A8, #X00000137, #X0000016D, #X0000031E, #X00000129,
+    #X0000031F, #X00000146, #X00000002, #X000000ED, #X000000B8, #XFFFFFFFF,
+    #XFFFFFFFF, #X0000031F, #X00000132, #X00000343, #X00000146, #X00000002,
+    #X000000ED, #X000000A1, #X00000149, #X00000152, #X00000343, #X0000013B,
+    #X00000344, #X00000146, #X00000002, #X000000ED, #X000000B1, #XFFFFFFFF,
+    #XFFFFFFFF, #X00000344, #X00000144, #X00000346, #X00000146, #X00000002,
+    #X000000ED, #X000000A9, #X0000015B, #X00000217, #X00000346, #X0000014D,
+    #X00000347, #X00000146, #X00000002, #X000000ED, #X000000B9, #XFFFFFFFF,
+    #XFFFFFFFF, #X00000347, #X00000156, #X00000315, #X00000146, #X00000002,
+    #X000000ED, #X00000044, #XFFFFFFFF, #XFFFFFFFF, #X00000315, #X0000015F,
+    #X00000321, #X00000146, #X00000002, #X000000ED, #X000000A2, #X00000176,
+    #X0000017F, #X00000321, #X00000168, #X00000322, #X00000146, #X00000002,
+    #X000000ED, #X000000B2, #X000001D7, #XFFFFFFFF, #X00000322, #X00000171,
+    #X00000327, #X00000146, #X00000002, #X000000ED, #X000000AA, #X00000188,
+    #X0000029B, #X00000327, #X0000017A, #X00000328, #X00000146, #X00000002,
+    #X000000ED, #X000000BA, #XFFFFFFFF, #XFFFFFFFF, #X00000328, #X00000183,
+    #X00000308, #X00000146, #X00000002, #X000000ED, #X000000A3, #XFFFFFFFF,
+    #X0000019A, #X00000308, #X0000018C, #X0000030A, #X00000146, #X00000002,
+    #X000000ED, #X000000B3, #X000001A3, #X000001AC, #X0000030A, #X00000195,
+    #X0000030C, #X00000146, #X00000002, #X000000ED, #X000000AB, #XFFFFFFFF,
+    #X000002C8, #X0000030C, #X0000019E, #X0000030F, #X00000146, #X00000002,
+    #X000000ED, #X000000BB, #XFFFFFFFF, #XFFFFFFFF, #X0000030F, #X000001A7,
+    #X000002F7, #X00000146, #X00000002, #X000000ED, #X0000004D, #X000001BE,
+    #X00000267, #X000002F7, #X000001B0, #X000002F9, #X00000146, #X00000002,
+    #X000000ED, #X00000045, #X0000022F, #XFFFFFFFF, #X000002F9, #X000001B9,
+    #X000002F4, #X00000146, #X00000002, #X000000ED, #X0000006F, #X00000237,
+    #XFFFFFFFF, #X000002F4, #X000001C2, #X000002F0, #X00000146, #X00000002,
+    #X000000ED, #X00000067, #X000001F7, #XFFFFFFFF, #X000002F0, #X000001CB,
+    #X00000324, #X00000147, #X00000000, #XFFFFFFFF, #X0000026E, #X00000324,
+    #X000001D4, #X0000034A, #X00000148, #XFFFFFFFF, #X00000000, #X000001FF,
+    #X000001E7, #X0000034A, #X000001DB, #X0000034F, #X00000148, #XFFFFFFFF,
+    #X00000001, #XFFFFFFFF, #XFFFFFFFF, #X0000034F, #X000001E3, #X000002E4,
+    #X00000148, #XFFFFFFFF, #X00000002, #XFFFFFFFF, #X00000247, #X000002E4,
+    #X000001EB, #X000002F1, #X00000148, #XFFFFFFFF, #X00000003, #XFFFFFFFF,
+    #X00000293, #X000002F1, #X000001F3, #X0000034B, #X00000148, #XFFFFFFFF,
+    #X00000004, #X00000257, #XFFFFFFFF, #X0000034B, #X000001FB, #X000002DC,
+    #X00000148, #XFFFFFFFF, #X00000005, #XFFFFFFFF, #XFFFFFFFF, #X000002DC,
+    #X00000203, #X00000314, #X00000148, #XFFFFFFFF, #X00000006, #XFFFFFFFF,
+    #XFFFFFFFF, #X00000314, #X0000020B, #X00000349, #X00000148, #XFFFFFFFF,
+    #X00000007, #XFFFFFFFF, #XFFFFFFFF, #X00000349, #X00000213, #X000002F6,
+    #X00000149, #XFFFFFFFF, #X00000000, #XFFFFFFFF, #XFFFFFFFF, #X000002F6,
+    #X0000021B, #X000002F3, #X00000149, #XFFFFFFFF, #X00000001, #XFFFFFFFF,
+    #XFFFFFFFF, #X000002F3, #X00000223, #X000002FB, #X00000149, #XFFFFFFFF,
+    #X00000002, #XFFFFFFFF, #XFFFFFFFF, #X000002FB, #X0000022B, #X000002F5,
+    #X00000149, #XFFFFFFFF, #X00000003, #XFFFFFFFF, #XFFFFFFFF, #X000002F5,
+    #X00000233, #X000002E8, #X00000149, #XFFFFFFFF, #X00000004, #XFFFFFFFF,
+    #X0000025F, #X000002E8, #X0000023B, #X000002E5, #X00000149, #XFFFFFFFF,
+    #X00000005, #X0000024F, #XFFFFFFFF, #X000002E5, #X00000243, #X000002E6,
+    #X00000149, #XFFFFFFFF, #X00000007, #XFFFFFFFF, #XFFFFFFFF, #X000002E6,
+    #X0000024B, #X0000034C, #X0000014A, #XFFFFFFFF, #X00000001, #X00000275,
+    #XFFFFFFFF, #X0000034C, #X00000253, #X000002E9, #X0000014A, #XFFFFFFFF,
+    #X00000003, #XFFFFFFFF, #XFFFFFFFF, #X000002E9, #X0000025B, #X000002FC,
+    #X0000014A, #XFFFFFFFF, #X00000002, #X0000027C, #XFFFFFFFF, #X000002FC,
+    #X00000263, #X00000325, #X0000014B, #X00000000, #X00000283, #XFFFFFFFF,
+    #X00000325, #X0000026B, #X0000034D, #X0000014C, #X00000000, #XFFFFFFFF,
+    #XFFFFFFFF, #X0000034D, #X00000272, #X000002FD, #X0000014D, #X00000000,
+    #XFFFFFFFF, #XFFFFFFFF, #X000002FD, #X00000279, #X00000326, #X0000014E,
+    #X00000000, #XFFFFFFFF, #XFFFFFFFF, #X00000326, #X00000280, #X00000335,
+    #X0000014F, #X00000001, #X00000010, #XFFFFFFFF, #XFFFFFFFF, #X00000335,
+    #X00000287, #X000002F2, #X00000150, #X00000001, #X000000C7, #XFFFFFFFF,
+    #XFFFFFFFF, #X000002F2, #X0000028F, #X0000032A, #X00000151, #XFFFFFFFF,
+    #X00000004, #XFFFFFFFF, #X000002C1, #X0000032A, #X00000297, #X0000033E,
+    #X00000151, #XFFFFFFFF, #X00000005, #XFFFFFFFF, #XFFFFFFFF, #X0000033E,
+    #X0000029F, #X0000032E, #X00000152, #X00000000, #XFFFFFFFF, #XFFFFFFFF,
+    #X0000032E, #X000002A7, #X00000302, #X00000153, #XFFFFFFFF, #X00000005,
+    #XFFFFFFFF, #XFFFFFFFF, #X00000302, #X000002AE, #X00000307, #X00000153,
+    #XFFFFFFFF, #X00000001, #XFFFFFFFF, #XFFFFFFFF, #X00000307, #X000002B6,
+    #X0000032B, #X00000154, #X00000000, #XFFFFFFFF, #X000002D0, #X0000032B,
+    #X000002BE, #X0000030E, #X00000155, #X00000000, #XFFFFFFFF, #XFFFFFFFF,
+    #X0000030E, #X000002C5, #X0000032C, #X00000156, #X00000001, #X000000ED,
+    #XFFFFFFFF, #XFFFFFFFF, #X0000032C, #X000002CC, #X02444200, #X04444546,
+    #X42000000, #X02445700, #X03455155, #X03524546, #X04575245, #X46000000,
+    #X03584F52, #X04544558, #X54000000, #X05544954, #X4C450000, #X0352454C,
+    #X05535041, #X43450000, #X03535542, #X03535241, #X0353524C, #X03534346,
+    #X03534C41, #X03534554, #X03524C41, #X04524C43, #X41000000, #X03525241,
+    #X04525243, #X41000000, #X03525244, #X03534243, #X03525354, #X03525243,
+    #X03524C44, #X02525200, #X03524C43, #X04524554, #X49000000, #X04524554,
+    #X4E000000, #X02524C00, #X03524553, #X03524554, #X054E4545, #X44530000,
+    #X04505241, #X47000000, #X04505553, #X48000000, #X034F5247, #X04504147,
+    #X45000000, #X03504F50, #X044F5554, #X49000000, #X044F5449, #X52000000,
+    #X044F5554, #X44000000, #X034F5554, #X044F5444, #X52000000, #X064E4F4C,
+    #X49535400, #X034E4F50, #X024F5200, #X034E4547, #X03474554, #X044C4953,
+    #X54000000, #X0448414C, #X54000000, #X034C4449, #X044C4449, #X52000000,
+    #X034C4444, #X044C4444, #X52000000, #X03494E49, #X04494E49, #X52000000,
+    #X024C4400, #X024A5000, #X024A5200, #X03494E44, #X04494E44, #X52000000,
+    #X03494E43, #X02494E00, #X02494D00, #X03455858, #X02455800, #X03454E44,
+    #X02454900, #X04444546, #X57000000, #X02445300, #X02444900, #X04444A4E,
+    #X5A000000, #X04444546, #X4D000000, #X04444546, #X53000000, #X04444546,
+    #X4C000000, #X03444546, #X03444543, #X03414253, #X03444141, #X0343504C,
+    #X03434346, #X03435049, #X04435049, #X52000000, #X03435044, #X04435044,
+    #X52000000, #X02435000, #X03414444, #X03414E44, #X03424954, #X0443414C,
+    #X4C000000, #X03414443
+    LET tab.start = 3
+    LET locate(lv.tree, at) BE
+    TEST !lv.tree<0 THEN !lv.tree:=0 ELSE
+    $(  MANIFEST
+        $(  c.size = 0; c.str  = 0; c.fn   = 1; c.opstr= 2
+            t.left = 0; t.right= 1; t.str  = 2; t.val  = 3
+            t.size = 4
+        $)
+        LET tree = !lv.tree+at
+        LET val = tree!t.val+at
+        val!c.fn := (@start-1)!(val!c.fn)
+        val!c.str := val!c.str+at
+        !lv.tree := !lv.tree+at
+        tree!t.str := val!c.str
+        tree!t.val := val
+        locate(tree+t.left, at)
+        locate(tree+t.right, at)
+    $)
+    locate(@tab.start, tab)
+    codes := tab.start
+$)
+/*68000INIT>*/
+
+
+
+
+
+
+
+/*<LSI4INIT     06.01.82        Version 3.056
+LET initcodes() BE
+$(  // table for the Z80 assembler:
+    // this table must be regenerated if the globals change
+    LET tab = TABLE
+    #X02D4, #X00DD, #X0000, #X000A, #X007A, #X02D4, #X0000, #X02D6, #X00DD,
+    #X0000, #X0011, #X003B, #X02D6, #X0007, #X02D9, #X0144, #X0000, #X0034,
+    #X0018, #X02D9, #X000E, #X0377, #X0144, #X0000, #X0026, #X001F, #X0377,
+    #X0015, #X0381, #X00DD, #X0000, #X002D, #X005E, #X0381, #X001C, #X037A,
+    #X00EC, #X0000, #XFFFF, #X00EB, #X037A, #X0023, #X0384, #X00EC, #X0000,
+    #XFFFF, #XFFFF, #X0384, #X002A, #X02DB, #X00DF, #X0000, #X0042, #X009D,
+    #X02DB, #X0031, #X038A, #X00E1, #X0000, #XFFFF, #X02A3, #X038A, #X0038,
+    #X02DD, #X00E2, #X0000, #X0049, #X0050, #X02DD, #X003F, #X02DF, #X00E3,
+    #X0000, #X0207, #X0065, #X02DF, #X0046, #X031F, #X00E4, #X0000, #X0057,
+    #X0088, #X031F, #X004D, #X0322, #X00E5, #X0000, #X02B2, #X0073, #X0322,
+    #X0054, #X0387, #X00E0, #X0000, #XFFFF, #XFFFF, #X0387, #X005B, #X02E4,
+    #X00E6, #X0000, #X006C, #X0081, #X02E4, #X0062, #X02E7, #X00DE, #X0000,
+    #XFFFF, #XFFFF, #X02E7, #X0069, #X0328, #X00EB, #X0000, #X00A4, #X0096,
+    #X0328, #X0070, #X038E, #X00E9, #X0000, #X00BB, #XFFFF, #X038E, #X0077,
+    #X02EA, #X00EA, #X0000, #X00AB, #XFFFF, #X02EA, #X007E, #X0347, #X00E7,
+    #X0000, #X008F, #X00B3, #X0347, #X0085, #X0349, #X00EF, #X0000, #XFFFF,
+    #X00E3, #X0349, #X008C, #X033D, #X0157, #X0000, #X00DB, #X0164, #X033D,
+    #X0093, #X0373, #X00E8, #X0000, #XFFFF, #X00F3, #X0373, #X009A, #X032A,
+    #X00EE, #X0000, #X02BA, #X0191, #X032A, #X00A1, #X02EC, #X00ED, #X0000,
+    #X01EF, #X00D3, #X02EC, #X00A8, #X036F, #X0146, #X0001, #X00D9, #XFFFF,
+    #X02AA, #X036F, #X00AF, #X0390, #X0146, #X0001, #X0027, #XFFFF, #X00C3,
+    #X0390, #X00B7, #X0392, #X0146, #X0001, #X002F, #XFFFF, #X00CB, #X0392,
+    #X00BF, #X0394, #X0146, #X0001, #X003F, #X0140, #X01DF, #X0394, #X00C7,
+    #X02F5, #X0146, #X0001, #X0037, #X023F, #X00FB, #X02F5, #X00CF, #X0341,
+    #X0146, #X0001, #X0000, #X020F, #XFFFF, #X0341, #X00D7, #X034C, #X0146,
+    #X0001, #X0076, #X011C, #XFFFF, #X034C, #X00DF, #X037C, #X0146, #X0001,
+    #X00F3, #X028B, #XFFFF, #X037C, #X00E7, #X0375, #X0146, #X0001, #X00FB,
+    #XFFFF, #XFFFF, #X0375, #X00EF, #X02FB, #X0146, #X0001, #X0017, #X0103,
+    #X01B5, #X02FB, #X00F7, #X02FD, #X0146, #X0001, #X0007, #X010B, #X021F,
+    #X02FD, #X00FF, #X0300, #X0146, #X0001, #X001F, #X0113, #X01C7, #X0300,
+    #X0107, #X0302, #X0146, #X0001, #X000F, #X01D0, #X0227, #X0302, #X010F,
+    #X034F, #X0146, #X0002, #X00ED, #X00A0, #X0125, #X012E, #X034F, #X0117,
+    #X0351, #X0146, #X0002, #X00ED, #X00B0, #XFFFF, #XFFFF, #X0351, #X0120,
+    #X0354, #X0146, #X0002, #X00ED, #X00A8, #X0137, #X016D, #X0354, #X0129,
+    #X0356, #X0146, #X0002, #X00ED, #X00B8, #XFFFF, #XFFFF, #X0356, #X0132,
+    #X0396, #X0146, #X0002, #X00ED, #X00A1, #X0149, #X0152, #X0396, #X013B,
+    #X0398, #X0146, #X0002, #X00ED, #X00B1, #XFFFF, #XFFFF, #X0398, #X0144,
+    #X039B, #X0146, #X0002, #X00ED, #X00A9, #X015B, #X0217, #X039B, #X014D,
+    #X039D, #X0146, #X0002, #X00ED, #X00B9, #XFFFF, #XFFFF, #X039D, #X0156,
+    #X0345, #X0146, #X0002, #X00ED, #X0044, #XFFFF, #XFFFF, #X0345, #X015F,
+    #X0359, #X0146, #X0002, #X00ED, #X00A2, #X0176, #X017F, #X0359, #X0168,
+    #X035B, #X0146, #X0002, #X00ED, #X00B2, #X01D7, #XFFFF, #X035B, #X0171,
+    #X0364, #X0146, #X0002, #X00ED, #X00AA, #X0188, #X029B, #X0364, #X017A,
+    #X0366, #X0146, #X0002, #X00ED, #X00BA, #XFFFF, #XFFFF, #X0366, #X0183,
+    #X032F, #X0146, #X0002, #X00ED, #X00A3, #XFFFF, #X019A, #X032F, #X018C,
+    #X0332, #X0146, #X0002, #X00ED, #X00B3, #X01A3, #X01AC, #X0332, #X0195,
+    #X0335, #X0146, #X0002, #X00ED, #X00AB, #XFFFF, #X02C8, #X0335, #X019E,
+    #X033A, #X0146, #X0002, #X00ED, #X00BB, #XFFFF, #XFFFF, #X033A, #X01A7,
+    #X0313, #X0146, #X0002, #X00ED, #X004D, #X01BE, #X0267, #X0313, #X01B0,
+    #X0316, #X0146, #X0002, #X00ED, #X0045, #X022F, #XFFFF, #X0316, #X01B9,
+    #X030D, #X0146, #X0002, #X00ED, #X006F, #X0237, #XFFFF, #X030D, #X01C2,
+    #X0305, #X0146, #X0002, #X00ED, #X0067, #X01F7, #XFFFF, #X0305, #X01CB,
+    #X035E, #X0147, #X0000, #XFFFF, #X026E, #X035E, #X01D4, #X03A2, #X0148,
+    #XFFFF, #X0000, #X01FF, #X01E7, #X03A2, #X01DB, #X03AB, #X0148, #XFFFF,
+    #X0001, #XFFFF, #XFFFF, #X03AB, #X01E3, #X02EF, #X0148, #XFFFF, #X0002,
+    #XFFFF, #X0247, #X02EF, #X01EB, #X0307, #X0148, #XFFFF, #X0003, #XFFFF,
+    #X0293, #X0307, #X01F3, #X03A4, #X0148, #XFFFF, #X0004, #X0257, #XFFFF,
+    #X03A4, #X01FB, #X02E2, #X0148, #XFFFF, #X0005, #XFFFF, #XFFFF, #X02E2,
+    #X0203, #X0343, #X0148, #XFFFF, #X0006, #XFFFF, #XFFFF, #X0343, #X020B,
+    #X03A0, #X0148, #XFFFF, #X0007, #XFFFF, #XFFFF, #X03A0, #X0213, #X0311,
+    #X0149, #XFFFF, #X0000, #XFFFF, #XFFFF, #X0311, #X021B, #X030B, #X0149,
+    #XFFFF, #X0001, #XFFFF, #XFFFF, #X030B, #X0223, #X0319, #X0149, #XFFFF,
+    #X0002, #XFFFF, #XFFFF, #X0319, #X022B, #X030F, #X0149, #XFFFF, #X0003,
+    #XFFFF, #XFFFF, #X030F, #X0233, #X02F7, #X0149, #XFFFF, #X0004, #XFFFF,
+    #X025F, #X02F7, #X023B, #X02F1, #X0149, #XFFFF, #X0005, #X024F, #XFFFF,
+    #X02F1, #X0243, #X02F3, #X0149, #XFFFF, #X0007, #XFFFF, #XFFFF, #X02F3,
+    #X024B, #X03A6, #X014A, #XFFFF, #X0001, #X0275, #XFFFF, #X03A6, #X0253,
+    #X02F9, #X014A, #XFFFF, #X0003, #XFFFF, #XFFFF, #X02F9, #X025B, #X031B,
+    #X014A, #XFFFF, #X0002, #X027C, #XFFFF, #X031B, #X0263, #X0360, #X014B,
+    #X0000, #X0283, #XFFFF, #X0360, #X026B, #X03A8, #X014C, #X0000, #XFFFF,
+    #XFFFF, #X03A8, #X0272, #X031D, #X014D, #X0000, #XFFFF, #XFFFF, #X031D,
+    #X0279, #X0362, #X014E, #X0000, #XFFFF, #XFFFF, #X0362, #X0280, #X037E,
+    #X014F, #X0001, #X0010, #XFFFF, #XFFFF, #X037E, #X0287, #X0309, #X0150,
+    #X0001, #X00C7, #XFFFF, #XFFFF, #X0309, #X028F, #X0369, #X0151, #XFFFF,
+    #X0004, #XFFFF, #X02C1, #X0369, #X0297, #X038C, #X0151, #XFFFF, #X0005,
+    #XFFFF, #XFFFF, #X038C, #X029F, #X0371, #X0152, #X0000, #XFFFF, #XFFFF,
+    #X0371, #X02A7, #X0325, #X0153, #XFFFF, #X0005, #XFFFF, #XFFFF, #X0325,
+    #X02AE, #X032D, #X0153, #XFFFF, #X0001, #XFFFF, #XFFFF, #X032D, #X02B6,
+    #X036B, #X0154, #X0000, #XFFFF, #X02D0, #X036B, #X02BE, #X0338, #X0155,
+    #X0000, #XFFFF, #XFFFF, #X0338, #X02C5, #X036D, #X0156, #X0001, #X00ED,
+    #XFFFF, #XFFFF, #X036D, #X02CC, #X0244, #X4200, #X0444, #X4546, #X4200,
+    #X0244, #X5700, #X0345, #X5155, #X0352, #X4546, #X0457, #X5245, #X4600,
+    #X0358, #X4F52, #X0454, #X4558, #X5400, #X0554, #X4954, #X4C45, #X0352,
+    #X454C, #X0553, #X5041, #X4345, #X0353, #X5542, #X0353, #X5241, #X0353,
+    #X524C, #X0353, #X4346, #X0353, #X4C41, #X0353, #X4554, #X0352, #X4C41,
+    #X0452, #X4C43, #X4100, #X0352, #X5241, #X0452, #X5243, #X4100, #X0352,
+    #X5244, #X0353, #X4243, #X0352, #X5354, #X0352, #X5243, #X0352, #X4C44,
+    #X0252, #X5200, #X0352, #X4C43, #X0452, #X4554, #X4900, #X0452, #X4554,
+    #X4E00, #X0252, #X4C00, #X0352, #X4553, #X0352, #X4554, #X054E, #X4545,
+    #X4453, #X0450, #X5241, #X4700, #X0450, #X5553, #X4800, #X034F, #X5247,
+    #X0450, #X4147, #X4500, #X0350, #X4F50, #X044F, #X5554, #X4900, #X044F,
+    #X5449, #X5200, #X044F, #X5554, #X4400, #X034F, #X5554, #X044F, #X5444,
+    #X5200, #X064E, #X4F4C, #X4953, #X5400, #X034E, #X4F50, #X024F, #X5200,
+    #X034E, #X4547, #X0347, #X4554, #X044C, #X4953, #X5400, #X0448, #X414C,
+    #X5400, #X034C, #X4449, #X044C, #X4449, #X5200, #X034C, #X4444, #X044C,
+    #X4444, #X5200, #X0349, #X4E49, #X0449, #X4E49, #X5200, #X024C, #X4400,
+    #X024A, #X5000, #X024A, #X5200, #X0349, #X4E44, #X0449, #X4E44, #X5200,
+    #X0349, #X4E43, #X0249, #X4E00, #X0249, #X4D00, #X0345, #X5858, #X0245,
+    #X5800, #X0345, #X4E44, #X0245, #X4900, #X0444, #X4546, #X5700, #X0244,
+    #X5300, #X0244, #X4900, #X0444, #X4A4E, #X5A00, #X0444, #X4546, #X4D00,
+    #X0444, #X4546, #X5300, #X0444, #X4546, #X4C00, #X0344, #X4546, #X0344,
+    #X4543, #X0341, #X4253, #X0344, #X4141, #X0343, #X504C, #X0343, #X4346,
+    #X0343, #X5049, #X0443, #X5049, #X5200, #X0343, #X5044, #X0443, #X5044,
+    #X5200, #X0243, #X5000, #X0341, #X4444, #X0341, #X4E44, #X0342, #X4954,
+    #X0443, #X414C, #X4C00, #X0341, #X4443
+    LET tab.start = 3
+    LET locate(lv.tree, at) BE
+    TEST !lv.tree<0 THEN !lv.tree:=0 ELSE
+    $(  MANIFEST
+        $(  c.size = 0; c.str  = 0; c.fn   = 1; c.opstr= 2
+            t.left = 0; t.right= 1; t.str  = 2; t.val  = 3
+            t.size = 4
+        $)
+        LET tree = !lv.tree+at
+        LET val = tree!t.val+at
+        val!c.fn := (@start-1)!(val!c.fn)
+        val!c.str := val!c.str+at
+        !lv.tree := !lv.tree+at
+        tree!t.str := val!c.str
+        tree!t.val := val
+        locate(tree+t.left, at)
+        locate(tree+t.right, at)
+    $)
+    locate(@tab.start, tab)
+    codes := tab.start
+$)
+/*LSI4INIT>*/
+
+
+
+/*<PDP11INIT    06.01.82   Version 3.056
+LET initcodes() BE
+$(  // table for the Z80 assembler:
+    // this table must be regenerated if the globals change
+    LET tab = TABLE
+    #X02D4, #X00DD, #X0000, #X000A, #X007A, #X02D4, #X0000, #X02D6, #X00DD,
+    #X0000, #X0011, #X003B, #X02D6, #X0007, #X02D9, #X0144, #X0000, #X0034,
+    #X0018, #X02D9, #X000E, #X0377, #X0144, #X0000, #X0026, #X001F, #X0377,
+    #X0015, #X0381, #X00DD, #X0000, #X002D, #X005E, #X0381, #X001C, #X037A,
+    #X00EC, #X0000, #XFFFF, #X00EB, #X037A, #X0023, #X0384, #X00EC, #X0000,
+    #XFFFF, #XFFFF, #X0384, #X002A, #X02DB, #X00DF, #X0000, #X0042, #X009D,
+    #X02DB, #X0031, #X038A, #X00E1, #X0000, #XFFFF, #X02A3, #X038A, #X0038,
+    #X02DD, #X00E2, #X0000, #X0049, #X0050, #X02DD, #X003F, #X02DF, #X00E3,
+    #X0000, #X0207, #X0065, #X02DF, #X0046, #X031F, #X00E4, #X0000, #X0057,
+    #X0088, #X031F, #X004D, #X0322, #X00E5, #X0000, #X02B2, #X0073, #X0322,
+    #X0054, #X0387, #X00E0, #X0000, #XFFFF, #XFFFF, #X0387, #X005B, #X02E4,
+    #X00E6, #X0000, #X006C, #X0081, #X02E4, #X0062, #X02E7, #X00DE, #X0000,
+    #XFFFF, #XFFFF, #X02E7, #X0069, #X0328, #X00EB, #X0000, #X00A4, #X0096,
+    #X0328, #X0070, #X038E, #X00E9, #X0000, #X00BB, #XFFFF, #X038E, #X0077,
+    #X02EA, #X00EA, #X0000, #X00AB, #XFFFF, #X02EA, #X007E, #X0347, #X00E7,
+    #X0000, #X008F, #X00B3, #X0347, #X0085, #X0349, #X00EF, #X0000, #XFFFF,
+    #X00E3, #X0349, #X008C, #X033D, #X0157, #X0000, #X00DB, #X0164, #X033D,
+    #X0093, #X0373, #X00E8, #X0000, #XFFFF, #X00F3, #X0373, #X009A, #X032A,
+    #X00EE, #X0000, #X02BA, #X0191, #X032A, #X00A1, #X02EC, #X00ED, #X0000,
+    #X01EF, #X00D3, #X02EC, #X00A8, #X036F, #X0146, #X0001, #X00D9, #XFFFF,
+    #X02AA, #X036F, #X00AF, #X0390, #X0146, #X0001, #X0027, #XFFFF, #X00C3,
+    #X0390, #X00B7, #X0392, #X0146, #X0001, #X002F, #XFFFF, #X00CB, #X0392,
+    #X00BF, #X0394, #X0146, #X0001, #X003F, #X0140, #X01DF, #X0394, #X00C7,
+    #X02F5, #X0146, #X0001, #X0037, #X023F, #X00FB, #X02F5, #X00CF, #X0341,
+    #X0146, #X0001, #X0000, #X020F, #XFFFF, #X0341, #X00D7, #X034C, #X0146,
+    #X0001, #X0076, #X011C, #XFFFF, #X034C, #X00DF, #X037C, #X0146, #X0001,
+    #X00F3, #X028B, #XFFFF, #X037C, #X00E7, #X0375, #X0146, #X0001, #X00FB,
+    #XFFFF, #XFFFF, #X0375, #X00EF, #X02FB, #X0146, #X0001, #X0017, #X0103,
+    #X01B5, #X02FB, #X00F7, #X02FD, #X0146, #X0001, #X0007, #X010B, #X021F,
+    #X02FD, #X00FF, #X0300, #X0146, #X0001, #X001F, #X0113, #X01C7, #X0300,
+    #X0107, #X0302, #X0146, #X0001, #X000F, #X01D0, #X0227, #X0302, #X010F,
+    #X034F, #X0146, #X0002, #X00ED, #X00A0, #X0125, #X012E, #X034F, #X0117,
+    #X0351, #X0146, #X0002, #X00ED, #X00B0, #XFFFF, #XFFFF, #X0351, #X0120,
+    #X0354, #X0146, #X0002, #X00ED, #X00A8, #X0137, #X016D, #X0354, #X0129,
+    #X0356, #X0146, #X0002, #X00ED, #X00B8, #XFFFF, #XFFFF, #X0356, #X0132,
+    #X0396, #X0146, #X0002, #X00ED, #X00A1, #X0149, #X0152, #X0396, #X013B,
+    #X0398, #X0146, #X0002, #X00ED, #X00B1, #XFFFF, #XFFFF, #X0398, #X0144,
+    #X039B, #X0146, #X0002, #X00ED, #X00A9, #X015B, #X0217, #X039B, #X014D,
+    #X039D, #X0146, #X0002, #X00ED, #X00B9, #XFFFF, #XFFFF, #X039D, #X0156,
+    #X0345, #X0146, #X0002, #X00ED, #X0044, #XFFFF, #XFFFF, #X0345, #X015F,
+    #X0359, #X0146, #X0002, #X00ED, #X00A2, #X0176, #X017F, #X0359, #X0168,
+    #X035B, #X0146, #X0002, #X00ED, #X00B2, #X01D7, #XFFFF, #X035B, #X0171,
+    #X0364, #X0146, #X0002, #X00ED, #X00AA, #X0188, #X029B, #X0364, #X017A,
+    #X0366, #X0146, #X0002, #X00ED, #X00BA, #XFFFF, #XFFFF, #X0366, #X0183,
+    #X032F, #X0146, #X0002, #X00ED, #X00A3, #XFFFF, #X019A, #X032F, #X018C,
+    #X0332, #X0146, #X0002, #X00ED, #X00B3, #X01A3, #X01AC, #X0332, #X0195,
+    #X0335, #X0146, #X0002, #X00ED, #X00AB, #XFFFF, #X02C8, #X0335, #X019E,
+    #X033A, #X0146, #X0002, #X00ED, #X00BB, #XFFFF, #XFFFF, #X033A, #X01A7,
+    #X0313, #X0146, #X0002, #X00ED, #X004D, #X01BE, #X0267, #X0313, #X01B0,
+    #X0316, #X0146, #X0002, #X00ED, #X0045, #X022F, #XFFFF, #X0316, #X01B9,
+    #X030D, #X0146, #X0002, #X00ED, #X006F, #X0237, #XFFFF, #X030D, #X01C2,
+    #X0305, #X0146, #X0002, #X00ED, #X0067, #X01F7, #XFFFF, #X0305, #X01CB,
+    #X035E, #X0147, #X0000, #XFFFF, #X026E, #X035E, #X01D4, #X03A2, #X0148,
+    #XFFFF, #X0000, #X01FF, #X01E7, #X03A2, #X01DB, #X03AB, #X0148, #XFFFF,
+    #X0001, #XFFFF, #XFFFF, #X03AB, #X01E3, #X02EF, #X0148, #XFFFF, #X0002,
+    #XFFFF, #X0247, #X02EF, #X01EB, #X0307, #X0148, #XFFFF, #X0003, #XFFFF,
+    #X0293, #X0307, #X01F3, #X03A4, #X0148, #XFFFF, #X0004, #X0257, #XFFFF,
+    #X03A4, #X01FB, #X02E2, #X0148, #XFFFF, #X0005, #XFFFF, #XFFFF, #X02E2,
+    #X0203, #X0343, #X0148, #XFFFF, #X0006, #XFFFF, #XFFFF, #X0343, #X020B,
+    #X03A0, #X0148, #XFFFF, #X0007, #XFFFF, #XFFFF, #X03A0, #X0213, #X0311,
+    #X0149, #XFFFF, #X0000, #XFFFF, #XFFFF, #X0311, #X021B, #X030B, #X0149,
+    #XFFFF, #X0001, #XFFFF, #XFFFF, #X030B, #X0223, #X0319, #X0149, #XFFFF,
+    #X0002, #XFFFF, #XFFFF, #X0319, #X022B, #X030F, #X0149, #XFFFF, #X0003,
+    #XFFFF, #XFFFF, #X030F, #X0233, #X02F7, #X0149, #XFFFF, #X0004, #XFFFF,
+    #X025F, #X02F7, #X023B, #X02F1, #X0149, #XFFFF, #X0005, #X024F, #XFFFF,
+    #X02F1, #X0243, #X02F3, #X0149, #XFFFF, #X0007, #XFFFF, #XFFFF, #X02F3,
+    #X024B, #X03A6, #X014A, #XFFFF, #X0001, #X0275, #XFFFF, #X03A6, #X0253,
+    #X02F9, #X014A, #XFFFF, #X0003, #XFFFF, #XFFFF, #X02F9, #X025B, #X031B,
+    #X014A, #XFFFF, #X0002, #X027C, #XFFFF, #X031B, #X0263, #X0360, #X014B,
+    #X0000, #X0283, #XFFFF, #X0360, #X026B, #X03A8, #X014C, #X0000, #XFFFF,
+    #XFFFF, #X03A8, #X0272, #X031D, #X014D, #X0000, #XFFFF, #XFFFF, #X031D,
+    #X0279, #X0362, #X014E, #X0000, #XFFFF, #XFFFF, #X0362, #X0280, #X037E,
+    #X014F, #X0001, #X0010, #XFFFF, #XFFFF, #X037E, #X0287, #X0309, #X0150,
+    #X0001, #X00C7, #XFFFF, #XFFFF, #X0309, #X028F, #X0369, #X0151, #XFFFF,
+    #X0004, #XFFFF, #X02C1, #X0369, #X0297, #X038C, #X0151, #XFFFF, #X0005,
+    #XFFFF, #XFFFF, #X038C, #X029F, #X0371, #X0152, #X0000, #XFFFF, #XFFFF,
+    #X0371, #X02A7, #X0325, #X0153, #XFFFF, #X0005, #XFFFF, #XFFFF, #X0325,
+    #X02AE, #X032D, #X0153, #XFFFF, #X0001, #XFFFF, #XFFFF, #X032D, #X02B6,
+    #X036B, #X0154, #X0000, #XFFFF, #X02D0, #X036B, #X02BE, #X0338, #X0155,
+    #X0000, #XFFFF, #XFFFF, #X0338, #X02C5, #X036D, #X0156, #X0001, #X00ED,
+    #XFFFF, #XFFFF, #X036D, #X02CC, #X4402, #X0042, #X4404, #X4645, #X0042,
+    #X4402, #X0057, #X4503, #X5551, #X5203, #X4645, #X5704, #X4552, #X0046,
+    #X5803, #X524F, #X5404, #X5845, #X0054, #X5405, #X5449, #X454C, #X5203,
+    #X4C45, #X5305, #X4150, #X4543, #X5303, #X4255, #X5303, #X4152, #X5303,
+    #X4C52, #X5303, #X4643, #X5303, #X414C, #X5303, #X5445, #X5203, #X414C,
+    #X5204, #X434C, #X0041, #X5203, #X4152, #X5204, #X4352, #X0041, #X5203,
+    #X4452, #X5303, #X4342, #X5203, #X5453, #X5203, #X4352, #X5203, #X444C,
+    #X5202, #X0052, #X5203, #X434C, #X5204, #X5445, #X0049, #X5204, #X5445,
+    #X004E, #X5202, #X004C, #X5203, #X5345, #X5203, #X5445, #X4E05, #X4545,
+    #X5344, #X5004, #X4152, #X0047, #X5004, #X5355, #X0048, #X4F03, #X4752,
+    #X5004, #X4741, #X0045, #X5003, #X504F, #X4F04, #X5455, #X0049, #X4F04,
+    #X4954, #X0052, #X4F04, #X5455, #X0044, #X4F03, #X5455, #X4F04, #X4454,
+    #X0052, #X4E06, #X4C4F, #X5349, #X0054, #X4E03, #X504F, #X4F02, #X0052,
+    #X4E03, #X4745, #X4703, #X5445, #X4C04, #X5349, #X0054, #X4804, #X4C41,
+    #X0054, #X4C03, #X4944, #X4C04, #X4944, #X0052, #X4C03, #X4444, #X4C04,
+    #X4444, #X0052, #X4903, #X494E, #X4904, #X494E, #X0052, #X4C02, #X0044,
+    #X4A02, #X0050, #X4A02, #X0052, #X4903, #X444E, #X4904, #X444E, #X0052,
+    #X4903, #X434E, #X4902, #X004E, #X4902, #X004D, #X4503, #X5858, #X4502,
+    #X0058, #X4503, #X444E, #X4502, #X0049, #X4404, #X4645, #X0057, #X4402,
+    #X0053, #X4402, #X0049, #X4404, #X4E4A, #X005A, #X4404, #X4645, #X004D,
+    #X4404, #X4645, #X0053, #X4404, #X4645, #X004C, #X4403, #X4645, #X4403,
+    #X4345, #X4103, #X5342, #X4403, #X4141, #X4303, #X4C50, #X4303, #X4643,
+    #X4303, #X4950, #X4304, #X4950, #X0052, #X4303, #X4450, #X4304, #X4450,
+    #X0052, #X4302, #X0050, #X4103, #X4444, #X4103, #X444E, #X4203, #X5449,
+    #X4304, #X4C41, #X004C, #X4103, #X4344
+    LET tab.start = 3
+    LET locate(lv.tree, at) BE
+    TEST !lv.tree<0 THEN !lv.tree:=0 ELSE
+    $(  MANIFEST
+        $(  c.size = 0; c.str  = 0; c.fn   = 1; c.opstr= 2
+            t.left = 0; t.right= 1; t.str  = 2; t.val  = 3
+            t.size = 4
+        $)
+        LET tree = !lv.tree+at
+        LET val = tree!t.val+at
+        val!c.fn := (@start-1)!(val!c.fn)
+        val!c.str := val!c.str+at
+        !lv.tree := !lv.tree+at
+        tree!t.str := val!c.str
+        tree!t.val := val
+        locate(tree+t.left, at)
+        locate(tree+t.right, at)
+    $)
+    locate(@tab.start, tab)
+    codes := tab.start
+$)
+/*PDP11INIT>*/
+
+
+
+
+
+//*<STANDINIT
+LET initcodes() BE
+$(  code.put("DB",dataproc,0)
+    code.put("DEFB",dataproc,0)
+    code.put("DW",dwproc,0)
+    code.put("DEFW",dwproc,0)
+    code.put("DEFM",dataproc,0)
+    code.put("DS",storeproc,0)
+    code.put("DEFS",storeproc,0)
+    code.put("EQU",equproc,0)
+    code.put("DEF",defproc,0)
+    code.put("REF",refproc,0)
+    code.put("WREF",wrefproc,0)
+    code.put("NEEDS",needsproc,0)
+    code.put("PRAG",pragproc,0)
+    code.put("DEFL",setproc,0)
+    code.put("TEXT",textproc,0)
+    code.put("TITLE",titlproc,0)
+    code.put("ORG",orgproc,0)
+    code.put("ABS",absproc,0)
+    code.put("REL",relproc,0)
+    code.put("GET",getproc,0)
+    code.put("LIST",listproc,0)
+    code.put("NOLIST",nolistproc,0)
+    code.put("END",endproc,0)
+    code.put("PAGE",ejectproc,0)
+    code.put("SPACE",spaceproc,0)
+//*<MACROS:
+    code.put("MACRO",macroproc,0)
+    code.put("REPT",rptmacroproc,0)
+    code.put("ENDM",endmacroproc,0)
+    code.put("EXITM",breakmacroproc,0)
+    code.put("IF",ifproc,-1,#X01)
+    code.put("IFT",ifproc,-1,#X01)
+    code.put("IFE",ifproc,-1,#X00)
+    code.put("IFF",ifproc,-1,#X00)
+    code.put("IFDEF",ifproc,-1,#X80)
+    code.put("IFNDEF",ifproc,-1,#X81)
+    code.put("IFB",ifproc,-1,#X08)
+    code.put("IFNB",ifproc,-1,#X09)
+    code.put("IFIDN",ifproc,-1,#X0A)
+    code.put("IFDIF",ifproc,-1,#X0B)
+    code.put("ELSE",elseproc,0)
+    code.put("ENDIF",fiproc,0)
+    code.put("LOCAL",localproc,0)
+    code.put("OPT",optproc,0)
+    code.put("PRINTX",printproc,0)
+/*MACROS>*/
+//*<STANDINIT
+    code.put("EXX",fmt0,1,#XD9)
+    code.put("DAA",fmt0,1,#X27)
+    code.put("CPL",fmt0,1,#X2F)
+    code.put("CCF",fmt0,1,#X3F)
+    code.put("SCF",fmt0,1,#X37)
+    code.put("NOP",fmt0,1,#X00)
+    code.put("HALT",fmt0,1,#X76)
+    code.put("DI",fmt0,1,#XF3)
+    code.put("EI",fmt0,1,#XFB)
+    code.put("RLA",fmt0,1,#X17)
+    code.put("RLCA",fmt0,1,#X07)
+    code.put("RRA",fmt0,1,#X1F)
+    code.put("RRCA",fmt0,1,#X0F)
+    code.put("LDI",fmt0,2,#XED,#XA0)
+    code.put("LDIR",fmt0,2,#XED,#XB0)
+    code.put("LDD",fmt0,2,#XED,#XA8)
+    code.put("LDDR",fmt0,2,#XED,#XB8)
+    code.put("CPI",fmt0,2,#XED,#XA1)
+    code.put("CPIR",fmt0,2,#XED,#XB1)
+    code.put("CPD",fmt0,2,#XED,#XA9)
+    code.put("CPDR",fmt0,2,#XED,#XB9)
+    code.put("NEG",fmt0,2,#XED,#X44)
+    code.put("INI",fmt0,2,#XED,#XA2)
+    code.put("INIR",fmt0,2,#XED,#XB2)
+    code.put("IND",fmt0,2,#XED,#XAA)
+    code.put("INDR",fmt0,2,#XED,#XBA)
+    code.put("OUTI",fmt0,2,#XED,#XA3)
+    code.put("OTIR",fmt0,2,#XED,#XB3)
+    code.put("OUTD",fmt0,2,#XED,#XAB)
+    code.put("OTDR",fmt0,2,#XED,#XBB)
+    code.put("RETI",fmt0,2,#XED,#X4D)
+    code.put("RETN",fmt0,2,#XED,#X45)
+    code.put("RLD",fmt0,2,#XED,#X6F)
+    code.put("RRD",fmt0,2,#XED,#X67)
+    code.put("LD",fmt1,0)
+    code.put("ADD",fmt2,-1,0)
+    code.put("ADC",fmt2,-1,1)
+    code.put("SUB",fmt2,-1,2)
+    code.put("SBC",fmt2,-1,3)
+    code.put("AND",fmt2,-1,4)
+    code.put("XOR",fmt2,-1,5)
+    code.put("OR",fmt2,-1,6)
+    code.put("CP",fmt2,-1,7)
+    code.put("RLC",fmt3,-1,0)
+    code.put("RRC",fmt3,-1,1)
+    code.put("RL",fmt3,-1,2)
+    code.put("RR",fmt3,-1,3)
+    code.put("SLA",fmt3,-1,4)
+    code.put("SRA",fmt3,-1,5)
+    code.put("SRL",fmt3,-1,7)
+    code.put("BIT",fmt4,-1,1)
+    code.put("SET",fmt4,-1,3)
+    code.put("RES",fmt4,-1,2)
+    code.put("JP",fmt5,0)
+    code.put("CALL",fmt6,0)
+    code.put("RET",fmt7,0)
+    code.put("JR",fmt8,0)
+    code.put("DJNZ",fmt9,1,#X10)
+    code.put("RST",fmt10,1,#XC7)
+    code.put("INC",fmt11,-1,4)
+    code.put("DEC",fmt11,-1,5)
+    code.put("EX",fmt12,0)
+    code.put("PUSH",fmt13,-1,5)
+    code.put("POP",fmt13,-1,1)
+    code.put("IN",fmt14,0)
+    code.put("OUT",fmt15,0)
+    code.put("IM",fmt16,1,#XED)
+$)
+/*STANDINIT>*/
+
+
+
+//
+//                        Initialisation
+//
+
+
+
+LET startasm(version) = (version/1000)\=3 -> "version 3.008 27-Mar-80",
+VALOF
+$(  name:="Z80"
+    i.here:=i.dollar
+    comntcheck:=TRUE
+    f.rinfo    := newf(0,3)
+    f.ccinfo   := newf(3,3)
+    f.ddinfo   := newf(0,2)
+    f.source   := newf(3,3)
+    f.ddsource := newf(4,2)
+    f.dest     := newf(0,3)
+    f.top      := newf(6,2)
+    f.ccsmall  := newf(3,2)
+    RESULTIS 0
+$)
+
+
+
+
+

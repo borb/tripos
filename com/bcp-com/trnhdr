@@ -1,0 +1,108 @@
+$<TRNHDR'
+$$TRNHDR := TRUE
+$<COMHDR'       GET "COMHDR"    $>COMHDR'
+$<STHDR'        GET "STHDR"     $>STHDR'
+//$<MIPMANHDR'  GET "MIPMANHDR" $>MIPMANHDR'
+$<AEHDR'        GET "AEHDR"     $>AEHDR'
+$<AEOCHDR'      GET "AEOCHDR"   $>AEOCHDR'
+$<OCODEHDR'     GET "OCODEHDR"  $>OCODEHDR'
+
+GLOBAL
+$(
+nextparam       :TRN+ 0
+
+trans           :TRN+ 1
+
+declnames       :TRN+ 2
+decldyn         :TRN+ 3
+declstat        :TRN+ 4
+decllabels      :TRN+ 5
+checkdistinct   :TRN+ 6
+addname         :TRN+ 7
+cellwithname    :TRN+ 8
+scanlabels      :TRN+ 9
+transdef        :TRN+10
+transdyndefs    :TRN+11
+transstatdefs   :TRN+12
+statdefs        :TRN+13
+
+jumpcond        :TRN+14
+transswitch     :TRN+15
+transfor        :TRN+16
+
+load            :TRN+17
+loadlv          :TRN+18
+loadzero        :TRN+19
+loadlist        :TRN+20
+
+evalconst       :TRN+21
+assign          :TRN+22
+transname       :TRN+23
+
+complab         :TRN+24
+compentry       :TRN+25
+compdatalab     :TRN+26
+compjump        :TRN+27
+out1            :TRN+28
+out2            :TRN+29
+out3            :TRN+30
+outstring       :TRN+31
+endocode        :TRN+32
+
+paramnumber     :TRN+33
+comcount        :TRN+34
+ssp             :TRN+35
+vecssp          :TRN+36
+currentbranch   :TRN+37
+dvec            :TRN+38
+dvece           :TRN+39
+dvecp           :TRN+40
+dvect           :TRN+41
+globdecl        :TRN+42
+globdecls       :TRN+43
+globdeclt       :TRN+44
+casek           :TRN+45
+casel           :TRN+46
+casep           :TRN+47
+caset           :TRN+48
+caseb           :TRN+49
+breaklabel      :TRN+50
+resultlabel     :TRN+51
+defaultlabel    :TRN+52
+endcaselabel    :TRN+53
+looplabel       :TRN+54
+ocount          :TRN+55
+// !!!!!!!!!!!!!!!!!!!!!!!!!;           obufp   :TRN +56
+In.mod          :TRN+56
+findocode       :TRN+57
+listnames       :TRN+58
+trnspace        :TRN+59
+indent          :TRN+60
+indent.do       :TRN+61
+
+outslct         :TRN+62
+unpackslct      :TRN+63
+packslct        :TRN+64
+isconst         :TRN+65
+$)
+MANIFEST $(
+//savespacesize = 2
+maxocount       = 62                    // max chars for numeric ocode
+EVAL.JUMPCOND   =  1                    // Not TRUE or FALSE
+
+$<PDPRSX
+g.getbyte       = 58
+g.putbyte       = 59
+g.gethalfword   = ?
+g.puthalfword   = ?
+$>PDPRSX
+$<TRIPOS
+g.getbyte       = 15
+g.putbyte       = 16
+g.gethalfword   = 94
+g.puthalfword   = 95
+$>TRIPOS
+$)
+$>TRNHDR'
+
+

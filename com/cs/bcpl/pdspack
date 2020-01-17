@@ -1,0 +1,349 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+      #######   ######     ######   #######     ####      #####   ##    ## 
+      ########  #######   ########  ########   ######    #######  ##   ##  
+      ##    ##  ##    ##  ##        ##    ##  ##    ##  ##        ##  ##   
+      #######   ##    ##  #######   #######   ########  ##        ####     
+      ##        ##    ##        ##  ##        ##    ##  ##        ## ##    
+      ##        ##    ##        ##  ##        ##    ##  ##        ##  ##   
+      ##        #######   ########  ##        ##    ##   #######  ##   ##  
+      ##        ######     ######   ##        ##    ##    #####   ##    ## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   20/12/84             *
+\*****************************************************************************/
+
+
+
+SECTION "PDSPACK"
+
+
+
+GET "LIBHDR"
+
+
+
+GLOBAL
+$(
+    sysin    :  ug + 0
+    sysout   :  ug + 1
+$)
+
+
+
+MANIFEST
+$(
+    a.files      =  0
+    a.to         =  1
+
+    lf.file      =  0
+    lf.name      =  1
+
+    maxlength    =  255
+$)
+
+
+LET start()  BE
+$(
+    LET argv         =  VEC 50
+    LET args         =  "FILES,TO/A/K"
+    
+    LET files        =  0
+    LET filestream   =  0
+    LET tostream     =  0
+    LET interactive  =  0
+    
+    LET broken       =  FALSE
+
+    sysin   :=  input()
+    sysout  :=  output()
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** Bad arguments for *"%S*"*N", args )
+
+        stop( 20 )
+    $)
+
+    files  :=  argv!a.files
+
+    TEST  files = 0  THEN
+    $(
+        //  No "files" stream given, so take the standard input stream.
+        
+        filestream   :=  sysin
+        interactive  :=  TRUE
+    $)
+    ELSE  
+    $(
+        //  A filename has been given, but it could still be interactive!
+        
+        filestream   :=  findinput( files )
+        interactive  :=  compstring( files, "**" )  =  0
+        
+        IF  filestream = 0  THEN
+        $(
+            writef( "****** Cannot open FILES file *"%S*"*N", files )
+    
+            stop( 20 )
+        $)
+    $)
+    
+    tostream  :=  findoutput( argv!a.to )
+    
+    IF  tostream = 0  THEN
+    $(
+        //  Failed to open the main output stream, so stop before any more
+        //  damage is done.
+        
+        writef( "****** Cannot open TO file *"%S*"*N", argv!a.to )
+        
+        UNLESS  files = 0  DO  endstream( filestream )
+
+        stop( 20 )
+    $)
+
+    selectinput( filestream )
+    selectoutput( sysout )
+
+    writes( "PDSPACK (Son of TO370PDS)  Version 1.15*N" )
+
+    $(  //  Loop to read the file, and pick out the tripos file names, and 
+        //  their phoenix equivalents.
+
+        LET lf.args  =  "TRIPOSFILE/A,AS"
+        LET lf.argv  =  VEC  50
+        LET file     =  0
+        LET stream   =  0
+        LET name     =  0
+        LET ch       =  0
+
+        IF  interactive  THEN  writes( "> *E" )
+
+        ch  :=  rdch()   REPEATWHILE  ch = '*S'  |  ch = '*T'
+
+        IF  ch = endstreamch  THEN  BREAK
+        IF  ch = '*N'         THEN  LOOP
+
+        unrdch()
+
+        UNLESS  rdargs( lf.args, lf.argv, 50 )  DO
+        $(
+            writef( "****** Invalid syntax for *"%S*"*N", lf.args )
+
+            LOOP
+        $)
+
+        file  :=  lf.argv!lf.file
+        name  :=  lf.argv!lf.name
+
+        IF  compstring( file, "/**" ) = 0  THEN  BREAK
+
+        stream  :=  findinput( file )
+
+        IF  stream = 0  THEN
+        $(
+            writef( "****** Cannot open file *"%S*"*N", file )
+
+            LOOP
+        $)
+
+        writef( "Sending %S", file )
+
+        UNLESS  name = 0  DO  writef( " as %S", name )
+
+        writes( "  *E" )
+
+        selectinput( stream )
+        selectoutput( tostream )
+
+        writef( "./ ADD NAME=%S*N", uppercase( name = 0  ->  file, name ) )
+
+        $(  //  Loop to read the file, and copy lines down the byte stream.
+
+            LET line    =  getvec( maxlength/bytesperword )
+            LET lines   =  0
+            LET length  =  0
+
+            IF  line = 0  THEN
+            $(
+                endread()
+                selectinput( filestream )
+                selectoutput( sysout )
+
+                writes( "****** Cannot get line buffer*N" )
+
+                BREAK
+            $)
+
+            length  :=  readline( line )
+
+            UNTIL  length = endstreamch  DO
+            $(
+                //  We have been given a buffered line back from readline,
+                //  as a string, so we had better test to see if it is indeed
+                //  an IEBUPDTE control record.
+
+                UNLESS  length < 2  DO
+                    IF  (line % 1  =  '.')  &  (line % 2  =  '/')  THEN
+                        wrch( '.' )
+
+                lines  :=  lines + 1
+
+                writef( "%S*N", line )
+
+                //  Test for user BREAK
+
+                IF  testflags( #B0001 )  THEN
+                $(
+                    //  User Break  -  Print out a message and finish
+
+                    broken  :=  TRUE
+
+                    selectoutput( sysout )
+
+                    writes( "*N*N****** BREAK*N" )
+                    
+                    selectoutput( tostream )
+
+                    BREAK
+                $)
+
+                IF  testflags( #B1000 )  THEN
+                $(
+                    //  Control-E  -  Print out status information.
+
+                    LET o  =  output()
+
+                    selectoutput( sysout )
+
+                    writef( "****** %N lines packed*N", lines )
+
+                    selectoutput( o )
+                $)
+
+                length  :=  readline( line )
+            $)
+
+            freevec( line )
+        $)
+
+        endread()
+        selectinput( filestream )
+
+        selectoutput( sysout )
+
+        newline()
+    $)
+    REPEATUNTIL  broken
+
+    //  On dropping through here, we have finished sending the files,
+    //  and can wind the jolly show up!
+
+    UNLESS  broken  DO
+    $(
+        writes( "End of files.*N" )
+        
+        selectoutput( tostream )
+
+        writes( "./ ENDUP*N" )
+
+        selectoutput( sysout )
+    $)
+
+    //  Now, close the streams, and finish.
+
+    endstream( tostream )
+    
+    UNLESS  files = 0  DO  endstream( filestream )
+
+    stop( broken  ->  20, 0 )
+$)
+
+
+
+AND readline( line )  =  VALOF
+$(
+    LET ch      =  rdch()
+    LET length  =  0
+
+    UNTIL  ch = '*N'  |  ch = endstreamch  DO
+    $(
+        LET isbad    =  badch( ch )
+        LET toolong  =  length = maxlength
+
+        IF  isbad  |  toolong  THEN
+        $(
+            //  Invalid file (probably binary)
+
+            LET o  =  output()
+
+            selectoutput( sysout )
+
+            TEST  toolong  THEN
+                  writef( "****** Record length >%N characters*N", maxlength )
+            ELSE  writef( "****** Unprintable ASCII character #X%X2*N", ch )
+
+            selectoutput( o )
+
+            line % 0  :=  0
+
+            RESULTIS  endstreamch
+        $)
+
+        length         :=  length + 1
+        line % length  :=  ch
+        ch             :=  rdch()
+    $)
+
+    line % 0  :=  length
+
+    IF  ch = endstreamch  THEN
+        TEST  length = 0  THEN  RESULTIS  endstreamch
+        ELSE  unrdch()
+
+    RESULTIS  length
+$)
+
+
+
+AND badch( ch )  =  VALOF
+$(
+//  Returns true if the character is not a printable  member of the ascii
+//  character set.
+
+    LET c  =  ch & #X7F
+    LET w  =  ch >> 4
+    LET b  =  ch & #X0F
+
+    LET t  =  TABLE   #B0011111110000000,  // SI  to NUL
+                      #B0000100000000000,  // DLE to US
+                      #B1111111111111111,  // /   to SP
+                      #B1111111111111111,  // ?   to 0
+                      #B1111111111111111,  // O   to @
+                      #B1111111111111111,  // _   to P
+                      #B1111111111111111,  // o   to `
+                      #B0111111111111111   // DEL to p
+
+    RESULTIS  (((t!w >> b) & 1) = 0)   |   (ch \= c)
+$)
+
+
+
+AND uppercase( string )  =  VALOF
+$(
+    FOR  i = 1  TO  string % 0  DO
+         string % i  :=  uppercasech( string % i )
+
+    RESULTIS  string
+$)
+
+
+
+AND uppercasech( ch )  =  'a' <= ch <= 'z'  ->  ch - 'a' + 'A',  ch
+
+

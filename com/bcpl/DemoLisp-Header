@@ -1,0 +1,95 @@
+Get "LIBHDR"
+Get "IOHDR"  // for discard.pending.input ()
+
+MANIFEST
+$( p.maxnum = #x20000000
+   p.minnum = #xe0000000
+   p.code0 = #x40000000   //Entrypoint of hard code, 0 args
+   p.code1 = #x41000000
+   p.code2 = #x42000000
+   p.code3 = #x43000000
+   p.code4 = #x44000000
+   p.fcode = #x4f000000   //Entrypoint of special case hard code
+   p.id    = #x50000000
+   p.list  = #x80000000
+   gcbit   = #x20000000
+   tag.mask = #Xff000000
+   value.mask = #X00ffffff
+   top.three.bits = #Xe0000000
+   characters.in.boffo = 250 // arbitrary
+   words.in.boffo = (characters.in.boffo + bytesperword - 1) / bytesperword
+
+   // For backtraces:
+   args.not.evaluated = 0
+   args.evaluated = 1
+
+   // The following are dependent on Tripos 68000 store layout
+   pointer.to.stack.end = 2 // Offset in stack
+   previous = -3      // BCPL stack frame layout
+   return.address = -2
+   routine = -1
+   stack.frame.header.size = 3
+   stack.margin = 200 // ad hoc margin for stack checking
+$)
+
+
+Global $( heapbase:  fg // Start of free area
+          heapend:  fg + 1// End ditto
+          freechain:  fg + 2
+          stackend:  fg + 3  // Since this is not provided by Tripos bcpl
+          nil:  fg + 4
+          eofmarker:  fg + 5 // Token handed back by READ to mark end of file
+          lisptrue:  fg + 6 // Lisp atom 't'
+          pname:  fg + 7  // Lisp atom 'PNAME'
+          leftparen:  fg + 8
+          rightparen:  fg + 9
+          dot:  fg + 10
+          unset:  fg + 11  // 'INDEFINITE VALUE' marker
+          posn:  fg + 12 // Position along line being printed
+          curchar:  fg + 13
+          oblist:  fg + 14 //List of Lisp identifiers that must be recognized
+          boffo:  fg + 15  //Character assembly buffer
+          boffp:  fg + 16
+          quotesymbol:  fg + 17
+          quote:  fg + 18
+          lambda:  fg + 19
+          startstackbase:  fg + 20 // Used in error recovery
+          restartlabel:  fg + 21 //     for longjump
+          arg1:  fg + 22
+          arg2:  fg + 23
+          arg3:  fg + 24
+          arg4:  fg + 25
+          function:  fg + 26
+          funarg:  fg + 27
+          lastglobal:  fg + 28 // Not actually the last, but rather
+                               // the last that needs marking
+          declare.atoms:  fg + 29
+          car:  fg + 30
+          cdr:  fg + 31
+          cons:  fg + 32
+          atom:  fg + 33
+          print:  fg + 34
+          prin:  fg + 35
+          lispget:  fg + 36
+          assoc:  fg + 37
+          mkatom: fg + 38
+          eval:  fg + 39
+          read:  fg + 40
+          reclaim:  fg + 41
+          evlis:  fg + 42
+          mixerror:  fg + 43
+          error:  fg + 44
+          eval.last:  fg + 45
+          equal:  fg + 46
+          numberp:  fg + 47
+          symp:  fg + 48
+          windup:  fg + 49
+          debugging:  fg + 50
+          notlistp:  fg + 51
+          standard.input:  fg + 52
+          standard.output:  fg + 53
+          length.of.a.line:  fg + 54
+          lispstring.to.boffo:  fg + 55
+       $)
+   
+

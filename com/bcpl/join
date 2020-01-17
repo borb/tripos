@@ -1,0 +1,90 @@
+// (C) Copyright 1979 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "JOIN"
+
+GET "LIBHDR"
+
+MANIFEST
+$(
+    readwords.size = 512
+
+    a.as        = 35
+    a.chars     = a.as + 1
+    a.zap       = a.chars + 1
+
+    a.size      = a.zap + (30 * a.as) /BYTESPERWORD
+$)
+
+LET start() BE
+ $( LET v = VEC a.size
+    LET s = VEC 12/bytesperword
+    LET t = "T:JOIN-T00"
+    LET oldoutput = output()
+    LET inputstream = 0
+    LET outputstream = 0
+    LET rc = 0
+
+    IF rdargs(
+        ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,AS/A/K,CHARS/S,WRITEINPLACE=ZAP/S",
+        v, a.size)=0 DO
+    $( writef("Bad args*N")
+       stop(20) $)
+
+    FOR i = 0 TO t%0 DO s%i := t%i
+    s%(s%0-1) := (taskid/10) REM 10 + '0'
+    s%(s%0) := taskid REM 10 +'0'
+    IF v!a.zap DO s := v!a.as
+    outputstream := findoutput(s)
+    IF outputstream=0 DO
+    $( writef("Can't open %S*N", s)
+       stop(20) $)
+    selectoutput(outputstream)
+    FOR i = 0 TO a.as-1 DO
+    $( LET u = v!i
+       IF u=0 BREAK
+       inputstream := findinput(u)
+       IF inputstream=0 DO
+       $( endwrite()
+          selectoutput(oldoutput)
+          writef("Can't open %S*N", u)
+          deleteobj(s)
+          stop(20)
+       $)
+       selectinput(inputstream)
+       TEST v!a.chars THEN
+       $( LET ch = rdch()
+          IF ch=endstreamch BREAK
+          IF testflags(1) GOTO exit
+          wrch(ch)
+       $) REPEAT
+       ELSE
+       $( LET w = VEC readwords.size -1
+          LET n = 0
+          $( n := readwords(w, readwords.size)
+             IF testflags(1) GOTO exit
+             writewords(w, ABS n)
+          $) REPEATUNTIL n<=0
+       $)
+       endread()
+    $)
+    endwrite()
+    UNLESS v!a.zap
+       IF renameobj(s, v!a.as)=0 DO
+       $( rc := 20
+          selectoutput(oldoutput)
+          writef("Can't rename %S as %S*N", s, v!a.as)
+       $)
+    stop(rc)
+
+exit:
+    endread()
+    endwrite()
+    selectoutput(oldoutput)
+    writes("****BREAK*N")
+    deleteobj(s)
+    stop(10)
+ $)
+
+

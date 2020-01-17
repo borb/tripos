@@ -1,0 +1,370 @@
+**********************************************************
+*                                                        *
+*        (C) Copyright 1978 Tripos Research Group        *
+*            University of Cambridge                     *
+*            Computer Laboratory                         *
+*                                                        *
+**********************************************************
+
+**********************************************************
+*                                                        *
+*       High capacity disc driver for the LSI4           *
+*                                                        *
+* The only actions recognised by this version are        *
+* read block, write block, seek, and dummy (get status). *
+*                                                        *
+* On return, the RES1 field of the packet contains zero  *
+* if there was no error, or the controller status        *
+* otherwise.  RES2 always contains the controller status.*
+*                                                        *
+**********************************************************
+
+* DCB symbols
+
+D:ID    EQU     1                Device ID
+D:WKQ   EQU     2                Work queue
+D:STRT  EQU     3                Start routine
+D:STOP  EQU     4                Stop routine
+D:INT   EQU     5                Interrupt routine
+D:DAFC  EQU     6                Device address
+D:IVEC  EQU     7                Int vector address
+
+D:CBLK  EQU     8                Control Block
+D:OPCD  EQU    D:CBLK            Op code
+D:DRIV  EQU     9                Drive number
+D:CYL   EQU    10                Cylinder address
+D:SUR   EQU    11                Surface number
+D:SEC   EQU    12                Sector address
+D:WCNT  EQU    13                Word count
+D:BUFF  EQU    14                Buffer address
+D:IADR  EQU    15                Interrupt address
+D:NIOB  EQU    16                Next I/O block
+D:WPRO  EQU    17                Words processed
+D:CNST  EQU    18                Controller Status
+D:DRST  EQU    19                Drive status
+
+* Packet symbols
+
+P:ID    EQU    1                 Device or task ID
+P:ACT   EQU    2                 Requested action
+P:RES1  EQU    3                 First result
+P:RES2  EQU    4                 Second result
+P:A1    EQU    5                 First argument
+P:A2    EQU    6
+P:A3    EQU    7
+P:A4    EQU    8
+P:A5    EQU    9
+P:A6    EQU    10
+P:ERR   EQU    P:RES1            Error flag
+P:STAT  EQU    P:RES2            Controller Status
+P:BUFF  EQU    P:A1              Buffer address
+P:WCNT  EQU    P:A2              Word Count
+P:DRIV  EQU    P:A3              Drive number
+P:CYL   EQU    P:A4              Cylinder number
+P:SUR   EQU    P:A5              Surface number
+P:SEC   EQU    P:A6              Sector number
+
+* Root Node
+
+CRNTSK  EQU    :0B               Current TCB
+DEVMVP  EQU    :15               pointer to MOVPKT routine
+DEVINT  EQU    :16               pointer to INTENT
+DEVRET  EQU    :17               pointer to INTRET
+DEVSAV  EQU    :18               Pointer to INTSAV
+
+**********************************************************
+
+        REL    0
+
+        DATA   INIT              Initialisation routine
+        DATA   UNIN              Uninitialisation routine
+
+
+**********************************************************
+*                                                        *
+*                The Interrupt Vector                    *
+*                                                        *
+*     The controller interrupts at INTVEC.               *
+*     Control passes to the standard interrupt entry in  *
+* the kernel via INTV1.                                  *
+*                                                        *
+**********************************************************
+
+INTVEC  JST    INTV1             Normal interrupt
+
+INTV1   DATA   0                 P at interrupt
+        JST    *DEVSAV           Save regs, go to int rtn
+INTDCB  DATA   0                 Holds DCB address
+
+
+
+*********************************************************
+*                                                       *
+* Initialisation routine                                *
+*                                                       *
+* On entry:  A holds the device ID                      *
+*            Y holds the DCB address                    *
+*                                                       *
+* A,X,Y,K,L must be preserved.                          *
+*                                                       *
+*********************************************************
+
+INIT    DATA   0
+        CEA    START,Q           Fill in rest of DCB
+        COPY   Q,D:STRT(Y)       Start routine
+        CEA    STOP,Q            Stop routine
+        COPY   Q,D:STOP(Y)
+        CEA    INT,Q             Interrupt routine
+        COPY   Q,D:INT(Y)
+        CEA    INTVEC,Q          Interrupt vector address
+        COPY   Q,D:IVEC(Y)
+        COPY   Y,INTDCB          DCB for interrupt entry
+        COPY   D:DAFC(Y),Q       Device address
+        XNX    Q
+        SELP   A,:04             Initialise controller
+        JMP    *INIT
+
+
+*********************************************************
+*                                                       *
+* Uninitialisation routine                              *
+*                                                       *
+* On entry:  A holds DCB address                        *
+*            Y holds DCB address                        *
+*                                                       *
+* A,X,Y,K,L must be preserved.                          *
+*                                                       *
+*********************************************************
+
+UNIN    DATA   0
+        COPY   =0,Q              Disable device
+        COPY   Q,D:IADR(Y)       interrupts
+        JMP    *UNIN
+
+
+*********************************************************
+*                                                       *
+* Device start routine                                  *
+*                                                       *
+* On entry:  Y holds the DCB address                    *
+*                                                       *
+* X,Y,K,L must be preserved.                            *
+* A must be non-zero on exit.                           *
+*                                                       *
+*********************************************************
+
+START   DATA   0
+        COPY   CRNTSK,Q          In case MOVPKT required
+        JST    FDACT             Initiate disc action
+
+        JEQ    A,START1          Jump if packet sent back
+
+        COPY   D:IVEC(Y),Q       Get int vec address
+        COPY   Q,D:IADR(Y)       Enable device ints
+
+START1  COPY   =-1,A             Make A non-zero
+        JMP    *START            Return
+
+
+*********************************************************
+*                                                       *
+* Device Stop Routine                                   *
+*                                                       *
+* On entry:  Y holds DCB address                        *
+*                                                       *
+* X,Y,K,L must be preserved.                            *
+*                                                       *
+*********************************************************
+
+STOP    DATA   0
+        COPY   D:DAFC(Y),Q       Get device address
+        XNX    Q                 Reset controller to
+        SELP   A,:04             abort current operation
+*                                and disable device ints
+        JMP    *STOP
+
+
+*********************************************************
+*                                                       *
+* Interrupt routine                                     *
+*                                                       *
+*    Entered via INTSAV (in kernel) whenever the disc   *
+* controller completes the last requested action.  The  *
+* head packet is sent back.  If the interrupt was to    *
+* indicate an error, then the error field of the packet *
+* set non-zero, otherwise to zero.                      *
+*                                                       *
+* On entry: Y holds the DCB address                     *
+*                                                       *
+* K,L must be preserved.                                *
+*                                                       *
+*********************************************************
+
+INT     COPY   D:CNST(Y),A       Controller status
+        JGE    A,NOTERR          J if error bit unset
+
+        COPY   D:WKQ(Y),X        Get packet
+        COPY   A,P:ERR(X)        Set error field non zero
+
+NOTERR  COPY   CRNTSK,Q          TCB pointer
+        JST    SNDPKT            Send packet back
+
+INT1    COPY   D:WKQ(Y),A        Any more packets?
+        JEQ    A,INT2            Jump if no
+
+        JST    FDACT             Initiate next action
+
+        JEQ    A,INT1            J if pkt was sent back
+
+        JMP    INT3
+
+INT2    COPY   A,D:IADR(Y)       Disable device ints
+
+INT3    COPY   CRNTSK,X          Current TCB
+        CSK    X,Q               Compare TCB pointers
+        JMP    *DEVINT           Enter scheduler for
+        JMP    *DEVINT           possible task switch
+        JMP    *DEVRET           Return from interrupt
+
+
+*********************************************************
+*                                                       *
+*    This routine initiates the action requested by the *
+* head packet.  If an error is detected in the contents *
+* of the packet it is sent back.                        *
+*                                                       *
+* On entry:  Y contains the DCB address                 *
+*            Q contains the address of the highest pri  *
+*              TCB to which a packet has been sent back *
+*                                                       *
+* X,Y,K,L are preserved.                                *
+* If the packet is sent back, then A is set to zero and *
+* Q is updated.  Otherwise, A is set non-zero, and Q is *
+* preserved.                                            *
+*                                                       *
+*********************************************************
+
+FDACT   DATA   0
+        COPY   X,WORK1           Save a reg
+        COPY   D:WKQ(Y),X        Get packet
+        COPY   =0,A
+        COPY   A,P:ERR(X)        Clear error  field
+
+* Set up hardware control block
+
+        COPY   P:BUFF(X),A       Buffer address
+        COPY   A,D:BUFF(Y)
+        COPY   P:WCNT(X),A       Word count
+        COPY   A,D:WCNT(Y)
+        COPY   P:DRIV(X),A       Drive number
+        COPY   A,D:DRIV(Y)
+        COPY   P:CYL(X),A        Cylinder number
+        COPY   A,D:CYL(Y)
+        COPY   P:SUR(X),A        Surface number
+        COPY   A,D:SUR(Y)
+        COPY   P:SEC(X),A        Sector number
+        COPY   A,D:SEC(Y)
+
+* Set up operation code
+
+        COPY   D:WKQ(Y),X        Get packet address
+        COPY   P:ACT(X),A        Requested action
+        CSK    A,A:DUMM          Dummy (status request)?
+        JMP    NOTDUM            No
+        JMP    NOTDUM            No
+        COPY   TESTIO,A          Test I/O
+        JMP    SETOP
+
+NOTDUM  CSK    A,A:READ          Read?
+        JMP    NOTRD             No
+        JMP    NOTRD             No
+        COPY   RDDATA,A          Read data
+        JMP    SETOP
+
+NOTRD   CSK    A,A:WRIT          Write?
+        JMP    NOTWT             No
+        JMP    NOTWT             No
+        COPY   WTDATA,A          Write data
+        JMP    SETOP
+
+NOTWT   CSK    A,A:SEEK          Seek?
+        JMP    NOTSK             No
+        JMP    NOTSK             No
+        COPY   SEEK,A            Seek only
+        JMP    SETOP
+
+* Unknown operation - send packet back
+
+NOTSK   JST    SNDPKT
+
+        COPY   =0,A              To indicate pkt returned
+        JMP    FDARET            Return
+
+* Arrive here with hardware opcode in A
+
+SETOP   COPY   A,D:OPCD(Y)       Set in control block
+        COPY   D:DAFC(Y),A       Get device address
+        CEA    D:CBLK(Y),X       Get addr of control blk
+        XNX    A
+        OUT    X,:00             Initiate action
+        COPY   =-1,A             "Pkt not sent back"
+
+FDARET  COPY   WORK1,X           Restore saved reg
+        JMP    *FDACT            Return
+
+
+
+**********************************************************
+*                                                        *
+*    This routine sends back the head packet, with the   *
+* device status in the status field.                     *
+*                                                        *
+* On entry:  Y contains the DCB address                  *
+*            Q points to the TCB of the highest pri task *
+*              to which a packet has been returned       *
+*                                                        *
+* X,Y,K,L are preserved.                                 *
+* Q is updated, A is corrupted.                          *
+*                                                        *
+**********************************************************
+
+SNDPKT  DATA   0
+        COPY   X,SPWORK          Save a reg
+        COPY   Y,X               Copy DCB address
+        COPY   D:WKQ(X),Y        Get packet
+        COPY   0(Y),A            Packet link
+        COPY   A,D:WKQ(X)        DQ packet
+        COPY   D:CNST(X),A       Get controller status
+        COPY   A,P:STAT(Y)       Plant in packet
+        COPY   D:ID(X),A         ID for MOVPKT
+        JST    *DEVMVP           Send packet back
+
+        COPY   X,Y               Restore DCB pointer
+        COPY   SPWORK,X          Restore saved reg
+        JMP    *SNDPKT
+
+
+
+* Device actions
+
+A:DUMM  DATA   1000              Dummy (request status)
+A:READ  DATA   1001              Read a block
+A:WRIT  DATA   1002              Write a block
+A:SEEK  DATA   1008              Seek only
+
+* Controller operation codes
+
+TESTIO  DATA   0                 Test I/O
+WTDATA  DATA   2                 Write data
+RDDATA  DATA   4                 Read data
+SEEK    DATA   9                 Seek only
+
+* Temporary storage locations
+
+WORK1   DATA   0
+SPWORK  DATA   0
+
+        END
+
+
+

@@ -1,0 +1,138 @@
+SECTION "WHOIS"
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "bcpl.RINGHDR"
+GET "bcpl.RING"
+GET "bcpl.RINGSSP"
+GET "bcpl.readstring"
+
+MANIFEST
+$( TRIES =1; TIMEOUT    = 30 //secs
+   argvupb=80; res.size=100
+   ALL  = 12
+$)
+
+LET start() BE
+$(start
+   LET result           = VEC res.size
+   LET service          = VEC sv.upb
+   LET argv             = VEC argvupb
+   LET whois.data       = VEC 64
+   LET serv.addr        = VEC 40
+   LET result           = VEC 40
+   LET serv.addr        = VEC 40
+   LET ps.map.data      = VEC 30
+   LET user             = VEC 20
+   LET whois.service    = "WTO-01234567890123456789"
+   LET whois.mc         = whois.service+2
+   LET dom.puid         = "PUID"
+   LET dom.world        = "WORLD"
+   LET ps.map           = "PS.MAP"
+   LET alpha            = "alpha"
+   LET bravo            = "bravo"
+   LET charlie          = "charlie"
+   LET delta            = "delta"
+   LET echo             = "echo"
+   LET foxtrot          = "foxtrot"
+   LET gateway          = "gateway"
+   LET first            = @ALPHA
+   LET last             = @GATEWAY
+   LET rc               = ?
+   LET s                = ?
+
+   dr.initialise()
+
+   IF Rdargs("machine,,,,,,,,,,,,ALL/s", argv, argvupb)=0
+   $( WRITEF("Rdargs failed*N"); FINISH $)
+   $( LET some = FALSE
+      FOR I = 0 TO ALL DO UNLESS argv!i=0 THEN some := TRUE <> BREAK
+      UNLESS some do argv!all := TRUE
+   $)
+$(
+   FOR mc.number = 0 TO ALL-1
+   $( LET whois.mc = argv!mc.number
+      IF testflags(1) TIDYUP()
+      IF whois.mc=0 | whois.mc%0=0 LOOP
+      FOR I = 1 TO whois.mc%0 DO Whois.service%(i+4) := whois.mc%i
+      Whois.service%0   := whois.mc%0 +4
+
+      rc := DR.LOOKUP(Whois.service, serv.addr)
+      IF testflags(1) TIDYUP()
+      IF rc = 0 THEN
+      WRITEF("Failed to find '%S' - %N*N", Whois.service, DR.result2)
+                <> LOOP
+      serv.addr!3 := 1013
+
+      whois.data!0 := 2+bb.ssp.args
+      whois.data! bb.ssp.args    := 1
+      whois.data!(bb.ssp.args+1) := 1
+
+      !result := res.size
+      IF testflags(1) TIDYUP()
+      rc := DR.SSP(serv.addr, whois.data, result, TIMEOUT, TRIES)
+      UNLESS rc = 0 SWITCHON rc INTO
+      $( DEFAULT:       WRITEF("SSP to %S failed.  Rcs %N,%X4*N",
+                                        Whois.service, rc, DR.result2)
+                        LOOP
+         CASE 413:      WRITEF("%S is not running*N", whois.mc);        LOOP
+      $)
+
+      UNLESS !result=0 | !result=res.size | !result=7
+      $( WRITEF("From %S: Result for rc=%N, DR.R2=%N, R2=%N is ",
+                                        Whois.service, rc, DR.result2, RESULT2)
+         FOR I = 0 TO RESULT!0 >20 -> 10, RESULT!0 DO WRITEF(" %X4", RESULT!I);
+         NEWLINE()
+         LOOP
+      $)
+
+      s := 0
+      IF testflags(1) TIDYUP()
+      rc := DR.LOOKUP(ps.map, serv.addr)
+      UNLESS rc = 0
+      $( ps.map.data!0 := 8
+
+         user%0 := 16
+         FOR I = 0 TO 3 DO HEXPUT(RESULT!(I+4), user+2*I)
+         adds(ps.map.data, dom.puid)
+         adds(ps.map.data, dom.world)
+         adds(ps.map.data, user)
+
+         ps.map.data!0 :=       (ps.map.data!0-1)/2
+
+         result!0 := 20
+         IF testflags(1) TIDYUP()
+         rc := DR.SSP(serv.addr, ps.map.data, result, TIMEOUT, TRIES)
+         IF rc = 0 THEN s := result+4
+      $)
+
+      WRITEF("%S is being used by ", whois.mc)
+      TEST s=0
+      THEN WRITEF("user with PUID: %X4%X4%X4%X4*N", RESULT!4,RESULT!5,RESULT!6,RESULT!7)
+      ELSE writes(s)
+      NEWLINE()
+
+   $)
+   IF argv!ALL = 0 BREAK
+   ARGV!ALL := 0
+   FOR I = 0 TO LAST - FIRST DO argv!I := first!I
+$) REPEAT
+$)start
+
+AND adds(V, string) BE
+$( let pos = v!0
+   FOR I = 0 TO string%0 DO dr.byteput(v, i+pos, string%i)
+   v!0 := pos+string%0+1
+$)
+
+AND hexput(n, V) BE
+FOR I = 4 TO 1 BY -1 DO
+$( LET ch = (n & #XF) + '0'
+   n := n >> 4
+   If ch > '9' THEN ch := ch+'A' - '9' -1
+   v%i := ch
+$)
+
+AND tidyup() BE FINISH
+
+

@@ -1,0 +1,398 @@
+// Header file for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+// Version 2.0 - May 1983  lots of new features.
+
+GLOBAL $(
+ main        : ug + 0
+ sys.init    : ug + 1
+ sys.finish  : ug + 2
+ sys.wrch    : ug + 3
+ sys.curpos  : ug + 4
+ sys.videoinit:ug + 5
+// sys.scrollup: ug + 6   // yields bool
+ sys.hardscroll: ug + 7 // asks sys to hardscroll screen
+                        // replaces scrollup and scrolldown
+// sys.scrolldown:ug+ 7 // yields bool // dead
+ sys.highlight:ug + 8
+ sys.nonhighlight:ug+9
+ sys.flushbuf: ug + 10
+ sys.rdch    : ug + 11
+ sys.keywaiting:ug+ 12
+ sys.keywait : ug + 13
+ sys.killkbd : ug + 14
+ xmax        : ug + 15
+ ymax        : ug + 16
+ displaycol  : ug + 17
+ showctlchars: ug + 18
+ showmarkers : ug + 19
+ marker.alternate: ug + 20 // bool array - yes -> set in other buffer.
+ marker.x    : ug + 21     // array [0..nmark] of int. <B> is 10, <K> is 11.
+                           // 12 is (or will be) inv vid matching bracket
+                           // 13 is prev find position.
+                           // 14 is user cur in block op
+                           // 15 is the folded block. It is kludged to allow
+                           //   one such per window.
+ marker.y    : ug + 22     // array. -1 -> not set
+ marker.name : ug + 23     // string array
+ marker.hidden:ug + 24     // bool array
+ scr.init    : ug + 25
+ scr.finish  : ug + 26
+ scr.updateline:ug+ 27
+ scr.jumbled : ug + 28
+ scr.hardscroll.hint  : ug + 29
+ scr.cleareol         : ug + 30 // some terminals can clear to end of line
+// scr.cmdname        : ug + 33
+// scr.doline         : ug + 36
+ scr.dolineupdates    : ug + 37
+ scr.redraw           : ug + 38 // V2.0, final attempt at screen garbage.
+ scr.saveline         : ug + 39
+
+ // 40 to 57 are reserved for internal use by 'screen'
+ linmap : ug + 40       // these two are made public so that screen mode
+ line.updated : ug + 45 // can be changed easily - NOT to be touched!
+
+ // 60 to 69 are reserved for use by 'sysdep'
+
+ screen.x.of.file.cur  :  ug + 58
+ screen.y.of.file.cur  :  ug + 59
+
+ textspace   : ug + 70  // base of main char vector
+ textmax     : ug + 71  //  upb of textspace
+ textend     : ug + 72  //  last char of user text
+ textcur     : ug + 73  //  first char of cursor line
+ textsp      : ug + 74  //  first free byte
+ textstart   : ug + 75  //  first char of user text
+ textpop     : ug + 76  // undelete character. (WS extension feature)
+ textpush    : ug + 77  // used by deletion
+ textditto   : ug + 78  // copy character above (WS extension feature)
+ fileline    : ug + 79  // line no in text of cursor line (from 0)
+ filecol     : ug + 80  // pos in current line of cursor (from 0)
+
+ text.top.scr.line: ug + 81  //  top screen line in text area
+ text.bot.scr.line: ug + 82  //  bot screen line in text area
+ text.top.vis.line: ug + 83  //  line no in text of top vis line
+
+ text.init   : ug + 84
+ text.finish : ug + 85
+ cur.marker  : ug + 86
+ text.dbufinit:ug + 87
+ cur.endofline:ug + 88
+ cur.up      : ug + 89
+ cur.down    : ug + 90
+ cur.left    : ug + 91
+ cur.right   : ug + 92
+ cur.inschar : ug + 93
+ cur.delchar : ug + 94
+ cur.replacechar:ug+95
+ text.update : ug + 96     // calls scr.updateline to match screen to text
+                  //97, 98 used internally
+ text.delline: ug + 99
+ text.update.info:ug + 100 // 1 for updte curr line, +2 for above, +4 for below
+                           // + 8 for ruler.
+                           // refers to NEW current line.
+    // 101-104 used in 'text'
+ cur.delchar.backwards : ug + 105 // better undeletion of ^G. V2.0
+ cur.moveto  : ug + 106     // (line, col, mes) = interrupted
+                            // message issued after 50 lines
+ work.formf  : ug + 107     // amazing writed left-justify bodge
+ message      : ug + 108
+ checkint    : ug + 109
+ formbuf     : ug + 110
+ formptr     : ug + 111
+ formmax     : ug + 112
+ formf       : ug + 113  // writef to array
+ error       : ug + 114
+ cmd.init    : ug + 115  // prepare to splurge menu, question or whatever.
+ cmd.simple  : ug + 116  // splurge line of text, saveing line below
+ cmd.query.numeric:ug + 117 // asks a question with a numeric reply
+ cmd.query   : ug + 118  // ask question, Y/N or for buffer of input
+ cmd.finish  : ug + 119  // call scr.updateline to replace splurged lines
+ cmd.savevec : ug + 120  // where hidden line descriptions are saved.
+ cmd.saveptr : ug + 121  //  ptr into savevec
+ cmd.curline : ug + 122  // how far splurge has got down screen.
+ cmd.query   : ug + 123
+ request.helplevel: ug + 124
+ request.filename : ug + 125
+
+ statusline  : ug + 126
+ statusbuf   : ug + 127
+ helplevel   : ug + 128  // 0 to 3
+
+ initialise.toggles : ug + 129 // () called for a new window. in 'split'
+
+ t.insertmode: ug + 130  // toggles, lots of them
+ t.document  : ug + 131
+ t.editing   : ug + 132
+ t.ruler     : ug + 133
+ t.directory : ug + 134
+ t.wordwrap  : ug + 135
+ t.justify   : ug + 136
+ t.varitabs  : ug + 137
+ t.hyphhelp  : ug + 138
+ t.softhyph  : ug + 139
+ t.printdisp : ug + 140
+ t.pagebreak : ug + 141
+ t.column    : ug + 142
+ t.bracket   : ug + 143 // bracket matching
+ t.marrel    : ug + 144 // margin release
+ t.tabindent : ug + 145
+
+// process buffer stuff
+ processbufallowed      : ug + 150  // if = 0, can leave out pbuf section
+// IDW interface routines
+ createtwid             : ug + 151  // twid := createtwid()
+ deletetwid             : ug + 152  // deletetwid(twid)
+ totwid                 : ug + 153  // totwid(twid, buffer, length)
+ fromtwid               : ug + 154  // length := fromtwid(twid, buffer, maxlen)
+ escapetwid             : ug + 155  // escapetwid(twid, buffer, length)
+// internal
+ send.line.to.process   : ug + 156
+ send.block.to.process  : ug + 157
+ check.processes.for.output     : ug + 158
+ twid                   : ug + 159  // current twid - 1 per window
+ process.dstname        : ug + 160  // in sysdep, p.d() yields suitable string
+ help.processbuf        : ug + 161  // in pbuf, gives a help page
+ process.inbuf          : ug + 162  // char buffer for receiving input lines
+ screencornerallowed    : ug + 163  // 0 if may write to bot rh corner, else 1
+ inittwids              : ug + 164
+// 165 is used internally by the twid system
+ ins.ch.line            : ug + 166  // in 'obey', now made public
+ save.scroll            : ug + 167  // for pipelining hardscrolls
+
+ ruler.scr.line: ug + 170
+ rulerbuf      : ug + 171    // holds screen image for rulerline.
+ tabbuf        : ug + 172    // holds tabstop info - []CHAR of ' ', '!', '#'
+ build.tabline : ug + 173    // () routine in 'status' to set up rulerbuf
+
+ edit.obey.main :  ug + 175  // obey char in main menu
+ edit.obey.quick:  ug + 176
+ edit.obey.block:  ug + 177
+ edit.obey.help :  ug + 178
+ edit.obey.print:  ug + 179
+ edit.obey.onscreen: ug + 180
+ print.main.menu:  ug + 181  // used when screen mode changes
+ edit.obey.tab  :  ug + 182
+ edit.rdch.obey :  ug + 183  // rdch and obey it,
+                             // allowing Lisp escape in meta streams
+ meta.lisp.allowed : ug + 184 // set in edit.rdch.obey,
+                              // telling the meta system that
+                              // escape to the Lisp system is allowed
+
+ o.bracket      :  ug + 186  // bracket flashing.
+ o.highlightcur :  ug + 187  // options set in 'start', or new.screen.mode(n)
+ o.highlightblock: ug + 188
+ o.colinc       :  ug + 189
+
+ interrupt      :  ug + 190  // yes -> ^U in input queue
+// key.rpt.speed  :  ug + 191  // 1 - 9, or -1 -> none  no, done differently
+ sys.fatalerror :  ug + 192
+
+ qbuf.file      :  ug + 193
+ qbuf.find      :  ug + 194
+ qbuf.repl      :  ug + 195
+ qbuf.opt       :  ug + 196
+ qbuf.line      :  ug + 197 // for move to line - WS extension
+                            // also used for any numeric question
+
+ sys.selectinput:  ug + 210
+ sys.selectoutput: ug + 211
+ sys.findinput  :  ug + 212
+ sys.findoutput :  ug + 213
+ sys.endread    :  ug + 214
+ sys.endwrite   :  ug + 215
+ sys.filerdch   :  ug + 216
+ sys.filewrch   :  ug + 217
+
+ // globals 218 to 229 stolen at the end of this file
+ // relevant to the kludging in of a Lisp system.
+
+ block.readfile :  ug + 230
+ block.writefile:  ug + 231
+ block.move     :  ug + 232
+ block.copy     :  ug + 233
+ block.delete   :  ug + 234
+ block.wordleft :  ug + 235
+ block.wordright:  ug + 236
+ block.delword  :  ug + 237
+
+ block.fold     :  ug + 238  // new in V2.0. Only one folded per window
+ block.unfold   :  ug + 239  // turns a block into a marker.
+
+ find           :  ug + 240
+ find.lastop    :  ug + 241  // remember for ^L
+
+ killmarkers    :  ug + 242  // () in obey2 and sysdep
+ block.endwordleft:ug + 243  // new op for ^_, by popular demand
+ source.filename:  ug + 244  // string name of file being edited.
+ browse         :  ug + 245  // browse mode -> no updating
+ updated        :  ug + 246  // changes made to file
+// tab.action     :  ug + 247  // 1 - 3, says what a tab char does
+ rptstop        :  ug + 248  // used to make ^QQ stop if nothing is happening
+// striptabsandspaces:ug +249  // set up in 'start'
+
+ blcksize       :  ug + 250  // size of random file blocks
+ sysrand.find   :  ug + 251  // find random file
+ sysrand.read   :  ug + 252  // read random block
+ sysrand.write  :  ug + 253  // write random block
+ sysrand.end    :  ug + 254  // close three files - end of edit
+
+ highlight.split : ug + 255  // set up by start, invert vid on split and ruler
+
+ scb.src        :  ug + 260  // descriptor of (random access) source file
+ scb.dst        :  ug + 261  //   destination file
+ scb.trans      :  ug + 262  //   transitory file, for stuff scrolled off bottom
+ scb.src.ptr    :  ug + 263  // block no. of source read so far, -1 -> all.
+ scb.dst.ptr    :  ug + 264  // block no. of dst written so far
+ scb.trans.ptr  :  ug + 265  // block no. of transitory file
+
+// And now, the ambitious department...
+splitallowed    :  ug + 270  // sysdep switch
+t.split         :  ug + 271  // current status toggle
+help.split      :  ug + 272  // information blurb
+otherbuf        :  ug + 273  // array of all buffer dependent globals, saved
+swapbufs        :  ug + 274  // routine to swap buffer dep globals
+edit.obey.split :  ug + 275  // routine to process 'split' user request
+edit.obey.swap  :  ug + 276  // routine to process 'swap' user request.
+scr.y.of.split  :  ug + 277  // only relevant if t.split is true
+scroll.top.line :  ug + 278  // top of scrolling text area
+scroll.bot.line :  ug + 279  // bot of scrolling text area
+// It is intended to allow two (and only two) indepenent text windows.
+// They are onto two different buffers.
+// All buffer depentent globals (23 at last count) are saved in 'otherbuf' array
+
+// The 'meta' system allows the execution of arbitrary strings
+// as if they were typed at the keyboard
+meta.file       :  ug + 284
+meta.chars      :  ug + 285
+meta.string     :  ug + 286
+// 287 - 294 are reserved for use by 'meta'
+sys.inlevel     :  ug + 295 // August 1983 so that ^QA can be obeyed
+
+// Escapecodes allow special tailoring for your particular terminal
+// PF keys allow common sequences to be programmed into a single(ish) keystroke
+// If they take 'escape' away from me for protocol handling,
+// I shall scream
+form.escapecode :  ug + 296
+edit.obey.escapecode : ug + 297
+pf.keys         :  ug + 298   // array of byte array pointers, init in 'start'
+pf.keys.upb     :  ug + 299   // 0..upb of them, probably = 36
+pf.keys.len     :  ug + 300   // max chars in each one
+escape.menu     :  ug + 301   // list of getvecs, st !v = next one
+                              //                    1!v = string
+                              // The escape menu is composed of these strings
+escape.menu.form:  ug + 302   // string arg -> add to bot of escape menu
+                              // zero arg -> clear escape menu.
+
+// text.page.signal:  ug + 303   // signals from 'text' to 'screen'
+//                               // true -> page fault since last text.update.
+//                               // fixes (I hope) screen garbage bug on some
+//                               // commands.
+
+// New globals for V2.0
+// A half-hearted attempt will be made to keep to <500,
+// out of a sense of cleanliness.
+
+screen.mode     : ug + 304   // a small integer, init in 'start'
+                             // -1 if no variety allowed, else (BBCish) mode.
+new.screen.mode : ug + 305   // sysdep routine to call with new small n
+                             // makes any changes and returns
+narrow.screen.offset:ug+306  // := 0 in start. for 40-col screen
+narrow.screen.before:ug+307  // := no in start. for helpful message
+narrow.flip.char    :ug+308  // := #Xff in start. command char to flip menus.
+                             // special 'cos eg ^Q flip flip R.
+new.narrow.offset   :ug+309  // () called if narrow.flip.char met
+
+// globals ug+310 to ug+330 reserved for internal use by sysdep.
+
+right.margin        :ug+331  // init where ruler is init
+left.margin         :ug+332  //
+line.spacing        :ug+333  // all to do with WS documents
+kosher.files        :ug+334  // do NOT produce incomprehensible files.
+
+srcname.not.dstname :ug+335  // init when opening a window, has a place in otherbuf
+
+random.files        :ug+336  // :=yes/no in start, dep on filing system.
+lines.rolled.past   :ug+337  // :=0 when opening a window, place in otherbuf.
+                             // If bitten by no random files, this counts past lines
+
+eol                 :ug+338  // eol(c) says if end of line
+folded.block        :ug+339  // 0 or pointer to getvec holding folded block
+folded.len          :ug+340  // byte length of folded block
+                             // both := 0 when opening file, both have places in otherbuf
+pop.up.menu         :ug+341  // (mes1, mes2, menu, mes3) = char. in 'status'
+                             // handles ^Q, ^K, ^P, ^O menu, delays etc.
+
+//max.lin.displayed   :ug+342  // internal to 'text', for bracket flashing
+//min.lin.displayed   :ug+343  //
+text.forw.bra.search:ug+344  // called when '(' typed.
+                             // 'text' does the searching, 'screen' the flashing
+text.back.bra.search:ug+345  // called when ')' typed.
+os.call.char        :ug+346  // at filename or ^K -> call os
+                             // <0 if no os call allowed
+ws.os.call          :ug+347  // (string) does os donkeywork. OS dependent.
+log.dat             :ug+348  // holds log output (ie record of edits)
+                             // as list of getvec(1)s HD=rest, TL=string to output
+                             // := 0 in start
+log.writef          :ug+349  // (f, a1, a2, a3, a4) outputs record to log
+                             // if it gets too big, run out of memory - tough
+                             // (0) output log to output stream
+$)
+
+
+MANIFEST $(
+ yes = TRUE; on = TRUE; no = FALSE; off = FALSE; ctl = 31; adinc = 1
+ nmark = 17
+$)
+
+MANIFEST $(
+ // these are line types.
+ // n => line n of source, -(n+10) => line n of dir
+ cmdline = -1    // ie non-text, no flag in r.h. column
+ queryline = -2  // has the cursor on it.
+ rulerline = -3  // non - text, but scrolls horizontally like text
+ bofline    = -4
+ eofline    = -5
+ splitline  = -6 // fills with '-', used to split screen in two
+ $)
+
+MANIFEST $(
+ // These are special marker characters in the text.
+ ch.softspace  = #X81
+ ch.softhyphen = #X82
+ ch.invishyphen= #X83
+ ch.pagebrk    = #XFE
+ ch.bof        = #X85
+ ch.eof        = #XFF
+ ch.line       = '*N'  // because that's what filed result must be
+ ch.softline   = #XFD
+ ch.lineend    = #XFD  // c>=this | c=ch.line -> end of a line
+ escape        = '*E'
+ $)
+
+GLOBAL $( // 218 to 229 are reserved for Lisp system interface
+          // PicoLisp itself will use globals beyond 500
+          // it also intercepts the 'start' global.
+          // Without PL we will still run in 500 globals.
+        wspl.status      : ug + 218   // status of PL system - init in start
+        wspl             : ug + 219   // called (heapsiz) by ws init stuff, then
+                                      //        (1) by ^KL
+                                      //        (2) by ^JL
+                                      //        (3) by meta-\(
+                                      //        (4) by sys.finish
+        wspl.segment     : ug + 220   // (internal) loaded code
+        qbuf.lisp        : ug + 221   // (internal) remember last input lisp line
+        wspl.heap        : ug + 222   // (internal) requested heapsize in nodes
+       $)
+
+MANIFEST $( // possible values for wspl.status - status of PL subsystem
+        pl.unavailable  = 1             // not in implementation
+        pl.notloaded    = 2             // maybe, not tried yet or failed
+        pl.loaded       = 3             // loaded ok and ready
+        pl.running      = 4             // may not recurse
+        pl.broken       = 5             // set by ws 'error'
+                                        // cleared by exit from wspl
+         $)
+
+

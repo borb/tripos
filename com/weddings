@@ -1,0 +1,331 @@
+SECTION "WEDDINGS"
+
+
+
+GET "LIBHDR"
+
+
+
+GLOBAL
+$(
+    men            :  ug + 0
+    women          :  ug + 1
+    couplecount    :  ug + 2
+    suitorqueue    :  ug + 3
+$)
+
+
+
+MANIFEST
+$(
+    NIL            =  0
+
+    nobody         =  NIL
+$)
+    
+
+
+LET readdata()  BE
+$(
+//  Read in the data about the preferences of the men and women which we
+//  are eventually going to pair off.  The number of couples is read in,
+//  and the preferences of each of the men and women is read in after that.
+//  It is assumed that the men and women are numbered from 1 to "couplecount".
+
+    suitorqueue  :=  NIL
+    couplecount  :=  readn()
+    
+    //  Read in the priorities of each of the men, and then add each man in
+    //  turn onto the queue of suitors.
+    
+    men  :=  getvec( couplecount )
+    
+    FOR  i = 1  TO  couplecount  DO
+    $(
+        LET entry  =  getvec( couplecount )
+        
+        writef( "Man %I2: ", i )
+        
+        FOR  j = 1  TO  couplecount  DO
+        $(
+            LET choice  =  readn()
+            
+            writed( choice, 3 )
+            
+            entry!j  :=  choice
+        $)
+        
+        newline()
+        
+        addtosuitorqueue( entry )
+        
+        men!i  :=  entry
+    $)
+
+    newline()
+
+    //  Now, read the priorities of each of the women.  We use the entry "0"
+    //  in the vector to hold the current fiance of each woman (initially
+    //  set to "nobody").
+
+    women  :=  getvec( couplecount )
+
+    FOR  i = 1  TO  couplecount  DO
+    $(
+        LET entry  =  getvec( couplecount )
+        
+        writef( "Woman %I2: ", i )
+        
+        FOR  j = 1  TO  couplecount  DO
+        $(
+            LET choice  =  readn()
+            
+            writed( choice, 3 )
+            
+            entry!j  :=  choice
+        $)
+        
+        newline()
+        
+        setfiance( entry, nobody )
+
+        women!i  :=  entry
+    $)
+    
+    newline()
+    
+    //  Now, for each of the preference lists, change the numbers read in into
+    //  pointers to the preference entries.
+    
+    FOR  i = 1  TO  couplecount  DO
+    $(
+        //  Look at each main entry in turn, and fill in all the preferences.
+        
+        LET m.entry  =  men!i
+        LET w.entry  =  women!i
+
+        FOR  j = 1  TO  couplecount  DO
+        $(
+            LET m.pref  =  m.entry!j
+            LET w.pref  =  w.entry!j
+            
+            m.entry!j  :=  women!m.pref
+            w.entry!j  :=  men!w.pref
+        $)
+    $)
+$)
+
+
+
+AND matchmake()  BE
+$(
+//  Take each suitor in turn, and attempt to find him a bride.  We continue
+//  doing this until we have no more suitors left who do not have brides.
+
+    UNTIL  suitorqueue = NIL  DO
+    $(
+        LET suitor  =  findsuitor()
+        
+        //  Now, attempt to find a bride for this suitor.  We should look at
+        //  his priority list, so that we can find the most preferable one.
+        
+        FOR  i = 1  TO  couplecount  DO
+        $(
+            LET woman   =  suitor!i
+            LET fiance  =  findfiance( woman )
+            
+            //  If the woman is not yet spoken for, then this is our lucky day,
+            //  and we have found ourselves a bride!
+            
+            TEST  fiance = nobody  THEN
+            $(
+                setfiance( woman, suitor )
+                
+                BREAK
+            $)
+            ELSE
+            $(
+                //  If the woman is spoken for, then we have a more difficult
+                //  job on our hands.  It all depends on whether the woman
+                //  prefers the person she is already engaged to, or us.
+                //  If we are more preferable, then we can preempt the fiance,
+                //  and take over the woman.  Otherwise, we must keep on 
+                //  looking.
+                
+                IF  morepreferable( woman, suitor, fiance )  THEN
+                $(
+                    //  Cooer.  It appears that we are more preferable to
+                    //  the woman than her current fiance, and so we should
+                    //  take her over.
+                    
+                    setfiance( woman, suitor )
+                    
+                    addtosuitorqueue( fiance )
+                    
+                    BREAK
+                $)
+            $)
+        $)
+    $)
+$)
+
+
+
+AND addtosuitorqueue( suitor )  BE
+$(
+//  Add our suitor to the head of the suitor queue.
+
+    suitor!0     :=  suitorqueue
+    suitorqueue  :=  suitor
+$)
+
+
+
+AND findsuitor()  =  VALOF
+$(
+//  Remove and return the head item from the suitor queue.
+
+    LET suitor  =  suitorqueue
+    
+    suitorqueue  :=  suitor!0
+    
+    RESULTIS  suitor
+$)
+
+
+
+AND setfiance( woman, fiance )  BE
+
+//  Update the entry for "woman", marking her fiance to be "fiance".
+
+    woman!0  :=  fiance
+
+
+
+AND findfiance( woman )  =
+
+//  Return the current fiance of "woman".
+
+    woman!0
+
+
+
+AND morepreferable( woman, manx, many )  =  VALOF
+$(
+//  Search the preferences for woman "woman", and return TRUE if she has a
+//  higher preference for "man x" than for "man y".
+
+    FOR  i = 1  TO  couplecount  DO
+    $(
+        LET preference  =  woman!i
+        
+        IF  preference = manx  THEN  RESULTIS  TRUE
+        IF  preference = many  THEN  RESULTIS  FALSE
+    $)
+$)
+
+
+
+AND start()  BE
+$(
+//  Main program.  Read the data in from a file, and then attempt to find a
+//  match for the data.  When all that is done, print out the results.
+
+    LET args    =  "FILE/A"
+    LET argv    =  VEC 20
+    LET file    =  0
+    LET stream  =  0
+    
+    UNLESS  rdargs( args, argv, 20 )  DO
+    $(
+        writef( "****** Bad arguments for string *"%S*"*N", args )
+        
+        stop( 20 )
+    $)
+
+    file    :=  argv!0
+    stream  :=  findinput( file )
+    
+    IF  stream = 0  THEN
+    $(
+        writef( "****** Cannot open data file *"%S*"*N", file )
+        
+        stop( 20 )
+    $)
+
+
+    //  Now, select the main input stream, and read the data from it.
+
+    selectinput( stream )
+    readdata()
+    endread()
+
+
+    //  Having done all that, we can attempt to do some matchmaking.  When
+    //  we return from the matchmaking procedure, we can print out the
+    //  results.
+    
+    matchmake()
+    
+    FOR  i = 1  TO  couplecount  DO
+    $(
+        LET fiancee  =  women!i
+        LET fiance   =  findfiance( fiancee )
+        
+        writef( "Man %N (choice %N) married to woman %N (choice %N)*N",
+                 whichperson( men, fiance ),    whichchoice( fiance, fiancee ),
+                 whichperson( women, fiancee ), whichchoice( fiancee, fiance ) )
+    $)
+
+
+    //  Now, just free the memory allocated, and finish.
+
+    freestore()
+$)
+
+
+
+AND whichperson( people, person )  =  
+
+//  Return the person number of person "person".
+
+    findoffset( people, person )
+
+
+
+AND whichchoice( person, choice )  =
+
+//  Return the choice number for person "person".
+
+    findoffset( person, choice )
+
+
+
+AND findoffset( vector, item )  =  VALOF
+$(
+//  Return the offset at which item "item" was found in vector "vector".
+
+    FOR  i = 1  TO  couplecount  DO
+    
+        IF  vector!i = item  THEN
+        
+            RESULTIS  i
+$)
+
+
+
+AND freestore()  BE
+$(
+//  Free all the allocated memory.
+
+    FOR  i = 1  TO  couplecount  DO
+    $(
+        freevec( men!i )
+        freevec( women!i )
+    $)
+
+    freevec( men )
+    freevec( women )
+$)
+
+

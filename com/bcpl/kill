@@ -1,0 +1,129 @@
+/***********************************************************************
+**             (C) Copyright 1980  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+                 ##    ##  ########  ##        ##
+                 ##   ##   ########  ##        ##
+                 ##  ##       ##     ##        ##
+                 ####         ##     ##        ##
+                 ## ##        ##     ##        ##
+                 ##  ##       ##     ##        ##
+                 ##   ##   ########  ########  ########
+                 ##    ##  ########  ########  ########
+
+************************************************************************
+**    Author:   Brian Knight                       February 1980      **
+***********************************************************************/
+
+
+// Program to kill another task.
+//
+// It forces the victim to execute the global TIDYUP as if it were
+// at the outermost level of the current coroutine.
+// This global may be the standard BLIB routine, or may have been
+// overridden within the task.
+//
+// If the global is unset in the victim then the command will
+// refuse to work unless the switch SUBSTITUTE is set, in which case
+// it will make it call the standard tidyup routine.
+SECTION "kill"
+
+GET "libhdr"
+GET "string-to-number"
+
+MANIFEST
+    $(
+    fault.bad.id      = 101 // Invalid task id
+//*<LSI4
+    entry.offset      = 4 // Offset from routine start at which
+                          // it is safe to enter (in machine address units)
+    stack.offset      = 5*mcaddrinc // Offset of first stack frame
+                                    // from base of stack
+    status.value      = #X0170 // Value to put in S register
+
+    // Offsets of register dumps in the TCB
+
+    reg.arg1          = 10 // Register used for first argument
+    reg.stackptr      = 12 // Register containing current stack frame ptr.
+    reg.pc            = 14 // Program counter
+    reg.s             = 15 // S register
+    reg.gbase         = 17 // Register containing the global vector pointer
+/*LSI4>*/
+    $)
+
+GLOBAL
+    $(
+    undefined.global : ug // To find value of unset globals
+    $)
+
+
+LET start() BE
+    $(
+    LET argv              = VEC 20
+    LET rc                = 20
+    LET task              = ?
+    LET task.cb           = ?
+    LET task.gv           = ?
+    LET task.rootstack    = ?
+    LET task.currentstack = ?
+    LET task.tidyup       = ?
+    LET substitute        = ?
+
+    IF rdargs("task/a,substitute/s", argv, 20) = 0
+    THEN $( writes("Bad args*n"); stop(20) $)
+    substitute := argv!1 \= 0
+
+    TEST string.to.number(argv!0)
+    THEN task := result2
+    ELSE $( writef("Bad number *"%s*"*n", argv!0); stop(20) $)
+
+    // Hold task while we work on it
+    IF hold(task)=0 & result2=fault.bad.id
+    THEN $( writef("Task %n does not exist*n", task); stop(20) $)
+
+    task.cb           := rootnode ! rtn.tasktab ! task
+    task.gv           := task.cb ! tcb.gbase
+    task.rootstack    := task.cb ! tcb.sbase
+    task.currentstack := task.gv ! [@stackbase-@globsize]
+    task.tidyup       := task.gv ! [@tidyup-@globsize]
+
+
+    // Substitute the standard routine if requested.
+
+    TEST substitute
+    THEN TEST tidyup = undefined.global
+         THEN
+           $(
+           writes("No standard TIDYUP routine available*n")
+           GOTO exit
+           $)
+         ELSE task.tidyup := tidyup // Use standard one
+    ELSE IF task.tidyup = undefined.global
+         THEN
+           $(
+           writef("Task %n has no TIDYUP routine*n", task)
+           GOTO exit
+           $)
+
+    // The call of TIDYUP is achieved by zapping values
+    // in the TCB register dump of the task, and then
+    // making the task look interrupted so that all the
+    // registers will be restored when it next runs.
+    // TIDYUP is given a BOOL argument, which is TRUE
+    // iff it is being called in the root stack.
+
+    task.cb ! reg.gbase    := task.gv*mcaddrinc
+    task.cb ! reg.stackptr := task.currentstack + stack.offset
+    task.cb ! reg.pc       := task.tidyup + entry.offset
+    task.cb ! reg.s        := status.value
+    task.cb ! reg.arg1     := (task.rootstack = task.currentstack)
+    task.cb ! tcb.state    := state.int | state.hold
+    rc := 0 // All OK
+
+exit:
+    release(task)
+    stop(rc)
+    $)
+
+

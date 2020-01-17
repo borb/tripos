@@ -1,0 +1,1207 @@
+//*****************************************************************************
+//*                                                                           *
+//*    DEBUG-DISASM   A modified for of M68KDA.  The section which acts as a  *
+//*                   dis-assembler for the assembled code.                   *
+//*                                                                           *
+//*****************************************************************************
+//*    I. D. Wilson   Last Modified   -   IDW   -   19/01/82                  *
+//*                                       PB    -   31/05/82                  *
+//*****************************************************************************
+SECTION "Disasm68"
+
+GET "LIBHDR"
+GET "bcp.dahdr"
+
+$<STATICS'
+LET start(given, arg1, arg2) =
+$>STATICS'
+$<STATICS
+LET start() = entrypoint()
+
+        LET entrypoint(given, arg1, arg2) =
+$>STATICS               VALOF
+$(
+    LET seg.chain       = ?
+
+    SYSout      := output()
+    SYSin       := input()
+    otidyup     := tidyup
+    tidyup      := tidyup.
+    SYSwrch     := wrch
+    out.stream  := 0
+    in.stream   := 0
+    load.seg    := 0
+    lbuff       := 0
+    l.return    := return.lab
+    p.return    := level()
+
+    print.data  := -1           // print everything!
+    relative    := FALSE
+
+  $(  LET v             = VEC argv.upb
+      LET argv          = 0
+      LET argv.string   = "file,start/k,end/k,small/s,rel=relative/s"
+    TEST given=0                // Command
+    $(  argv := v
+        IF rdargs(argv.string, argv, argv.upb) = 0
+        THEN error(20, "Bad string for '%S'*N", argv.string)
+    $)
+    ELSE TEST given = -1        // pseudo command
+    THEN        argv            := arg1
+    ELSE TEST given = -2        // Just start address
+    THEN        seg.chain       := arg1
+    ELSE TEST given = -3        // From x to y
+    THEN        seg.chain       := 0
+    ELSE
+    $(  error(0,
+"unexpected entry reason %N --  args are (reason, arg1, arg2)*N", given)
+        error(0,
+"reason 0 is the command interface, -1 means arg1 is like the result of RDAGRS,*N")
+        error(20,
+"reason -2 means arg1 is a segment chain, -3 means arg1, arg2 delimit the data*N")
+    $)
+    UNLESS argv=0
+    $(
+        IF argv!A.small THEN print.data := 0            // Crude but ...
+        relative        := argv!A.rel
+
+        load.seg        := LOADSEG(argv!A.file)
+        IF load.seg = 0
+        THEN error(20, "Failed to load '%S' (%N)*N", argv!A.file, RESULT2)
+        seg.chain       := load.seg
+    $)
+ $)
+
+    loc.addr    := 0
+    loc.op      := loc.addr     + ((print.data & p.d.addr)=0) -> 0, size.addr + relative*2
+    loc.arg     := loc.op       +                                   size.op
+    loc.chars   := loc.arg      +                                   size.arg
+    loc.hex     := loc.chars    +                                   size.chars
+    loc.comment := loc.hex      +                                   size.hex
+
+    TEST seg.chain = 0
+    THEN listlocs(arg1, arg2)
+    ELSE
+    $(  LET seg = seg.chain
+        seg.chain := !seg.chain
+        listlocs( (seg+1)*4, (seg+1 + seg!1) * 4)
+    $) REPEATUNTIL seg.chain = 0
+
+    tidyup(2)
+
+  return.lab:
+    RESULT2 := returncode
+    RESULTIS returncode
+$)
+
+AND tidyup.(n) BE
+$(  returncode := n
+    wrch        := SYSwrch
+    tidyup      := otidyup
+    selectoutput(SYSout)
+    selectinput (SYSin)
+    UNLOADSEG(load.seg)
+    freevec(lbuff)
+    UNLESS in.stream  = SYSin   ENDSTREAM(in.stream)
+    UNLESS out.stream = SYSout  ENDSTREAM(out.stream)
+    longjump(p.return, l.return)
+$)
+
+AND error(rc, s, a,b,c,d,e,f) BE
+$(  LET o = OUTPUT()
+    LET w = wrch
+    WRCH := SYSwrch
+    SELECTOUTPUT(SYSOUT)
+    WRITEF(s, a,b,c,d,e,f)
+    UNLESS rc=0 tidyup(rc)
+    wrch := w
+    SELECTOUTPUT(o)
+$)
+
+
+AND listlocs( addr1, addr2 )  BE
+$(  base.addr   := addr1
+    progaddress := addr1
+    lbuff       := GETVEC(buff.bytes/BYTESPERWORD)
+    start.statics := -1         // Don't know where Statics start
+    start.globals := -1         // Don't know where globals start
+    upb         := addr2
+
+    UNLESS  checkvalid( addr1, size.w ) & checkvalid(addr2, size.w)
+    DO error(20, "Invalid address range %X8 - %X8*N", addr1, addr2)
+
+    IF lbuff = 0 THEN error(20, "Failed to get a Vector for line buffer*N")
+
+    $(  LET top         = readword()
+        LET bottom      = readword()
+        state           := state.incode         // Why not ... state.unknown
+        state.bcpl      := FALSE
+        TEST top=0  &  bottom = ((addr2-addr1)/4)
+        $(  state := state.beforecode
+            $(  LET pos = progaddress
+                LET real= ?
+                top     := readword()
+                real    := readword()
+                TEST top=0 & real=12345
+                $(  state.bcpl := (readword()>>8) = 17 -> TRUE, bcpl.no.names
+                    WRITEF("Module of %N BCPL words*N", bottom)
+                    progaddress := pos
+                $)
+                ELSE progaddress := addr1
+            $)
+            IF checkvalid(addr2, 1)
+            THEN FOR I = addr2 - 4*size.w TO addr1 BY -4*size.w
+                 DO IF location(I, size.w)=0 & location(I+size.w, size.w)=0
+                    $( start.globals := I+2; BREAK $)
+        $)
+        ELSE progaddress := addr1
+    $)
+
+    TEST addr1 = addr2
+    THEN FOR i = 1 TO 20 IF checkvalid(progaddress, size.w) THEN listloc()
+    ELSE
+    $( IF testflags( 1 )  THEN error(20, "******BREAK*N")
+
+        UNLESS  checkvalid(progaddress, size.w)
+                error(20, "Invalid address %X6*N", progaddress )
+        listloc()
+    $) REPEATUNTIL  progaddress >= addr2
+$)
+
+
+AND listloc()  BE
+$(  lpos  :=  loc.addr
+    llen  :=  lpos
+    FOR  i = 0  TO  buff.bytes DO lbuff % i := '*S'
+
+    currentloc  :=  progaddress
+    disasmlevel :=  level()
+    disasmlabel :=  disasmlabel.
+    word        :=  readword()
+    wrch        :=  writechar
+    ind1off,ind2off     := -1, -1
+    UNLESS (print.data & p.d.addr) = 0 DO TEST relative
+        THEN writef("%X4: ", currentloc - base.addr)
+        ELSE writef("%X6: ", currentloc )
+
+
+//  Dis-assemble the instruction whose first 16 bits are given in the global
+//  "word".  The instruction is split up into certain essential parts, and
+//  is then decoded depending on the Opcode field (Most significant 4 bits).
+
+    size    :=  sizefield()
+    reg     :=  registerfield()
+    opm     :=  opmodefield()
+    bits54  :=  bits54field()
+    reg1    :=  reg1field()
+    reg2    :=  reg2field()
+    bit8    :=  bit( 8 )
+
+    IF progaddress = start.statics THEN state := state.instatics
+    IF progaddress = start.globals THEN state := state.inglobals
+
+    TEST state = state.incode           THEN decodeinstruction()
+    ELSE TEST state = state.inswitch
+    THEN TEST word < switch.upb
+         THEN decodeword()
+         ELSE decodeinstruction()
+    ELSE TEST (progaddress & 3) = 0                     // Cos it's incremnted!
+    $(  TEST word = #X4E71 | state.bcpl = FALSE         // $4E71=NOP !!!
+        THEN decodeinstruction()
+        ELSE dataword()
+        UNLESS state.bcpl=FALSE DO State := state.instatics
+    $)
+    ELSE TEST state = state.inglobals   THEN decodeglobals()
+    ELSE TEST word=0                    THEN decodestatic()     // Small static
+    ELSE
+    $(  LET base = progaddress - 2
+        LET string = TRUE
+        LET len = word >> 8
+        FOR I = 1 TO len IF VALIDCH( location(base+i, size.b) ) = FALSE
+                            $( string := FALSE; BREAK $)
+        TEST string & len > 0           THEN decodestring()
+        ELSE
+        $(  TEST (state = state.incodeorstrings & state.bcpl = TRUE) |
+                 (state = state.instrings       & state.bcpl~=FALSE)
+            THEN state, A4 := state.incode, progaddress-2 + relative*base.addr
+            ELSE state := state.incode
+            decodeinstruction()
+        $)
+    $)
+
+disasmlabel.:
+
+    lpos   :=  llen < loc.chars  ->  loc.chars, llen + 1
+    IF lpos = loc.chars
+    $(  WRCH('*'')
+        FOR      i = 0 TO progaddress-1 - currentloc  BY        size.b
+        DO TEST i > (max.words*2-1) * size.b THEN BREAK
+           ELSE wrch(printch(checkvalid(currentloc+i, size.b)->
+                                location(currentloc+i, size.b), 0) )
+        WRCH('*'')
+    $)
+    IF lpos < loc.hex THEN lpos := loc.hex
+
+    FOR  i = currentloc  TO  progaddress-1  BY  size.w  DO
+         writef( "%X4 ", checkvalid( i, size.w )  ->  location( i, size.w ), #X0000 )
+
+    UNLESS ind1off=-1 & ind2off=-1
+    $(  lpos := llen < loc.comment -> loc.comment, llen
+        UNLESS ind1off = -1     print.indoff(ind1off, ind1reg)
+        UNLESS ind2off = -1     print.indoff(ind2off, ind2reg)
+    $)
+    wrch  :=  SYSwrch
+
+    FOR  i = 0  TO  llen - 1  DO  wrch( lbuff % i )
+    newline()
+$)
+
+AND print.indoff(off, reg) BE SWITCHON reg INTO
+$(  CASE 0:     UNLESS (print.data & p.d.addr) = 0
+                DO WRITEF(relative -> "[%X4]", "[%X6]", off);   RETURN
+    CASE 2:     WRITEF("G%I3  ", off/4);                        RETURN
+    CASE 4:     WRITEF( (print.data&p.d.addr)=0 -> "S%I3 ",
+                        relative                -> "S%I3 [%X4]  ",
+                                                   "S%I3 [%X6]  ",
+                                        off/4, A4+off);         RETURN
+$)
+
+AND readword()  =  VALOF
+$(
+    LET value  =  checkvalid( progaddress, size.w )  ->
+                        location( progaddress, size.w   ), #X0000
+    progaddress  :=  progaddress + size.w
+    RESULTIS  value
+$)
+
+AND writechar( ch )  BE UNLESS lpos > buff.bytes
+$(
+    lbuff % lpos  :=  ch
+    lpos          :=  lpos + 1
+
+    IF  lpos > llen  THEN  llen  :=  lpos
+$)
+
+
+AND decodeinstruction() BE SWITCHON  word >>12 INTO
+$(
+        CASE #B0000 :   decode0000();                                   ENDCASE
+        CASE #B0001 :   size  :=  s.byte;       gen( i.move.byte );     ENDCASE
+        CASE #B0010 :   size  :=  s.long;       gen( i.move.long );     ENDCASE
+        CASE #B0011 :   size  :=  s.word;       gen( i.move.word );     ENDCASE
+        CASE #B0100 :   misc1();                                        ENDCASE
+        CASE #B0101 :   TEST  size = #B11
+                        THEN TEST reg = #B001
+                             THEN        gen( i.DBcc )
+                             ELSE        gen( i.Scc  )
+                        ELSE TEST bit8  = 0
+                             THEN        gen( i.addq )
+                             ELSE        gen( i.subq );                 ENDCASE
+
+        CASE #B0110 :   gen( i.Bcc );                                   ENDCASE
+        CASE #B0111 :   gen( i.moveq );                                 ENDCASE
+        CASE #B1000 :   TEST  opm    = #B011  THEN  gen( i.divu )  ELSE
+                        TEST  opm    = #B111  THEN  gen( i.divs )  ELSE
+                        TEST  bits54 = #B00   &
+                                (word & #B111000000) =
+                                        #B100000000
+                        THEN  gen( i.sbcd )
+                        ELSE  gen( i.or )
+                        ENDCASE
+
+        CASE #B1001 :   TEST  size = #B11               THEN  gen( i.sub  )   ELSE
+                        TEST  (reg = am.Dr  |
+                               reg = am.Ar) &  bit8 = 1 THEN  gen( i.subx )   ELSE
+                              gen( i.sub )
+                        ENDCASE
+
+        CASE #B1010 :   dataword()               ;  ENDCASE
+
+        CASE #B1011 :   TEST  size = #B11  THEN  gen( i.cmp )  ELSE
+                        TEST  bit8 = 1  THEN
+                              TEST  reg = #B001
+                                    THEN  gen( i.cmpm )
+                                    ELSE  gen( i.eor  )
+                        ELSE  gen( i.cmp )
+                        ENDCASE
+
+        CASE #B1100 :   TEST  opm    = #B011  THEN  gen( i.mulu )  ELSE
+                        TEST  opm    = #B111  THEN  gen( i.muls )  ELSE
+                        TEST  bits54 = #B00   THEN
+                              TEST  opm  = #B100 THEN gen( i.abcd ) ELSE
+                              TEST  opm  = #B110 THEN gen( i.exg )  ELSE
+                              TEST  opm  = #B101 THEN gen( i.exg )
+                              ELSE  gen(i.and)
+                        ELSE  gen( i.and )
+                        ENDCASE
+
+        CASE #B1101 :   TEST  size = #B11               THEN  gen( i.add  )   ELSE
+                        TEST  (reg = am.Dr  |
+                               reg = am.Ar) &  bit8 = 1 THEN  gen( i.addx )   ELSE
+                              gen( i.add )
+                        ENDCASE
+
+        CASE #B1110 :   TEST  size = #B11
+                              THEN  memshift()
+                              ELSE  registershift()
+                        ENDCASE
+        CASE #B1111 :   dataword()               ;  ENDCASE
+        DEFAULT      :  // Should Never Happen!
+                        error(0, "Bad opcode in *"disasm*" - %X4*N", word )
+$)
+
+
+
+AND misc1() BE
+$(
+// Deals with all the miscellaneous instructions which have
+// opcode #B0100.
+
+    TEST  bit8 = 1
+    $(
+        TEST size = #B10  THEN gen( i.chk )    ELSE
+        TEST size = #B11  THEN gen( i.lea )    ELSE
+             dataword()
+    $)
+    ELSE
+    $(
+        SWITCHON  (word >> 9) & #B111  INTO
+        $(
+            CASE #B000 :  TEST  size = #B11
+                                THEN gen( i.move.from.sr )
+                                ELSE gen( i.negx )
+                          ENDCASE
+
+
+            CASE #B001 :  gen( i.clr )
+                          ENDCASE
+
+
+            CASE #B010 :  TEST  size = #B11
+                                THEN  gen( i.move.to.ccr )
+                                ELSE  gen( i.neg )
+                          ENDCASE
+
+            CASE #B011 :  TEST  size = #B11
+                                THEN  gen( i.move.to.sr )
+                                ELSE  gen( i.not )
+                          ENDCASE
+
+
+            CASE #B100 :  TEST  size = #B00  THEN  gen( i.nbcd )  ELSE
+                          TEST  size = #B01  THEN
+                                TEST  reg = am.Dr
+                                      THEN  gen( i.swap )
+                                      ELSE  gen( i.pea )
+                          ELSE  TEST  reg = am.Dr  THEN
+                                      gen( bit( 6 ) = 0  ->  i.extw, i.extl )
+                                ELSE  gen( i.movem.from.reg )
+                          ENDCASE
+
+
+            CASE #B101 :  TEST  size = #B11
+                                THEN  gen( i.tas )
+                                ELSE  gen( i.tst )
+                          ENDCASE
+
+
+            CASE #B110 :  gen( i.movem.to.reg )
+                          ENDCASE
+
+
+            CASE #B111 :  TEST  size    = #B11
+                        THEN STATE := state.aftercode <> gen( i.jmp )
+                        ELSE TEST       size    = #B10
+                        THEN  gen( i.jsr )  ELSE
+                          TEST  bits54  = #B00  THEN  gen( i.trap)  ELSE
+                            SWITCHON  reg  INTO
+                $(misc2
+                    DEFAULT        :  dataword()                   ;  ENDCASE
+                    CASE #B010 :  gen( i.link )            ;  ENDCASE
+                    CASE #B011 :  gen( i.unlk )            ;  ENDCASE
+                    CASE #B100 :  gen( i.move.to.usp )     ;  ENDCASE
+                    CASE #B101 :  gen( i.move.from.usp )           ;  ENDCASE
+
+                    CASE #B110 :  SWITCHON  word & #B111  INTO
+                    $(misc3
+                        CASE #B000 :  gen( i.reset )               ;  ENDCASE
+                        CASE #B001 :  gen( i.nop )                 ;  ENDCASE
+                        CASE #B010 :  gen( i.stop )                ;  ENDCASE
+                        CASE #B011 :  gen( i.rte )                 ;  ENDCASE
+                        CASE #B101 :  gen( i.rts )                 ;  ENDCASE
+                        CASE #B110 :  gen( i.trapv )               ;  ENDCASE
+                        CASE #B111 :  gen( i.rtr )                 ;  ENDCASE
+
+                        DEFAULT    :  dataword()
+                    $)misc3
+                $)misc2
+        $)
+    $)
+$)
+
+
+AND decode0000()  BE
+$(
+    TEST  bit8 = 1
+        //  If bit 8 is a one, then this is a dynamic
+        //  BIT or a MOVEP instruction.  If the register
+        //  field of the effective address is ADDRESS
+        //  then it must be a MOVEP - assumed BIT otherwise
+
+        TEST  reg = am.Ar
+              THEN  gen( i.movep )
+              ELSE  gen( i.bit.dynamic )
+
+    ELSE
+    $(
+        SWITCHON  (word >> 9) & #B111  INTO
+        $(
+            CASE  #B000 :  gen( i.ori )                ;  ENDCASE
+            CASE  #B001 :  gen( i.andi )               ;  ENDCASE
+            CASE  #B010 :  gen( i.subi )               ;  ENDCASE
+            CASE  #B011 :  gen( i.addi )               ;  ENDCASE
+            CASE  #B100 :  gen( i.bit.static )         ;  ENDCASE
+            CASE  #B101 :  gen( i.eori )               ;  ENDCASE
+            CASE  #B110 :  gen( i.cmpi )               ;  ENDCASE
+        //  CASE  #B111 :
+            DEFAULT     :  dataword()                  ;  ENDCASE
+        $)
+    $)
+$)
+
+AND decodeword() BE
+$(
+    writes( "DC.W" )
+    setargloc()
+    writef( "$%X4", word )
+$)
+
+AND dataword() BE
+$(
+// The decoding of the instruction has failed abismally, and so, we
+// can only assume that this is a word of data.
+    decodeword()
+    state := state.aftercode
+$)
+
+AND decodestatic() BE
+$(  WRITES("DC.L")
+    setargloc()
+    WRITENUMBER(word, readword(), 5)
+    state := state.instatics
+$)
+
+AND decodestring() BE
+$(  LET len = word>> 8
+    LET base = progaddress-2
+    WRCH('"')
+    FOR I = 1 TO len DO wrch(printch(location(base+i, size.b)))
+    WRCH('"')
+    progaddress := base + (len/4 +1)*4
+    IF len=7 //UNLESS state=state.instrings
+                state := state.incodeorstrings          // Well .... what else ???????
+$)
+
+AND decodeglobals() BE
+$(  WRITES("DC.L")
+    setargloc()
+    TEST progaddress = start.globals
+    $(  LET bottom = readword()
+        WRITENUMBER(word, bottom, 0)
+        UNLESS bottom=0 & word=0 DO state := state.unknown
+    $)
+    ELSE TEST progaddress = upb-2
+    THEN WRITENUMBER(word, readword(), 3)
+    ELSE
+    $(  writenumber(word, readword(), 3)
+        word := readword()
+        WRITES(", ")
+        $(  LET end = readword()
+            UNLESS relative
+            DO ind1off, ind1reg := (word<<8) +end + (relative-> 0, base.addr), 0
+            writenumber(word, end, 3)
+        $)
+    $)
+$)
+
+AND writenumber(a, b, c) BE TEST a=0 & b>= 0 & b <= #X7FFF
+THEN WRITED(b, c)
+ELSE WRITEF("$%X4%X4", a, b)
+
+AND registershift() BE
+$(
+// More decoding is necessary, before we can print out this instruction
+// we know that it is in the general class of data-register-shift
+// instructions.
+
+    LET ir    =  bit( 5 )
+    LET type  =  reg & #B11
+
+    writes( rcode( type ) )
+    wrch( bit8 = 0  ->  'R', 'L' )
+    writesize()
+    setargloc()
+
+    TEST  ir = 0  THEN
+          writef( "#%N,", reg2 = 0  ->  8, reg2 )
+    ELSE  writef( "D%N,", reg2 )
+
+    writef( "D%N", reg1 )
+$)
+
+
+
+AND memshift() BE
+$(
+// Like "registershift" - this needs more decoding, but we
+// assume that it is a memory shift instruction
+
+    LET type  =  reg2 & #B11
+
+    writes( rcode( type ) )
+    wrch( bit8 = 0  ->  'R', 'L' )
+    setargloc()
+
+    write.ea( word )
+$)
+
+
+
+AND gen( instruction ) BE
+$(
+//  We now know what sort of instruction we are dealing with, so decoding
+//  is now easy.  First write out the Opcode of the instruction.
+
+    LET opmode   =  ?
+    LET regmask  =  ?
+
+    writes( opcode( instruction ) )
+
+    SWITCHON  instruction  INTO
+    $(
+        CASE i.move.byte:
+        CASE i.move.word:
+        CASE i.move.long:
+                setargloc()
+                write.ea( word )
+                wrch( ',' )
+                write.ea( swapea( word >> 6 ) )
+                ENDCASE
+
+        CASE i.DBcc:
+        CASE i.Scc:
+        CASE i.Bcc:
+                writes( ccode( (word    >> 8) & #B1111, instruction ) )
+
+                TEST     instruction = i.DBcc  THEN
+                $(
+                                       setargloc()
+                                       writef( "D%N,", reg1 )
+                                       writeoffset( extend( readword() ) )
+                $)
+                ELSE TEST        instruction = i.Bcc  THEN
+                $(
+                                       LET short   =  bextend( word & #XFF )
+                                       LET offset  =  ?
+
+                                       TEST  (word & #XFF) = 0  THEN
+                                             offset  :=  extend( readword() )
+                                       ELSE
+                                       $(
+                                           writes( ".S" )
+                                           offset  :=  short
+                                       $)
+
+                                       setargloc()
+                                       writeoffset( offset )
+                $)
+                ELSE     //  instruction = i.Scc
+                $(
+                                       setargloc()
+                                       write.ea( word )
+                $)
+                ENDCASE
+
+
+        CASE i.addq:
+        CASE i.subq:  writesize()
+                setargloc()
+                writef( "#%N,", reg2    = 0  ->  8, reg2 )
+                write.ea( word )
+                ENDCASE
+
+        CASE i.moveq:
+                setargloc()
+                writef( "#%N,D%N", bextend( word & #XFF), reg2 )
+                ENDCASE
+
+        CASE i.chk:     CASE i.divu:    CASE i.divs:    CASE i.mulu:    CASE i.muls:
+                size    :=  s.word
+                setargloc()
+                write.ea( word )
+                writef( ",D%N", reg2 )
+                ENDCASE
+
+
+        CASE i.addx:    CASE i.subx:
+                writesize()
+
+        CASE i.abcd:
+        CASE i.sbcd:
+                setargloc()
+                writef( bit(3)=0 ->  "D%N,D%N", "-(A%N),-(A%N)", reg1, reg2 )
+                ENDCASE
+
+
+        CASE i.or:      CASE i.and:     CASE i.eor:
+                writesize()
+                setargloc()
+
+                TEST    bit8 = 0
+                $(  write.ea(   word ); writef( ",D%N", reg2 )  $)
+                ELSE
+                $(  writef( "D%N,", reg2 ); write.ea(   word )  $)
+                ENDCASE
+
+
+        CASE i.add:     CASE i.sub:     CASE i.cmp:
+                TEST  size = #B11
+                $(
+                      wrch( 'A' )
+                      writes( bit8 = 0  ->  ".W", ".L" )
+                      setargloc()
+                      write.ea( word )
+                      writef( ",A%N", reg2 )
+                $)
+                ELSE
+                $(
+                      writesize()
+                      setargloc()
+                      TEST  bit8 = 0  THEN
+                      $(
+                          write.ea( word )
+                          writef( ",D%N", reg2 )
+                      $)
+                      ELSE
+                      $(
+                          writef( "D%N,", reg2 )
+                          write.ea( word )
+                      $)
+                $)
+                ENDCASE
+
+
+        CASE i.cmpm:
+                writesize()
+                setargloc()
+                writef( "(A%N)+,(A%N)+", reg1, reg2 )
+                ENDCASE
+
+
+        CASE i.exg:
+                setargloc()
+                opmode   :=  (word >> 3) & #B11111
+                        TEST opmode =   #B01000
+                THEN writef( "D%N,D%N", reg2,   reg1 )
+                ELSE    TEST  opmode =  #B01001
+                THEN writef( "A%N,A%N", reg2,   reg1 )
+                ELSE    TEST  opmode = #B10001
+                THEN writef( "D%N,A%N", reg2,   reg1 )
+                ELSE duffinstruction()
+                ENDCASE
+
+    CASE i.lea: setargloc()
+                write.ea( word  )
+                writef( ",A%N", reg2 )
+                ENDCASE
+
+
+        CASE i.neg:     CASE i.negx:    CASE i.clr:     CASE i.tst:     CASE i.not:
+                writesize()
+                setargloc()
+                write.ea( word  )
+                ENDCASE
+
+        CASE i.swap:    CASE i.extl:    CASE i.extw:    CASE i.nbcd:
+        CASE i.jmp:     CASE i.jsr:     CASE i.pea:     CASE i.tas:
+                setargloc()
+                write.ea( word  )
+                ENDCASE
+
+
+        CASE i.reset:   CASE i.nop:     CASE i.rte:     CASE i.rts:     CASE i.rtr:     CASE i.trapv:
+                ENDCASE
+
+
+        CASE i.ori:     CASE i.andi:    CASE i.subi:    CASE i.addi:    CASE i.eori:    CASE i.cmpi:
+                writesize()
+                setargloc()
+                writes( "#$" )
+                TEST  size = s.byte  THEN  writehex( readword(), 2 )  ELSE
+                TEST  size = s.word  THEN  writehex( readword(), 4 )  ELSE
+                TEST  size = s.long  THEN
+                $(
+                    writehex( readword(), 4 )
+                    writehex( readword(), 4 )
+                $)
+                ELSE  duffinstruction()
+                wrch( ',' )
+                write.ea( word  )
+                ENDCASE
+
+
+        CASE i.move.to.sr     :
+        CASE i.move.from.sr   :
+        CASE i.move.to.ccr    :
+                size  :=  instruction = i.move.to.ccr   ->  s.byte, s.word
+                setargloc()
+
+                TEST  instruction = i.move.to.sr  THEN
+                $(
+                                     write.ea( word )
+                                     writes( ",SR" )
+                $)
+                ELSE TEST  instruction = i.move.from.sr
+                $(
+                                     writes( "SR," )
+                                     write.ea( word )
+                $)
+
+                ELSE  // instruction =  i.move.to.ccr
+                $(
+                                     write.ea( word )
+                                     writes( ",CCR" )
+                $)
+                ENDCASE
+
+
+        CASE i.move.to.usp:     CASE i.move.from.usp:
+                setargloc()
+                writef( instruction = i.move.to.usp  ->
+                                         "A%N,USP", "USP,A%N",  reg1 )
+                ENDCASE
+
+        CASE i.movep:
+                IF  bit8 = 0  THEN  duffinstruction()
+                writes( (opm &  #B001) = 0  ->  ".W", ".L" )
+                setargloc()
+
+                TEST (opm & #B010) = 0
+                THEN writef( "%N(A%N),D%N", extend( readword() ), reg1, reg2 )
+                ELSE writef( "D%N,%N(A%N)", reg2, extend( readword() ), reg1 )
+                ENDCASE
+
+
+        CASE i.stop:
+                setargloc()
+                writef( "#$%X4", readword() )
+                ENDCASE
+
+        CASE i.trap           :
+                setargloc()
+                writef( "#%N",  word & #B1111 )
+                ENDCASE
+
+
+        CASE i.link           :
+        CASE i.unlk           :  setargloc()
+                writef( "A%N",  reg1 )
+                IF  instruction = i.link  writef( ",#%N", extend( readword() ) )
+                ENDCASE
+
+
+        CASE i.movem.to.reg   :
+        CASE i.movem.from.reg :
+                writes( bit( 6  ) = 0  ->  ".W", ".L" )
+                setargloc()
+                regmask  :=  readword()
+
+                TEST  instruction = i.movem.to.reg  THEN
+                $(
+                                     write.ea( word )
+                                     wrch( ',' )
+                                     writeregs( regmask )
+                $)
+                ELSE
+                $(
+                                     writeregs( regmask )
+                                     wrch( ',' )
+                                     write.ea( word )
+                $)
+                ENDCASE
+
+
+        CASE i.bit.static     :
+        CASE i.bit.dynamic    :
+                writes( bcode(  size ) )
+                setargloc()
+
+                TEST instruction = i.bit.static
+                THEN writef( "#%N,", readword() & #B11111 )
+                ELSE writef( "D%N,", reg2 )
+
+                write.ea( word  )
+                ENDCASE
+
+
+        DEFAULT:
+                error( 0, "Bad code %N in *"gen*"*N", instruction )
+    $)
+$)
+
+
+AND opcode( instruction )  =  VALOF
+$(
+//  Return the String representation of the Opcode given by the argument
+//  "instruction".  The string is in minimum width so that size specifiers
+//  can be added to it later.
+
+    SWITCHON  instruction  INTO
+    $(
+        CASE i.move.byte       : RESULTIS "MOVE.B"
+        CASE i.move.long       : RESULTIS "MOVE.L"
+        CASE i.move.word       : RESULTIS "MOVE.W"
+        CASE i.DBcc            : RESULTIS "DB"
+        CASE i.Scc             : RESULTIS "S"
+        CASE i.addq            : RESULTIS "ADDQ"
+        CASE i.subq            : RESULTIS "SUBQ"
+        CASE i.Bcc             : RESULTIS "B"
+        CASE i.moveq           : RESULTIS "MOVEQ"
+        CASE i.divu            : RESULTIS "DIVU"
+        CASE i.mulu            : RESULTIS "MULU"
+        CASE i.divs            : RESULTIS "DIVS"
+        CASE i.muls            : RESULTIS "MULS"
+        CASE i.sbcd            : RESULTIS "SBCD"
+        CASE i.or              : RESULTIS "OR"
+        CASE i.subx            : RESULTIS "SUBX"
+        CASE i.sub             : RESULTIS "SUB"
+        CASE i.cmpm            : RESULTIS "CMPM"
+        CASE i.eor             : RESULTIS "EOR"
+        CASE i.cmp             : RESULTIS "CMP"
+        CASE i.abcd            : RESULTIS "ABCD"
+        CASE i.exg             : RESULTIS "EXG"
+        CASE i.and             : RESULTIS "AND"
+        CASE i.addx            : RESULTIS "ADDX"
+        CASE i.add             : RESULTIS "ADD"
+        CASE i.chk             : RESULTIS "CHK"
+        CASE i.lea             : RESULTIS "LEA"
+        CASE i.move.from.sr    : RESULTIS "MOVE"
+        CASE i.negx            : RESULTIS "NEGX"
+        CASE i.move.to.sr      : RESULTIS "MOVE"
+        CASE i.not             : RESULTIS "NOT"
+        CASE i.clr             : RESULTIS "CLR"
+        CASE i.move.to.ccr     : RESULTIS "MOVE"
+        CASE i.neg             : RESULTIS "NEG"
+        CASE i.nbcd            : RESULTIS "NBCD"
+        CASE i.swap            : RESULTIS "SWAP"
+        CASE i.pea             : RESULTIS "PEA"
+        CASE i.extw            : RESULTIS "EXT.W"
+        CASE i.extl            : RESULTIS "EXT.L"
+        CASE i.movem.from.reg  : RESULTIS "MOVEM"
+        CASE i.movem.to.reg    : RESULTIS "MOVEM"
+        CASE i.jmp             : RESULTIS "JMP"
+        CASE i.jsr             : RESULTIS "JSR"
+        CASE i.trap            : RESULTIS "TRAP"
+        CASE i.link            : RESULTIS "LINK"
+        CASE i.unlk            : RESULTIS "UNLK"
+        CASE i.move.to.usp     : RESULTIS "MOVE"
+        CASE i.move.from.usp   : RESULTIS "MOVE"
+        CASE i.reset           : RESULTIS "RESET"
+        CASE i.nop             : RESULTIS "NOP"
+        CASE i.stop            : RESULTIS "STOP"
+        CASE i.rte             : RESULTIS "RTE"
+        CASE i.rts             : RESULTIS "RTS"
+        CASE i.trapv           : RESULTIS "TRAPV"
+        CASE i.rtr             : RESULTIS "RTR"
+        CASE i.movep           : RESULTIS "MOVEP"
+        CASE i.bit.dynamic     : RESULTIS "B"
+        CASE i.ori             : RESULTIS "ORI"
+        CASE i.andi            : RESULTIS "ANDI"
+        CASE i.subi            : RESULTIS "SUBI"
+        CASE i.addi            : RESULTIS "ADDI"
+        CASE i.eori            : RESULTIS "EORI"
+        CASE i.cmpi            : RESULTIS "CMPI"
+        CASE i.bit.static      : RESULTIS "B"
+        CASE i.tas             : RESULTIS "TAS"
+        CASE i.tst             : RESULTIS "TST"
+
+        DEFAULT                :  RESULTIS "????"
+    $)
+$)
+
+
+
+AND sizestring( code )  =  code = s.byte  ->  ".B",
+                           code = s.word  ->  ".W",
+                           code = s.long  ->  ".L",  ".?"
+
+
+
+AND ccode( code, instruction )  =  VALOF
+$(
+    SWITCHON  code  INTO
+    $(
+        CASE #B0000 :  RESULTIS  instruction = i.Bcc   ->  "RA", "T"
+        CASE #B0001 :  RESULTIS  instruction = i.DBcc  ->  "RA",
+                                 instruction = i.Bcc   ->  "SR", "F"
+        CASE #B0010 :  RESULTIS  "HI"
+        CASE #B0011 :  RESULTIS  "LS"
+        CASE #B0100 :  RESULTIS  "CC"
+        CASE #B0101 :  RESULTIS  "CS"
+        CASE #B0110 :  RESULTIS  "NE"
+        CASE #B0111 :  RESULTIS  "EQ"
+        CASE #B1000 :  RESULTIS  "VC"
+        CASE #B1001 :  RESULTIS  "VS"
+        CASE #B1010 :  RESULTIS  "PL"
+        CASE #B1011 :  RESULTIS  "MI"
+        CASE #B1100 :  RESULTIS  "GE"
+        CASE #B1101 :  RESULTIS  "LT"
+        CASE #B1110 :  RESULTIS  "GT"
+        CASE #B1111 :  RESULTIS  "LE"
+
+        DEFAULT     :  err( "Bad code %N in *"ccode*"", code )
+    $)
+$)
+
+
+
+AND rcode( code )  =  VALOF
+$(
+    SWITCHON  code  INTO
+    $(
+        CASE #B00  :  RESULTIS "AS"
+        CASE #B01  :  RESULTIS "LS"
+        CASE #B10  :  RESULTIS "ROX"
+        CASE #B11  :  RESULTIS "RO"
+
+        DEFAULT    :  RESULTIS "????"
+    $)
+$)
+
+
+
+AND bcode( code )  =  VALOF
+$(
+    SWITCHON  code  INTO
+    $(
+        CASE b.tst  :  RESULTIS  "TST"
+        CASE b.set  :  RESULTIS  "SET"
+        CASE b.clr  :  RESULTIS  "CLR"
+        CASE b.chg  :  RESULTIS  "CHG"
+
+        DEFAULT     :  RESULTIS  "???"
+   $)
+$)
+
+AND extend( value )  =  (value & #X7FFF) - (value & #X8000)
+
+AND bextend( value ) =  (value & #X7F)   - (value & #X80)
+
+AND swapea( ea )     =  ((ea >> 3) & #B111) | ((ea & #B111) << 3)
+
+AND writesize()  BE  writes( sizestring( size ) )
+
+AND setargloc()  BE  lpos  :=  loc.arg
+
+AND writeoffset( offset )  BE
+$(  LET increment  =  offset + 2
+
+    wrch( '**' )
+    UNLESS  increment < 0  DO  wrch( '+' )
+    writen( increment )
+    UNLESS (print.data & p.d.addr) = 0
+    DO ind1reg, ind1off := 0, increment + currentloc + relative * base.addr
+$)
+
+AND writeregs( regmask )  BE
+$(
+    LET sp   = FALSE
+
+    IF  ((word >> 3) & #B111) = am.Ar.pd  THEN
+        regmask  :=  reversebits( regmask )
+
+    FOR  regtype = 'D' TO 'A' BY 'A' - 'D'
+    DO  FOR  i = 0  TO  7
+        $(  UNLESS (regmask & 1) = 0
+            $(  IF  sp  THEN  wrch( '/' )
+                writef( "%C%N", regtype, i )
+                sp  :=  TRUE
+            $)
+
+            regmask  :=  regmask >> 1
+        $)
+$)
+
+
+
+AND reversebits( value )  =  VALOF
+$(
+    LET newvalue = 0
+
+    FOR  i = 1  TO  16  DO
+    $(
+        newvalue  :=  (newvalue << 1) | (value & 1)
+        value     :=  value >> 1
+    $)
+
+    RESULTIS  newvalue
+$)
+
+
+
+AND write.ea( ea )  BE
+$(
+    LET offset  =  ?
+    LET extword =  ?
+
+    TEST  ((ea >> 3) & #B111) = #B111  THEN
+    $(
+        SWITCHON  ea & #B111  INTO
+        $(
+            CASE am.abs16     :  writef( "$%X4", readword() )
+                                 ENDCASE
+
+            CASE am.abs32     :  writef( "$%X4", readword() )
+                                 writehex( readword(), 4 )
+                                 ENDCASE
+
+            CASE am.PC.disp   :  wrch( '**' )
+                                 offset  :=  2 + extend( readword() )
+                                 UNLESS  offset < 0  DO  wrch( '+' )
+                                 writen( offset )
+                                 ENDCASE
+
+            CASE am.PC.index  :  wrch( '**' )
+                                 extword  :=  readword()
+                                 offset   :=  2 + bextend( extword & #XFF )
+                                 UNLESS  offset < 0  DO  wrch( '+' )
+                                write.offset(offset)
+                                 writef( "(%C%N",
+                                          (extword & #X8000) = 0  ->  'D', 'A',
+                                          (extword >> 12) & #B111 )
+                                 writes( (extword & #X800) = 0  ->  ".W)", ".L)" )
+                                 ENDCASE
+
+            CASE am.imm       : writes( "#$" )
+                                TEST  size = s.byte  THEN  writehex( readword(), 2 )  ELSE
+                                TEST  size = s.word  THEN  writehex( readword(), 4 )  ELSE
+                                TEST  size = s.long  THEN
+                                $(
+                                    writehex( readword(), 4 )
+                                    writehex( readword(), 4 )
+                                $)
+                                ELSE  duffinstruction()
+                                ENDCASE
+
+            DEFAULT          :  duffinstruction()
+        $)
+    $)
+    ELSE
+    $(
+        LET r  =  ea & #B111
+
+        SWITCHON  (ea >> 3) & #B111  INTO
+        $(
+            CASE am.Dr       :  writef( "D%N", r )
+                                ENDCASE
+
+            CASE am.Ar       :  writef( "A%N", r )
+                                ENDCASE
+
+            CASE am.Ar.ind   :  writef( "(A%N)", r )
+                                ENDCASE
+
+            CASE am.Ar.pi    :  writef( "(A%N)+", r )
+                                ENDCASE
+
+            CASE am.Ar.pd    :  writef( "-(A%N)", r )
+                                ENDCASE
+
+            CASE am.Ar.disp  :  extword := extend(readword())
+                                write.offset(extword)
+                                IF ((r=4) | (r=2)) & (extword & 3)=0
+                                THEN TEST ind1off = -1
+                                     THEN ind1off, ind1reg := extword, r
+                                     ELSE ind2off, ind2reg := extword, r
+                                WRITEF("(A%N)", r)
+                                ENDCASE
+
+            CASE am.Ar.index :  extword  :=  readword()
+                                write.offset(bextend(extword & #XFF))
+                                writef( "(A%N,", r )
+                                writef( "%C%N%S", (extword & #X8000) = 0  ->  'D', 'A',
+                                                  (extword >> 12) & #B111,
+                                                  (extword & #X800) = 0   ->  ".W)", ".L)" )
+                                // JMP 0(A4,?)
+
+                                IF (extword&#X88FF)=#X8800 & r=4 &
+                                        state = state.aftercode
+                                $(  state       := state.inswitch
+                                    switch.upb  := progaddress-A4 + relative * base.addr
+                                $)
+                                ENDCASE
+
+            DEFAULT          :  err( "Bad EA %X4 in *"write.ea*"", ea )
+        $)
+   $)
+$)
+
+AND write.offset(offset) BE
+//TEST (offset & 3) = 0
+//THEN writef("%N**4", offset/4)
+//ELSE
+WRITEF("%N", offset)
+
+AND sizefield()          =  (word >> 6) & sizemask
+
+AND registerfield()      =  (word >> 3) & registermask
+
+AND reg1field()          =  word        & registermask
+
+AND reg2field()          =  (word >> 9) & registermask
+
+AND opmodefield()        =  (word >> 6) & #B111
+
+AND bit( n )             =  (word >> n) & 1
+
+AND bits54field()        =  (word >> 4) & #B11
+
+AND duffinstruction()  BE
+$(
+    progaddress  :=  currentloc
+    lpos         :=  loc.op
+    llen         :=  lpos
+    word         :=  readword()
+
+    FOR  i = lpos TO  buff.bytes DO  lbuff % i  :=  '*S'
+//  writef( "$%X6:  ", currentloc )
+    dataword()
+
+    longjump( disasmlevel, disasmlabel )
+$)
+
+AND err( format, argument ) BE
+$(
+// Some sort of internal error
+
+    wrch  :=  SYSwrch
+    error(0,  format, argument )
+$)
+
+AND checkvalid(base, len) = base >= 0 & (base+len) < 256000
+
+AND location(base, len) = VALOF
+$( LET word     = base / bytesperword
+   LET offset   = len=1 -> base REM bytesperword, (base REM bytesperword)/2
+   RESULTIS len=1 -> word%offset, len=2 -> word %% offset, !word
+$)
+
+AND validch(ch) = ' '<=ch<127->TRUE, ch>' '->FALSE, VALOF SWITCHON ch INTO
+$(  DEFAULT:    RESULTIS FALSE
+CASE '*N':      CASE '*T':      CASE '*B':      CASE '*C':      CASE '*P':
+//CASE '*L':
+        RESULTIS 1
+$)
+AND printch(ch) = validch(ch)=TRUE -> ch, '.'
+
+

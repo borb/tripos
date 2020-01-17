@@ -1,0 +1,125 @@
+$<SUBROUTINE'
+SECTION "READLIN"
+
+GET "header"
+GET "CURHDR"
+GET "IOHDR"
+$>SUBROUTINE'
+GET "TERMHDR"
+
+MANIFEST $( chars       = 20 $)
+
+LET readline(bits) = //(NOT sc) -> 1,
+VALOF
+$(      LET a   = input()
+        LET new = ?
+        LET v.c = 0
+        LET v.s = 0
+        LET v.l = @v.c
+        LET pos = 0
+        LET ch  = ?
+        LET pntr= ?
+
+        LET reflect     = ((bits & 1) ~= 0) & sc
+        LET wait        = (bits & 2) ~= 0       // Retry if whol line deleted...
+
+        LET V   = VEC chars/BYTESPERWORD
+        $(  IF cis!4=cis!5      WRCH('*E')
+            ch  := cur.RDCH()
+            IF testflags(1) THEN ch := CUR.ABANDON
+            IF ch = ENDSTREAMCH         BREAK
+            IF pos >= chars
+            $(  new := getvec(chars/BYTESPERWORD +1)
+                !new    := 0                            // End marker
+                !v.l    := new                          // Chain on end
+                v.l     := new
+                v.s     := v.s+1
+                pos     := 0
+                new     := new+1
+                FOR i = 0 TO chars-1 DO new%i := v%i
+            $)
+
+switch.l:
+            UNLESS #X7F > ch  >= ' ' SWITCHON ch INTO
+            $(  DEFAULT:        WRCH(7);                                LOOP
+                CASE CUR.NODATA:                                        LOOP
+                CASE CUR.VTCH:  ch := RDCH() << 8;
+                                ch := ch | RDCH();              GOTO switch.l
+                CASE CUR.ABANDON:
+                                setflags(taskid, 1)
+                CASE CUR.DEL.LINE:
+                CASE 'x'-'a'+1: UNLOADSEG(v.c)
+                                IF reflect
+                                FOR I = 1 TO chars*v.s + pos DO WRITES("*B *B")
+                                WRCH('*E')
+
+                                // Whol line deleted - Do we wait ?
+                                UNLESS wait & ch ~= CUR.ABANDON RESULTIS 0
+                                v.s     := 0
+                                v.l     := @v.c
+                                v.c     := 0
+                                pos     := 0;                           LOOP
+
+                CASE '*N':
+                case '*C':      ch := '*N';                             ENDCASE
+                case 'z'-'a'+1: IF pos=0 & v.s=0
+                                $( ch := ENDSTREAMCH;                   BREAK $)
+                                UNRDCH()
+                                ch := '*N';                             ENDCASE
+
+                case '*B':
+                CASE CUR.RUBOUT:
+                case #X7F:      IF pos=0
+                                $(  LET ptr = @v.c
+                                    IF v.s=0
+                                    TEST wait $( WRCH(7); LOOP $)
+                                    ELSE $( WRCH('*E'); RESULTIS 0 $)
+                                    v.s := v.s-1
+                                    UNTIL !ptr = v.l DO ptr := !ptr
+                                    !ptr := 0           // New end ..
+                                    v.l := v.l+1
+                                    FOR i=0 TO chars-1 DO v%i := v.l%i
+                                    freevec(v.l-1)
+                                    v.l := ptr
+                                    pos := chars
+                                $)
+                                IF reflect THEN WRITES("*B *B")
+                                pos := pos-1
+
+                                // Whole line deleted - Do we wait ?
+                                IF pos=0 & v.s=0 & NOT wait
+                                $( WRCH('*E');  RESULTIS 0 $)
+                                LOOP
+            $)
+//          IF testflags(1) THEN ch := ENDSTREAMCH <> WRITEF("BREAK*N")
+            v%pos       := ch
+            IF reflect & NOT (ch='*N' & pos=0 & v.s=0 & NOT wait) cur.wrch(ch)
+            pos         := pos +1
+            IF ch='*N' BREAK
+        $) REPEATUNTIL ch = ENDSTREAMCH
+
+        $(  LET s.buf   = a!scb.buf
+            LET s.pos   = a!4
+            LET s.end   = a!5
+            LET s.extra = s.end - s.pos
+            new := GETVEC ((v.s*chars + pos + s.extra)/BYTESPERWORD +3) +3
+            pntr:= v.c+1
+            FOR v.p     = 0 TO v.s-1
+            $(  FOR i = 0 TO chars-1 DO new%(i+chars*v.p) := pntr%i
+                pntr := pntr!(-1) + 1
+            $)
+            UNLOADSEG(v.c)
+
+            FOR i = 0 TO pos-1 DO new%(i+chars*v.s) := V%i
+            FOR i = 0 TO s.extra-1
+            DO new%(i+chars*v.s+pos) := s.buf % (s.pos+i)
+
+            UNLESS s.buf=-1
+                FREEVEC(s.buf - 3 + (s.buf & 1) * 3)
+            a!scb.buf   := new
+            a!4, a!5    := 0, pos+chars*v.s + s.extra
+        $)
+        RESULTIS pos+chars*v.s
+$)
+
+

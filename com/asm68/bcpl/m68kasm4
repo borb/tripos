@@ -1,0 +1,1749 @@
+//******************************************************************************
+//*   Assembler for the Motorola MC68000 Microprocessor:  Section 4            *
+//******************************************************************************
+
+
+
+SECTION "M68KASM4"
+
+
+
+GET "LIBHDR"
+
+GET "M68KHDR"
+
+
+
+LET defineconstants( size )  BE
+$(
+//  Deal with a "DC" directive.
+
+    LET restype  =  0
+    LET bs       =  bytesize( size )
+
+    skiplayout()
+
+    align( bytesize( size = ts.byte  ->  size, ts.word ) )
+
+    IF  labelset  THEN  setlabel( locmode, location, no )
+
+    nitems  :=  0
+
+    $(  //  Repeat loop to read all the items on the line.  We are already
+        //  aligned to the correct boundary.
+
+        externalref  :=  no
+        forwardref   :=  no
+
+        TEST  ch = '*''  THEN
+        $(
+            //  This is the most revolting feature of the Motorola 68000
+            //  assembler.  We are allowed to use DC.L and DC.W to declare
+            //  aligned string constants as well as DC.B.
+
+            LET charcount  =  0
+
+            $(  //  Repeat loop to read the characters in the string.
+
+                rch()
+
+                IF  ch = '*''  THEN
+                $(
+                    rch()
+                    UNLESS  ch = '*''  BREAK
+                $)
+
+                IF  ch = '*N'  THEN  complain( 57 )
+
+                stackvalue( s.abs16, 1, ascii.value( ch ), no, 0 )
+                    
+                charcount  :=  charcount + 1
+            $)
+            REPEAT
+
+            readsymb()
+                
+            //  We now have to ensure that we are aligned to the right sort
+            //  of boundary by filling up with the right number of nulls.
+                
+            UNTIL  (charcount REM bs)  =  0  DO
+            $(
+                stackvalue( s.abs16, 1, 0, no, 0 )
+                    
+                charcount  :=  charcount + 1
+            $)
+        $)
+        ELSE
+        $(
+            readsymb()
+
+            restype  :=  evalexp( expression() )
+
+            UNLESS  size = ts.byte  DO
+                IF  pass1 & forwardref  THEN  
+                    relocate( 0, bs )
+
+            IF  externalref  &  size \= ts.long  THEN
+                complain( 161 )
+                
+            IF  size = ts.byte  &  NOT absolute( restype )  THEN
+                complain( 123 )
+
+            IF  pass2  THEN
+            $(
+                IF  size = ts.word  &  NOT wordsized( value )  THEN
+                    warning( 175 )
+
+                IF  size = ts.byte  &  NOT bytesized( value )  THEN
+                    warning( 176 )
+            $)
+
+            stackvalue( restype, bs, value, externalref, externalsymb )
+        $)
+    $)
+    REPEATWHILE  symb = s.comma
+
+    //  If we drop through here, then, either we have reached the end
+    //  of the list, and have come to an "s.none", or else, this is some
+    //  sort of syntax error.
+
+    checkfor( s.none, 77 )
+$)
+
+
+
+AND defineblock( size )  BE
+$(
+//  Handle the DCB directive - define a block of items which are all the same
+//  value.
+
+    LET incr     =  0
+    LET newloc   =  0
+    LET restype  =  0
+    LET bs       =  bytesize( size )
+    
+    align( bytesize( size = ts.byte  ->  size, ts.word ) )
+
+    IF  labelset  THEN  setlabel( locmode, location, no )
+    
+    //  First read the count, which will tell us where the final location will
+    //  be.
+    
+    nextsymb()
+
+    restype  :=  evalexp( expression() )
+
+    TEST  forwardref                THEN  complain( 79 )   ELSE
+    TEST  externalref               THEN  complain( 164 )  ELSE
+    TEST  NOT absolute( restype )   THEN  complain( 71 )   ELSE
+    TEST  value < 0                 THEN  complain( 48 )   ELSE
+
+          incr  :=  value * bs
+          
+    //  We now have an increment in our hands, and so can calculate what
+    //  the new address would be.  If out of address range, then we should
+    //  complain now.
+    
+    newloc  :=  location + incr
+    
+    UNLESS  (newloc & addressmask) = 0  DO  complain( 48 )
+
+    //  Having got this far, we can read the argument to the directive, which
+    //  is the value to be repeated.
+
+    checkfor( s.comma, 10 )
+
+    forwardref   :=  no
+    externalref  :=  no
+    restype      :=  evalexp( expression() )
+    
+    checkfor( s.none, 47 )
+    
+    IF  size = ts.byte  &  NOT absolute( restype )  THEN
+        complain( 123 )
+        
+    IF  externalref  &  size \= ts.long  THEN
+        complain( 161 )
+
+    IF  pass2  THEN
+    $(
+        IF  size = ts.word  &  NOT wordsized( value )  THEN
+            warning( 175 )
+
+        IF  size = ts.byte  &  NOT bytesized( value )  THEN
+            warning( 176 )
+    $)
+
+    //  We now have the count and the item to be repeated.  We should enter a
+    //  loop updating the store buffer with the value, and relocating the
+    //  symbol if necessary.
+    
+    TEST  pass1  THEN
+    $(
+        //  Nothing to be done in the first pass.  Just relocate the symbol
+        //  many times is necessary.
+        
+        UNTIL  location = newloc  DO
+        $(
+            UNLESS  size = ts.byte  DO  
+                IF  relocatable( restype )  |  forwardref  THEN
+                    relocate( 0, bs )
+            
+            setloc( location + bs )
+        $)
+    $)
+    ELSE
+    $(
+        //  This is the second pass, and we must update the code vector with
+        //  the value.  We must remember to relocate the symbol and add
+        //  external references if necessary.
+        
+        IF  listing  THEN
+        $(
+            clearbuffer()
+
+            linepos  :=  0
+
+            writehexvalue( location, locmode = s.rel  ->  4, 6 )
+
+            IF  locmode = s.rel  THEN  writechar( '*'' )
+
+            linepos  :=  10
+            writechar( '=' )
+            writehexvalue( incr, 4 )
+
+            IF  error.found  THEN
+            $(
+                linepos  :=  35
+                writechar( 'E' )
+                error.found  :=  no
+            $)
+
+            linepos :=  38
+            writenumber( linenumber, 5 )
+
+            IF  macrodepth > 0  &  NOT inmacro  THEN
+            $(
+                linepos  :=  43
+                writechar( '+' )
+            $)
+
+            linepos  :=  44
+            FOR  i = 0  TO  length-1  DO  writechar( inputbuff % i )
+
+            printbuffer()
+
+            listed  :=  yes
+        $)
+
+        //  Having listed the line, fill in all the values which we have 
+        //  prepared so carefully.
+
+        UNTIL  location = newloc  DO
+        $(
+            IF  relocatable( restype )  THEN  relocate( location, bs )
+            IF  externalref             THEN  addexternalref( externalsymb, location )
+
+            codebytes( bs, value )
+        $)
+    $)
+$)
+
+
+
+AND definestorage( size )  BE
+$(
+//  Deal with a "DS" directive
+
+    LET incr     =  0
+    LET newloc   =  0
+    LET restype  =  0
+    LET bs       =  bytesize( size )
+
+    align( bytesize( size = ts.byte  ->  size, ts.word ) )
+
+    IF  labelset  THEN  setlabel( locmode, location, no )
+
+    nextsymb()
+
+    restype  :=  evalexp( expression() )
+
+    TEST  forwardref                THEN  complain( 79 )   ELSE
+    TEST  externalref               THEN  complain( 164 )  ELSE
+    TEST  symb  \=  s.none          THEN  complain( 47 )   ELSE
+    TEST  NOT absolute( restype )   THEN  complain( 71 )   ELSE
+    TEST  value < 0                 THEN  complain( 48 )   ELSE
+
+          incr  :=  value * bs
+          
+    //  We now have an increment in our hands, and so can calculate what
+    //  the new address would be.  If out of address range, then we should
+    //  complain now.
+    
+    newloc  :=  location + incr
+    
+    UNLESS  (newloc & addressmask) = 0  DO  complain( 48 )
+
+    IF  pass2  &  listing  THEN
+    $(
+        clearbuffer()
+
+        linepos  :=  0
+
+        writehexvalue( location, locmode = s.rel  ->  4, 6 )
+
+        IF  locmode = s.rel  THEN  writechar( '*'' )
+
+        linepos  :=  10
+        writechar( '=' )
+        writehexvalue( incr, 4 )
+
+        IF  error.found  THEN
+        $(
+            linepos  :=  35
+            writechar( 'E' )
+            error.found  :=  no
+        $)
+
+        linepos :=  38
+        writenumber( linenumber, 5 )
+
+        IF  macrodepth > 0  &  NOT inmacro  THEN
+        $(
+            linepos  :=  43
+            writechar( '+' )
+        $)
+
+        linepos  :=  44
+        FOR  i = 0  TO  length-1  DO  writechar( inputbuff % i )
+
+        printbuffer()
+
+        listed  :=  yes
+    $)
+
+    setloc( newloc )
+$)
+
+
+
+AND checktagsize()  BE
+    UNLESS  tagsize.given = ts.none  DO
+            complain( 80 )
+
+
+
+AND wordsized( operand )  =  -32768 <= operand <= +32767    |
+                             (operand & #XFFFF) = operand
+
+
+
+AND bytesized( operand )  =  -128 <= operand <= +127         |
+                             (operand & #XFF) = operand
+
+
+
+AND absolute( ea )        =   ea = s.abs16   |   ea = s.abs32
+
+
+
+AND relocatable( ea )     =   ea = s.rel
+
+
+
+AND checkregister( reg )  =  VALOF
+$(
+    LET rnum   =  reg!p.ptr1
+    LET rsize  =  reg!p.ptr2
+
+    TEST  rsize = ts.none
+        THEN  RESULTIS  rnum
+        ELSE  complain( 81 )
+$)
+
+
+
+AND checklabel( possible )  BE
+    UNLESS  labelset = possible  DO
+        complain(  possible  ->  82, 83 )
+
+
+
+AND nextsymb()  BE
+$(
+//  Get the next symbol from the input stream, irrespective of layout
+//  characters.
+
+    skiplayout()
+    readsymb()
+$)
+
+
+
+AND spacelines( n )  BE  IF  pass2  &  listing  THEN
+$(
+    clearbuffer()
+    FOR  i = 1  TO  n  DO  printbuffer()
+    listed  :=  yes
+$)
+
+
+
+AND printbuffer()  BE    IF   pass2  &  (error.found  |  listing)  THEN
+$(
+//  Print the output buffer to the "listing" output stream
+//  On the IBM/370 the record output is done using WRITEREC for
+//  efficiency.  On other machines, replace the IBM/370 code
+//  by that in the following comments.
+//  First, strip trailing spaces.
+
+    LET linelength  =  0
+
+    FOR  i = charsperline-1  TO  0  BY  -1  DO
+         UNLESS  outbuff % i  =  '*S'  DO
+         $(
+             linelength  :=  i + 1
+             BREAK
+         $)
+
+    IF  (onpage REM (linesperpage-5) = 0)  &  paging  THEN  pageheading()
+
+
+$<CAP
+    FOR  i = 0  TO  linelength-1  DO  wrch( outbuff % i )              /* CAP */
+    newline()                                                          /* CAP */
+$>CAP
+
+
+$<68K
+    FOR  i = 0  TO  linelength-1  DO  wrch( outbuff % i )              /* 68K */
+    newline()                                                          /* 68K */
+$>68K
+
+
+$<370
+    writerec( outbuff, linelength )                                    /* 370 */
+$>370
+
+
+    onpage  :=  onpage + 1
+$)
+
+
+
+AND pageheading()  BE  IF  pass2  &  paging  THEN
+$(
+    wrchsave    :=  wrch
+    wrch        :=  wch
+    linepos     :=  0
+    pagenumber  :=  pagenumber  +  1
+
+    writef( "*PMC68000 ASSEMBLER VERSION %N.%N   ", version, release )
+    FOR  i = 0  TO  titlecharsmax-1  DO  wrch( titlevec % i )
+
+    writef( " %S %S     PAGE %N*N*N", datestring, timestring, pagenumber )
+
+    TEST  crossreference  THEN
+          writes( "            SYMBOL               DEFN   VALUE          *
+                  *   REFERENCES*N" )
+
+    ELSE  
+    
+    TEST  errormessages  THEN
+          writes( "             FILE                  STMT                *
+                  *  ERROR MESSAGE*N" )
+
+    ELSE  writes( "   LOC              OBJECT             STMT            *
+                  *SOURCE STATEMENT*N" )
+
+    writes( "*N*N" )
+
+    wrch    :=  wrchsave
+    onpage  :=  0
+$)
+
+
+
+AND wch( ch )  BE
+$(
+    TEST  ch = '*N'  THEN
+    $(
+        wrchsave( '*N' )
+        linepos  :=  0
+    $)
+    ELSE
+
+    UNLESS  linepos >= charsperline  DO
+    $(
+        wrchsave( ch )
+        linepos  :=  linepos + 1
+    $)
+$)
+
+
+
+AND bytesize( size )  =  VALOF
+$(
+    SWITCHON  size  INTO
+    $(
+        CASE ts.long    : RESULTIS 4
+        CASE ts.word    : RESULTIS 2
+        CASE ts.byte    : RESULTIS 1
+
+        CASE ts.none    : RESULTIS bytesize( ts.default )
+
+        DEFAULT         : complain( 0 )
+    $)
+$)
+
+
+
+AND checkexpression( type, endofexpression )  BE
+$(
+//  Match the expression, just read in, with that which is
+//  theoretically expected for the directive in "directive".
+//
+//  Check that:
+//
+//    a) The data type of the expression was correct
+//    b) The expression was terminated correctly
+//    c) It contained no forward references.
+
+    TEST  forwardref       THEN  complain( 79 )   ELSE
+    TEST  externalref      THEN  complain( 164 )  ELSE
+
+    TEST  endofexpression  
+        THEN  checkfor( s.none, 47 )  
+        ELSE  checkfor( s.comma, 10 )
+
+    SWITCHON  directive  INTO
+    $(
+        CASE d.equr    : // Requires "register" data type
+
+                         UNLESS  type = s.Ar | type = s.Dr  DO
+                                 complain( 84 )
+
+                         ENDCASE
+
+
+        CASE d.ifeq    :
+        CASE d.ifne    :
+        CASE d.spc     :
+        CASE d.plen    :
+        CASE d.llen    :
+        CASE d.cnop    :
+        CASE d.org     : // Requires "absolute" data type
+
+                         UNLESS  absolute( type )  DO
+                                 complain( 71 )
+
+                         ENDCASE
+
+
+        DEFAULT        : // All the rest require "relocatable" or
+                         // "absolute" data types
+
+                         UNLESS  absolute( type )  |  relocatable( type )  DO
+                                 complain( 85 )
+    $)
+$)
+
+
+
+AND listline()  BE  
+    TEST  pass2  &  (listing  |  error.found)
+        THEN  printline()
+        ELSE  codeline()
+
+
+
+AND printline()  BE  UNLESS  (listed  &  NOT error.found)    DO
+$(
+//  We are about to list a line...
+
+    clearbuffer()
+
+    linepos  :=  0
+
+    UNLESS  commentline  DO
+    $(
+        writehexvalue( location, locmode = s.rel  ->  4, 6 )
+        IF  locmode = s.rel  THEN  writechar( '*'' )
+    $)
+
+    linepos  :=  38
+    writenumber( linenumber, 5 )
+
+    IF  macrodepth > 0  &  NOT inmacro  THEN
+    $(
+        linepos  :=  43
+        writechar( '+' )
+    $)
+
+    linepos  :=  44
+    FOR  i = 0  TO  length - 1  DO  writechar( inputbuff % i )
+
+    FOR  itemsprinted = 0  TO  nitems-1  DO
+    $(
+        LET offset  =  itemsprinted * cb.size
+        LET dtype   =  codebuff!(offset + cb.dtype)
+        LET dsize   =  codebuff!(offset + cb.dsize)
+        LET dvalue  =  codebuff!(offset + cb.dvalue)
+        LET dext    =  codebuff!(offset + cb.dext)
+        LET dsymb   =  codebuff!(offset + cb.dsymb)
+
+        IF  dext  THEN  addexternalref( dsymb, location )
+
+        writebytes( dsize, dvalue )
+
+        IF  dtype = s.rel  THEN  relocate( location, dsize )
+
+        codebytes( dsize, dvalue )
+    $)
+
+    IF  error.found  THEN
+    $(
+        linepos  :=  35
+        writechar( 'E' )
+    $)
+
+    printbuffer()
+$)
+
+
+
+AND codeline()  BE
+$(
+//  Acts just like "printline", except does not prepare the buffer for 
+//  printing.  This is used in the first pass, and when the listing option
+//  is switched off.
+
+    FOR  itemscoded = 0  TO  nitems-1  DO
+    $(
+        LET offset  =  itemscoded * cb.size
+        LET dtype   =  codebuff!(offset + cb.dtype)
+        LET dsize   =  codebuff!(offset + cb.dsize)
+        LET dvalue  =  codebuff!(offset + cb.dvalue)
+        LET dext    =  codebuff!(offset + cb.dext)
+        LET dsymb   =  codebuff!(offset + cb.dsymb)
+
+        IF  dext  THEN  addexternalref( dsymb, location )
+
+        IF  dtype = s.rel  THEN  relocate( location, dsize )
+
+        codebytes( dsize, dvalue )
+    $)
+$)
+
+
+
+AND writebytes( dsize, dvalue )  BE
+    FOR  i = dsize-1  TO  0  BY  -1  DO
+         writebyte( (dvalue >> i*8) & #XFF )
+
+
+
+AND codebytes( dsize, dvalue )  BE
+    FOR  i = dsize-1  TO  0  BY  -1  DO
+         codebyte( (dvalue >> i*8) & #XFF )
+
+
+
+AND writebyte( byte )  BE
+$(
+    IF  bytesonline = 8  THEN
+    $(
+        printbuffer()
+        clearbuffer()
+
+        commentline  :=  yes
+        bytesonline  :=  0
+    $)
+
+    linepos  :=  bytesonline!( TABLE  11, 13, 17, 19, 23, 25, 29, 31 )
+
+    writehexvalue( byte, 2 )
+
+    bytesonline  :=  bytesonline + 1
+$)
+
+
+
+AND codebyte( byte )  BE
+$(
+    IF  pass2  THEN  codevec % location  :=  byte
+
+    setloc( location + 1 )
+$)
+
+
+
+AND align( boundary )  BE
+$(
+    LET try   =  (location + boundary - 1)
+    LET decr  =  try REM boundary
+
+    setloc( try - decr )
+$)
+
+
+
+AND writehexvalue( h, d )  BE
+$(
+    IF  d > 1  THEN  writehexvalue( h >> 4, d-1 )
+    writechar( (h & #XF)!  TABLE  '0', '1', '2', '3', '4', '5', '6', '7',
+                                  '8', '9', 'A', 'B', 'C', 'D', 'E', 'F' )
+$)
+
+
+
+AND writenumber( n, d )  BE
+$(
+    IF  d > 1  THEN  writenumber( n/10, d-1 )
+    writechar(  n = 0  ->  '*S',  (n REM 10  +  '0') )
+$)
+
+
+
+AND writestring( string )  BE
+    FOR  i = 1  TO  string % 0  DO
+         writechar( string % i )
+
+
+
+AND writechar( char )  BE
+$(
+    IF  linepos >= charsperline  THEN  RETURN
+
+    outbuff % linepos  :=  char
+    linepos            :=  linepos + 1
+$)
+
+
+
+AND clearbits()  BE
+$(
+//  Clear the bits in both the symbol tables.
+
+    cleartable( tagtable1 )
+    cleartable( tagtable2 )
+$)
+
+
+
+AND cleartable( tagtable )  BE
+$(
+//  Clear all the symbol table bits in the table "tagtable".
+
+    FOR  i = 0  TO  tagtablesize-1  DO
+    $(
+        LET ptr  =  tagtable!i
+
+        UNTIL  ptr = 0  DO
+        $(
+            UNLESS  ptr!st.definition = 0  DO
+                ptr!st.flags  :=  ptr!st.flags  &  (NOT stb.setnow)
+
+            ptr  :=  !ptr
+        $)
+    $)
+$)
+
+
+
+AND relocate( address, size )  BE
+$(
+    LET re  =  size = 4  ->  relocvec32,
+               size = 2  ->  relocvec16,
+                             complain( 0 )
+
+    LET rp  =  size = 4  ->  @relp32,
+               size = 2  ->  @relp16,
+                             complain( 0 )
+
+    LET p   =  !rp
+
+    IF  pass2  THEN  re!p  :=  address
+
+    !rp  :=  p + 1
+$)
+
+
+
+AND generate( masktype )  BE
+$(
+    SWITCHON  masktype  INTO
+    $(
+        CASE  1 :  swapoperands()
+                   codeword(  instr.mask                            |
+                              (op1.exp << 9)                        |
+                              (sizefield( instr.size ) << 6)        |
+                              (eafield())                           )
+                   genea()
+
+                   ENDCASE
+
+
+        CASE  2 :  codeword(  instr.mask                            |
+                              (sizefield( instr.size ) << 6)        |
+                              (eafield())                           )
+
+                              UNLESS  source.ea = 0  DO
+                              $(
+                                  //  There is some Immediate data to deal with.
+                                  IF  instr.size = ts.long  THEN
+                                       codeword(  op1.exp  >>  16  )
+                                       codeword(  op1.exp & #XFFFF )
+                              $)
+
+                              genea()
+
+                              ENDCASE
+
+
+        CASE  4 :  IF  op1.ea = am.Ar  |  op1.ea = am.Dr  THEN  swapoperands()
+                   codeword(  instr.mask   |   exp  )
+
+                   UNLESS  source.ea = 0  DO   codeword(  op1.exp & #XFFFF  )
+
+                   ENDCASE
+
+
+        CASE  5 :  codeword(  instr.mask                            |
+                              ((op1.exp & #B111) << 9)              |
+                              (sizefield( instr.size )  <<  6)      |
+                              (eafield())                           )
+                   genea()
+
+                   ENDCASE
+
+
+        CASE  6 :  codeword(  instr.mask                            |
+                              (source.ea  <<  8)                    |
+                              (eafield())                           )
+                   genea()
+
+                   ENDCASE
+
+
+        CASE  7 :  swapoperands()
+                   codeword(  instr.mask                            |
+                              (op1.exp  <<  9)                      |
+                              (eafield())                           )
+                   genea()
+
+                   ENDCASE
+
+
+        CASE  9 :  codeword(  instr.mask                            |
+                              (eafield())                           )
+                   genea()
+
+                   ENDCASE
+
+
+        CASE 10 :  codeword(  instr.mask                            |
+                              ((instr.size = ts.long -> 1,0) << 6)  |
+                              (exp)                                 )
+
+                   ENDCASE
+
+
+        CASE 15 :  codeword(  instr.mask  )
+                   UNLESS  dest.ea = 0  DO  codeword( exp & #XFFFF )
+
+                   ENDCASE
+
+
+        DEFAULT :  complain( 0 )
+    $)
+$)
+
+
+
+AND sizefield( size )  =  VALOF
+$(
+    SWITCHON  size  INTO
+    $(
+        CASE ts.long     : RESULTIS  #B10
+        CASE ts.word     : RESULTIS  #B01
+        CASE ts.byte     : RESULTIS  #B00
+        CASE ts.none     : RESULTIS  sizefield( ts.default )
+
+        CASE ts.short    : complain( 86 )
+        DEFAULT          : complain( 0 )
+    $)
+$)
+
+
+
+AND eafield()  =  VALOF
+$(
+//  Look at the effective address  represented by op.ea, etc.
+//  and return the 6 bit representation of it.
+
+    SWITCHON  op.ea  INTO
+    $(
+        CASE am.Dr           : RESULTIS #B000000  +  exp
+        CASE am.Ar           : RESULTIS #B001000  +  exp
+        CASE am.Ar.ind       : RESULTIS #B010000  +  exp
+        CASE am.Ar.pi        : RESULTIS #B011000  +  exp
+        CASE am.Ar.pd        : RESULTIS #B100000  +  exp
+        CASE am.abs16        : RESULTIS #B111000
+        CASE am.abs32        : RESULTIS #B111001
+        CASE am.PC.disp      : RESULTIS #B111010
+        CASE am.PC.index     : RESULTIS #B111011
+
+//      CASE am.imm3         :
+//      CASE am.imm16        :
+//      CASE am.imm32        :
+        DEFAULT              : RESULTIS #B111100
+
+        CASE am.Ar.disp      : RESULTIS #B101000  +  registers!p.ptr1
+        CASE am.Ar.index     : RESULTIS #B110000  +  registers!p.ptr0!p.ptr1
+    $)
+$)
+
+
+
+AND genea()  BE
+$(
+    LET bs  =  0
+
+    SWITCHON  op.ea  INTO
+    $(
+        CASE am.Ar           : IF  instr.size = ts.byte  THEN  complain( 29 )
+        CASE am.Dr           :
+        CASE am.Ar.ind       :
+        CASE am.Ar.pi        :
+        CASE am.Ar.pd        : 
+
+                               RETURN
+
+
+        CASE am.Ar.disp      : //  registers  ->  (Ar, regnum, rsize)
+
+                               TEST  pass1  THEN  codeword( 0 )
+                               ELSE
+
+                               TEST  registers!p.ptr0 = s.Ar  THEN
+                                   TEST  registers!p.ptr2 = ts.none
+                                         THEN  codeword( exp )
+                                         ELSE  complain( 81 )
+
+                               ELSE  complain( 134 )
+
+                               ENDCASE
+
+
+        CASE am.Ar.index     : //  registers  ->  ((Ar, rnum, rsize), (Ir, rnum, rsize ))
+
+                               TEST  pass1  THEN  codeword( 0 )
+                               ELSE
+                               $(
+                                   LET Ar  =  registers!p.ptr0
+                                   LET Ir  =  registers!p.ptr1
+                                   LET It  =  Ir!p.ptr0
+                                   LET In  =  Ir!p.ptr1
+                                   LET Is  =  Ir!p.ptr2
+
+                                   LET l   =  Is = ts.long  ->  1,
+                                              Is = ts.word  ->  0,
+                                              Is = ts.none  ->  0,
+                                                                complain( 87 )
+
+                                   LET r   =  It = s.Ar     ->  1,  0
+
+                                   UNLESS  -128 <= exp <= +127  DO  complain( 72 )
+
+                                   TEST  Ar!p.ptr2 = ts.none
+                                         THEN  codeword( (r  << 15)    |
+                                                         (In << 12)    |
+                                                         (l  << 11)    |
+                                                         (exp & #XFF)  )
+
+                                   ELSE  complain( 81 )
+                               $)
+
+                               ENDCASE
+
+
+        CASE am.abs32        : IF  pass2  &  externalref  THEN
+                                   addexternalref( externalsymb, location + codewords*2  )
+
+                               codeword( exp >> 16    )
+
+        CASE am.abs16        : codeword( exp & #XFFFF )
+
+                               ENDCASE
+
+
+        CASE am.PC.disp      : //  The current program counter and the expression
+                               //  MUST be of the same data type.
+
+                               TEST  pass1  THEN  codeword( 0 )
+                               ELSE
+                               $(
+                                   LET pc  =  location + (codewords * 2)
+                                   LET o   =  exp - pc
+
+                                   UNLESS  (locmode = s.abs  &  absolute( exptype ))  |
+                                           (locmode = s.rel  &  relocatable( exptype ))  DO
+
+                                           complain( 88 )
+
+                                   UNLESS  -32768 <= o <= +32767  DO  complain( 177 )
+
+                                   codeword( o & #XFFFF )
+                               $)
+
+                               ENDCASE
+
+
+        CASE am.PC.index     : TEST  pass1  THEN  codeword( 0 )
+                               ELSE
+                               $(
+                                   LET Ir  =  registers
+                                   LET It  =  Ir!p.ptr0
+                                   LET In  =  Ir!p.ptr1
+                                   LET Is  =  Ir!p.ptr2
+
+                                   LET l   =  Is = ts.long  ->  1,
+                                              Is = ts.word  ->  0,
+                                              Is = ts.none  ->  0,
+                                                                complain( 87 )
+
+                                   LET r   =  It = s.Ar     ->  1,  0
+
+                                   UNLESS  (locmode = s.abs  &  absolute( exptype ))  |
+                                           (locmode = s.rel  &  relocatable( exptype ))  DO
+
+                                           complain( 88 )
+
+                                   exp  :=  exp - (location + 2)
+
+                                   UNLESS  -128 <= exp <= +127  DO  complain( 72 )
+
+                                   codeword(  (r  <<  15)    |
+                                              (In << 12)     |
+                                              (l  <<  11)    |
+                                              (exp & #XFF)   )
+                               $)
+
+                               ENDCASE
+
+
+//      CASE am.imm16        :
+//      CASE am.imm32        :
+        DEFAULT              : //  Immediate data.  The size is given
+                               //  by "instr.size"
+
+                               bs  :=  bytesize( instr.size )
+
+                               IF  bs = 4  &  (pass2 & externalref)  THEN
+                                   addexternalref( externalsymb, location + codewords*2 )
+
+                               IF    bs = 4  THEN  codeword( exp >> 16 )
+                               TEST  bs = 1  THEN  codeword( exp & #XFF )
+                                             ELSE  codeword( exp & #XFFFF )
+    $)
+$)
+
+
+
+AND addexternalref( symbol, address )  BE  IF  pass2  THEN
+$(
+    LET s  =  extrnsymbols
+
+    UNTIL  s = 0  DO
+    $(
+        TEST  s!e.symbol = symbol  THEN
+        $(
+            LET refsr   =  s!e.refsr
+            LET refsa   =  s!e.refsa
+            LET countr  =  s!e.countr
+            LET counta  =  s!e.counta
+
+            TEST  locmode = s.abs  THEN
+            $(
+                //  Update the absolute list.
+
+                s!e.refsa   :=  heap2( refsa, address )
+                s!e.counta  :=  counta + 1
+            $)
+            ELSE
+            $(
+                //  Update the relocatable list
+
+                s!e.refsr   :=  heap2( refsr, address )
+                s!e.countr  :=  countr + 1
+            $)
+
+            RETURN
+        $)
+
+        ELSE  s  :=  s!e.link
+    $)
+
+    complain( 0 )
+$)
+
+
+
+AND codeword( word )  BE
+$(
+    codewords  :=  codewords + 1
+
+    stackvalue( s.abs16, 2, word, no, 0 )
+$)
+
+
+
+
+AND stackvalue( dtype, dsize, dvalue, dext, dsymb )  BE
+$(
+    LET offset  =  nitems * cb.size
+
+    codebuff!(offset + cb.dtype)   :=  dtype
+    codebuff!(offset + cb.dsize)   :=  dsize
+    codebuff!(offset + cb.dvalue)  :=  dvalue
+    codebuff!(offset + cb.dext)    :=  dext
+    codebuff!(offset + cb.dsymb)   :=  dsymb
+
+    nitems                         :=  nitems + 1
+
+    IF  nitems > codesize  THEN  error( 178 )
+$)
+
+
+
+AND clearbuffer()  BE
+    FOR  i = 0  TO  maxllen-1  DO  outbuff % i  :=  '*S'
+
+
+
+AND swapoperands()  BE
+$(
+    LET t1  =  op.ea
+    LET t2  =  exptype
+    LET t3  =  exp
+    LET t4  =  registers
+    LET t5  =  externalref
+    LET t6  =  externalsymb
+
+    op.ea             :=  op1.ea
+    exptype           :=  op1.exptype
+    exp               :=  op1.exp
+    registers         :=  op1.registers
+    externalref       :=  op1.externalref
+    externalsymb      :=  op1.externalsymb
+
+    op1.ea            :=  t1
+    op1.exptype       :=  t2
+    op1.exp           :=  t3
+    op1.registers     :=  t4
+    op1.externalref   :=  t5
+    op1.externalsymb  :=  t6
+$)
+
+
+
+
+
+AND setloc( newloc )  BE
+$(
+    UNLESS  (newloc & addressmask) = 0  DO  complain( 138 )
+
+    IF  newloc > maxloc  THEN  maxloc  :=  newloc
+    IF  newloc < minloc  THEN  minloc  :=  newloc
+
+    location  :=  newloc
+$)
+
+
+
+AND changemode( newmode )  BE
+$(
+    UNLESS  locmode = newmode  DO
+    $(
+        TEST  locmode = s.abs  THEN
+        $(
+            absmin      :=  minloc
+            absmax      :=  maxloc
+            absloc      :=  location
+            absrp16     :=  relp16
+            absrp32     :=  relp32
+            minloc      :=  relmin
+            maxloc      :=  relmax
+            location    :=  relloc
+            codevec     :=  relvec
+            relocvec16  :=  relrvec16
+            relocvec32  :=  relrvec32
+            relp16      :=  relrp16
+            relp32      :=  relrp32
+        $)
+        ELSE
+        $(
+            relmin      :=  minloc
+            relmax      :=  maxloc
+            relloc      :=  location
+            relrp16     :=  relp16
+            relrp32     :=  relp32
+            minloc      :=  absmin
+            maxloc      :=  absmax
+            location    :=  absloc
+            codevec     :=  absvec
+            relocvec16  :=  absrvec16
+            relocvec32  :=  absrvec32
+            relp16      :=  absrp16
+            relp32      :=  absrp32
+        $)
+    $)
+
+    locmode  :=  newmode
+$)
+
+
+
+AND triposmodule()  BE
+$(
+//  Output the object module.
+
+    LET o     =  output()
+    LET eabs  =  countextrnsymbols( e.counta )
+    LET erel  =  countextrnsymbols( e.countr )
+
+    selectoutput( codestream )
+
+    //  First output the Relocatable section...
+    //  Buffered in units of 4 bytes.
+
+    UNLESS  relmax = 0  DO
+    $(
+        LET r  =  relmax/bytesper68000word
+
+$<68K
+        IF  toobig( r )  THEN  error( 167 )                            /* 68K */
+$>68K
+
+        systemword( t.hunk )
+        writeword( r )
+        writewords( relvec, r )
+    $)
+
+    // If it has any 16 bit relocation information, this next
+
+    UNLESS  relrp16 = 0   DO
+    $(
+$<68K
+        IF  toobig( relrp16 )  THEN  error( 168 )                      /* 68K */
+$>68K
+
+        systemword( t.reloc16 )
+        writeword( relrp16 )
+        writewordvec( relrvec16, relrp16 )
+    $)
+
+    //  Now the 32 bit relocation info
+
+    UNLESS  relrp32 = 0  DO
+    $(
+$<68K
+        IF  toobig( relrp32 )  THEN  error( 169 )                      /* 68K */
+$>68K
+
+        systemword( t.reloc32 )
+        writeword( relrp32 )
+        writewordvec( relrvec32, relrp32 )
+    $)
+
+
+    //  We must now put out the external references in the relocatable
+    //  section, and the internal definitions of both sections.
+
+
+    UNLESS  entrysymbols = 0  &  erel = 0  DO
+    $(
+        LET ptr  =  entrysymbols
+
+        systemword( t.ext )
+
+        UNTIL  ptr = 0  DO
+        $(
+            LET symbol  =  ptr!e.symbol
+            LET type    =  symbol!st.type  &  st.type.mask
+            LET value   =  symbol!st.value
+            LET name    =  symbol+st.name
+            LET l       =  name % 0
+            LET length  =  l > maxextlength  ->  maxextlength, l
+            LET size    =  maxextlength = 7  ->  2, 4
+            LET buff    =  VEC 16/bytesperword
+
+            buff % 0  :=  relocatable( type )  ->  ext.defrel, ext.defabs
+
+            FOR  i = 1  TO  length  DO
+                 buff % i  :=  ascii.value( name % i )
+
+            FOR  i = length + 1  TO  maxextlength  DO
+                 buff % i  :=  ascii.value( '*S' )
+
+            writewords( buff, size )
+            writeword( value )
+
+            ptr  :=  ptr!e.link
+        $)
+
+        //  Now do the external references.
+
+        ptr  :=  extrnsymbols
+
+        UNTIL  ptr = 0  DO
+        $(
+            LET symbol  =  ptr!e.symbol
+            LET refs    =  ptr!e.refsr
+            LET count   =  ptr!e.countr
+            LET name    =  symbol+st.name
+            LET l       =  name % 0
+            LET length  =  l > maxextlength  ->  maxextlength, l
+            LET size    =  maxextlength = 7  ->  2, 4
+            LET buff    =  VEC 16/bytesperword
+
+            UNLESS  count = 0  DO
+            $(
+                buff % 0  :=  ext.ref
+
+                FOR  i = 1  TO  length  DO
+                     buff % i  :=  ascii.value( name % i )
+
+                FOR  i = length + 1  TO  maxextlength  DO
+                     buff % i  :=  ascii.value( '*S' )
+
+                writewords( buff, size )
+                writeword( count )
+
+                FOR  i = 1  TO  count  DO
+                $(
+                    writeword( refs!r.address )
+
+                    refs  :=  refs!r.link
+                $)
+            $)
+
+            ptr  :=  ptr!e.link
+        $)
+
+        systemword( 0 )
+    $)
+
+    //  Now the absolute section - very much the same as before.
+
+    UNLESS  absmax = 0  DO
+    $(
+        LET a  =  (absmax - absmin)/bytesper68000word
+
+$<68K
+        IF  toobig( a )  THEN  error( 170 )                            /* 68K */
+$>68K
+
+        systemword( t.abshunk )
+        writeword( absmin/bytesper68000word )
+        writeword( a )
+        writewords( absvec + absmin/bytesperword, a )
+    $)
+
+    // If it has any 16 bit relocation information, this next
+
+    UNLESS  absrp16 = 0   DO
+    $(
+$<68K
+        IF  toobig( absrp16 )  THEN  error( 171 )                      /* 68K */
+$>68K
+
+        systemword( t.absrel16 )
+        writeword( absrp16 )
+        writewordvec( absrvec16, absrp16 )
+    $)
+
+    //  Now the 32 bit relocation info
+
+    UNLESS  absrp32 = 0  DO
+    $(
+$<68K
+        IF  toobig( absrp32 )  THEN  error( 172 )                      /* 68K */
+$>68K
+
+        systemword( t.absrel32 )
+        writeword( absrp32 )
+        writewordvec( absrvec32, absrp32 )
+    $)
+
+    //  Now the external references for the absolute section.
+
+    UNLESS  eabs = 0  DO
+    $(
+        LET ptr  =  extrnsymbols
+
+        systemword( t.ext )
+
+        UNTIL  ptr = 0  DO
+        $(
+            LET symbol  =  ptr!e.symbol
+            LET refs    =  ptr!e.refsa
+            LET count   =  ptr!e.counta
+            LET name    =  symbol+st.name
+            LET l       =  name % 0
+            LET length  =  l > maxextlength  ->  maxextlength, l
+            LET size    =  maxextlength = 7  ->  2, 4
+            LET buff    =  VEC 16/bytesperword
+
+            UNLESS  count = 0  DO
+            $(
+                buff % 0  :=  ext.ref
+
+                FOR  i = 1  TO  length  DO
+                     buff % i  :=  ascii.value( name % i )
+
+                FOR  i = length + 1  TO  maxextlength  DO
+                     buff % i  :=  ascii.value( '*S' )
+
+                writewords( buff, size )
+                writeword( count )
+
+                FOR  i = 1  TO  count  DO
+                $(
+                    writeword( refs!r.address )
+
+                    refs  :=  refs!r.link
+                $)
+            $)
+
+            ptr  :=  ptr!e.link
+        $)
+
+        systemword( 0 )
+    $)
+
+    systemword( t.end )
+
+$<370
+    newline()                                                          /* 370 */
+$>370
+
+$<CAP
+    newline()                                                          /* CAP */
+$>CAP
+
+    selectoutput( o )
+$)
+
+
+
+$<68K
+//  The following function is needed if the version of TRIPOS is       /* 68K */
+//  using the Cambridge File Server directly, without the Filing       /* 68K */
+//  Machine to split up large blocks                                   /* 68K */
+//                                                                     /* 68K */
+//  AND toobig( v )  =  v > (32767 / bytesperword)                     /* 68K */
+                                                                       /* 68K */
+AND toobig( v )  =  FALSE                                              /* 68K */
+$>68K
+
+
+
+AND countextrnsymbols( offset )  =  VALOF
+$(
+    LET count  =  0
+    LET ptr    =  extrnsymbols
+
+    UNTIL  ptr = 0  DO
+    $(
+        count  :=  count + ptr!offset
+        ptr    :=  ptr!e.link
+    $)
+
+    RESULTIS  count
+$)
+
+
+
+$<370
+AND systemword( word )  BE                                             /* 370 */
+$(                                                                     /* 370 */
+    writef( "*N*N%X8", word )                                          /* 370 */
+    totalwords  :=  0                                                  /* 370 */
+$)                                                                     /* 370 */
+                                                                       /* 370 */
+                                                                       /* 370 */
+                                                                       /* 370 */
+AND writewords( wordvec, words )  BE                                   /* 370 */
+    FOR  i = 0  TO  words-1  DO  writeword( wordvec!i )                /* 370 */
+                                                                       /* 370 */
+                                                                       /* 370 */
+                                                                       /* 370 */
+AND writewordvec( wordvec, words )  BE                                 /* 370 */
+    FOR  i = 0  TO  words-1  DO  writeword( wordvec!i )                /* 370 */
+                                                                       /* 370 */
+                                                                       /* 370 */
+                                                                       /* 370 */
+AND writeword( word )  BE                                              /* 370 */
+$(                                                                     /* 370 */
+    IF  totalwords REM 8  =  0  THEN  newline()                        /* 370 */
+    writef( "%X8  ", word )                                            /* 370 */
+    totalwords  :=  totalwords + 1                                     /* 370 */
+$)                                                                     /* 370 */
+$>370
+
+
+
+$<CAP
+AND systemword( word )  BE                                             /* CAP */
+$(                                                                     /* CAP */
+    writef( "*N*N%X8", word )                                          /* CAP */
+    totalwords  :=  0                                                  /* CAP */
+$)                                                                     /* CAP */
+                                                                       /* CAP */
+                                                                       /* CAP */
+                                                                       /* CAP */
+AND writewords( wordvec, words )  BE                                   /* CAP */
+    FOR  i = 0  TO  words-1  DO  writeword( wordvec!i )                /* CAP */
+                                                                       /* CAP */
+                                                                       /* CAP */
+                                                                       /* CAP */
+AND writewordvec( wordvec, words )  BE                                 /* CAP */
+    FOR  i = 0  TO  words-1  DO  writeword( wordvec!i )                /* CAP */
+                                                                       /* CAP */
+                                                                       /* CAP */
+                                                                       /* CAP */
+AND writeword( word )  BE                                              /* CAP */
+$(                                                                     /* CAP */
+    IF  totalwords REM 8  =  0  THEN  newline()                        /* CAP */
+    writef( "%X8  ", word )                                            /* CAP */
+    totalwords  :=  totalwords + 1                                     /* CAP */
+$)                                                                     /* CAP */
+$>CAP
+
+
+
+$<68K
+AND systemword( word )  BE  writeword( word )                          /* 68K */
+                                                                       /* 68K */
+                                                                       /* 68K */
+                                                                       /* 68K */
+AND writeword( word )  BE  writewords( @word, 1 )                      /* 68K */
+                                                                       /* 68K */
+                                                                       /* 68K */
+                                                                       /* 68K */
+AND writewordvec( wordvec, words )  BE  writewords( wordvec, words )   /* 68K */
+$>68K
+
+
+
+AND motorolamodule()  BE
+$(
+// Output a Motorola type Object Module.  The Specification of this module
+// does not allow for relocation, and so, if the user has compiled relocatable
+// code, this is an error.
+
+    LET o  =  output()
+
+    UNLESS  relmax = 0  &  relrp16 = 0  &  relrp32 = 0  DO
+    $(
+        selectoutput( sysout )
+        writes( "MOTOROLA module cannot handle Relocatable code*N" )
+        selectoutput( o )
+
+        RETURN
+    $)
+
+    UNLESS  extrnsymbols = 0  &  entrysymbols = 0  DO
+    $(
+        selectoutput( sysout )
+        writes( "MOTOROLA module cannot handle External Symbols*N" )
+        selectoutput( o )
+
+        RETURN
+    $)
+
+    selectoutput( codestream )
+
+    $(  //  Loop to write out the records of the module.
+
+        LET cs  =  0
+
+        FOR  addr = absmin  TO  absmax-1  BY  32  DO
+        $(
+            LET left    =  absmax - addr
+            LET nbytes  =  left > 32  ->  32, left
+            LET length  =  4 + nbytes
+
+            cs  :=  length + ((addr)       & #XFF) + 
+                             ((addr >> 8)  & #XFF) +
+                             ((addr >> 16) & #XFF)
+
+            writef( "S2%X2", length )
+
+            writehex( addr, 6 )
+
+            FOR  i = addr  TO  addr + nbytes - 1  DO
+            $(
+                LET byte  =  absvec % i
+
+                cs  :=  cs + byte
+
+                writehex( byte, 2 )
+            $)
+
+            writef( "%X2*N", NOT cs )
+        $)
+
+        cs    :=  length + ((absmin)       & #XFF) + 
+                           ((absmin >> 8)  & #XFF) +
+                           ((absmin >> 16) & #XFF)
+
+        writef( "S804%X6%X2*N", absmin, NOT cs )
+    $)
+
+    UNLESS  absrp16 = 0  &  absrp32 = 0  DO
+    $(
+        selectoutput( sysout )
+        writes( "MOTOROLA module cannot deal with Relocation within code*N" )
+    $)
+
+    selectoutput( o )
+$)
+
+
+
+AND intelhexmodule()  BE
+$(
+//  Output an INTEL standard HEX module.  This will work with both
+//  absolute and relocatable code, provided that there are no 32-bit
+//  relocatable values involved.  Unfortunately, it is not possible to mix
+//  Relocatable and Absolute code in this module format, and so if both have
+//  been produced, this is also an error.
+
+    LET o  =  output()
+
+    UNLESS  relmax = 0  NEQV  absmax = 0  DO
+    $(
+        selectoutput( sysout )
+
+        UNLESS  relmax = 0  &  absmax = 0  DO
+            writes( "INTEL HEX module cannot deal with mixed Absolute and *
+                    *Relocatable code*N" )
+
+        selectoutput( o )
+
+        RETURN
+    $)
+
+    UNLESS  relrp32 = 0  &  absrp32 = 0  DO
+    $(
+        selectoutput( sysout )
+        writes( "INTEL HEX module cannot deal with 32-bit relocation*N" )
+        selectoutput( o )
+
+        RETURN
+    $)
+
+    UNLESS  extrnsymbols = 0  &  entrysymbols = 0  DO
+    $(
+        selectoutput( sysout )
+        writes( "INTEL HEX module cannot handle External symbols*N" )
+        selectoutput( o )
+
+        RETURN
+    $)
+
+    $(  //  Loop to write the records of the INTEL format.
+
+        LET absm   =  relmax = 0
+
+        LET base   =  absm  ->  absmin, 0
+        LET size   =  absm  ->  (absmax - absmin), relmax
+
+        LET top    =  base + size
+
+        LET bvec   =  absm  ->  absvec,    relvec
+        LET rvec   =  absm  ->  absrvec16, relrvec16
+        LET rvecp  =  absm  ->  absrp16,   relrp16
+
+        selectoutput( codestream )
+
+        writes( absm -> "$      0500FE*N", "$      0501FD*N" )
+
+        FOR  addr = base  TO  top-1  BY  32  DO
+        $(
+            LET left    =  top - addr
+            LET nbytes  =  left > 32  ->  32, left
+
+            LET lbyte   =  (addr)       &  #XFF
+            LET hbyte   =  (addr >> 8)  &  #XFF
+
+            LET cs      =  nbytes + lbyte + hbyte
+
+            UNLESS  wordsized( addr )  DO
+            $(
+                selectoutput( sysout )
+                writes( "INTEL HEX module cannot handle 24-bit addresses*N" )
+                selectoutput( o )
+                RETURN
+            $)
+
+            writef( ":%X2%X2%X200", nbytes, hbyte, lbyte )
+
+            FOR  i = addr  TO  addr + nbytes - 1  DO
+            $(
+                LET byte  =  bvec % i
+
+                cs  :=  cs + byte
+
+                writehex( byte, 2 )
+            $)
+
+            writef( "%X2*N", -cs )
+        $)
+
+        //  Now the relocation information.
+
+        FOR  i = 0  TO  rvecp-1  BY  16  DO
+        $(
+            LET nwords  =  rvecp - i
+            LET nbytes  =  (nwords > 16  ->  16, nwords) * 2
+            LET cs      =  nbytes + 4
+
+            writef( "$%X2000004", nbytes )
+
+            FOR  j = 0  TO  nbytes/2 - 1  DO
+            $(
+                LET reladdr  =  rvec!j
+                LET lbyte    =  (reladdr)       &  #XFF
+                LET hbyte    =  (reladdr >> 8)  &  #XFF
+
+                UNLESS  wordsized( reladdr )  DO
+                $(
+                    selectoutput( sysout )
+                    writes( "INTEL HEX module cannot handle 24-bit relocation *
+                            *addresses" )
+                    selectoutput( o )
+                    RETURN
+                $)
+
+                writehex( hbyte, 2 )
+                writehex( lbyte, 2 )
+
+                cs  :=  cs + hbyte + lbyte
+            $)
+
+            writef( "%X2*N", -cs )
+
+            rvec  :=  rvec + nbytes/2
+        $)
+
+        writes( ":00000001FF*N" )
+    $)
+
+    selectoutput( o )
+$)
+
+

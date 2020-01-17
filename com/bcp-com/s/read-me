@@ -1,0 +1,40 @@
+The BCP program is developed in two stages.
+
+During debugging, filenames are included - later they are removed.
+During debugging, the conditiona compilation flag $$DEBUG is set.
+
+The ? is changed on each iteration of the process so that a new development
+version can be produced, without effecting the installed version, yet
+simply coping into :c will make it pick up the new version.
+
+NOVL uses a single file (SYS:l.bcp-?-ov) whereas OVL reads a seperate file for
+each overlay (called SYS:l.bcp-?-<overlay name>). The former is faster, but each
+simple change demands rebuilding the overlay file.
+
+The ? is changed on each iteration of the process so that a new development
+version can be produced, without effecting the installed version, yet
+simply coping into :c will make it pick up the new version.
+
+The altered program is compiled either into OBJS: with opt -DB or into OBJ:
+with opt cc:debug, and then rejoin the relavent group and re-build the overlay
+file.
+
+OBJ: and OBJS: should be assigned to ?OBJ and ?OBJS where ? is the first
+character of the macine name (until a clash occurs). E.g. MOBJ and MOBJS.
+
+There are a set of commands in s that can be used to build the system.
+
+C S.MAKE                will compile versions for "vesrion,obj" (d,  OBJS:)
+                        for the header, syn and trn
+C S.MAKE-?cg            for the code generators
+C S.MAKE-ov             will join together a new vesrion of SYS:l.bcp-?-ov
+C S.MAKE-BCP            will generate in OBJS: 4 versions of the compiler stub:
+                   bcp-?        use OVL
+                   bcp-?-spare  use OVL, and report on spare overlay space
+                   nbcp-?       use NOVL
+                   nbcp-?-spare use NOVL, and report on spare overlay space
+
+The command 'c s.j?' will join together the bits for ? where ? is the first
+letter of Err, Syn, Trn, Cg.
+
+

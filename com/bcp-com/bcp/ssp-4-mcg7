@@ -1,0 +1,459 @@
+SECTION "MCG7"
+
+GET "CG68HDR"
+
+// Class bits:
+//      q  b     w  m  cr r  r7 r6 r5 r4 r3 r2 r1 r0
+//   0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15
+
+LET class(a) = VALOF
+$( LET k, n = h1!a, h2!a
+// LET junk = VALOF IF debug>7 DO backtrace()
+
+   LET bits = regscontaining(k, n)
+
+//debug   IF debug>5 DO
+//debug      writef("REGSCONTAINING(%N,%N) %X4*N", k, n, bits)
+
+   SWITCHON k INTO
+   $( DEFAULT:
+   // CASE K.LVLOC:   CASE K.LOCSH:
+   // CASE K.LVGLOB:  CASE K.GLOBSH:
+   // CASE K.LVLAB:   CASE K.LABSH:
+                  ENDCASE
+
+      CASE k.glob:
+      CASE k.loc:
+      CASE k.lab:
+      CASE k.ir7:
+      CASE k.ir6:
+      CASE k.ir5:
+      CASE k.ir4:
+      CASE k.ir3:
+      CASE k.ir2:
+      CASE k.ir1:
+      CASE k.ir0: bits := bits | c.m
+                  ENDCASE
+
+
+      CASE k.numb:IF n=0 DO          bits := bits | c.z
+                  IF -8<=n<=8 DO     bits := bits | c.q
+                  IF -128<=n<=127 DO bits := bits | c.b
+                  bits := bits | c.w
+                  ENDCASE
+
+      CASE k.reg: bits := bits | c.r+c.cr
+   $)
+
+//debug   IF debug>5 DO
+//debug      writef("CLASS(%N,%N) %X4*N", h1!a, h2!a, bits)
+   RESULTIS bits
+$)
+
+AND choosereg(regs) = VALOF
+$(
+//debug   IF debug>5 DO
+//debug      writef("CHOOSEREG(%X4)*N", regs)
+   FOR r = r1 TO r7 DO
+       UNLESS (regs>>r&1)=0 RESULTIS r
+//debug   IF (regs&1)=0 DO bug(5)
+   RESULTIS r0
+$)
+
+// Form effective address in EA.M and EA.D
+// If the address requires an offset that will not fit in a 16 bit word then
+// code is compiled to put a suitable value in L.  The result is TRUE if this
+// was done and FORMEA may not be called until EA.M AND EA.D have been used.
+AND formea(k, n) = VALOF
+$( LET x = k & 7  // P G or D0-D7
+
+   ea.d := n
+
+   SWITCHON k INTO
+   $( DEFAULT:  cgerror(0, "CG BUG 8 - FORMEA given %X8 and %X8", k,n)
+//debugbug(8)
+
+      CASE k.reg:  ea.m, ea.d := n, 0 // Dn direct
+                   RESULTIS FALSE
+
+      CASE k.numb: ea.m := m.74       // #w long immediate
+                   RESULTIS FALSE
+
+      CASE k.loc:  n    := n - 3
+      CASE k.glob: ea.d := n    //      * 4
+                   UNLESS -32768<=ea.d<=32767 DO
+                   $( ea.d :=  ea.d & #X00FFFFFF
+                      n    := (ea.d & #X00FFFF00) + 128
+                      UNLESS numbinl=n DO
+                         genrea(f.lea, rl, m.74, n)
+                      numbinl := n
+                      ea.m := m.6l
+                      ea.d := exta(x, ea.d-n)
+                      RESULTIS TRUE
+                   $)
+                   TEST ea.d=0
+                   THEN ea.m := m.20 + x // (P)  or (G)
+                   ELSE ea.m := m.50 + x // w(P) or w(G)
+                   RESULTIS FALSE
+      CASE k.ir7:
+      CASE k.ir6:
+      CASE k.ir5:
+      CASE k.ir4:
+      CASE k.ir3:
+      CASE k.ir2:
+      CASE k.ir1:
+      CASE k.ir0:  // it is known that -128<=N<127
+                   ea.m, ea.d := m.6z, extd(x, n)  // b(Z,Ri)
+                   RESULTIS FALSE
+
+      CASE k.lab:  ea.m := m.5b
+                   RESULTIS FALSE
+   $)
+$)
+
+AND initslave() BE FOR r = r0 TO r7 DO slave!r := 0
+
+AND forgetr(r) BE UNLESS slave!r=0 DO
+$( LET a = @slave!r
+   UNTIL !a = 0 DO  a := !a
+   !a := freelist
+   freelist := slave!r
+   slave!r := 0
+$)
+
+AND forgetall() BE
+$(  FOR r = r0 TO r7 DO forgetr(r)
+    numbinl := 0  // no known value in L
+$)
+
+AND remem(r, k, n) BE IF k<k.reg DO             // Remem's third is WORD ADDR
+    slave!r := getblk(slave!r, k, n)
+
+AND moveinfo(s, r) BE UNLESS s=r DO
+$( LET p = slave!s
+   forgetr(r)
+   UNTIL p=0 DO
+   $( remem(r, h2!p, h3!p)
+      p := !p
+   $)
+$)
+
+// Forget the slave information about the variable (K, N).
+// If K>=K.IR0 all information about variables are lost.
+// K is one of: K.LOC, K.GLOB, K.LAB or K.IRr
+AND forgetvar(k, n) BE TEST k>=k.ir0
+THEN forgetvars()
+ELSE FOR r = r0 TO r7 DO
+$( LET a = @slave!r
+
+    $( LET p = !a
+      IF p=0 BREAK
+      TEST h3!p=n & (h2!p & k.notshs)=k
+      THEN $( !a := !p; freeblk(p) $)   // free and unlink the item
+      ELSE a := p
+   $) REPEAT
+$)
+
+AND forgetvars() BE FOR r = r0 TO r7 DO
+$( LET a = @slave!r
+
+   $( LET p = !a
+      IF p=0 BREAK
+      TEST h2!p <= k.labsh                      //??????????????????????????????
+      THEN $( !a := !p; freeblk(p) $)           // free and unlink the item
+      ELSE a := p
+   $) REPEAT
+$)
+
+AND regscontaining(k, n) = VALOF
+$( LET regset = 0
+
+   IF k=k.reg RESULTIS 1<<n | c.cr+c.r
+
+   FOR r = r0 TO r7 IF isinslave(r, k, n) DO regset := regset | (1<<r) | c.cr
+
+   RESULTIS regset
+$)
+
+AND inregs(r, regs) = r<0 | (regs>>r & 1)=0 -> FALSE, TRUE
+
+AND isinslave(r, k, n) = VALOF
+$( LET p = slave!r
+
+   UNTIL p=0 DO
+   $( IF h2!p=k & h3!p=n RESULTIS TRUE; p := !p $)
+
+   RESULTIS FALSE
+$)
+
+AND regsinuse() = VALOF
+$( LET regset = 0
+
+   FOR t = tempv TO arg1 BY 3 DO
+       IF h1!t>=k.reg DO
+       $( LET r = h1!t & 7
+          IF h1!t=k.reg DO r := h2!t
+          regset := regset | (1<<r)
+       $)
+   RESULTIS regset
+$)
+
+AND regswithinfo() = VALOF
+$( LET regset = 0
+   FOR r = r0 TO r7 DO
+       UNLESS slave!r=0 DO regset := regset | (1<<r)
+   RESULTIS regset
+$)
+
+
+AND code(a) BE
+$( stv%stvp     := a>>8
+   stv%(stvp+1) := a
+   stvp := stvp + 2
+//debug   IF debug>0 DO
+//debug      writef("CODE: %X4*N", a)
+   checkspace()
+$)
+
+AND code2(a) BE $( code(a>>16); code(a) $)
+
+// line up on full word boundary
+AND cnop() BE IF (stvp&3)=2 DO code(f.nop)
+
+AND addtoword(val, a) BE
+$( val := val + (stv%a<<8) + stv%(a+1)
+   stv%a     := val>>8
+   stv%(a+1) := val
+$)
+
+// functions to form index extension words
+AND extd(r, d) = #X0800 + ((r&7)<<12) + (d&#XFF)
+
+AND exta(r, d) = #X8800 + ((r&7)<<12) + (d&#XFF)
+
+// make an operand if required
+AND genrand(m, d) BE TEST (m & m.l)=0
+THEN $( UNLESS (m&m.ww)=0 DO code(d>>16)
+        UNLESS (m&m.w) =0 DO code(d)
+     $)
+ELSE $( LET val = labv!d
+        IF val=-1  DO
+        $( rlist := getblk(rlist, stvp, d)
+           val := 0
+        $)
+        code(val-procbase)
+     $)
+
+
+// compile  single word instructions
+AND gen(f) BE IF incode DO
+$( insertcount(); code(f) $)
+
+// compile  NEG ea  etc.
+AND genea(f, m, d) BE IF incode DO
+$( LET instr = f | (m&#77)
+   insertcount()
+   code(instr)
+   genrand(m, d)
+$)
+
+// compile  MOVE.L  ea,ea  etc.
+AND geneaea(f, ms, ds, md, dd) BE IF incode DO
+$( LET instr = f | (ms&#77) | (md&7)<<9 | (md&#70)<<3
+   insertcount()
+   code(instr)
+   genrand(ms, ds)
+   genrand(md, dd)
+$)
+
+// compile  ADDQ.L  #q,ea  etc.
+AND genqea(f, q, m, d) BE genrea(f, q&7, m, d)
+
+// compile MOVEQ #b,Dn
+AND genmoveq(b, r) BE gen(f.moveq | (r<<9) | (b&#XFF))
+
+// compile  ADD.L Dn,ea   ADD.L ea,Dn  etc.
+AND genrea(f, r, m, d) BE IF incode DO
+$( LET instr = f | (m&#77) | (r<<9)
+   insertcount()
+   code(instr)
+   genrand(m, d)
+$)
+
+// compile  SWAP Dn  etc.
+AND genr(f, r) BE gen(f+r)
+
+// compile  LSL Ds,Dr     etc.
+AND genrr(f, s, r) BE gen(f | s<<9 | r)
+
+// compile  LSL #q,Dn  etc.
+AND genshkr(f, sk, r) BE genrr(f, sk&7, r)
+
+// compile  ADDI.L  #w,Dr  etc.
+AND genwr(f, w, r) BE genwea(f, w, m.00+r, 0)
+
+// compile  ADDI.L  #w,ea  etc.
+AND genwea(f, w, m, d) BE IF incode DO
+$( LET instr = f | (m&#77)
+   insertcount()
+   code(instr)
+   code2(w)
+   genrand(m, d)
+$)
+
+
+// inserts a profile count
+AND insertcount() BE RETURN
+//      Not avaialble yet
+//IF countflag DO
+//$( countflag := FALSE
+//   cnop()
+//   genea(f.jsr, m.5s, sr.profile)
+//   code2(0)
+//$)
+//      JUNK
+
+
+// set the label L to the current location
+AND setlab(l) BE
+$( LET a = @rlist
+//debug
+   UNLESS labv!l=-1 DO cgerror(0, "BUG 9, SETLAB given %N which is already %N",
+                                l, labv!l)
+//bug(9)
+   labv!l := stvp
+
+   // fill in forward jump refs
+   // and remove them from RLIST
+   UNTIL !a=0 DO
+   $( LET p = !a
+      TEST l = h3!p
+      THEN $( addtoword(stvp, h2!p)
+              !a := !p
+              freeblk(p)
+           $)
+      ELSE a := p
+   $)
+$)
+
+
+// compiles names for S.ENTRY, S.SECTION, S.NEEDS, and s.defines
+AND cgname(op,n, insert) BE
+$( LET v = VEC 16/BYTESPERWORD
+   FOR i=0 TO 16/BYTESPERWORD DO v!i := 0
+   v%0 := op=s.entry->7, op=s.needs-> ext.ref, op=s.defines -> ext.def, 17
+   FOR i=1 TO n DO
+   $( LET c = rdn()
+      IF i<=7 DO v%i := c
+   $)
+   FOR i = n+1 TO 7 DO
+       v%i := n=0->#X2A,#X20 // #X20 is ASCII '*S'
+                             // #X2A is ASCII asterisk
+   v%8 := #X2E // ASCII .
+   UNLESS op=s.needs | op=s.section | op=s.defines | op=s.entry
+   DO CGERROR(0, "Op was %N in cgname!!", op)
+   UNLESS op=s.entry | op=s.needs | op=s.defines
+   $( LET datvec = VEC 20
+      datstring(datvec)
+      FOR i = 1 TO datvec%0 DO v%(i+8) := datvec%i
+   $)
+
+   UNLESS insert=TRUE | insert=FALSE
+   DO CGERROR(0, "Insert was %N for %S", insert, V)
+
+   IF op=s.defines
+   DO CGERROR(0, "Multiple section names found. Code cannot be run ASIS.")
+
+   TEST op=s.needs | op=s.defines
+   $(   LET x = dp- 7/bytesperword -1
+        dp := x-1
+        checkspace()
+        !dp := needslist
+               needslist := dp
+        FOR I = 1 TO 7 DO x%i := v%i
+        x%0     := op=s.needs -> ?, ?
+   $)
+   ELSE IF insert       //PBnaming DO
+   $( IF op=s.section DO code2(secword)
+      FOR i = 0 TO (v%0)/BYTESPERWORD  DO code2(v!i)
+   $)
+$)
+
+
+AND cgstring(n) BE
+$( LET w = n
+   datalabel := nextparam()
+   loadt(k.lvlab, datalabel)
+
+   FOR i = 1 TO n|3 DO
+   $( w := w<<8
+      IF i<=n DO w := rdn() | w
+      IF i REM 4 = 3 DO
+      $( cgitemn(w)
+         w := 0
+      $)
+   $)
+$)
+
+AND getblk(a, b, c) = VALOF
+$( LET p = freelist
+   TEST p=0
+   THEN $( dp := dp-3
+           p := dp
+           checkspace()
+        $)
+   ELSE freelist := !p
+   h1!p, h2!p, h3!p := a, b, c
+   RESULTIS p
+$)
+
+AND freeblk(p) BE
+$( !p := freelist
+   freelist := p
+$)
+
+AND cgitemn(n) BE
+$(  LET p = getblk(0, datalabel, n)
+    datalabel := 0
+    !nliste := p
+    nliste := p
+$)
+
+// Compile static data.  It is only
+// called at the outermost level
+// There are no ITEML items since are regarded
+// as constants so as to allow position independent
+// code.  ITEML information is held on the LLIST
+
+AND cgstatics() BE
+$( cnop() // line up on a full word boundary
+
+   UNTIL nlist=0 DO
+   $( LET p = h1!nlist
+      LET l = h2!nlist
+      LET n = h3!nlist
+      UNLESS l=0 DO setlab(l)
+      code2(n)
+      freeblk(nlist)
+      nlist := p
+   $)
+
+   nliste := @nlist  // (NLIST=0 when we are finished)
+$)
+
+
+
+AND initdatalists() BE
+$(  rlist   := 0        // for single word rel label refs
+    llist   := 0        // for the DATALAB ITEML mappings
+    nlist   := 0        // for ITEMNs with their labels
+    nliste  := @nlist
+    needslist  := 0     // list of NEEDS directives
+//  needsliste := @needslist
+$)
+
+
+AND checkspace() BE IF ((stv+stvp/4)>>1) > (dp>>1)
+THEN cgerror(20, "PROGRAM TOO LARGE %N WORDS COMPILED, dp=%N", stvp, dp)
+
+

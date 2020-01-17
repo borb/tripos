@@ -1,0 +1,385 @@
+SECTION "Asm-mac"
+
+
+
+
+
+
+/*<RSX
+NEEDS "TITLE"
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+//
+//                        M A C R O S
+//
+
+
+
+
+
+MANIFEST
+$(  macro.next  = 0       // pointer to next macro on definitions stack
+    macro.text  = 1       // address of text buffer
+    macro.chars = 2       // number of characters in text area
+    macro.parms = 3       // list of formal parameters
+    macrosize   = 4
+$)
+
+
+
+
+
+LET callmacroproc(lab, macro) BE
+$(  LET parm = macro!macro.parms
+    LET macro.activation = macro.var(0, 1)
+//  writef("Body of %S is:*N<", item.info)
+//  FOR i=0 TO macro!macro.chars-1 DO wrch((macro!macro.text)%i)
+//  writef(">*N(%N characters)*N", macro!macro.chars)
+    get.and.declare(lab)
+    WHILE is.strexp() DO
+    $(  LET str = ?
+        str := strexp(null, 0, FALSE)
+//      writef("CALLMACRO: str = *"%S*"*N", str)
+        UNLESS parm=null THEN
+        $(  // declare local value of symbol <parm+1> as STR
+//          writef("CALLMACRO: about to declare %S as *"%S*"*N", parm+1, s)
+            stacktext(macro.activation, parm+1, str)
+            parm := parm!0
+//          writef("CALLMACRO: next PARM is #X%X8*N", parm)
+        $)
+        scan(i.comma)
+    $)
+    WHILE parm \= null DO
+    $(  // for each formal paramter still in the list give it the value ""
+//      writef("CALLMACRO: about to declare %S as null*N", parm+1)
+        stacktext(macro.activation, parm+1, "")
+        parm := parm!0
+//      writef("CALLMACRO: next PARM is #X%X8*N", parm)
+    $)
+    endline(\print.expansions)
+//  writef("Macro being called with text @%X8 %N chars, parmlink=#X%X8*N",
+//         macro!macro.text, macro!macro.chars, macro!macro.parms)
+    call.macro(macro.activation, macro!macro.text, macro!macro.chars, '*N')
+$)
+
+
+
+
+
+AND macroproc(lab) BE
+$(  LET savelist = list     // assembler LIST variable - controlling listing
+    LET text.size = ?
+    getitem()
+    TEST lab=null THEN error(e.nolab) ELSE
+    $(  LET macro = ?
+        macro := simplegetvec(macrosize-1)
+        // declare the MACRO straight away!
+        IF pass=first THEN putlab(lab, macro, type.macro)
+        macro!macro.next  := null
+        macro!macro.parms := null
+        IF item.type = i.iden THEN
+        $(  IF pass=first THEN
+            add.macro.parm(macro, item.info)
+            getitem()
+            WHILE scan(i.comma) DO
+            $(  TEST item.type = i.iden THEN
+                    IF pass=first THEN add.macro.parm(macro, item.info)
+                ELSE warn(e.nolab)
+                getitem()
+            $)
+        $)
+        IF comntcheck THEN
+        UNLESS item.type=i.comnt | item.type=i.stop | item.type=i.end THEN
+        warn(e.nocomnt, comntch)
+        IF print.expansions THEN list:=0   // turn listing off
+        TEST warning THEN
+        $(  LET savelev = errorlevel
+            LET savelab = errorlabel
+            errorlevel := level()
+            errorlabel := stoplab
+            error(0)
+stoplab:    errorlabel := savelab
+            errorlevel := savelev
+        $) ELSE endline(TRUE)
+        text.size := read.macro.body(macro, pass=first)
+        TEST text.size \= -1 THEN
+        IF pass=first THEN
+        $(  LET text.area = simplegetvec(text.size-1)
+            LET text = macro!macro.text
+            // copy text to temporary area:
+            FOR i=0 TO text.size-1 DO text.area!i := text!i
+            macro!macro.text := text.area
+//          writef("Macro %S: text area @%X8 with %N chars, parms at #X%X8*N",
+//                  lab, macro!macro.text, macro!macro.chars, macro!macro.parms)
+        $)
+        ELSE
+        $(  list := savelist
+            error(e.nomacterm)
+        $)
+        IF print.expansions THEN
+        $(  list := savelist          // turn listing on again
+            endline(FALSE)            // remove this line from listing too
+        $)
+    $)
+$)
+
+
+
+
+AND endmacroproc(lab) BE get.and.declare(lab)
+
+
+
+AND rptmacroproc(lab) BE
+$(  LET rpt.factor = -1        // causing indefinite expansion
+    LET an.error = 0
+    LET mark.on.temp = memory!0
+    get.and.declare(lab)
+    IF is.expression() THEN
+    $(  rpt.factor := expression()
+        TEST dontknow THEN an.error := e.forward ELSE
+        IF rpt.factor < 0 THEN an.error := e.posnum
+    $)
+    TEST an.error \= 0 THEN error(an.error) ELSE
+    $(  LET macro = tempgetvec(macrosize-1)
+        LET savelist = list
+        LET text.size = ?
+        IF macro=null THEN error(e.memfull)
+        IF print.expansions THEN list:=0  // turn listing off
+        macro!macro.next  := null
+        macro!macro.parms := null
+        endline(TRUE)
+        text.size := read.macro.body(macro, TRUE)
+        TEST text.size \= -1 THEN
+        $(  tempgetvec(text.size-1)
+            // this should allocate the space waiting on top of the
+            // TEMPGETVEC stack
+            endline(TRUE)
+            list := savelist              // restore listing
+            call.macro(macro.var(0, rpt.factor),
+                       macro!macro.text, macro!macro.chars, '*N')
+        $) ELSE
+        $(  list := savelist
+            memory!0 := mark.on.temp
+            error(e.nomacterm)
+        $)
+    $)
+$)
+
+
+
+
+AND breakmacroproc(label) = VALOF
+$(  get.and.declare(label)
+    UNLESS end.macro.var() THEN error(e.nomacro)
+$)
+
+
+
+
+
+AND localproc(lab) BE
+$(  LET gen.label() = VALOF
+    $(  LET new.label = TABLE 0,0,0,0
+        LET unique.no = ?
+        new.label%0 := 7
+        new.label%1 := 'X'
+        new.label%2 := sepch
+        new.label%3 := sepch
+        TEST pass=first THEN
+        $(  STATIC $( passone.var = 0 $)
+            unique.no := passone.var
+            passone.var := passone.var + 1
+        $) ELSE
+        $(  STATIC $( passtwo.var = 0 $)
+            unique.no := passtwo.var
+            passtwo.var := passtwo.var + 1
+        $)
+        FOR i=0 TO 3 DO
+        $(  LET digit = (unique.no >> 4*i) & #XF
+            new.label%(4+i) := (digit > 9 -> 'A'+digit-10, '0'+digit)
+        $)
+        RESULTIS new.label
+    $)
+    get.and.declare(lab)
+    TEST macro.stack=null THEN error(e.nomacro) ELSE
+    $(  $(rpt
+            TEST item.type=i.iden THEN
+            stacktext(macro.stack, item.info, gen.label()) ELSE
+            error(e.nolab)
+            getitem()
+        $)rpt REPEATUNTIL \scan(i.comma)
+    $)
+$)
+
+
+
+
+
+AND printproc(lab) BE
+$(  LET str = ?
+    LET saveout = output()
+    get.and.declare(lab)
+    str := strexp(null, 0, TRUE)
+    IF pass=second THEN
+    $(  selectoutput(out)
+        writef("%S: %S*N", name, str)
+        selectoutput(saveout)
+    $)
+$)
+
+
+
+
+
+AND read.macro.body(macro, write.macro) = VALOF
+$(  // now in a position to parse the body of the macro:
+    // This procedure returns the size, in words, of the block of
+    // text that it reads into MACRO!MACRO.TEXT
+    // It leaves the text on an unclaimed part of the TEMPVEC stack -
+    // hence calls to either TEMPGETVEC or SIMPLEGETVEC should be
+    // avoided until the information is either copied, claimed or
+    // deliberately ignored.
+    // If no ending mnemonic is found the size returned will be -1
+    // It only changes the macro if WRITE.MACRO is TRUE
+    LET mnemproc = ?
+    LET lab = lab.space    // will be label for terminating mnemonic
+    LET depth = 1
+    LET size = -1
+    LET notfound = FALSE
+    LET text = (write.macro -> tempgetvec(-1), macro!macro.text)
+    // TEXT holds the value to be insterted into MACRO!MACRO.TEXT when
+    // the read is completed
+    macro!macro.text := (write.macro -> text, null)
+    // assigned NULL when WRITE.MACRO is FALSE so that no characters will
+    // overwrite the buffer
+    macro!macro.chars := 0 // initially
+    filling.macro := macro // turns listing to text area on
+    $(rpt
+        mnemproc := find.mnem(@lab, 4,
+                    macroproc, rptmacroproc, endmacroproc, endproc)
+        TEST mnemproc=null | mnemproc=endproc THEN notfound := TRUE ELSE
+        depth := depth + (mnemproc=endmacroproc -> -1, 1)
+        UNLESS notfound | depth=0 THEN endline(TRUE)
+    $)rpt REPEATUNTIL notfound | depth=0
+    filling.macro := 0     // disengages MACRO.WRCH
+    // if macro was too big MACRO.TEXT will be NULL (see MACRO.WRCH)
+    IF macro!macro.text = null & write.macro THEN notfound := TRUE
+    UNLESS macro!macro.text = null THEN
+    $(  // must delete this line from text area:
+        LET chptr = macro!macro.chars - 1
+        // MACRO!MACRO.CHARS points to the character position just after
+        // the one last read.  The character last read is the first one
+        // after the last character in the current symbol.
+        UNLESS chptr<=0 THEN
+        chptr:=chptr-1 REPEATUNTIL chptr<=0 | text%chptr='*N'
+        macro!macro.chars :=  (chptr<=0 -> 0, chptr+1)
+        // the "1" above accounts for the '*N' that we are to add to the
+        // end of the buffer (which we have just ensured does not end with
+        // '*N').
+    $)
+    IF macro!macro.text\=null | \write.macro THEN
+    size := (macro!macro.chars+bytesperword-1)/bytesperword
+    macro!macro.text := text    // ensure MACRO.TEXT field is as on entry
+    // call procedure which ended macro expansion:
+    UNLESS mnemproc=null THEN mnemproc(lab)
+    RESULTIS size
+$)
+
+
+
+AND add.macro.parm(macro, parm) BE
+$(  LET parm.copy = simplegetvec(1 + parm%0/bytesperword)
+    LET p = macro+macro.parms
+    FOR i=0 TO parm%0/bytesperword DO
+        (parm.copy+1)!i := parm!i
+    parm.copy!0 := null
+    WHILE !p \= null DO p := !p
+    !p := parm.copy
+$)
+
+
+
+
+AND find.mnem(lv.lab, n, proc1, proc2, proc3, proc4, proc5, proc6) = VALOF
+$(  // finds the first mnemonic the procedure for which is
+    // one of the N procedures PROC1 .. PROC4 or returns NULL
+    // if none is found.
+    LET savelev = errorlevel
+    LET savelab = errorlabel
+    LET save.expand = expand.text
+    LET mnem = ?
+    LET mt.line = ?
+    LET mnem.found = ?
+    LET i = ?
+    errorlevel := level()
+    errorlabel := exitlabel
+    expand.text := FALSE      // stop TEXT expansions during read
+    $(rpt
+        i := 0
+        mnem := read.to.mnem(@mt.line, @mnem.found, lv.lab, FALSE)
+        // do not allow declarations in parsing lines either
+        UNLESS mnem=null THEN
+            WHILE i<n & (@proc1)!i \= mnem!c.fn DO i:=i+1
+        IF i=n | mnem=null THEN endline(TRUE) // none found on this line
+exitlabel:
+    $)rpt REPEATUNTIL item.type=i.end | fatal | i\=n & mnem\=null | finishpass
+    expand.text := save.expand  // restore former text expansion mode
+    // restore error jump label:
+    errorlevel := savelev
+    errorlabel := savelab
+    RESULTIS (i=n | mnem=null -> null, mnem!c.fn)
+$)
+
+
+
+
+
+AND macro.wrch(macro, ch) BE
+// This routine is called for every character read so long as
+// FILLING.MACRO is not zero.  (see RCH)
+$(  LET text = macro!macro.text
+    UNLESS text=null THEN
+    $(  LET chno = macro!macro.chars
+        LET next.word = chno/bytesperword
+        LET next.byte = chno REM bytesperword
+        LET max.buf.size = memsize - (text-memory)
+        TEST next.word > max.buf.size THEN
+        $(  // disable further expansions
+            macro!macro.text := null
+            error(e.bigmacro)
+        $) ELSE
+        $(  text%chno := ch
+            macro!macro.chars := chno+1
+        $)
+    $)
+$)
+
+
+
+
+
+
+
+

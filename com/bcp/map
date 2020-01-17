@@ -1,0 +1,394 @@
+|| (C) Copyright 1979 Tripos Research Group
+||     University of Cambridge
+||     Computer Laboratory
+
+|| Command to map the store allocation under TRIPOS
+|| It counts the store used for its own code, stack
+|| and workspace as free.
+||
+|| MAP [BLOCKS] [CODE] [NAMES] [MAPSTORE] [TO file]
+||     [PIC]
+||
+||     BLOCKS gives size and address of every block
+||     CODE   gives layout of loaded code sections
+||     NAMES  gives space used for routine names,
+||            section names, and global initialisation info.
+||     TO     specifies an output file
+||     PIC    gives the allocation map in picture form
+
+// Modifications:
+// 22 Jun 82 by BJK: Choice of maximum number of blocks recorded related
+//                   to memory size.
+//  9 Sep 82 by PB:  Profile counts for 68000s
+// 21 Sep 82 by PB:  Long names for 68000s
+// 24 Sep 82 by PB:  Vary cell size to fit on one page
+// 11 Oct 82 by IDW: Fixing bugs introduced by the last 3 modifications!
+// 25 Jun 84 by BJK: Bug in PIC option fixed: it didn't cope with more than
+//                   one store block per character position. (I remember fixing
+//                   this before, many years ago - somehow, it has been
+//                   reinstated!!)
+
+
+SECTION "MAP"
+
+GET "LIBHDR"
+GET "CLIHDR"  // Just for cli.module
+
+MANIFEST $(
+         secword        = 12345
+         libword        = 23456
+         maxpri         = 32767
+         sectnamesize   = (17 + bytesperword)/bytesperword
+         routnamesize   = (7 + bytesperword)/bytesperword
+         nameoffset     = -routnamesize
+$<PDP
+         entry2         = 0
+         entry3         = #12625
+         countword      = #x0000
+$>PDP
+$<LSI4
+         entry2         = #XE27E
+         entry3         = #XA840
+         countword      = #XBD2B
+$>LSI4
+$<68000
+        countword       = #X4EAD0100    // JSR  256(A6)
+                                        // DC.L 0
+        countword.1     = #X4EAD        // JSR  256(A6)
+        countword.2     = #X0100        // (part 2)
+
+        countword2.name = #X52ACFFFC    // DC.L 0
+                                        // DC.B 7,'name...'
+                                        // ADDQ #1,-12(A4)
+        countword2.lib  = countword2.name-4
+                                        // DC.L 0
+                                        // DC.L 23456
+                                        // DC.B 7,'name...' OR DC.B n,'..',n
+                                        // ADDQ #1,-16(A4)
+
+        countword2      = #X52ACFFFC    // DC.L 0
+                                        // ADDQ #1,-4(A4)
+$>68000
+         $)
+
+
+
+GLOBAL $( maxblocks     : ug $)
+
+
+LET start() BE
+$(
+    LET blocklist       = rootnode ! rtn.blklist
+    LET a               = blocklist
+    LET memsize         = rootnode ! rtn.memsize
+    LET topofstore      = memsize * 1024
+    LET free, used, n   = 0, 0, 0
+    LET v               = VEC 50
+    LET largest.free    = 0
+    LET joinfree        = 0
+    LET blocksopt       = FALSE
+    LET namesopt        = FALSE
+    LET codeopt         = FALSE
+    LET mapstore        = FALSE
+    LET picopt          = FALSE
+    LET mapstack        = stackbase - 1
+    LET mapcode         = cli.module-1  || Section vector
+    LET sectnames, routnames, globinit = 0, 0, 0
+    LET constr          = output()
+    LET outstr          = 0
+    LET oldpri          = ((rootnode ! rtn.tasktab) ! taskid) ! tcb.pri
+    LET blocks          = ?
+    LET rdargs.string   = "BLOCKS/S,NAMES/S,CODE/S,MAPSTORE/S,TO/K,PIC/S"
+
+    maxblocks           := memsize <= 64 -> 512, memsize*8
+    blocks              := getvec(maxblocks-1)
+
+    IF rdargs(rdargs.string, v, 50) = 0
+    $(
+        writef("MAP: Bad args for key string *"%S*"*N", rdargs.string)
+        freevec(blocks)
+        stop(20)
+    $)
+
+    IF blocks=0 $( writes("MAP: Not enough store for workspace*N"); stop(20) $)
+
+    UNLESS v!0 = 0 THEN blocksopt       := TRUE
+    UNLESS v!1 = 0 THEN namesopt        := TRUE
+    UNLESS v!2 = 0 THEN codeopt         := TRUE
+    UNLESS v!3 = 0 THEN mapstore, codeopt, namesopt := TRUE, TRUE, TRUE
+    UNLESS v!4 = 0
+    $(  outstr := findoutput(v!4)
+        IF  outstr = 0  THEN
+        $( writef("Can't open %S*N",v!4); freevec(blocks); stop(20) $)
+        selectoutput(outstr)
+    $)
+    UNLESS v!5 = 0 THEN picopt := TRUE
+
+    // Take highest task priority for critical section
+    // (Should always be available if we are running)
+    changepri(taskid, maxpri)
+
+    UNTIL !a = 0
+    $(
+      LET size = !a
+      LET next = ?
+      IF (a = mapstack) | (a = mapcode) | (a = blocks-1)
+      THEN size := size + 1 || Make it look free
+
+      blocks!n := size; n := n + 1
+      TEST (size & 1) = 0
+          $( || Used block
+          used := used + size
+          IF (joinfree >> 1) > (largest.free >> 1)
+          THEN largest.free := joinfree
+          joinfree := 0
+          $)
+      ELSE
+          $(
+          size := size-1
+          free := free + size
+          joinfree := joinfree + size
+          $)
+
+      next := a + size
+      IF ((a >> 1) >= (next >> 1)) | // Wrap around
+         ((next >> 1) > ((topofstore-1) >> 1))
+      THEN
+        $(
+        changepri(taskid, oldpri)
+        writef("******Store chain corrupt!!*NNoticed at %U0*N", a)
+        BREAK
+        $)
+      a := next
+      IF n >= maxblocks
+          $(
+          writef("*N****** Too many blocks for MAP's workspace*N*
+                 ******* Only the first %N mapped*N", maxblocks)
+          BREAK
+          $)
+      $)
+
+    IF (joinfree >> 1) > (largest.free >> 1)
+    THEN largest.free := joinfree
+
+    changepri(taskid, oldpri)
+
+    // Now print what we've found
+    newline()
+
+    IF blocksopt
+    $(  writes("Map of free and allocated store*N*N")
+
+        a := blocklist
+
+        FOR i = 0 TO n - 1
+        $(  LET s       = blocks!i
+            LET free    = (s&1)=1
+            IF testflags(1)     WRITES("****** Break*N") <> GOTO exit
+
+            writef("%U6: ", a)
+            TEST free
+            THEN $( writes("free ") ; s := s - 1 $)
+            ELSE    writes("alloc")
+
+            writef("%U6 words", s)
+            IF a = mapstack writes(" (MAP's stack)")
+            IF a = mapcode  writes(" (MAP's code)")
+            IF a = (blocks-1) writes(" (MAP's workspace)")
+            newline()
+            a := a + s
+            $)
+
+        writef("Top of block list = %U0*N", a)
+        $)
+
+    writef("Largest contiguous free area: %U0 words*N", largest.free)
+    writef("Totals: %U0 words available, %U0 used, %U0 free*N*N",
+                used+free, used, free)
+
+    IF picopt
+    $(  // Print as a picture
+        LET chunk       = memsize/2
+        LET alloc       = TRUE
+        LET next.block  = blocklist
+        LET num         = 0
+        LET col         = 0
+        LET sample      = chunk-1
+
+        writes("     0 ")
+        $(  LET some.alloc      = alloc
+            LET some.free       = NOT alloc
+
+
+            UNTIL (sample <= (next.block >> 1)) | (num > n) DO
+            $(  // Move to next block
+                alloc := ((blocks!num) & 1) = 0
+                TEST alloc
+                THEN some.alloc := TRUE
+                ELSE some.free, next.block := TRUE, next.block - 1
+                next.block := next.block + blocks!num
+                num := num+1
+            $)
+
+            col := col+1
+            IF col=65 $( writef("*N%U6 ", (sample-chunk+1)*2); col := 1 $)
+            wrch (num > n -> '?',  // No info
+                        some.alloc   -> (some.free -> 'a', '@'), '.')
+            IF sample >= ((topofstore-1)>>1) THEN BREAK
+            sample := sample + chunk
+        $) REPEAT
+        newline()
+    $)
+
+    || Print the layout of the code sections, assuming
+    || that they will not change under our feet!
+    || Also, add up space used for section names, routine
+    || names, and global initialisation information.
+
+    a := blocklist
+
+    IF codeopt | namesopt
+    $(
+        IF codeopt THEN writes("Layout of loaded code*N*N")
+
+        FOR i = 0 TO n-1
+        DO $(
+           LET s = blocks!i
+           IF testflags(1) WRITES("****** BREAK*N") <> BREAK
+           IF (s&1)=1
+           THEN $( a := a+s-1; LOOP $) // Free block
+
+           IF (a!3 = secword) & ((a+4)%0 = 17)
+           THEN
+             $( // We've found a BCPL section
+             LET goffset = ?
+
+             IF codeopt writef("%U6: %S - length %U4 words*N", a+2, a+4, a!2)
+
+             sectnames := sectnames + sectnamesize + 1
+
+             // Count space for global initialisation
+             // table
+             goffset := a+2 + a!2 // Word after highest
+                                  // referenced global
+               $(
+               globinit := globinit+2
+               goffset  := goffset-2
+               $) REPEATUNTIL !goffset=0 // End of list
+
+            IF namesopt
+                FOR j=5 /* skip some junk! */ TO a!2
+                $(  LET addr = a+j // Avoid comparing signed addresses
+                    LET name = good.routine.name(addr + nameoffset)
+
+                    TEST name ~= 0
+                    $(  // BCPL entry sequence
+                        LET namelen = (name%0=7 -> 7, name%0+1)/BYTESPERWORD+1
+                        LET libw.entry = addr!(-namelen-1) = libword
+
+                        routnames := routnames+namelen + (libw.entry->1,0)
+                        IF mapstore
+                        THEN writef(
+$<68000                              (!addr=countword                ) ->
+                                                          "%U6: %C%TA%U7*N",
+                                     (!addr=countword2.name-namelen*4) ->
+                                                          "%U6: %C%TA%$%U7*N",
+                                     (!addr=countword2.lib -namelen*4) ->
+                                                          "%U6: %C%TA%$%$%U7*N",
+$>68000                                                   "%U6: %C%S*N",
+                                addr, libw.entry -> '**', ' ',
+                                name $<68000 ,  addr!1,
+                                                addr!(-namelen-1),
+                                                addr!(-namelen-2)
+                                     $>68000 )
+                    $)
+                    ELSE
+$<68000              TEST !addr = countword2
+                     THEN WRITEF("%U6:       %U9*N", addr, addr!(-1))
+                     ELSE TEST addr%%1 = countword.1 & addr%%2=countword.2
+                     THEN WRITEF("%U6.5   %U9*N", addr, ((addr%%3)<<8) | addr%%4)
+                     ELSE
+$>68000                  IF !addr = countword
+                         $( // Profile count
+$<LSI4                      writef("%U6:    ", addr)
+                            writedp(addr!2, addr!1); newline()
+$>LSI4
+$<68000
+                            WRITEF("%U6:    %U9*N", addr, addr!1)
+$>68000
+                         $)
+                $)
+            $)
+            a := a+s // Point to next block
+        $)
+
+        IF namesopt
+        THEN writef("*NRoutine names: %I5 words*N*
+                     *Section names: %I5 words*N*
+                     *Global initialisation info: %N words*N",
+                     routnames, sectnames, globinit)
+        $)
+
+exit:
+    freevec(blocks)
+    UNLESS outstr = 0 THEN endwrite()
+    selectoutput(constr)
+    $)
+
+
+$<LSI4
+AND writedp(msw, lsw) BE
+    $(
+    // Write a double precision integer in a field of 9 places
+    // Assume bitsperword=16
+    // Assume top 3 bits of msw are zero.
+
+    msw := (msw << 3) + (lsw >> 13)
+    lsw := lsw & #B0001111111111111
+    msw := muldiv(msw, 8192, 10000)
+    lsw := lsw + result2
+    IF lsw >= 10000 THEN msw, lsw := msw+1, lsw-10000
+
+    // Write msw half
+    TEST msw=0 THEN writes("     ") ELSE writed(msw, 5)
+
+    // Write lsw half
+    $( LET v = VEC 3
+       LET zero.supp = msw=0
+       FOR pos = 3 TO 0 BY -1
+       DO $( v!pos := lsw REM 10 + '0'
+             lsw := lsw/10
+          $)
+
+       FOR pos = 0 TO 3
+       DO $( LET d = v!pos
+             TEST zero.supp & d='0' & pos<3
+             THEN wrch(' ')
+             ELSE $( wrch(d); zero.supp := FALSE $)
+          $)
+    $)
+$)
+$>LSI4
+
+
+AND good.routine.name(string) = VALOF
+$(  LET len = string%0
+
+    UNLESS len=7
+    $(  len := string%7
+        string := string + 7/bytesperword - (len+1) / bytesperword
+    $)
+
+    IF len=0 | len ~= string%0 RESULTIS FALSE
+
+    FOR i=1 TO len
+    $(  LET ch = capitalch(string%i)
+
+        UNLESS ('A' <= ch <= 'Z') | ('0' <= ch <= '9') | (ch = '.') | (ch = ' ')
+        THEN RESULTIS FALSE
+    $)
+
+    RESULTIS string
+$)
+
+

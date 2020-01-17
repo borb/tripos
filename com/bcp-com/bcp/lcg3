@@ -1,0 +1,311 @@
+SECTION "LCG3"
+
+GET "LCGHDR"
+
+LET cgpendingop() BE
+  // Generates code for any pending operator.
+  // The simulated stack is left correct, and
+  //  'pendingop' is set to s.none.
+  $( LET sw = no
+
+     SWITCHON pendingop INTO
+
+       $( DEFAULT:      cgerror(0, "in CGPENDINGOP %N", op)
+
+          CASE s.none:                                                  RETURN
+
+          CASE s.eq: CASE s.ne: CASE s.ls:
+          CASE s.le: CASE s.ge: CASE s.gr:
+                        cgrelop(pendingop);                             ENDCASE
+
+          CASE s.plus: CASE s.minus:
+            // Optimize 'address' +- const.
+            $( LET a1, a2 = arg1, arg2
+               IF h1!a2 = k.numb THEN $( a1 := arg2; a2 := arg1 $)
+               IF (h1!a2 = k.lvloc | h1!a2 = k.lvglob) & h1!a1 = k.numb
+                 $( h2!arg2 := h2!a2 + (pendingop=s.plus -> h2!a1, - h2!a1)
+                    h1!arg2 := h1!a2
+                    stack(ssp - 1);                                     ENDCASE
+                 $)
+               IF cgdyadic(pendingop, no) & pendingop = s.minus THEN
+                 // Operands reversed: negate result.
+                 genrr(f.neg, h2!arg1, h2!arg1);                        ENDCASE
+            $)
+
+          CASE s.mult:  cgmult();                                       ENDCASE
+
+          CASE s.rem:   sw := yes
+          CASE s.div:   cgdiv(sw);                                      ENDCASE
+
+          CASE s.getbyte:cggetbyte();                                   ENDCASE
+
+          CASE s.logand:sw := yes;
+          CASE s.logor: CASE s.eqv: CASE s.neqv:
+            // Use bit-change instructions if possible.
+            $( LET a1, a2 = arg1, arg2
+               IF h1!a2 = k.numb $( a1 := arg2; a2 := arg1 $)
+               IF h1!a1 = k.numb THEN
+               $( LET n = h2!a1 NEQV sw
+                  IF [n & (n - 1)] = 0 THEN
+                  $( LET b = bitpos(n)
+                     LET r = movetoaqy(a2)
+                     LET f = (pendingop-s.logand) !
+                                              TABLE f.rbit,f.sbit,f.cbit,f.cbit
+                     UNLESS n=0 $( genbit(f,b,r); forgetreg(r) $)
+                     lose1(r)
+                     GOTO lop.done
+                  $)
+               $)
+
+               cgdyadic(pendingop, yes)
+
+             lop.done:
+               IF (h1!arg1 = k.reg) & (pendingop = s.eqv)
+               THEN $( LET r = h2!arg1; genrr(f.comp,r,r); forgetreg(r) $)
+               ENDCASE
+            $)
+
+          CASE s.lshift:        sw := yes
+          CASE s.rshift:        cgshift(sw);                            ENDCASE
+
+          CASE s.neg:           sw := yes
+          CASE s.not:
+            $( LET r = movetoaqy(arg1)
+               genrr((sw -> f.neg, f.comp), r,r)
+               TEST reg.k!r = k.numb
+               THEN reg.n!r := NOT reg.n!r - sw
+               ELSE forgetreg(r);                                       ENDCASE
+            $)
+
+          CASE s.abs:
+            $( LET r,l = movetoaqy(arg1), nextparam()
+               genb(f.jge,r,l)
+               genrr(f.neg,r,r)
+               setlabel(l)
+               unsetlabel()
+               TEST reg.k!r = k.numb
+               THEN reg.n!r := ABS reg.n!r
+               ELSE forgetreg(r)
+            $)
+     $)
+     pendingop := s.none
+$)
+
+
+AND bitpos(n) = VALOF
+// Delivers bit position (0 - 15) of the single bit in a power of two.
+$( LET b = -1
+   $( n := n >> 1; b := b + 1 $) REPEATUNTIL n = 0
+     RESULTIS b
+$)
+
+
+AND cgdyadic(op, cant.use.y) = VALOF
+  // Generates code for dyadic operator 'op'.
+  //  op = 0 means a comparison and CSKs are generated.
+  // yes is returned if the operands were reversed.
+  $( LET r1, r2 = argreg(arg1), argreg(arg2)
+     LET a1, a2, rev, optab = arg1, arg2, no, ?
+
+     IF (h1!arg1 = k.numb = h1!a2) & (op \= 0) THEN
+       $( evalconst(op);                                        RESULTIS no $)
+
+     // Now select a register.  Priority is given
+     //  to a operand already in a register,
+     //  either as K.REG or from the slave.
+
+     IF r2 < 0 & r1 >= 0 THEN
+         $( r2 := r1
+            a2 := arg1
+            a1 := arg2
+            rev := yes
+            r1 := -1
+         $)
+
+     TEST r2 >= 0 THEN // At least one already in reg.
+       IF r2 = r.y & (cant.use.y | h1!a1 = k.glob)
+       THEN $( r2 := movetoaq(a2); IF r2 = r1 THEN r1 := -1 $)
+      ELSE
+       // Neither in register: prefer to load constant.
+       $( IF h1!a1 = k.numb THEN
+            $( a2 := arg1
+               a1 := arg2
+               TEST op = s.minus
+               THEN $( h2!a2 := - h2!a2; op := s.plus $)
+               ELSE rev := yes
+            $)
+
+          TEST cant.use.y | (h1!a1 = k.glob) THEN
+            r2 := movetoaq(a2)
+           ELSE
+            r2 := movetoaqy(a2)
+       $)
+
+     // Now we have 'a2' in register 'r2'.   Do the operation.
+     h1!a2, h2!a2 := k.reg, r2
+
+     optab := ftables(op)
+
+     TEST r1 >= 0 THEN
+       genrr(optab!3, r1, r2)
+      ELSE
+      $( LET k, n = h1!a1, h2!a1
+
+         SWITCHON k INTO
+            $( CASE k.lvloc:
+               CASE k.lvlab:
+               CASE k.lvglob:
+                 genrr(optab!3, movetoaqy(a1), r2)
+                 ENDCASE
+
+               CASE k.numb:
+                 IF n = 0 & op \= s.logand & op \= 0 THEN
+                   // Value <op> 0 : No effect
+                   ENDCASE
+                 IF -255 <= n <= 0 & op = s.minus THEN
+                   // x - -n = x + n
+                   $( n := -n
+                      op := s.plus
+                      optab := ftables(op)
+                   $)
+                 TEST op = s.minus THEN
+                   IF 1 <= n <= 256 THEN
+                     $( geni(optab!2, r2, 256 - n)
+                        ENDCASE
+                     $)
+                  ELSE
+                   IF 0 <= n <= 255 THEN
+                     $( geni(optab!2, r2, n)
+                        ENDCASE
+                     $)
+
+               CASE k.lab: CASE k.glob:
+               CASE k.loc: CASE k.ry: CASE k.abs:
+                 genm(optab!0, optab!1, r2, k, n, 0)
+
+            $)
+       $)
+
+     IF op \= 0 THEN
+       $( forgetreg(r2)
+          lose1(r2)
+       $)
+
+     RESULTIS rev
+
+  $)
+
+AND evalconst(op) BE
+// Evaluates arg2 <op> arg1, where both arg1 and arg2 are known to be constants.
+$( LET n2, n1 = h2!arg2, h2!arg1
+   LET n = VALOF SWITCHON op INTO
+   $( CASE s.plus:   RESULTIS n2 + n1
+      CASE s.minus:  RESULTIS n2 - n1
+      CASE s.logand: RESULTIS n2 & n1
+      CASE s.logor:  RESULTIS n2 | n1
+      CASE s.neqv:   RESULTIS n2 NEQV n1
+      CASE s.eqv:    RESULTIS n2 EQV  n1
+   $)
+   stack(ssp - 1)
+   h2!arg1 := n
+$)
+
+
+AND ftables(op) = VALOF
+  // Delivers TABLE of function codes for each operator.
+  // op = 0 indicates CSK.
+  SWITCHON op INTO
+    $( CASE s.plus:     RESULTIS TABLE f.add, f.adde, f.addi, f.addr
+       CASE s.minus:    RESULTIS TABLE f.sub, f.sube, f.subi, f.subr
+       CASE s.logand:   RESULTIS TABLE f.and, f.ande, f.andi, f.andr
+       CASE s.logor:    RESULTIS TABLE f.or,  f.ore,  f.ori,  f.orr
+       CASE s.neqv:
+       CASE s.eqv:      RESULTIS TABLE f.xor, f.xore, f.xori, f.xorr
+       CASE 0:          RESULTIS TABLE f.csk, f.cske, f.cski, f.cskr
+    $)
+
+
+AND cgrelop(op) BE  // arg2 <op> arg1 -> yes or no.
+  $( LET r, a1, a2, reversed = ?, arg1, arg2, no
+
+     IF h1!a2 = k.numb $( reversed := yes; a2 := arg1; a1 := arg2 $)
+
+     pendingop := s.none
+
+     TEST (h1!a1 = k.numb) & (h2!a1) = 0 THEN
+       $( // Special case of comparison with zero.
+          // Each case is treated differently, and some rather contorted code is
+          //  produced.
+          LET label = 0
+
+          r := movetoaqy(a2)
+
+          IF reversed THEN op := revop(op)
+
+          UNLESS (op = s.ls) | (op = s.ge) DO label := nextparam()
+
+          SWITCHON op INTO
+            $( CASE s.eq:
+                 //       JEQD   R,$+2
+                 //       COPY   =0,R
+                 genb(f.jeqd,r,label); setrtok(r,0);                    ENDCASE
+
+               CASE s.ne:
+                 //       JEQ    R,$+2
+                 //       COPY   =-1,R
+                 genb(f.jeq,r,label); setrtok(r,-1);                    ENDCASE
+
+               CASE s.gr:                               //        JEQ    R,$+3
+                 genb(f.jeq,r,label)
+               CASE s.ge:                               //        COMP   R,R
+                 genrr(f.comp,r,r)
+               CASE s.ls:                               //        SHIFT  R,RA,15
+                 gensh(f.sra,r,15);                                     ENDCASE
+
+               CASE s.le: // Rather horrible!
+                 //       JEQD   R,$+3
+                 //       ADD    =1,R
+                 //       SHIFT  R,RA,15
+                 genb(f.jeqd,r,label); geni(f.addi,r,1); gensh(f.sra,r,15)
+          $)
+          UNLESS label = 0  $( setlabel(label); unsetlabel() $)
+       $)
+      ELSE TEST (op = s.eq) | (op = s.ne) THEN
+         // Use subtract for = and ~=.
+         $( cgdyadic(s.minus,no)
+            TEST h1!arg1 = k.numb THEN h2!arg1 := (h2!arg1=0) \= (op=s.eq)
+            ELSE $( loadt(k.numb,0); cgrelop(op) $)
+            RETURN
+         $)
+        ELSE
+         // General comparison (with CSK)
+         $( LET eqval = (op = s.gr) | (op = s.ls) -> 0,-1
+            r := unwantedreg()
+            reg.locked!r := yes
+            freereg(r)
+            setrtok(r,eqval)
+            chkrefs(6) // CSKE!
+            IF cgdyadic(0,yes) THEN op := revop(op)
+            reg.locked!r := no
+
+            SWITCHON op INTO
+              $( CASE s.gr: CASE s.le:
+                   gens(f.jmp,0,m.rel+#X80+1); setrtok(r,NOT eqval);    ENDCASE
+
+                 CASE s.ls: CASE s.ge:
+                   setrtok(r,NOT eqval); genrr(f.lr,r.a,r.a)
+              $)
+         $)
+     forgetreg(r)
+     lose1(r)
+  $)
+
+
+AND unwantedreg() = VALOF
+$( LET r1, r2 = argreg(arg1), argreg(arg2)
+   IF r1 < 0 & (h1!arg1=k.glob | h1!arg1=k.ry) THEN r1 := r.y
+   IF r2 < 0 & (h1!arg2=k.glob | h1!arg2=k.ry) THEN r2 := r.y
+   RESULTIS anybut(r1, r2)
+$)
+
+

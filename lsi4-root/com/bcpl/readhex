@@ -1,0 +1,156 @@
+SECTION "READHEX"
+
+GET "LIBHDR"
+
+GLOBAL $( buf       : ug
+          ptr       : ug + 1
+
+          instream  : ug + 10
+          outstream : ug + 11
+          standout  : ug + 12
+       $)
+
+MANIFEST $( buffer.size = 100
+            no          = FALSE
+            yes         = TRUE
+         $)
+
+
+
+LET start() BE // READHEX [FROM] file [TO] file
+  //
+  // This command is roughly the inverse of TYPEHEX.
+  //
+  $( LET argv   = VEC 100
+
+     standout  := output()
+
+     instream  := 0
+     outstream := 0
+     buf       := 0
+     ptr       := 0
+
+     IF rdargs("FROM/A,TO/A", argv, 100) = 0 THEN
+       collapse("Invalid parameters")
+
+     // Get the buffer, and open both the files.
+
+     buf       := getvec(buffer.size - 1)
+
+     IF buf = 0 THEN
+       collapse("Insufficient free store")
+
+     instream  := findinput(argv!0)
+     outstream := findoutput(argv!1)
+
+     IF instream = 0 THEN
+       collapse("Can't open *"%S*"", argv!0)
+
+     IF outstream = 0 THEN
+       collapse("Can't open *"%S*"", argv!1)
+
+     selectinput(instream)
+     selectoutput(outstream)
+
+     // The main loop of the program.
+     // The input is a stream of hex constants, with spaces
+     //  and newlines as separators.
+
+     // A REPEAT loop starts here.
+
+     $( LET ch  = ?
+        LET val = 0
+        LET ok  = no
+        LET cap = ?
+
+        IF testflags(1) THEN
+          $( selectoutput(standout)
+             writes("****BREAK*N")
+             selectoutput(outstream)
+             BREAK
+          $)
+
+        ch := rdch()
+
+        WHILE ch = '*N' | ch = ' ' DO
+          ch := rdch()
+
+        IF ch = endstreamch THEN
+          //
+          BREAK
+
+        // Read a hex constant - there must be at least one
+        //  valid digit.
+
+        cap := capitalch(ch)
+
+        WHILE ('0' <= ch <= '9') | ('A' <= cap <= 'F') DO
+          //
+          $( LET d = '0' <= ch <= '9' -> ch - '0', cap - 'A' + 10
+
+             val := (val << 4) + d
+             ok  := yes
+
+             ch  := rdch()
+             cap := capitalch(ch)
+          $)
+
+        IF NOT ok THEN
+          collapse("Invalid character (%C) in hex constant", ch)
+
+        // Output the word.
+
+        IF ptr = buffer.size THEN
+          output.buffer()
+
+        buf ! ptr := val
+        ptr       := ptr + 1
+
+     $) REPEAT
+
+     // Finished.
+
+     output.buffer()
+
+     collapse(0)
+  $)
+
+
+
+
+
+AND output.buffer() BE
+  //
+  $( writewords(buf, ptr)
+     ptr := 0
+  $)
+
+
+
+AND collapse(string, a, b) BE
+  //
+  $( IF instream ~= 0 THEN
+       $( selectinput(instream)
+          endread()
+       $)
+
+     IF outstream ~= 0 THEN
+       $( selectoutput(outstream)
+          endwrite()
+       $)
+
+     freevec(buf)
+
+     selectoutput(standout)
+
+     IF string = 0 THEN
+       stop(0)
+
+     writef(string, a, b)
+
+     newline()
+
+     stop(20)
+  $)
+
+

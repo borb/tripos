@@ -1,0 +1,1340 @@
+//****************************************************************************
+//*                                                                          *
+//*        M68KASM  -  Assembler for the MC68000 family  -  Section 8        *
+//*                                                                          *
+//*                Constant Definition and Simple Instructions               *
+//*                                                                          *
+//****************************************************************************
+//*     I. D. Wilson    -    Last Modified    -    IDW    -    18/11/86      *
+//****************************************************************************
+
+
+
+SECTION "M8"
+
+
+
+GET "LIBHDR"
+GET "M68KHDR"
+
+
+
+LET defineconstants( size )  BE
+$(
+//  Deal with a "DC" directive.
+
+    LET bs  =  bytesize( size )
+
+    skiplayout()
+
+    align( bytesize( size = ts.byte  ->  size, ts.word ) )
+
+    IF  labelset  THEN  setlabel( locmode, location, FALSE )
+
+    nitems  :=  0
+
+    $(  //  Repeat loop to read all the items on the line.  We are already
+        //  aligned to the correct boundary.
+
+        externalref  :=  FALSE
+        forwardref   :=  FALSE
+
+        TEST  ch = '*''  THEN
+        $(
+            //  This is the most revolting feature of the Motorola 68000
+            //  assembler.  We are allowed to use DC.L and DC.W to declare
+            //  aligned string constants as well as DC.B.
+
+            LET charcount  =  0
+
+            $(  //  Repeat loop to read the characters in the string.
+
+                rch()
+
+                IF  ch = '*''  THEN
+                $(
+                    rch()
+                    UNLESS  ch = '*''  BREAK
+                $)
+
+                IF  ch = '*N'  THEN  complain( 57 )
+
+                stackvalue( s.abs16, 1, ascii.value( ch ), FALSE, 0 )
+
+                charcount  :=  charcount + 1
+            $)
+            REPEAT
+
+            readsymb()
+
+            //  We now have to ensure that we are aligned to the right sort
+            //  of boundary by filling up with the right number of nulls.
+
+            UNTIL  (charcount REM bs)  =  0  DO
+            $(
+                stackvalue( s.abs16, 1, 0, FALSE, 0 )
+
+                charcount  :=  charcount + 1
+            $)
+        $)
+        ELSE
+        $(
+            LET ofwd  =  forwardreftype
+            LET olev  =  recoverlevel
+            LET olab  =  recoverlabel
+
+            readsymb()
+
+            recoverlevel    :=  level()
+            recoverlabel    :=  label
+
+            forwardreftype  :=  s.abs32
+
+            effective.address()
+
+        label:
+            recoverlevel    :=  olev
+            recoverlabel    :=  olab
+
+            forwardreftype  :=  ofwd
+
+            IF  error.found  THEN  longjump( recoverlevel, recoverlabel )
+
+            UNLESS  size = ts.byte  DO
+                IF  pass1 & forwardref  THEN
+                    relocate( 0, bs )
+
+            IF  externalref  &  size \= ts.long  THEN
+                complain( 161 )
+
+            IF  size = ts.byte  &  NOT absolute( exptype )  THEN
+                complain( 123 )
+
+            IF  pass2  THEN
+            $(
+                IF  size = ts.word  &  NOT wordsized( exp )  THEN
+                    warning( 175 )
+
+                IF  size = ts.byte  &  NOT bytesized( exp )  THEN
+                    warning( 176 )
+            $)
+
+            stackvalue( exptype, bs, exp, externalref, externalsymb )
+        $)
+    $)
+    REPEATWHILE  symb = s.comma
+
+    //  If we drop through here, then, either we have reached the end
+    //  of the list, and have come to an "s.none", or else, this is some
+    //  sort of syntax error.
+
+    checkfor( s.none, 77 )
+$)
+
+
+
+AND defineblock( size )  BE
+$(
+//  Handle the DCB directive - define a block of items which are all the same
+//  value.
+
+    LET incr    =  0
+    LET newloc  =  0
+    LET bs      =  bytesize( size )
+
+    LET ofwd    =  forwardreftype
+    LET olev    =  recoverlevel
+    LET olab    =  recoverlabel
+
+    align( bytesize( size = ts.byte  ->  size, ts.word ) )
+
+    IF  labelset  THEN  setlabel( locmode, location, FALSE )
+
+    //  First read the count, which will tell us where the final location will
+    //  be.
+
+    nextsymb()
+    effective.address()
+
+    TEST  forwardref                THEN  complain( 79 )   ELSE
+    TEST  externalref               THEN  complain( 164 )  ELSE
+    TEST  NOT absolute( exptype )   THEN  complain( 71 )   ELSE
+    TEST  exp < 0                   THEN  complain( 48 )   ELSE
+
+          incr  :=  exp * bs
+
+    //  We now have an increment in our hands, and so can calculate what
+    //  the new address would be.  If out of address range, then we should
+    //  complain now.
+
+    newloc  :=  location + incr
+
+    UNLESS  (newloc & addressmask) = 0  DO  complain( 48 )
+
+    //  Having got this far, we can read the argument to the directive, which
+    //  is the value to be repeated.
+
+    checkfor( s.comma, 10 )
+
+    recoverlevel    :=  level()
+    recoverlabel    :=  label
+
+    forwardreftype  :=  s.abs32
+
+    effective.address()
+
+label:
+    recoverlevel    :=  olev
+    recoverlabel    :=  olab
+
+    forwardreftype  :=  ofwd
+
+    IF  error.found  THEN  longjump( recoverlevel, recoverlabel )
+
+    checkfor( s.none, 47 )
+
+    IF  size = ts.byte  &  NOT absolute( exptype )  THEN
+        complain( 123 )
+
+    IF  externalref  &  size \= ts.long  THEN
+        complain( 161 )
+
+    IF  pass2  THEN
+    $(
+        IF  size = ts.word  &  NOT wordsized( exp )  THEN
+            warning( 175 )
+
+        IF  size = ts.byte  &  NOT bytesized( exp )  THEN
+            warning( 176 )
+    $)
+
+    //  We now have the count and the item to be repeated.  We should enter a
+    //  loop updating the store buffer with the value, and relocating the
+    //  symbol if necessary.
+
+    TEST  pass1  THEN
+    $(
+        //  Nothing to be done in the first pass.  Just relocate the symbol
+        //  many times is necessary.
+
+        LET r  =  (size \= ts.byte)  &  (relocatable( exptype ) | forwardref)
+
+        UNTIL  location = newloc  DO
+        $(
+            IF  r  THEN  relocate( 0, bs )
+
+            setloc( location + bs )
+        $)
+    $)
+    ELSE
+    $(
+        //  This is the second pass, and we must update the code vector with
+        //  the value.  We must remember to relocate the symbol and add
+        //  external references if necessary.
+
+        IF  listing  THEN
+        $(
+            clearbuffer()
+
+            linepos  :=  0
+
+            writehexvalue( location, locmode = s.rel  ->  4, 8 )
+
+            IF  locmode = s.rel  THEN  writechar( '*'' )
+
+            linepos  :=  10
+            writechar( '=' )
+            writehexvalue( incr, 4 )
+
+            IF  error.found  THEN
+            $(
+                linepos  :=  36
+                writechar( 'E' )
+                error.found  :=  FALSE
+            $)
+
+            linepos :=  38
+            writenumber( linenumber, 5 )
+
+            IF  macrodepth > 0  &  NOT inmacro  THEN
+            $(
+                linepos  :=  43
+                writechar( '+' )
+            $)
+
+            linepos  :=  44
+            FOR  i = 0  TO  length-1  DO  writechar( inputbuff % i )
+
+            printbuffer()
+
+            listed  :=  TRUE
+        $)
+
+        //  Having listed the line, fill in all the values which we have
+        //  prepared so carefully.
+
+        UNTIL  location = newloc  DO
+        $(
+            IF  relocatable( exptype )  THEN  relocate( location, bs )
+            IF  externalref             THEN  addexternalref( externalsymb, location )
+
+            code.bytes( bs, exp )
+        $)
+    $)
+$)
+
+
+
+AND definestorage( size )  BE
+$(
+//  Deal with a "DS" directive
+
+    LET incr     =  0
+    LET newloc   =  0
+    LET restype  =  0
+    LET bs       =  bytesize( size )
+
+    align( bytesize( size = ts.byte  ->  size, ts.word ) )
+
+    IF  labelset  THEN  setlabel( locmode, location, FALSE )
+
+    nextsymb()
+    effective.address()
+
+    TEST  forwardref                THEN  complain( 79 )   ELSE
+    TEST  externalref               THEN  complain( 164 )  ELSE
+    TEST  symb  \=  s.none          THEN  complain( 47 )   ELSE
+    TEST  NOT absolute( exptype )   THEN  complain( 71 )   ELSE
+    TEST  exp < 0                   THEN  complain( 48 )   ELSE
+
+          incr  :=  exp * bs
+
+    //  We now have an increment in our hands, and so can calculate what
+    //  the new address would be.  If out of address range, then we should
+    //  complain now.
+
+    newloc  :=  location + incr
+
+    UNLESS  (newloc & addressmask) = 0  DO  complain( 48 )
+
+    IF  pass2  &  listing  THEN
+    $(
+        clearbuffer()
+
+        linepos  :=  0
+
+        writehexvalue( location, locmode = s.rel  ->  4, 8 )
+
+        IF  locmode = s.rel  THEN  writechar( '*'' )
+
+        linepos  :=  10
+        writechar( '=' )
+        writehexvalue( incr, 4 )
+
+        IF  error.found  THEN
+        $(
+            linepos  :=  36
+            writechar( 'E' )
+            error.found  :=  FALSE
+        $)
+
+        linepos :=  38
+        writenumber( linenumber, 5 )
+
+        IF  macrodepth > 0  &  NOT inmacro  THEN
+        $(
+            linepos  :=  43
+            writechar( '+' )
+        $)
+
+        linepos  :=  44
+        FOR  i = 0  TO  length-1  DO  writechar( inputbuff % i )
+
+        printbuffer()
+
+        listed  :=  TRUE
+    $)
+
+    setloc( newloc )
+$)
+
+
+
+AND checktagsize()  BE
+    UNLESS  tagsize.given = ts.none  DO
+            complain( 80 )
+
+
+
+AND wordsized( operand )  =  -32768 <= operand <= +32767    |
+                             (operand & #XFFFF) = operand
+
+
+
+AND bytesized( operand )  =  -128 <= operand <= +127         |
+                             (operand & #XFF) = operand
+
+
+
+AND absolute( ea )  =  ea = s.abs16  |  ea = s.abs32
+
+
+
+AND relocatable( ea )  =  ea = s.rel  |  ea = s.rel32
+
+
+
+AND checklabel( possible )  BE
+    UNLESS  labelset = possible  DO
+        complain(  possible  ->  82, 83 )
+
+
+
+AND nextsymb()  BE
+$(
+//  Get the next symbol from the input stream, irrespective of layout
+//  characters.
+
+    skiplayout()
+    readsymb()
+$)
+
+
+
+AND spacelines( n )  BE  IF  pass2  &  listing  THEN
+$(
+    clearbuffer()
+
+    FOR  i = 1  TO  n  DO  printbuffer()
+
+    listed  :=  TRUE
+$)
+
+
+
+AND printbuffer()  BE    IF   pass2  &  (error.found  |  listing)  THEN
+$(
+//  Print the output buffer to the "listing" output stream.
+//  First, strip trailing spaces.
+
+    LET linelength  =  0
+
+    FOR  i = charsperline-1  TO  0  BY  -1  DO
+         UNLESS  outbuff % i  =  '*S'  DO
+         $(
+             linelength  :=  i + 1
+             BREAK
+         $)
+
+    IF  (onpage REM (linesperpage-5) = 0)  &  paging  THEN  pageheading()
+
+$<RECORDIO
+    writerec( outbuff, linelength )
+$>RECORDIO
+
+$<RECORDIO'
+    FOR  i = 0  TO  linelength-1  DO  wrch( outbuff % i )
+    newline()
+$>RECORDIO'
+
+    onpage  :=  onpage + 1
+$)
+
+
+
+AND pageheading()  BE  IF  pass2  &  paging  THEN
+$(
+//  Print out a heading for a page.  This includes the title of the thing
+//  being assembled, the current date and time, and a description of what else
+//  is on the page.
+
+    wrchsave    :=  wrch
+    wrch        :=  wch
+
+    linepos     :=  0
+    pagenumber  :=  pagenumber  +  1
+
+    writef( "*PMC68020 ASSEMBLER VERSION %N.%N   ", version, release )
+
+    FOR  i = 0  TO  titlecharsmax-1  DO  wrch( titlevec % i )
+
+    writef( "  %S  %S   PAGE %N*N*N", datestring, timestring, pagenumber )
+
+    //  Print out the heading which is specific to the type of thing we are
+    //  listing.
+
+    TEST  headingtype = h.code  THEN
+        writes( "   LOC           OBJECT CODE           STMT            SOURCE STATEMENT" )
+
+    ELSE
+
+    TEST  headingtype = h.errors  THEN
+        writes( "                    FILE NAME                          STMT                  ERROR MESSAGE" )
+
+    ELSE
+
+    TEST  headingtype = h.xref  THEN
+        writes( "            SYMBOL               DEFN   VALUE             REFERENCES" )
+
+    ELSE
+
+    TEST  headingtype = h.files  THEN
+        writes( "         REF        FILE NAME" )
+
+    //  If it isn't one of these, then heaven help us!
+
+    ELSE  complain( 0 )
+
+    writes( "*N*N*N" )
+
+    wrch    :=  wrchsave
+    onpage  :=  0
+$)
+
+
+
+AND wch( ch )  BE
+$(
+    TEST  ch = '*N'  THEN
+    $(
+        wrchsave( '*N' )
+        linepos  :=  0
+    $)
+    ELSE
+
+    UNLESS  linepos >= charsperline  DO
+    $(
+        wrchsave( ch )
+        linepos  :=  linepos + 1
+    $)
+$)
+
+
+
+AND bytesize( size )  =  VALOF
+$(
+    SWITCHON  size  INTO
+    $(
+        CASE ts.long    : RESULTIS 4
+        CASE ts.word    : RESULTIS 2
+        CASE ts.byte    : RESULTIS 1
+
+        CASE ts.none    : RESULTIS bytesize( ts.default )
+
+        DEFAULT         : complain( 0 )
+    $)
+$)
+
+
+
+AND checkexpression( type, endofexpression )  BE
+$(
+//  Match the expression, just read in, with that which is
+//  theoretically expected for the directive in "directive".
+//
+//  Check that:
+//
+//    a) The data type of the expression was correct
+//    b) The expression was terminated correctly
+//    c) It contained no forward references.
+
+    TEST  forwardref       THEN  complain( 79 )   ELSE
+    TEST  externalref      THEN  complain( 164 )  ELSE
+
+    TEST  endofexpression
+        THEN  checkfor( s.none, 47 )
+        ELSE  checkfor( s.comma, 10 )
+
+    SWITCHON  directive  INTO
+    $(
+        CASE d.equr    : // Requires "register" data type
+
+                         UNLESS  type = s.Ar  |  type = s.Dr  |  type = s.FPr  DO
+                                 complain( 84 )
+
+                         ENDCASE
+
+
+        CASE d.ifeq    :
+        CASE d.ifne    :
+        CASE d.spc     :
+        CASE d.plen    :
+        CASE d.llen    :
+        CASE d.cnop    :
+        CASE d.org     : // Requires "absolute" data type
+
+                         UNLESS  absolute( type )  DO
+                                 complain( 71 )
+
+                         ENDCASE
+
+
+        DEFAULT        : // All the rest require "relocatable" or
+                         // "absolute" data types
+
+                         UNLESS  absolute( type )  |  relocatable( type )  DO
+                                 complain( 85 )
+    $)
+$)
+
+
+
+AND listline()  BE
+    TEST  pass2  &  (listing  |  error.found)
+        THEN  printline()
+        ELSE  codeline()
+
+
+
+AND printline()  BE  UNLESS  (listed  &  NOT error.found)    DO
+$(
+//  We are about to list a line...
+
+    clearbuffer()
+
+    linepos  :=  0
+
+    UNLESS  commentline  DO
+    $(
+        writehexvalue( location, locmode = s.rel  ->  4, 8 )
+        IF  locmode = s.rel  THEN  writechar( '*'' )
+    $)
+
+    linepos  :=  38
+    writenumber( linenumber, 5 )
+
+    IF  macrodepth > 0  &  NOT inmacro  THEN
+    $(
+        linepos  :=  43
+        writechar( '+' )
+    $)
+
+    linepos  :=  44
+    FOR  i = 0  TO  length - 1  DO  writechar( inputbuff % i )
+
+    FOR  itemsprinted = 0  TO  nitems-1  DO
+    $(
+        LET offset  =  itemsprinted * cb.size
+        LET dtype   =  codebuff!(offset + cb.dtype)
+        LET dsize   =  codebuff!(offset + cb.dsize)
+        LET dvalue  =  codebuff!(offset + cb.dvalue)
+        LET dext    =  codebuff!(offset + cb.dext)
+        LET dsymb   =  codebuff!(offset + cb.dsymb)
+
+        IF  dext  THEN  addexternalref( dsymb, location )
+
+        write.bytes( dsize, dvalue )
+
+        IF  dtype = s.rel  THEN  relocate( location, dsize )
+
+        code.bytes( dsize, dvalue )
+    $)
+
+    IF  error.found  THEN
+    $(
+        linepos  :=  36
+        writechar( 'E' )
+    $)
+
+    printbuffer()
+$)
+
+
+
+AND codeline()  BE
+$(
+//  Acts just like "printline", except does not prepare the buffer for
+//  printing.  This is used in the first pass, and when the listing option
+//  is switched off.
+
+    FOR  itemscoded = 0  TO  nitems-1  DO
+    $(
+        LET offset  =  itemscoded * cb.size
+        LET dtype   =  codebuff!(offset + cb.dtype)
+        LET dsize   =  codebuff!(offset + cb.dsize)
+        LET dvalue  =  codebuff!(offset + cb.dvalue)
+        LET dext    =  codebuff!(offset + cb.dext)
+        LET dsymb   =  codebuff!(offset + cb.dsymb)
+
+        IF  dext  THEN  addexternalref( dsymb, location )
+
+        IF  dtype = s.rel  THEN  relocate( location, dsize )
+
+        code.bytes( dsize, dvalue )
+    $)
+$)
+
+
+
+AND write.bytes( dsize, dvalue )  BE
+$(
+    IF  dsize > 1  THEN  write.bytes( dsize-1, dvalue >> 8 )
+
+    writebyte( dvalue & #XFF )
+$)
+
+
+
+AND code.bytes( dsize, dvalue )  BE
+$(
+    IF  dsize > 1  THEN  code.bytes( dsize-1, dvalue >> 8 )
+
+    codebyte( dvalue & #XFF )
+$)
+
+
+
+AND writebyte( byte )  BE
+$(
+//  Write a single byte value.
+
+    IF  bytesonline = 10  THEN
+    $(
+        printbuffer()
+        clearbuffer()
+
+        commentline  :=  TRUE
+        bytesonline  :=  0
+    $)
+
+    linepos  :=  bytesonline!(TABLE 11, 13, 16, 18, 21, 23, 26, 28, 31, 33)
+
+    TEST  dummysection
+        THEN  writestring( "xx" )
+        ELSE  writehexvalue( byte, 2 )
+
+    bytesonline  :=  bytesonline + 1
+$)
+
+
+
+AND codebyte( byte )  BE
+$(
+    IF  pass2  THEN
+        UNLESS  dummysection  DO
+            codevec % location  :=  byte
+
+    setloc( location + 1 )
+$)
+
+
+
+AND align( boundary )  BE
+$(
+    LET try   =  (location + boundary - 1)
+    LET decr  =  try REM boundary
+
+    setloc( try - decr )
+$)
+
+
+
+AND writehexvalue( h, d )  BE
+$(
+    IF  d > 1  THEN  writehexvalue( h >> 4, d-1 )
+
+    writechar( (h & #XF)!  TABLE  '0', '1', '2', '3', '4', '5', '6', '7',
+                                  '8', '9', 'A', 'B', 'C', 'D', 'E', 'F' )
+$)
+
+
+
+AND writenumber( n, d )  BE
+$(
+    IF  d > 1  THEN  writenumber( n/10, d-1 )
+
+    writechar(  n = 0  ->  '*S',  (n REM 10  +  '0') )
+$)
+
+
+
+AND writestring( string )  BE
+    FOR  i = 1  TO  string % 0  DO
+        writechar( string % i )
+
+
+
+AND writechar( char )  BE
+$(
+    IF  linepos >= charsperline  THEN  RETURN
+
+    outbuff % linepos  :=  char
+    linepos            :=  linepos + 1
+$)
+
+
+
+AND clearbits()  BE
+$(
+//  Clear the bits in both the symbol tables.
+
+    cleartable( tagtable1 )
+    cleartable( tagtable2 )
+$)
+
+
+
+AND cleartable( tagtable )  BE
+$(
+//  Clear all the symbol table bits in the table "tagtable".
+
+    FOR  i = 0  TO  tagtablesize-1  DO
+    $(
+        LET ptr  =  tagtable!i
+
+        UNTIL  ptr = 0  DO
+        $(
+            UNLESS  ptr!st.definition = 0  DO
+                ptr!st.flags  :=  ptr!st.flags  &  (NOT stb.setnow)
+
+            ptr  :=  !ptr
+        $)
+    $)
+$)
+
+
+
+AND relocate( address, size )  BE  UNLESS  dummysection  DO
+$(
+    LET re  =  size = 4  ->  relocvec32,
+               size = 2  ->  relocvec16,
+                             complain( 0 )
+
+    LET rp  =  size = 4  ->  @relp32,
+               size = 2  ->  @relp16,
+                             complain( 0 )
+
+    LET p   =  !rp
+
+    IF  pass2  THEN  
+    $(
+        //  Relocate the address given, but only if it has not been
+        //  relocated before.
+        
+        FOR  i = 0  TO  p-1  DO  IF  re!i = address  THEN  RETURN
+        
+        re!p  :=  address
+    $)
+
+    !rp  :=  p + 1
+$)
+
+
+
+AND generate( masktype )  BE
+$(
+    SWITCHON  masktype  INTO
+    $(
+        CASE  1 :  swapoperands()
+                   codeword(  instr.mask                            |
+                              (op1.exp << 9)                        |
+                              (sizefield( instr.size ) << 6)        |
+                              (eafield())                           )
+                   genea()
+
+                   ENDCASE
+
+
+        CASE  2 :  codeword(  instr.mask                            |
+                              (sizefield( instr.size ) << 6)        |
+                              (eafield())                           )
+
+                              UNLESS  source.ea = 0  DO
+                              $(
+                                  //  There is some Immediate data to deal with.
+                                  IF  instr.size = ts.long  THEN
+                                       codeword(  op1.exp  >>  16  )
+                                       codeword(  op1.exp & #XFFFF )
+                              $)
+
+                              genea()
+
+                              ENDCASE
+
+
+        CASE  4 :  IF  op1.ea = am.Ar  |  op1.ea = am.Dr  THEN  swapoperands()
+                   codeword(  instr.mask   |   exp  )
+
+                   UNLESS  source.ea = 0  DO   codeword(  op1.exp & #XFFFF  )
+
+                   ENDCASE
+
+
+        CASE  5 :  codeword(  instr.mask                            |
+                              ((op1.exp & #B111) << 9)              |
+                              (sizefield( instr.size )  <<  6)      |
+                              (eafield())                           )
+                   genea()
+
+                   ENDCASE
+
+
+        CASE  6 :  codeword(  instr.mask                            |
+                              (source.ea  <<  8)                    |
+                              (eafield())                           )
+                   genea()
+
+                   ENDCASE
+
+
+        CASE  7 :  swapoperands()
+                   codeword(  instr.mask                            |
+                              (op1.exp  <<  9)                      |
+                              (eafield())                           )
+                   genea()
+
+                   ENDCASE
+
+
+        CASE  9 :  codeword(  instr.mask                            |
+                              (eafield())                           )
+                   genea()
+
+                   ENDCASE
+
+
+        CASE 10 :  codeword(  instr.mask                            |
+                              ((instr.size = ts.long -> 1,0) << 6)  |
+                              (exp)                                 )
+
+                   ENDCASE
+
+
+        CASE 15 :  codeword(  instr.mask  )
+                   UNLESS  dest.ea = 0  DO  codeword( exp & #XFFFF )
+
+                   ENDCASE
+
+
+        DEFAULT :  complain( 0 )
+    $)
+$)
+
+
+
+AND sizefield( size )  =  VALOF
+$(
+    SWITCHON  size  INTO
+    $(
+        CASE ts.long     : RESULTIS  #B10
+        CASE ts.word     : RESULTIS  #B01
+        CASE ts.byte     : RESULTIS  #B00
+        CASE ts.none     : RESULTIS  sizefield( ts.default )
+
+        DEFAULT          : complain( 0 )
+    $)
+$)
+
+
+
+AND eafield()  =  VALOF
+$(
+//  Look at the effective address  represented by op.ea, etc.
+//  and return the 6 bit representation of it.
+
+    SWITCHON  op.ea  INTO
+    $(
+        CASE am.Dr           : RESULTIS #B000000  +  exp
+        CASE am.Ar           : RESULTIS #B001000  +  exp
+        CASE am.Ar.ind       : RESULTIS #B010000  +  exp
+        CASE am.Ar.pi        : RESULTIS #B011000  +  exp
+        CASE am.Ar.pd        : RESULTIS #B100000  +  exp
+        CASE am.abs16        : RESULTIS #B111000
+        CASE am.abs32        : RESULTIS #B111001
+        CASE am.PC.disp      : RESULTIS #B111010
+        CASE am.PC.index     : RESULTIS #B111011
+
+//      CASE am.imm3         :
+//      CASE am.imm16        :
+//      CASE am.imm32        :
+        DEFAULT              : RESULTIS #B111100
+
+        CASE am.Ar.disp      : RESULTIS #B101000  +  registers!p.rnumber
+        CASE am.Ar.index     : RESULTIS #B110000  +  registers!p.base!p.rnumber
+    $)
+$)
+
+
+
+AND genea()  BE
+$(
+    LET bs  =  0
+
+    SWITCHON  op.ea  INTO
+    $(
+        CASE am.Ar           : IF  instr.size = ts.byte  THEN  complain( 29 )
+        CASE am.Dr           :
+        CASE am.Ar.ind       :
+        CASE am.Ar.pi        :
+        CASE am.Ar.pd        :
+
+                               RETURN
+
+
+        CASE am.Ar.disp      : TEST  pass1  THEN  codeword( 0 )
+                               ELSE
+
+                               TEST  registers!p.rtype = s.Ar  THEN
+                                   TEST  registers!p.rsize = ts.none
+                                       TEST  -32768 <= exp <= +32767
+                                           THEN  codeword( exp )
+                                           ELSE  complain( 89 )
+                                    ELSE  complain( 81 )
+
+                               ELSE  complain( 134 )
+
+                               ENDCASE
+
+
+        CASE am.Ar.index     : gen.Ar.index()
+
+                               ENDCASE
+
+
+        CASE am.PC.index     : gen.PC.index()
+
+                               ENDCASE
+
+
+        CASE am.abs32        : IF  pass2  THEN
+                               $(
+                                   LET address  =  location + codewords*2
+
+                                   IF  externalref  THEN
+                                       addexternalref( externalsymb, address )
+
+                                   IF  relocatable( exptype )  THEN
+                                       relocate( address, 4 )
+                               $)
+
+                               codeword( exp >> 16    )
+                               codeword( exp & #XFFFF )
+
+                               ENDCASE
+
+
+        CASE am.abs16        : IF  pass2  THEN
+                               $(
+                                   LET address  =  location + codewords*2
+
+                                   IF  relocatable( exptype )  THEN
+                                       relocate( address, 2 )
+                               $)
+
+                               codeword( exp & #XFFFF )
+
+                               ENDCASE
+
+
+        CASE am.PC.disp      : //  The current program counter and the
+                               //  expression MUST be of the same data type.
+
+                               TEST  pass1  THEN  codeword( 0 )
+                               ELSE
+                               $(
+                                   LET pc  =  location + codewords * 2
+                                   LET o   =  exp - pc
+
+                                   UNLESS  (locmode = s.abs  &  absolute( exptype ))  |
+                                           (locmode = s.rel  &  relocatable( exptype ))  DO
+
+                                           complain( 88 )
+
+                                   UNLESS  -32768 <= o <= +32767  DO
+                                       complain( 177 )
+
+                                   codeword( o & #XFFFF )
+                               $)
+
+                               ENDCASE
+
+
+//      CASE am.imm16        :
+//      CASE am.imm32        :
+        DEFAULT              : //  Immediate data.  The size is given
+                               //  by "instr.size"
+
+                               bs  :=  bytesize( instr.size )
+
+                               IF  bs = 4  &  (pass2 & externalref)  THEN
+                                   addexternalref( externalsymb, location + codewords*2 )
+
+                               IF    bs = 4  THEN  codeword( exp >> 16 )
+                               TEST  bs = 1  THEN  codeword( exp & #XFF )
+                                             ELSE  codeword( exp & #XFFFF )
+    $)
+$)
+
+
+
+AND gen.Ar.index()  BE
+$(
+//  Generate code for the "Ar indexed" type addressing mode.  We should be
+//  careful to spot the 68020 type addressing modes.
+
+    LET base   =  registers!p.base
+    LET index  =  registers!p.index
+
+    LET ar     =  base!p.rtype  \= s.none
+    LET ir     =  index!p.rtype \= s.none
+
+    //  Before going any further, check that we are dealing with an absolute
+    //  expression, and that the address register does not have a size
+    //  specifier.
+
+    UNLESS  exptype = s.none  DO
+        UNLESS  absolute( exptype )  DO
+            complain( 88 )
+
+    UNLESS  base!p.rsize = ts.none  DO
+        complain( 81 )
+
+    //  Having got that far, we should look to see whether this is a 68000
+    //  type address, and if so handle it.
+
+    IF  eatype = ea.R.index  THEN
+    $(
+        //  The easy case this, since the syntax defines that this must be
+        //  a 68000 type address.
+
+        gen.shortindex( exp, index )
+
+        RETURN
+    $)
+
+    //  Ok, so it wasn't the easy case.  Look to see if it is the 68020
+    //  version of the easy case, and if so, handle it.
+
+    IF  eatype = ea.68020.R.index  THEN
+
+        //  This is the 68020 equivalent of the 68000 version, but the
+        //  base displacement may be out of range of the 8 bit value.
+        //  Forward references will always have the type "ABS32"
+
+        IF  ar  &  ir  &  (exptype = s.abs16)  &
+                          (-128 <= exp <= +127)  THEN
+        $(
+            //  Easy.  This is the 68020 syntax, but we are within
+            //  range of the short extension word.
+
+            gen.shortindex( exp, index )
+
+            RETURN
+        $)
+
+    //  If we reach here, then we must generate a full 68020 type
+    //  extension word.
+
+    gen.longindex( base, index )
+$)
+
+
+
+AND gen.PC.index()  BE
+$(
+//  Generate code for the "PC indexed" type addressing mode.  Like the Ar
+//  equivalent, we should be careful with the 68020 versions.
+
+    LET base    =  registers!p.base
+    LET index   =  registers!p.index
+
+    LET pc      =  base!p.rtype = s.PC
+    LET zpc     =  base!p.rtype = s.ZPC
+
+    //  Check that the data type of the base displacement is sensible,
+    //  given the base register.
+
+    IF  pc  THEN
+    $(
+        //  This is program counter relative, so we are interested in the
+        //  difference between the current location and the one being
+        //  addressed.
+
+        LET pc  =  location + (codewords * 2)
+
+        UNLESS  exptype = s.none  DO
+            UNLESS  (locmode = s.abs  &  absolute( exptype ))  |
+                    (locmode = s.rel  &  relocatable( exptype ))  DO
+                complain( 88 )
+
+        exp  :=  exp - pc
+    $)
+
+    IF  zpc  THEN
+
+        //  We are doing a program counter relative operation into absolute
+        //  store.  We therefore keep the expression as it stands.
+
+        UNLESS  exptype = s.none  DO
+            UNLESS  absolute( exptype )  DO
+                complain( 88 )
+
+    //  The base displacement is consistent with the base register, so
+    //  we should look at the type of addressing mode to use.
+
+    IF  eatype = ea.R.index  |  eatype = ea.R.disp  THEN
+    $(
+        //  This is not so difficult, since the syntax states that this must
+        //  be a 68000 type address.
+
+        gen.shortindex( exp, index )
+
+        RETURN
+    $)
+
+    //  Ok, so it wasn't the easy case.  Look to see if it is the 68020
+    //  version of the easy case, and if so, handle it.
+
+    IF  eatype = ea.68020.R.index  THEN
+
+        //  This is the 68020 equivalent of the 68000 version, but the
+        //  base displacement may be out of range of the 8 bit value.
+        //  Forward references will always have the type "ABS32" or
+        //  "REL32".
+
+        IF  pc  &  (exptype = s.abs16  |  exptype = s.rel)  &
+                   (-128 <= exp <= +127)  THEN
+        $(
+            //  Easy.  This is the 68020 syntax, but we are within
+            //  range of the short extension word.
+
+            gen.shortindex( exp, index )
+
+            RETURN
+        $)
+
+    //  If we reach here, then we must generate a full 68020 type
+    //  extension word.
+
+    gen.longindex( base, index )
+$)
+
+
+
+AND gen.shortindex( offset, index )  BE
+
+//  Generate a short index type extension word.  This is of fixed size,
+//  and the same format for the 68000 and 68020.
+
+    TEST  pass1  THEN  codeword( 0 )
+    ELSE
+    $(
+        LET itype     =  index!p.rtype
+        LET inumber   =  index!p.rnumber
+        LET isize     =  index!p.rsize
+        LET iscale    =  index!p.rscale
+
+        LET wl        =  isize = ts.long  ->  1,
+                         isize = ts.word  ->  0,
+                         isize = ts.none  ->  0,
+                                              complain( 87 )
+
+        LET da        =  itype = s.Ar     ->  1,
+                         itype = s.Dr     ->  0,
+                                              complain( 0 )
+                                              
+        UNLESS  -128 <= offset <= +127  DO  complain( 72 )
+
+        codeword( (da       <<  15)  |
+                  (inumber  <<  12)  |
+                  (wl       <<  11)  |
+                  (iscale   <<  9)   |
+                  (offset & #XFF)    )
+    $)
+
+
+
+AND gen.longindex( base, index )  BE
+
+//  Generate a 68020 type extension word.  This allows any of the consituent
+//  parts to be omitted.
+
+    TEST  pass1  THEN
+    $(
+        //  No need to do any calculations, since we can work out how big
+        //  the extension will be.
+
+        codeword( 0 )
+
+        FOR  i = 1  TO  indexwords( exptype )    DO  codeword( 0 )
+        FOR  i = 1  TO  indexwords( outertype )  DO  codeword( 0 )
+    $)
+    ELSE
+    $(
+        //  This is the second pass, so we need to generate the words of
+        //  the extension.
+
+        LET btype    =  base!p.rtype
+        LET itype    =  index!p.rtype
+        LET inumber  =  index!p.rnumber
+        LET isize    =  index!p.rsize
+        LET iscale   =  index!p.rscale
+
+        LET nobase   =  btype = s.none  |  btype = s.ZPC
+        LET noindex  =  itype = s.none
+
+        LET bs       =  nobase   ->  1, 0
+        LET is       =  noindex  ->  1, 0
+
+        LET wl       =  noindex          ->  0,
+                        isize = ts.long  ->  1,
+                        isize = ts.word  ->  0,
+                        isize = ts.none  ->  0,
+                                             complain( 87 )
+
+        LET da       =  noindex       ->  0,
+                        itype = s.Ar  ->  1,
+                        itype = s.Dr  ->  0,
+                                          complain( 0 )
+
+        LET bsize    =  indexwords( exptype )
+        LET osize    =  indexwords( outertype )
+
+        LET ibits    =  osize = 0  ->  #B01,
+                        osize = 1  ->  #B10,
+                        osize = 2  ->  #B11,
+                                       complain( 0 )
+
+        LET bbits    =  bsize = 0  ->  #B01,
+                        bsize = 1  ->  #B10,
+                        bsize = 2  ->  #B11,
+                                       complain( 0 )
+
+        //  Check for the special cases now.  If the "(x,x,x)" type
+        //  addressing mode has been used, then there is no memory
+        //  indirection, so the "ibits" are set to zero.  Otherwise,
+        //  if an index register is present, then we must distinuish
+        //  between the pre and post indexed versions.
+
+        IF  eatype = ea.68020.R.index  THEN  ibits  :=  #B000
+
+        IF  eatype = ea.68020.postindex  &  NOT noindex  THEN
+            ibits  :=  ibits  |  #B100
+
+        //  We are now in a fit state to generate the extension words.
+
+        codeword( (da       <<  15)  |
+                  (inumber  <<  12)  |
+                  (wl       <<  11)  |
+                  (iscale   <<  9)   |
+                  (1        <<  8)   |
+                  (bs       <<  7)   |
+                  (is       <<  6)   |
+                  (bbits    <<  4)   |
+                  (ibits)            )
+
+        IF  bsize = 2   THEN  codeword( exp >> 16 )
+        IF  bsize \= 0  THEN  codeword( exp & #XFFFF )
+
+        IF  osize = 2   THEN  codeword( outer >> 16 )
+        IF  osize \= 0  THEN  codeword( outer & #XFFFF )
+    $)
+
+
+
+AND indexwords( type )  =  type = s.none                    ->  0,
+                           type = s.abs16 | type = s.rel    ->  1,
+                           type = s.abs32 | type = s.rel32  ->  2,
+                                                                complain( 0 )
+
+

@@ -1,0 +1,42 @@
+        REL     0
+
+START   DATA    ENDSTART-START
+        DATA    12345  SECWORD
+        DATA    17%8+'C'
+        TEXT    'hecksu 13-Feb-79'
+
+
+        DATA    7%8+'C','HE','CK','SU'
+CHKSUM  DATA    0
+        COPY    $-1,Y
+        ADD     0(Y),X
+        COPY    Y,0(X)
+        COPY    P,Y
+        COPY    Y,1(X)
+
+        COPY    A,Y             A := Vector
+        COPY    =0,A            A := 0
+        RBIT    0,S             Clear carry
+        JMP     TEST
+LOOP
+        SUB     =1,Q            Q := Q-1
+        ADDC    0(Y),A          A := A+word+carry
+        ADD     =1,Y            Y := Y+1
+TEST
+        JNE     Q,LOOP          IF Q=0 drop through
+
+        ADDC    ZERO,A          Add in last carry
+        COPY    0(X),Y
+        SUB     0(Y),X
+        JMP     1(Y)
+
+ZERO    DATA    0
+
+        DATA    0
+        DATA    150
+        DATA    CHKSUM-START
+        DATA    150
+ENDSTART
+        END
+
+

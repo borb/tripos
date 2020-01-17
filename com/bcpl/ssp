@@ -1,0 +1,473 @@
+SECTION "ssp"
+
+GET "LIBHDR"
+GET "RINGHDR"
+
+GET "BCPL.ssplib"
+GET "BCPL.xlookup"
+
+//   This program is modified from the routine SSP in SSPLIB, but reads
+//in parameters from the command line instead of being passed them.
+
+//   Modifications
+//
+// 29-Jan-86 NJO  Extra data arguments added on command line.  Timeout
+//                manifests changed in line with change in SSPLIB.  String
+//                to number routine included as source (rather than GET).
+// 31-Jan-86 NJO  Bug fixed:  argument offsets were wrong
+
+//   If the function called has no port number specified
+//then one is prompted for.  If the specified service is a machine name
+//or a bridge then a port number and function are requested.  Keys are
+//provided to allow PORT and FUNC to be specified on the command line,
+//and a switch NOFN inhibits prompting for function (it is then set to
+//zero if it cannot be determined).  Replies of <CR> to the port or
+//function prompts result in values of zero.
+//
+//   A key HEADER allows a word other than SSPREQ to be placed in the
+//block (eg. for testing OPEN services or setting flags).
+//
+//   A switch OPEN allows it to be used for prodding OPEN services.  If
+//this is set then HEADER will be set to #X6A00 by default, and an error
+//warning given if the service is not of type OPEN.
+//
+// The program takes arguments for the contents of the SSP data block to be
+//sent in the following syntax:
+//
+//                     <number> - 16 bit quantity
+//                    .<number> - 8 bit quantity
+//                     $<chars> - characters preceded by a length byte
+//                     '<chars> - characters without a length byte
+//
+// The 8 bit and single quoted values are aligned on byte boundaries by
+//default.  The other two types of value are aligned on 16 bit word
+//boundaries by default.  Preceding a value by the character ">" it will
+//override this default and cause it to be aligned on a 16 byte boundary,
+//conversely preceeding it with "<" will cause it to be aligned on an
+//8 bit boundary (except in the case of 16 bit numbers).
+
+MANIFEST
+$( max.txbuffsize = 64     // 16 bit words
+   max.rxbuffsize = 64
+$)
+
+LET start() BE
+    $( 
+       LET service.name = ?
+       LET txwords      = ?
+       LET txbytes      = ?
+       LET rxwords      = max.rxbuffsize
+       LET func         = 0
+       LET station      = ?
+       LET port         = 0
+       LET header       = code.sspreq
+       LET open.key     = ?
+       LET reply.len    = ?
+       LET ssp.rc       = ?
+       LET argv         = VEC 160/bytesperword + 20
+       LET txbuff       = VEC (bb.ssp.args+max.txbuffsize)*2/bytesperword
+       LET rxbuff       = VEC max.rxbuffsize*2/bytesperword
+       LET nsvec        = VEC nsv.upb
+
+    // Do an SSP transaction to the named service.
+    // The data part of the basic block to be transmitted is in TXBUFF,
+    // with the SSP arguments starting at (ring word) offset 3.
+    // TXBUFF is TXWORDS ring words long in total.
+    // RXBUFF is a buffer for the data part of the reply basic block.
+    // It is RXWORDS ring words long.
+    // NSVEC is a VEC in which the results of the nameserver lookup
+    // of SERVICE.NAME are returned.
+    // FUNC is used as the function code iff the service is one with
+    // no specified function code.
+    //
+
+    LET rhtaskid  = rootnode ! rtn.info ! rtninfo.ring ! ri.rhtaskid
+    LET rx.pkt    = TABLE notinuse, 0,
+                          act.rx.bb,
+                          0, 0,
+                          0,        // Reply buffer
+                          0,        // Size of reply buffer
+                          0,        // Station
+                          0,        // Reply port
+                          ssp.short.timeout
+    LET flags      = nsv.flags.slow
+    LET tx.status  = ?
+    LET reply.port = ?
+
+    IF rhtaskid=0 THEN $( result2 := 400
+                          writes("Can't find RH task*N")
+                          stop(16)
+                       $)
+
+    pkt.id ! rx.pkt := rhtaskid
+
+    IF rdargs("SERVICE/A,,,,,,,,,,,,,,,,FUNC/K,PORT/K,HEADER/K,NOFN/S,OPEN/S",
+                                          argv, 160/bytesperword + 20) = 0 THEN
+    $( writes("Bad args*N")
+       stop(16)
+    $)
+
+    txbytes := 0   // number of bytes written to the SSP data block
+
+    FOR i = 1 TO 15 DO
+    $( LET argstr = argv!i
+
+       TEST argstr = 0 | txbytes >= max.txbuffsize*2
+       DO
+       $( txwords := bb.ssp.args + (txbytes+1)/2
+
+          IF txbytes >= max.txbuffsize*2 THEN
+          writef("SSP TX buffer full at argument %N - *
+                 *this and following args ignored*N", i)
+
+          BREAK
+       $)
+       OR
+       $( LET strlen = argstr%0
+
+          TEST strlen = 0
+          DO
+          $( writef("SSP argument %N is null - ignored*N", i)
+          $)
+          OR
+          $( MANIFEST $( yes=1; no=2; dontknow=3 $)
+
+             LET string = ?
+             LET byte = ?
+             LET first.ch = argstr%1
+             LET align = (first.ch = '<' -> no,
+                          first.ch = '>' -> yes, dontknow)
+
+             UNLESS align = dontknow DO
+             $( first.ch := nibble.string(argstr)
+             $)
+
+             string := (first.ch = '*'' | first.ch = '$')
+
+             IF align = dontknow THEN
+             $( align := (first.ch = '*'' -> no,
+                          first.ch = '$'  -> yes,
+                          first.ch = '.'  -> no,  yes)
+             $)
+
+             IF first.ch = '*'' | first.ch = '$' | first.ch = '.' THEN
+             $( nibble.string(argstr)
+             $)
+
+             IF align=yes THEN txbytes := (txbytes+1)/2 * 2
+
+             TEST string
+             DO
+             $( LET strlen = argstr%0
+
+                IF first.ch = '$' THEN
+                $( byteput(txbuff, bb.ssp.args*2+txbytes, strlen)
+                   txbytes := txbytes + 1
+                $)
+
+                FOR i=1 TO argstr%0 DO
+                $( byteput(txbuff, bb.ssp.args*2+txbytes, argstr%i)
+                   txbytes := txbytes + 1
+                $)
+             $)
+             OR
+             $( LET n = strtonum(argstr)
+
+                UNLESS result2 = 0 THEN
+                $( writef("SSP argument %N is not a correct number - 0 used*N", i)
+                   n := 0
+                $)
+
+                TEST first.ch = '.'
+                DO
+                $(  byteput(txbuff, bb.ssp.args*2+txbytes, n)
+                    txbytes := txbytes + 1
+                $)
+                OR
+                $(  put2bytes(txbuff, bb.ssp.args+(txbytes+1)/2, n)
+                    txbytes := txbytes + 2
+                $)
+             $)
+          $)
+       $)
+    $)
+
+//    FOR i=0 TO txwords-1 DO
+//    $(  LET n = get2bytes(txbuff, i)
+//        writef("    SSP block %I2 - %X4 (%N)*N", i, n, n)
+//    $)
+
+    service.name := argv!0
+
+    open.key     := argv!20 ~= 0
+
+    reply.port := sendpkt(notinuse, rhtaskid, act.findfreeport)
+
+    // A service name string was supplied.  Look up that string
+    // in the name server to get the station, port and function code.
+
+      UNLESS lookup.name(service.name, nsvec) DO
+      $( LET r2 = result2
+         writes("Name lookup failed*N")
+         result2 := r2
+         GOTO fail
+      $)
+
+      flags     := nsvec ! nsv.flags
+      station   := nsvec ! nsv.machine.id
+      port      := nsvec ! nsv.port
+      func      := nsvec ! nsv.func
+
+      SWITCHON (flags & nsv.flags.pmask) INTO
+
+      $( CASE nsv.flags.ssp:
+         IF open.key THEN
+            GOTO warn.error
+         ENDCASE
+
+         CASE nsv.flags.bsp:
+         UNLESS open.key DO
+            GOTO warn.error
+         ENDCASE
+
+         DEFAULT:
+warn.error:
+         writef("Warning - not %S service or machine*N", open.key->"BSP", "SSP")
+         GOTO send.anyway
+
+         CASE nsv.flags.mc.name:
+         CASE nsv.flags.brg.name:
+send.anyway:
+         station   := nsvec ! nsv.machine.id
+         flags := flags | nsv.flags.nofunc      //Set the "No function" bit
+
+         TEST argv!17 = 0   //Port key given?
+         DO
+         $( LET argv = VEC 5     //Machine given: prompt for a port
+            writes("Port: *E")
+            IF rdargs("PORT/A", argv, 5) ~= 0 THEN
+               port := strtonum(argv!0)
+         $)
+         OR port := strtonum(argv!17)
+         ENDCASE
+      $)
+
+     // If the flags say "no function code" then get one
+     //unless the NOFN key was set in the command
+
+      TEST (flags & nsv.flags.nofunc) = 0
+      DO func := nsvec ! nsv.func
+      OR
+      $( TEST argv!16 = 0     //See if one was given in the command
+         DO IF argv!19 = 0 THEN
+         $( LET argv = VEC 5
+            writes("Function: *E")
+            IF rdargs("Function", argv, 5) ~= 0 THEN
+               func := strtonum(argv!0)
+         $)
+         OR func := strtonum(argv!16)
+      $)
+
+      // If the service is concocted from a machine name, port and function
+      //use XLOOKUP to ensure that a path through the bridge exists to the
+      //service.
+
+      IF (flags & nsv.flags.pmask) = nsv.flags.mc.name
+      THEN
+      $( LET rtn.flags = nsv.flags.ssp  // to give it SOMETHING
+
+         UNLESS xlookup(service.name, rtn.flags, port, func, nsvec) DO
+         $( LET r2 = result2
+            writes("Name XLOOKUP failed*N")
+            result2 := r2
+            GOTO fail
+         $)
+
+         station := nsvec ! nsv.machine.id
+         port    := nsvec ! nsv.port
+         func    := nsvec ! nsv.func
+         flags   := nsvec ! nsv.flags
+      $)
+
+      // If a HEADER or OPEN key was given modify the header value
+
+      IF open.key THEN
+         header := code.open
+
+      IF argv!18 ~= 0 THEN
+         header := strtonum(argv!18)
+
+    // Send off receive packet
+
+    rx.pkt ! rhpkt.buff      := rxbuff
+    rx.pkt ! rhpkt.size      := rxwords
+    rx.pkt ! rhpkt.port      := reply.port
+    rx.pkt ! rhpkt.station   := station
+
+    IF (flags & nsv.flags.slow) \= 0
+    THEN rx.pkt ! rhpkt.lifetime := ssp.long.timeout // Slow machine
+
+    qpkt(rx.pkt)
+
+    put2bytes(txbuff, bb.ssp.type,      header)
+    put2bytes(txbuff, bb.ssp.replyport, reply.port)
+    put2bytes(txbuff, bb.ssp.func,      func)
+    tx.status := sendpkt(notinuse, rhtaskid,
+                         act.tx, 0, 0,
+                         txbuff, txwords,
+                         station,
+                         port)
+
+    UNLESS tx.status = txst.accepted DO
+    $( writes("Transmission failed*N")
+       result2 := tx.status
+       GOTO fail
+    $)
+
+    pktwait(rhtaskid, rx.pkt) //for receive packet
+
+    reply.len := pkt.res1 ! rx.pkt
+
+    IF reply.len = 0 THEN
+    $( writes("No reply*N")
+       result2 := 409
+       GOTO fail
+    $)
+
+    IF reply.len < 3 THEN
+    $( writef("Reply only %N words: ", reply.len)
+       FOR i = 0 TO reply.len-1 DO
+          writehex(get2bytes(rxbuff, bb.ssp.type+i), 4)
+       newline()
+       result2 := #X8005
+       GOTO fail
+    $)
+
+    ssp.rc := get2bytes(rxbuff, bb.ssp.rc)
+
+    writef("Header is:  %X4 %X4 %X4*N", get2bytes(rxbuff, bb.ssp.type),
+                                        get2bytes(rxbuff, bb.ssp.replyport),
+                                        ssp.rc)
+    writef("Data part is%S*N", reply.len = 3 -> " empty", ":")
+
+    FOR i = bb.ssp.args TO pkt.res1!rx.pkt -1 DO
+    $( LET val = get2bytes(rxbuff, i)
+
+       writef("               %X4  %I6  *'%C%C*'*N", val,
+                                                     val,
+                                                     printingch(val >> 8),
+                                                     printingch(val & #XFF))
+    $)
+
+    sendpkt(notinuse, rhtaskid, act.releaseport, ?, ?, reply.port)
+
+    IF ssp.rc ~= 0 THEN
+    $( result2 := ssp.rc
+       GOTO fail
+    $)
+
+    stop(0)
+
+fail:
+    $(
+    LET r2      = result2
+    sendpkt(notinuse, rhtaskid, act.releaseport, 0, 0, reply.port)
+    result2     := r2
+    $)
+
+    stop(16)
+    $)
+
+AND printingch(char) = 32 <= char <= 127 -> char, '?'
+
+AND nibble.string(string) = VALOF
+    $( IF string%0 > 0 THEN
+
+       $( FOR i=1 TO string%0-1 DO string%(i) := string%(i+1)
+          string%0 := string%0 - 1
+       $)
+
+       RESULTIS (string%0 > 0 -> string%1, endstreamch)
+    $)
+
+AND strtonum(s) = VALOF
+
+//   This routine attempts to read a number from the string 's'.  If
+//successful then the number is returned as result and result2 will be zero.
+//Otherwise result2 will be set to 1030.
+//
+//   The number may have leading or trailing spaces, but any other characters
+//will be faulted.  A + or - sign may precede the number.  The prefixes
+//'#X' or '#B' may be given (after the sign, if any) to indicate a hex or
+//binary number respectively.  Otherwise it is assumed to be decimal.
+
+$( LET minussign=FALSE
+   LET p=1
+   LET num=0
+   LET char=getch(s,@p)
+   LET valid=FALSE
+
+   WHILE char='*S' DO
+      char:=getch(s,@p)
+
+   TEST char='+'
+   DO char:=getch(s,@p)
+   OR
+   $( IF char='-' THEN
+      $( minussign:=TRUE
+         char:=getch(s,@p)
+      $)
+   $)
+
+   SWITCHON char INTO
+   $( DEFAULT:
+      WHILE '0'<=char<='9' DO
+      $( num:=num*10 +char -'0'
+         char:=getch(s,@p)
+         valid:=TRUE
+      $)
+      ENDCASE
+
+      CASE '#':
+      char:=getch(s,@p)
+      SWITCHON char INTO
+      $( CASE 'X':
+         char:=getch(s,@p)
+         WHILE '0'<=char<='9' | 'A'<=char<='F' DO
+         $( num:=num*#X10 +char -('A'<=char<='F'->'A'-10,'0')
+            char:=getch(s,@p)
+            valid:=TRUE
+         $)
+         ENDCASE
+
+         CASE 'B':
+         char:=getch(s,@p)
+         WHILE '0'<=char<='1' DO
+         $( num:=num*#B10 +char -'0'
+            char:=getch(s,@p)
+            valid:=TRUE
+         $)
+      $)
+   $)
+
+   WHILE char='*S' DO
+      char:=getch(s,@p)
+
+   UNLESS char=endstreamch DO
+      valid:=FALSE
+
+   result2:= valid -> 0, 1030
+
+   RESULTIS minussign->-num,num
+$)
+
+AND getch(string,offsetptr)=VALOF
+$( LET char=endstreamch
+   IF !offsetptr<=string%0 THEN
+   $( char:=string%(!offsetptr)
+      !offsetptr:=!offsetptr+1
+   $)
+   RESULTIS capitalch(char)
+$)
+
+

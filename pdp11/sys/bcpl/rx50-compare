@@ -1,0 +1,72 @@
+SECTION "RX50-Compare"
+
+GET "libhdr"
+GET "iohdr"
+
+LET start() BE
+$(
+    MANIFEST
+    $(
+        sectors = 800
+        chunk = 10
+        dudev = -2
+        blksize = 256
+    $)
+
+    GLOBAL
+    $(
+        unit1 : ug
+        unit2 : ug+1
+    $)
+
+    LET buffer1 = ?
+    LET buffer2 = ?
+    LET argv = VEC 10
+
+    IF rdargs("UNIT1/A,UNIT2/A", argv, 10) = 0 THEN $( writes("Bad args*N"); stop(16) $)
+    unit1 := unit(argv!0)
+    unit2 := unit(argv!1)
+
+    buffer1 := getvec (2 * chunk * blksize - 1)
+    IF buffer1=0 THEN $( writes("cannot GETVEC buffer space*N"); stop(16) $)
+    buffer2 := buffer1 + chunk * blksize
+
+    FOR sector = 0 TO sectors-1 BY chunk DO
+    $(  LET rc = sendpkt (notinuse, dudev, act.read, 0, 0,
+                          buffer1, chunk*blksize, unit1, 0, 0, sector)
+        TEST rc ~= 0 THEN
+        $(  writef ("read error, unit %N, sectors %N-%N, status %N*N",
+                    unit1, sector, sector+chunk-1, result2)
+        $)
+        ELSE
+        $(  rc := sendpkt (notinuse, dudev, act.read, 0, 0,
+                           buffer2, chunk*blksize, unit2, 0, 0, sector)
+            TEST rc ~= 0 THEN
+            $(  writef ("read error, unit %N, sectors %N-%N, status %N*N",
+                        unit2, sector, sector+chunk-1, result2)
+            $)
+            ELSE
+                FOR i = 0 TO chunk * blksize - 1 DO
+                    IF buffer1!i ~= buffer2!i THEN
+                    $(  writef("Different at offset %N, sectors %N-%N*N",
+                                i, sector, sector+chunk-1)
+                        GOTO exit
+                    $)
+        $)
+    $)
+
+exit:
+
+    freevec(buffer1)
+$)
+
+AND unit(string) = VALOF
+$(
+    IF compstring(string, "0") = 0 THEN RESULTIS 0
+    IF compstring(string, "1") = 0 THEN RESULTIS 1
+    IF compstring(string, "2") = 0 THEN RESULTIS 2
+    writes("Bad unit number*N")
+    stop(16)
+$)
+
+

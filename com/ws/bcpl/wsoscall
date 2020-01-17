@@ -1,0 +1,56 @@
+// Source file "wsoscall" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+
+// a '@' (= os.call.char) will give the user a cli
+//   '@command' will run the command and suspend the editor until it finishes.
+//
+// Thus simple commands can be called from inside WS.
+
+
+//  Note by IDW:  27-Mar-87
+//    The old version of this code has been removed, and the cleaner
+//    "REX" interface added.
+
+
+
+SECTION "WSOSCALL"
+
+
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "WRSHDR"
+
+GET "BCPL.REX-OBEY"
+
+
+
+LET ws.os.call(a) BE $(
+  IF a%0 < 1 THEN RETURN
+  IF a%1 = os.call.char THEN $( // it's a special one
+    TEST a%0 = 1 THEN $( // it's a simple cli
+      clean.screen()
+      log.writef("  Interactive CLI used*n")
+      rex.obeyfile("**") $)
+    ELSE $( // its a command to submit
+      LET v = getvec((a%0 + 10) / bytesperword)
+      formf(v, 0, a%0, "%s", a) // strip initial os.call.char
+      v%0 := formptr - 1
+      clean.screen()
+      rex.obey(v)
+      freevec(v) $)
+    sendpkt(notinuse, consoletask, act.sc.mode, 0, 0, TRUE)
+    writes("Press any key to reenter the editor*n")
+    sys.rdch()
+    scr.jumbled()   // tells the screen handler what to expect
+                    // worry over getting the right mode back?
+    $) $)
+
+
+AND clean.screen() BE sys.finish() // clears screen, changes to line mode
+
+

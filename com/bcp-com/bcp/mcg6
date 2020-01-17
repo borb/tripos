@@ -1,0 +1,124 @@
+SECTION "MCG6"
+
+GET "CG68HDR"
+
+// compiles code for SWITCHON
+// N = no. of cases
+// D = default label
+LET cgswitch(v,m) BE
+$(1 LET n = m/2
+    LET d = rdl()
+    casek, casel := v-1, v+n-1
+
+    // read and sort (K,L) pairs
+    FOR i = 1 TO n
+    $( LET a = rdn()
+       LET l = rdl()
+       LET j = i-1
+       UNTIL j=0
+       $( IF a > casek!j BREAK
+          casek!(j+1) := casek!j
+          casel!(j+1) := casel!j
+          j := j - 1
+       $)
+       casek!(j+1), casel!(j+1) := a, l
+    $)
+
+    cgpendingop()
+    store(0, ssp-2)
+    movetor(arg1,r1)
+
+    // care with overflow !
+    TEST 2*n-6 > casek!n/2-casek!1/2
+    THEN lswitch(1, n, d)
+    ELSE bswitch(1, n, d) <> genb(f.bra, d)
+
+    stack(ssp-1)
+$)1
+
+
+// binary switch
+AND bswitch(p, q, d) BE TEST q-p>6
+    $(  LET m = nextparam()
+        LET t = (p+q)/2
+        loadt(k.numb,casek!t)
+        genb(cgcmp(f.bge), m)
+        stack(ssp-1)
+        bswitch(p, t-1, d)
+        genb(f.bra,d)
+        setlab(m)
+        forgetall()
+        incode := TRUE
+        genb(f.beq,casel!t)
+        bswitch(t+1, q, d)
+    $)
+    ELSE FOR i = p TO q
+         $( loadt(k.numb,casek!i)
+            genb(cgcmp(f.beq),casel!i)
+            stack(ssp-1)
+         $)
+
+
+// label vector switch
+AND lswitch(p,q,d) BE
+$(1 LET l = nextparam()
+    LET dl = labv!d
+
+    loadt(k.numb,casek!p)
+    cgdyadic(fns.sub, FALSE, FALSE)
+    genb(f.blt,d)
+    stack(ssp-1)
+
+    loadt(k.numb,casek!q-casek!p)
+    genb(cgcmp(f.bgt),d)
+    stack(ssp-1)
+
+    genshkr(f.lslkr,1,r1)
+    geneaea(f.movew,m.73,extd(r1,6),m.1l,0) // MOVE.W 6(PC,R1),L
+    genea(f.jmp, m.6b, exta(rl,0))          // JMP    0(B,L)
+    incode := FALSE
+    // now compile the label vector table in-line
+    IF dl=-1 DO dl := stvp + 2 * (casek!q-casek!p+1)
+    FOR k=casek!p TO casek!q TEST casek!p=k
+        THEN $( code(labv!(casel!p)-procbase)
+                p := p+1
+             $)
+        ELSE code(dl-procbase)
+$)1
+
+
+AND condbfn(op) = VALOF SWITCHON op INTO
+$( CASE s.eq:  RESULTIS f.beq
+   CASE s.ne:  RESULTIS f.bne
+   CASE s.gr:  RESULTIS f.bgt
+   CASE s.le:  RESULTIS f.ble
+   CASE s.ge:  RESULTIS f.bge
+   CASE s.ls:  RESULTIS f.blt
+   DEFAULT:    RESULTIS 0
+$)
+
+AND compbfn(bfn) = bfn=f.beq -> f.bne,
+                   bfn=f.bne -> f.beq,
+                   bfn=f.blt -> f.bge,
+                   bfn=f.bge -> f.blt,
+                   bfn=f.bgt -> f.ble,
+                   bfn=f.ble -> f.bgt,
+//debug                   bug(4)
+                        CGERROR(5, "Compbfn failed")
+
+AND genb(bfn, l) BE IF incode
+$( LET a = labv!l
+
+   TEST a<0             // label is unset?
+   THEN $( gen(bfn)     // compile 2 word branch instruction
+           rlist := getblk(rlist, stvp, l) // make ref to L
+           code(-stvp)
+        $)
+   ELSE TEST stvp-a > 127       // Label was set. Back jump too far for J ?
+   THEN $( gen(bfn); code(a-stvp) $)    // compile 2 word branch
+   ELSE gen(bfn|(a-stvp-2 & #XFF))      // it can be a short backward jump
+
+   IF bfn=f.bra DO incode := FALSE
+$)
+
+

@@ -1,0 +1,116 @@
+/*****************************************************************************\
+*                        Olivetti Research Laboratory                         *
+*******************************************************************************
+
+
+      ##         ######     ####    ######    ########  ########  #      # 
+      ##        ########   ######   #######   ########  ########  ##    ## 
+      ##        ##    ##  ##    ##  ##    ##     ##        ##      ##  ##  
+      ##        ##    ##  ########  ##    ##     ##        ##       ####   
+      ##        ##    ##  ##    ##  ##    ##     ##        ##        ##    
+      ##        ##    ##  ##    ##  ##    ##     ##        ##        ##    
+      ########  ########  ##    ##  #######      ##        ##        ##    
+      ########   ######   ##    ##  ######       ##        ##        ##    
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   27/04/87             *
+\*****************************************************************************/
+
+
+
+SECTION "LOADTTY"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+GET "BCPL.ASSIGNLIB"
+
+
+
+LET start()  BE
+$(
+//  Load the TTY devices, and set up assignments to them.
+
+    LET args    =  "No arguments needed"
+    LET argv    =  VEC 20
+    
+    LET devin   =  devicetask( "ttyin:" )
+    LET devout  =  devicetask( "ttyout:" )
+
+    rdargs( args, argv, 20 )
+
+    TEST  devin = 0  &  devout = 0  THEN
+    $(
+        //  The names are available, so we should attempt to load the driver
+        //  and dcb segments from disc.
+        
+        LET driver  =  loadseg( "sys:68000sys.drivers.console.z8530.obj.driver" )
+        LET dcbin   =  loadseg( "sys:68000sys.drivers.console.z8530.obj.dcbin-atoll-mvme133" )
+        LET dcbout  =  loadseg( "sys:68000sys.drivers.console.z8530.obj.dcbout-atoll-mvme133" )
+    
+        IF  driver = 0  |  dcbin = 0  |  dcbout = 0  THEN
+        $(
+            //  We have not loaded all the files, therefore something must be
+            //  wrong.
+        
+            TEST  driver = 0
+                THEN  writes( "Cannot load driver file*N" )
+                ELSE  unloadseg( driver )
+
+            TEST  dcbin = 0
+                THEN  writes( "Cannot load dcbin file*N" )
+                ELSE  unloadseg( dcbin )
+
+            TEST  dcbout = 0
+                THEN  writes( "Cannot load dcbout file*N" )
+                ELSE  unloadseg( dcbout )
+
+            stop( 20 )
+        $)
+
+        dcbin!0   :=  driver
+        dcbout!0  :=  driver
+
+        devin     :=  createdev( dcbin )
+        devout    :=  createdev( dcbout )
+
+        IF  devin = 0  |  devout = 0  THEN
+        $(
+            //  Failed to create one or both of the devices, for some reason.
+        
+            TEST  devin = 0
+                THEN  writes( "Cannot create input device*N" )
+                ELSE  deletedev( devin )
+
+            TEST  devout = 0
+                THEN  writes( "Cannot create output device*N" )
+                ELSE  deletedev( devout )
+
+            dcbin!0   :=  0
+            dcbout!0  :=  0
+            
+            unloadseg( driver )
+            unloadseg( dcbin )
+            unloadseg( dcbout )
+        
+            stop( 20 )
+        $)
+
+        //  All successful.  Set up the assignment names, and then return.
+    
+        make.task.assignment( "ttyin", devin )
+        make.task.assignment( "ttyout", devout )
+    $)
+    ELSE
+    $(
+        writes( "Devices already loaded*N" )
+        
+        stop( 20 )
+    $)
+$)
+
+

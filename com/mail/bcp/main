@@ -1,0 +1,1260 @@
+SECTION "MAIN"
+
+$$MAININIT := TRUE
+
+GET "header"
+GET "TERMHDR"
+GET "CURHDR"
+
+MANIFEST $( scb.buf=3; scb.pos=4 $) //GET "IOHDR"
+MANIFEST $( priv.command.offset = 30 $)
+
+//*****************************************************************************
+//               MAIL SERVER START AND MAIN COMMAND LOOP                     //
+//*****************************************************************************
+
+// This is used BOTH for the DYNAMIC MAILSERVER and for the TRIPOS COMMAND
+
+LET start(start.pkt) BE
+$(  MANIFEST $( ESC = '*E' | #X80 $)
+    MANIFEST $( readline.nowait = TRUE &  ( ~2) $)
+    LET command         = VEC 15
+    LET address         = VEC 4
+    LET need.new.header = TRUE
+    LET input.waiting   = FALSE
+//SO LET Start.ok       = TRUE
+    LET char            = ?
+    LET res             = ?
+    LET norm.output     = ?
+    LET force.wait      = ?
+    LET trust.1         = TABLE
+                        $<68000TRIPOS #XFF026752, #XD21B1390    $>68000TRIPOS
+                        $<LSI4TRIPOS  #XFF02,#X6752, #XD21B,#X1390 $>LSI4TRIPOS
+    LET trust.2         = TABLE
+                        $<68000TRIPOS #XFF02DAE2, #XCEDA64F2    $>68000TRIPOS
+                        $<LSI4TRIPOS  #XFF02,#XD3DC, #X72C6,#XEADF $>LSI4TRIPOS
+$<COMMAND'
+    LET service         = ?     //validroutine(@cli.init)
+$>COMMAND'
+    ms.fs.fail.link     := ms.fs.fail.main
+    ms.user.break.link  := ms.break.main
+$<MAININIT
+    service :=  call.main.initseg(0, start.pkt, @norm.output, trust.1, trust.2)
+    IF service = 1 THEN GOTO END
+
+    $(  LET seg = tcb!tcb.seglist ! 4
+        tcb!tcb.seglist ! 4 := 0
+        unloadseg(seg)
+    $)
+$>MAININIT
+$<MAININIT'
+//========================== init =============================================
+    SC                  := FALSE
+    limited.access      := limit.none
+    ms.get.failure      := -6
+    ms.interlocked.file := 0
+    ms.perm.vec.chain   := 0
+    ms.temp.vec.chain   := 0
+    ms.fs.fail.level    := 0                    // Cannot use !!
+    ms.user.break.level := 0                    // Do not use !!
+
+$<COMMAND'
+    root                := perm.file()                  // INDEX
+    (root+uid) %% 0     := #X800d
+    (root+uid) %% 1     := #x2a6e
+    (root+uid) %% 2     := #xd59f
+    (root+uid) %% 3     := #x79b9
+$>COMMAND'
+
+    workfile.base       := 0
+
+    trusted             := FALSE
+    trace               := FALSE
+    full.trace          := FALSE
+    timing              := FALSE
+    breaks.allowed      := TRUE
+    selected            := 0                    // First selected
+    mail.count          := -1
+
+    fs.insert.index     := get.perm.vec(8/bytesperword)
+    client.puid         := get.perm.vec(8/bytesperword)
+    client.name         := get.perm.vec(30/bytesperword)
+    lookat.name         := get.perm.vec(30/bytesperword)
+    items               := get.perm.vec(Max.items)
+    items!0             := 0                            // none selected
+    items!1             := -1                           // invalid
+    mbox.name           := get.perm.vec(mbox.name.bytes / BYTESPERWORD)
+    mbox.name%0         := 0
+    mbox.puid           := get.perm.vec(8/bytesperword)
+    mbox.puid2          := get.perm.vec(8/bytesperword)
+    $(  Let Tripos      = "TRIPOS"
+        LET Puid        = TABLE $<68000 #XC2aa1, #X88335690 $>68000
+                                $<LSI4 #XC, #X2aa1, #X8833, #X5690 $>LSI4
+        LET len         = mbox.string + tripos%0/BYTESPERWORD
+        LET string      = ?
+        mbox.chain      := get.perm.vec(len)
+        string          := mbox.chain + mbox.string
+
+        FOR i = 0 TO mbox.string DO mbox.chain!I        := 0
+        FOR i = 0 TO Tripos%0    DO string%i            := Tripos%i
+        copy.uid(PUID, 0, mbox.chain+mbox.md,   0)
+                                        // mbox.ver, mbox.flags, mbox.index
+    $)
+    norm.input          := 0
+//========================== init =============================================
+$<COMMAND'
+    IF service THEN  cli.init(start.pkt)        // Terminal type declared !!
+    Dynamic := TRUE
+$>COMMAND'
+    Terminal.data       := readtermvec()
+$<COMMAND
+    Terminal.remote     := terminal.data = 0
+    Dynamic := FALSE
+    SETSC(NOT terminal.remote)
+$>COMMAND
+    Terminal.type       := (Terminal.data=0) -> TERM.UNSET,
+                                                   Terminal.data ! TERM.NUMBER
+
+    User.puid           := uidset() + PUID.offset
+    User.tuid           := uidset() + TUID.offset
+    norm.output         := output()
+
+    rhtaskid            := rootnode!rtn.info!rtninfo.ring!ri.rhtaskid
+
+    $(  LET first = TRUE
+        UNTIL fs.find(-1)
+        $(      IF FIRST
+                THEN writeF("Can't locate the fileserver %X4, %N  Waiting*N",
+                                                        RESULT2, RESULT2)
+                delay(tickspersecond*5)
+                if testflags(1) tidyup()
+        $)
+        UNLESS FIRST
+        $(      WRITEF("Located Fileserver*N")
+                FIRST := TRUE
+        $)
+        UNTIL lookup.name("PS.MAP",address)
+        $(      IF first
+                THEN writef("Can't locate PS.MAP %X4 = %n.  Waiting*N",
+                                                        RESULT2, RESULT2)
+                first := FALSE
+                delay(tickspersecond*5)
+                if testflags(1) tidyup()
+        $)
+        UNLESS FIRST    WRITEF("Located PS.MAP*N")
+    $)
+    map.station         := address!0
+    map.port            := address!2
+    map.func            := address!3
+
+    mail.list           := get.perm.vec(ml.size*ml.element.size)
+
+    md                  := perm.file()          // UMMD only - It looks after buffers
+$<COMMAND'
+    client.index        := perm.file()          // INDEX
+    master.index        := perm.file()          // INDEX
+    send.file           := perm.file()          // Temp
+    header.file         := perm.file()          // Temp
+    recipients.puids.file:= perm.file()         // Temp, CREATED
+    expanded.groups.file:= perm.file()          // Temp, CREATED
+    client.md           := perm.file()          // HERE
+    um                  := perm.file()          // HERE....
+    client.group.directory:= perm.file()        // HERE ...
+    public.group.directory:= perm.file()        // HERE ...
+WRITEF("Vectors ?*N")
+
+    client.md!cache.address             := get.perm.vec(600/rwpw)
+    client.md!cache.size                := 600
+    um!cache.address                    := get.perm.vec(um.cache.size)
+    um!cache.size                       := um.cache.size
+    client.group.directory!cache.address:= get.perm.vec(300/rwpw)
+    client.group.directory!cache.size   := 300
+    public.group.directory!cache.address:= get.perm.vec(300/rwpw)
+    public.group.directory!cache.size   := 300
+    new.umid            := get.perm.vec(umid.size)
+
+    // If initialisation code is linked in then use it!!
+WRITEF("Test ... ?*N")
+
+    $(  LET quick       = FALSE
+        LET test.       = FALSE
+
+        TEST service
+        THEN    norm.input, cli.standardoutput := input(), output()
+        ELSE
+        $(  user.find.and.set.up()
+            norm.input  := findinput("**")
+        $)
+
+        IF testflags(2)
+        $(  LET argv = VEC 20
+$<SMALL
+            LET argv.string = "Quick/s,trace/s"
+$>SMALL
+$<SMALL'
+            LET argv.string = "Quick/s,trace/s,test/s,fred/s,mc/k"
+$>SMALL'
+            IF RDARGS(argv.string, argv, 20) = 0
+            $( WRITEF("Bag arg for '%S'*N", argv.string); GOTO end $)
+            quick       := argv!0
+            trace       := argv!1 &
+                           ( compare.uid(trust.1, 0, client.puid, 0) |
+                             compare.uid(trust.2, 0, client.puid, 0) )
+$<SMALL'
+            test.       := argv!2 &
+                           ( compare.uid(trust.1, 0, client.puid, 0) |
+                             compare.uid(trust.2, 0, client.puid, 0) )
+            IF argv!3 | (argv!4 ~= 0)
+            $(  TEST lookup.name("MAIL", address)
+                $(  writef("Can't find MAIL (%N=%X8)", RESULT2, RESULT2)
+//SO                START.OK := FALSE
+                $)
+                ELSE
+                $(      mail.station    := address!0
+                        mail.port       := address!2
+
+                        IF argv!3 THEN argv!4 := "FRED"
+                        UNLESS argv!4=0 TEST lookup.name(argv!4, address)
+                        THEN mail.station       := address!0
+                        ELSE
+                        $(  writef("Can't find %S (%N)", argv!4, RESULT2)
+//SO                        START.OK := FALSE
+                        $)
+                $)
+            $)
+$>SMALL'
+        $)
+
+        $(  LET seg = tcb!tcb.seglist ! 4
+            tcb!tcb.seglist ! 4 := 0
+            unloadseg(seg)
+        $)
+
+        UNLESS test. IF validroutine(@ms.checker) THEN ms.checker()
+        retrieve.entry(root, root.user.map, um)
+        retrieve.entry(root, root.master.index, master.index)
+
+        read.cache(um, 0)
+
+        get.temp.files()
+        // Give information about his mail
+        UNLESS quick DO get.mail.list(TRUE, 0, -1)
+//==============================================================================
+//              POSSIBLY WAIT ??????????????????????????????????????????????????
+//==============================================================================
+    $)
+$>COMMAND'
+$<COMMAND
+    norm.input                  := findinput("**")
+    client.md                   := perm.file()
+    client.md!cache.address     := get.perm.vec(600/rwpw)
+    client.md!cache.size        := 600
+$<68000TRIPOS
+    IF testflags(2)
+    $(  LET argv = VEC 20
+        LET argv.string = "fred/s,mc/k"
+        IF RDARGS(argv.string, argv, 20) = 0
+        $( WRITEF("Bag arg for '%S'*N", argv.string); GOTO end $)
+
+        IF argv!0 | (argv!1 ~= 0)
+        $(      UNLESS lookup.name("MAIL", address)
+                $(  writef("Can't find MAIL (%N=%X8)", RESULT2, RESULT2)
+//SO                START.OK := FALSE
+                $)
+                mail.station    := address!0
+                mail.port       := address!2
+
+                IF argv!0 THEN argv!1 := "FRED"
+
+                UNLESS argv!1=0 TEST lookup.name(argv!1, address)
+                THEN mail.station       := address!0
+                ELSE
+                $(  writef("Can't find %S (%N)", argv!1, RESULT2)
+//SO                START.OK := FALSE
+                $)
+        $)
+    $)
+$>68000TRIPOS
+    // MAIL uses, to clear NEW MAIL bit
+    get.mail.list(TRUE, 0, -1)
+//==============================================================================
+//              POSSIBLY WAIT ??????????????????????????????????????????????????
+//==============================================================================
+    FOR i = 0 TO 3 DO client.puid%%i := (uidset()+puid.offset) %% i
+    convert..puid.to.name(client.puid, 0, client.name)
+$>COMMAND
+    FOR i = 0 TO client.name%0 DO lookat.name%i := client.name%i
+
+    ms.fs.fail.level    := level()              // Now safe ......
+    ms.user.break.level := level()
+
+    IF TERMINAL.data = 0
+    THEN WRITES("*N Unknown Terminal, Remote dumb assumed (see HELP TERMINAL)*N")
+    Terminal.depth      := (Terminal.data=0) -> 23, Terminal.data ! TERM.DEPTH
+    Terminal.width      := (Terminal.data=0) -> 79, Terminal.data ! TERM.WIDTH
+    cur.init(TRUE, TRUE)
+$>MAININIT'
+
+ms.command.loop:
+    $(  LET headed               = FALSE
+        LET simulate.text        = 0
+        LET Write.header         = // (SC | need.new.header) &
+                                        inputwaiting(norm.input)=FALSE
+        LET pending.char         = ENDSTREAMCH
+
+        force.wait              := force.wait.
+        ms.fs.fail.level        := level()
+        ms.user.break.level     := level()
+        ms.fs.fail.link         := ms.fs.fail.main
+        ms.user.break.link      := ms.break.main
+        // Main loop for reading commands
+        selectinput(norm.input)
+        selectoutput(norm.output)
+DO.write.header:
+        need.new.header         := FALSE
+//------------------------------------------------------------------------------
+//      The user want's the header printed.
+//
+//      In SC mode, do this after each command
+//      Otherwise ONLY ON EXPLICIT REQUEST !!
+//------------------------------------------------------------------------------
+        IF Write.header
+        $(  headed := TRUE
+            UNLESS cur.wrch(CUR.CLEAR.SCREEN)
+            DO TEST 0 <= terminal.depth < 100
+            THEN FOR I = 0 TO 1 //terminal.depth
+            DO WRCH('*N' | #X80)
+            ELSE
+            $(  terminal.depth  := 23
+                terminal.width  := 79           // Col 80 bug ??
+                WRITEF("*N*N    Terminal Depth silly. Reset to %N*N*N",
+                terminal.depth)
+            $)
+            cur.attr(0, TRUE)
+            cur.attr(1, TRUE)
+            WRITES("*215MAIL SERVER")
+            cur.attr(1, FALSE)
+            cur.attr(0, FALSE)
+            WRITES("   ")
+            ms.mail(FALSE)
+//          IF SC THEN
+            writes("*212ms: *e")
+        $)
+
+//      UNLESS SC IF inputwaiting(norm.input)=FALSE WRITES("*212MS: *e")
+
+        break.test()
+
+        //----------------------------------------------------------------------
+        //      The prompt has been written.
+        //
+        //      If pending.char is set, use that, else do a real read.
+        //----------------------------------------------------------------------
+        $(  char := pending.char = ENDSTREAMCH -> cur.rdch(), pending.char
+            pending.char := ENDSTREAMCH
+            IF char=endstreamch THEN BREAK
+
+            TEST 0 <= char <= #X7F
+            //------------------------------------------------------------------
+            //  This is a normal charcter. So read a command
+            //------------------------------------------------------------------
+            $(  unrdch();
+                UNLESS input.waiting
+                $(  UNLESS headed /*IF SC*/ writes("*215ms: *e")
+                    IF readline(readline.nowait)=0      LOOP    // -> SC
+                $)
+                break.test()
+
+                res := rditem(command,12)
+                input.waiting := FALSE
+
+                UNLESS res=0                                            BREAK
+
+                //--------------------------------------------------------------
+                // Just a newline. SC-> ignore, redisplay
+                //--------------------------------------------------------------
+                RDCH()                          // discard it ....
+//              UNLESS sc $( write.header := TRUE; GOTO DO.write.header $)
+
+                // KEEP THE USERS HAPPY !!!!!!
+                TEST SC
+                $(      writes("*215XXXX*e")
+                        delay(7)
+                        WRITES("*215ms: *E")
+                $)
+                ELSE    WRITES("MS: *E")
+                LOOP
+            $)
+//          ELSE TEST remaining.mail.count=0
+//          $(  input.waiting := false; WRCH(7); wrch('*E'); READLINE(readline.nowait) $)
+            ELSE
+            //------------------------------------------------------------------
+            //  A fancy command.
+            //------------------------------------------------------------------
+            $(  LET current     = 0
+                LET valid.selected      = mail.list !
+                                (selected*ml.element.size + ml.entry.disp) ~= -1
+
+                LET number(offset) = VALOF FOR I =  0 TO Mail.count-1
+                    UNLESS mail.list ! (i*ml.element.size + ml.entry.disp) =-1
+                    $(  IF offset=0     RESULTIS i; offset -:= 1 $)
+
+                // Find which line the current message is on
+                FOR I = 0 TO selected-1
+                DO UNLESS mail.list ! (i*ml.element.size + ml.entry.disp) =-1
+                   DO current +:= 1
+                // UNLESS valid.selected THEN DOWN is a NO-OP, UP as usual
+//              IF current >= Remaining.mail.count DO current -:= 1
+
+
+                WHILE char > #X7F
+                $(      LET old = current
+                        SWITCHON char INTO
+                        $(  DEFALT:
+                            DEFAULT:            WRCH(7);                ENDCASE
+                            CASE CUR.HELP:
+                                                WRITES("*
+**NYou are typing a command. Either type a line of text, OR one of*N*
+*  UP           ESC u   Select previous item*N*
+*  DOWN         ESC d   Select previous item*N*
+*");                                            WRITES("*
+*  CLEAR SCREEN ESC c   Redisplay the screen*N*
+*  Keypad 8     ESC 8   Type the current item*N*
+*  Keypad 5     ESC 5   Reply to the current item*N*
+*");                                            WRITES("*
+*  Keypad 2     ESC 2   Delete (needs a RETURN after it)*N*
+*Type any character to continue...*E*
+*");                                            CUR.RDCH()
+                            CASE CUR.CLEAR.SCREEN: res := 0; CUR.init(TRUE, TRUE)
+                                                IF valid.selected
+                                                THEN selected := number(current)
+                                                                GOTO Got.line
+                            CASE CUR.UP:
+                                                UNLESS headed GOTO Unheaded
+                                                IF current=0    GOTO DEFALT
+                                                current -:= 1
+                                                UNLESS valid.selected
+                                                $(  old := -1;
+                                                    valid.selected := TRUE
+                                                $)                      ENDCASE
+
+                            CASE CUR.DOWN:
+                                                UNLESS headed GOTO Unheaded
+                                                UNLESS valid.selected
+                                                $( old := -1;
+                                                   IF current =
+                                                        Remaining.mail.count
+                                                                GOTO DEFALT
+                                                   valid.selected := TRUE;
+                                                                        ENDCASE
+                                                $)
+                                                IF current =
+                                                        Remaining.mail.count-1
+                                                                GOTO DEFALT
+                                                current +:= 1;          ENDCASE
+
+                            CASE CUR.FN2:
+                            CASE CUR.FN8:
+                            CASE CUR.FN5:       simulate.text := char=CUR.FN2 ->
+                                                                "delete ",
+                                                                char=CUR.FN8 ->
+                                                                "Type*N",
+                                                                "Reply*N"
+                                                IF valid.selected
+                                                THEN selected := number(current)
+                                                GOTO got.line
+                        $)
+                        UNLESS current=old | NOT valid.selected
+                        $(  IF old >= 0
+                            $(  IF   cur.pos(0, terminal.depth-4-old)
+                                THEN writed(number(old)+item1, 2)
+                            $)
+                            TEST cur.pos(0, terminal.depth-4-current)
+                            THEN writes("=>")
+                            ELSE writef("Select %N*Nms: ", number(current)+item1)
+                            cur.pos(4,
+                                terminal.depth-Remaining.mail.count -5-
+                                                (mail.count>ml.size->1,0) )
+                        $)
+                        wrch('*E')
+                        char := cur.rdch()
+                        LOOP
+
+unheaded:
+                $(  Write.header, Pending.char := TRUE, char
+                    GOTO do.write.header
+                $)
+
+                $)
+                UNRDCH()
+                IF valid.selected THEN selected := number(current)
+            $)
+            LOOP
+
+Got.line:
+            UNLESS simulate.text=0
+            $(  LET len = simulate.text%0
+                WRITES(simulate.text)
+                UNLESS simulate.text%len=' ' | simulate.text%len='*N' WRCH(' ')
+                WRCH('*E')
+                FOR i = 1 TO len DO command%i := simulate.text%i
+                command%0 := command%len=' ' -> len-1, len
+                res          := 1
+                TEST simulate.text%len = '*N'
+                $(  UNRDCH()
+                    (cis!scb.buf) % (cis!scb.pos) := '*N'
+                    command%0 := len-1
+                $)
+                ELSE IF readline(readline.nowait) = 0   // Deleted ...
+                $(      FOR i = 1 TO len DO WRITES("*B *B")
+                        WRCH('*E')
+                        LOOP
+                $)
+            $)
+            BREAK
+        $) REPEAT
+
+        IF res=0 LOOP
+        IF char=ENDSTREAMCH THEN BREAK
+
+        // Check for inappropriate response from "rditem"
+        UNLESS res = 1
+        $(  writes("Invalid command syntax*N")
+            char := rdch() REPEATUNTIL (char='*N') | (char=endstreamch)
+            LOOP
+        $)
+
+        start.time := rootnode!rtn.ticks
+
+        res := findarg(
+$<COMMAND'
+"send,type=read,delete,finish=quit=q,mail,terminal,?=help,priv,group,select,*
+*print,reply,undelete,next,lookat,public,private,mbox,move,copy,forward,create",
+$>COMMAND'
+$<COMMAND
+        $<SMALL
+"send,type=read,delete,finish=quit=q,mail,terminal,?=help,priv,,select,*
+*print,reply,,next",
+        $>SMALL
+        $<SMALL'
+"send,type=read,delete,finish=quit=q,mail,terminal,?=help,priv,,select,*
+*print,reply,undelete,next,,public,private,mbox,move,copy,forward",
+        $>SMALL'
+$>COMMAND       command)
+
+        IF (res=-1) & trusted
+        $(    // Test for other (restricted) commands.
+            res := priv.command.offset +
+findarg("exterminate,analyse,trace,newhelp,impersonate,,demon,test,patch,*
+*makembox,inspect,insert,debug,reflect", command)
+        $)
+
+        SWITCHON res INTO $(
+        DEFAULT:        writes("      Unknown command.  See HELP*N");   ENDCASE
+
+        CASE 0:         //UNLESS allowed() ENDCASE
+                        UNLESS headed
+                        $(  cur.wrch(CUR.clear.screen)
+                            cur.pos(0, terminal.depth-Remaining.mail.count-6-
+                                (mail.count>ml.size -> 1,0) +
+                                (mail.count=0-> 2, 0) )
+                        $)
+                        //      Bound to have lost header ...
+                        IF ms.send(FALSE) THEN GOTO No.Skip;    GOTO message
+
+                        //      Bound to have lost header ...
+        CASE 1:         ms.type(0, FALSE);                      GOTO message
+
+        CASE 2:
+                        UNLESS allowed() ENDCASE
+                        //      Bound to have changed header ...
+                        IF ms.delete(TRUE) THEN GOTO no.wait;           ENDCASE
+
+        CASE 3:         IF extra.items()                                ENDCASE
+                                                                        BREAK
+
+        CASE 4:         $(  MANIFEST $( argv.upb = 1 + 20/BYTESPERWORD $)
+                            LET argv    = VEC argv.upb
+                            LET argv.s  = "number"
+                            LET number  = 0
+                            LET string  = ?
+                            IF rdargs(argv.s, argv, argv.upb)=0
+                            $( WRITEF("Bad arg for '%S'*N", argv.s);  ENDCASE $)
+
+                            string := argv!0
+                            UNLESS string=0
+                            FOR i = 1 TO string%0
+                                DO  TEST '0' <= string%i <= '9'
+                                    THEN number := number*10 + string%i - '0'
+                                    ELSE
+                                    $(  WRITEF("Bad number string '%S'*N", string)
+                                        ENDCASE
+                                    $)
+
+// WRONG !!!!!!
+                            Need.new.header := TRUE
+                            IF get.mail.list(TRUE, number, (mbox.name%0=0)->0,
+                                                                mbox.puid,
+                                        0, -1 )>=0 GOTO No.skip // Changed .....
+                        $)                                              ENDCASE
+
+        CASE 5:         IF ms.terminal() THEN   Goto No.wait;   // New format
+                                                                        ENDCASE
+
+        CASE 6:         ms.help();                              GOTO message
+$<VSMALL'
+        CASE 7:         // Check for priv users
+                        IF extra.items()                                ENDCASE
+                        TEST compare.uid(trust.1, 0, user.puid, 0) |
+                             compare.uid(trust.2, 0, user.puid, 0)
+                        THEN trusted := ~TRUSTED
+                        ELSE writes("*NRefused*N")
+//$( LET debugpkt = TABLE notinuse, 2
+//   IF qpkt(debugpkt)~=0 pktwait()
+//$)
+                                                                        ENDCASE
+$>VSMALL'
+$<LSI4TRIPOS'
+        $<COMMAND'
+        CASE 8:
+                        UNLESS allowed() ENDCASE
+                        IF group.edit() THEN GOTO no.wait;      // Header lost..
+                                                                        ENDCASE
+        $>COMMAND'
+$>LSI4TRIPOS'
+
+        //              SELECT
+        CASE 9:         IF ms.select(0) GOTO no.skip            // Header change
+                                                                GOTO Message
+
+
+        //              TYPE
+        CASE 10:        ms.type(0, TRUE);       GOTO message    // Header lost
+
+        //              SEND
+        CASE 11:
+                        UNLESS headed
+                        $(  cur.wrch(CUR.clear.screen)
+                            cur.pos(0, terminal.depth-Remaining.mail.count-6-
+                                (mail.count>10 -> 1,0) +
+                                (mail.count=0-> 2, 0) )
+                        $)
+                        IF ms.send(TRUE) THEN GOTO No.Skip;     // Header lost
+                                                                GOTO message
+        CASE 12:        //      DELETE
+                        UNLESS allowed() ENDCASE
+                        IF ms.delete(FALSE) THEN GOTO no.wait;  // Header change
+                                                                ENDCASE
+
+        CASE 13:        IF ms.select(1) GOTO no.message;                ENDCASE
+
+$<COMMAND'
+        CASE 14:        $(  LET string = "user"
+                            LET mail.to.do      = FALSE
+                            LET v = VEC 14
+                            IF rdargs(string, V, 14)=0
+                            $(  WRITEF("Bad string for '%S'*N", string)
+                                GOTO message
+                            $)
+
+                            UNLESS mbox.name%0=0
+                            $(  mbox.name%0 := 0
+                                UNLESS limited.access = limit.read
+                                DO Limited.access := limit.none
+                                mail.to.do      := TRUE
+                            $)
+
+                            IF V!0 = 0
+                            $(  IF LIMITED.access = limit.read
+                                $(  Limited.access := limit.none
+                                    FOR I = 0 TO 3
+                                    DO client.puid%%i := User.puid%%i
+                                    FOR I = 0 TO client.name%0
+                                    DO lookat.name%i := client.name%i
+                                    mail.to.do  := FALSE
+                                    GOTO (get.mail.list( TRUE, 0,
+                                        mbox.name%0=0 -> 0, mbox.puid, 0,
+                                                -1 ) < 0) -> message, no.skip
+                                $)
+                                IF mail.to.do
+                                THEN GOTO (get.mail.list( TRUE, 0,
+                                        mbox.name%0=0 -> 0, mbox.puid, 0,
+                                                -1 ) < 0) -> message, no.skip
+                            $)
+
+                            IF convert.name.to.puid(v!0, client.puid)=convert.ok
+                            $(  Limited.access :=
+                                compstring(client.name, v!0)=0 -> limit.none,
+                                                                  limit.read
+                                client.group.directory!uid := 0;
+                                for i = 0 TO (v!0)%0 DO lookat.name%i := (v!0)%i
+                                GOTO (get.mail.list( TRUE, 0, -1 )<0) ->
+                                                                message, No.skip
+                            $)
+                            writef("Unable to lookat %S*N", v!0)
+                                                                GOTO message
+                        $)
+$>COMMAND'
+$<SMALL'
+        CASE 15:        IF allowed() ms.setbit(md.public.flag, TRUE);   ENDCASE
+                        // Practically no change!!
+                        // UNLESS allowed() ENDCASE
+                        //IF ms.setbit(md.public.flag, TRUE) THEN GOTO no.wait;
+
+        CASE 16:        IF allowed() ms.setbit(md.public.flag, FALSE);  ENDCASE
+
+        CASE 17:
+                        $(  LET argv    = VEC 1 + mbox.name.bytes/BYTESPERWORD
+                            LET argv.s  = "mbox,list/s"
+
+                            IF rdargs(argv.s, argv,
+                                        1 + mbox.name.bytes/BYTESPERWORD ) = 0
+                            $(  WRITEF("Bad string for '%S'*N", argv.s)
+                                unrdch()
+                                ENDCASE
+                            $)
+
+                            UNRDCH()
+                            TEST argv!1
+                            THEN TEST mbox.chain=0
+                                 THEN WRITES("No mboxes*N")
+                                 ELSE
+                                 $(  LET chain  = mbox.chain
+                                     WRITES("Available mboxes are ")
+                                     UNTIL chain=0
+                                     $( UNLESS chain=mbox.chain WRITES(", ")
+                                        WRITES(chain + mbox.string)
+                                        IF chain!mbox.index=0 WRCH('**')
+                                        chain := !chain
+                                     $)
+                                     newline()
+                                $)
+                            ELSE
+                            $(  LET string = argv!0
+                                TEST string=0
+                                $( mbox.name%0 := 0;
+                                   UNLESS limited.access = limit.read
+                                    THEN limited.access := limit.none
+                                   IF get.mail.list(TRUE, 0, -1) >= 0
+                                   GOTO no.wait                 // Change !!
+                                   ENDCASE
+                                $)
+                                ELSE
+                                $(  LET chain   = mbox.chain
+                                    UNTIL chain=0
+                                    $(  IF compstring(string, chain+mbox.string)=0
+                                        $( FOR i = 0 TO string%0
+                                           DO mbox.name%i := string%i
+                                           copy.uid(chain+mbox.md, 0,
+                                                        mbox.puid, 0)
+                                           copy.uid(chain+mbox.index, 0,
+                                                        mbox.puid2, 0)
+                                        UNLESS limited.access = limit.read
+                                        DO limited.access := ((mbox.puid2!0)=0)->
+                                                        limit.delete, limit.none
+                                           IF get.mail.list(TRUE, 0,
+                                                        mbox.puid, 0, -1) >= 0
+                                           GOTO no.wait
+                                           ENDCASE
+                                        $)
+                                        chain := !chain
+                                    $)
+                                    WRITEF("Mbox '%S' not found*N", string)
+                                $)
+                            $)
+                        $)                                              ENDCASE
+        CASE 18:
+                        IF ms.move(TRUE) = TRUE GOTO no.wait;           ENDCASE
+        CASE 19:
+                        IF ms.move(FALSE) = TRUE GOTO no.wait;          ENDCASE
+$>SMALL'
+$<COMMAND'
+        $<SMALL'
+        CASE 20:
+                        UNLESS headed
+                        $(  cur.wrch(CUR.clear.screen)
+                            cur.pos(0, terminal.depth-Remaining.mail.count-6-
+                                (mail.count>10 -> 1,0) +
+                                (mail.count=0-> 2, 0) )
+                        $)
+                        IF ms.send(1) THEN GOTO No.Skip;        // Header change
+                                                                GOTO message
+        $>SMALL'
+
+        CASE 21:
+            $(  LET argv.s      = trusted -> "delete/s,user/a", "delete/s"
+                LET exists      = ?
+                LET delete.s    = ?
+                LET user        = -1
+                IF rdargs(argv.s, command,14) =0 WRITEF("Bad args for %S*N") <> ENDCASE
+                UNRDCH()
+                delete.s        := command!0
+                TEST trusted
+                $(      LET hexpair (c1, c2) = (hex(c1)<<4) | hex(c2)
+                        AND hex (c) = ('0' <= c <= '9') -> c-'0',
+                                'A' <= capitalch(c) <= 'F' ->
+                                                capitalch(c)-'A'+10, 0
+                        user    := command!1
+                        UNLESS convert.name.to.puid(user,address) = convert.ok
+                        TEST user%0 = 16
+                        $(      FOR i = 0 TO 8 DO address%i := hexpair(user%(i*2 +1), user%(I*2 +2))
+                        $)
+                        ELSE WRITEF("Bad name '%S'*N", user) <> ENDCASE
+                $)
+                ELSE
+                $(      copy.uid(user.puid,0, address,0)
+                $)
+                exists := find.puid.in.user.map(address,client.md,client.index)>= 0
+                UNLESS exists = delete.s
+                WRITEF(trusted -> "User '%S' %S exist%S*N", "You %$%S exist*N",
+                        user,
+                        exists -> "already", trusted -> "does not", "do not",
+                        exists -> "s", "")
+                <> ENDCASE
+                create.message.directory(address,client.md,client.index,
+                                delete.s -> 1, -1, -1)
+                writef(trusted -> "%S %S*N", "Your directory has been %$%S*N",
+                                        user, delete.s -> "deleted", "created")
+                UNLESS trusted DO IF get.mail.list(TRUE, 0, 0, 0, -1) >= 0
+                                  THEN GOTO no.wait             // New header
+            $)
+            ENDCASE
+        $<SMALL'
+        CASE priv.command.offset + 0:
+                        exterminate();                                  BREAK
+
+        CASE priv.command.offset + 1:
+                        ms.analyse(TRUE);                               ENDCASE
+        $>SMALL'
+        CASE priv.command.offset + 2:
+                        rditem(command,12)
+                        SWITCHON findarg(
+        "on,off,full,onlyfull,timing,map,stack,files,limit,store",command)
+                        INTO $(
+
+            DEFAULT:    writes("Unknown trace option*n");               ENDCASE
+            CASE 0:     trace, full.trace := TRUE,  FALSE;              ENDCASE
+            CASE 1:     trace, full.trace, timing:=FALSE, FALSE, FALSE; ENDCASE
+            CASE 2:     trace, full.trace := TRUE,  TRUE;               ENDCASE
+            CASE 3:     trace, full.trace := FALSE, TRUE;               ENDCASE
+            CASE 4:                        timing := TRUE;              ENDCASE
+            CASE 5:     read.cache(um,0); writes("*N*NUSER MAP:*N")
+                        FOR i=0 TO 500   writef(" %X4", (um!cache.address) %% i)
+                                                                        ENDCASE
+            CASE 6:
+                        $(
+                            LET si      = (stackbase!-1) -2
+                            LET Value   = stackbase!si
+                            LET upb     = stackbase+2
+                            FOR I       = stackbase+si TO stackbase BY -1
+                                    TEST testflags(1) THEN BREAK
+                                    ELSE UNLESS !I = value
+                                    DO   $( upb := I; BREAK $)
+                            WRITEF("stack %N/%N*N", upb-stackbase, si);
+                            wto.mc("file", "Mailserv Stack %N,%N",
+                                                        upb-stackbase, si);
+                            WRITEF("WTOed OK*N")
+                                                                        ENDCASE
+                        $)
+        $<SMALL'
+            CASE 7:
+                        trace.file(master.index,        "master.index")
+                        trace.file(send.file,           "send.file")
+                        trace.file(header.file,         "header.file")
+                        trace.file(recipients.puids.file,"recip.puids.file")
+                        trace.file(expanded.groups.file,"expanded.grp.file")
+                        trace.file(client.index,        "client.index")
+                        trace.file(client.md,           "client.md")
+                        trace.file(md,                  "md")
+                        trace.file(um,                  "um")
+                        trace.file(client.group.directory,"client.group.dir");
+                                                                        ENDCASE
+        $>SMALL'
+                CASE 8: WRITEF("Limited.access=%N*N", limited.access);  ENDCASE
+                CASE 9:
+
+//$(    MANIFEST $( UNSET = #XAAAAAAAA $)
+$(      MANIFEST $( UNSET = #X00000000 $)
+        LET free        = 0
+        LET used        = 0
+        LET n.f         = 0
+        LET n.f2        = 0
+        LET real.free   = 0
+        LET n.u         = 0
+        LET biggest     = 0
+        LET joinfree    = 0
+        LET stillfree   = 0
+        LET a           = rootnode ! rtn.blklist
+        LET memsize     = rootnode ! rtn.memsize
+        LET topofstore  = memsize * 1024
+        LET oldpri      = ((rootnode ! rtn.tasktab) ! taskid) ! tcb.pri
+LET ssp.ad = ssp >> 2
+        changepri(taskid, MAXINT)
+
+        UNTIL !a = 0
+        $(      LET size = !a
+                LET next = ?
+                TEST (size & 1) = 0     // Used block
+                $(  used +:= size
+                    n.u  +:= 1
+                    IF (joinfree>>1) > (biggest>>1) biggest:=joinfree
+                    joinfree := 0
+                $)
+                ELSE
+                $(  LET touched = FALSE
+abort(1001, a, size)
+                    size -:= 1
+                    free +:= size
+                    n.f  +:= 1
+                    next := a + size
+                    IF ((a >> 1) >= (next >> 1)) | // Wrap around
+                        ((next >> 1) > ((topofstore-1) >> 1))
+                    $(
+                        changepri(taskid, oldpri)
+                        WRITEF("Store chain corrupt..  (at %U0)*N", a)
+                        BREAK
+                    $)
+                    FOR i = a+1 TO next-1 UNLESS !i = UNSET
+                    DO touched:=TRUE <> BREAK
+                    TEST touched
+                    THEN
+
+//WRITEF("*N[%I5+1--%I5-1 (%I4=%I4-1), ssp=%N=%N, %X8 %X8%S.  *E",
+// a, next, size, !a, ssp, ssp.ad, ssp.ad!0, ssp.ad!1, (a <= ssp.ad <= next) ->
+//              "[!!!!!]", "") <>
+abort(1002, a, next, size, !a,
+        ssp, ssp.ad, ssp.ad!0, ssp.ad!1, (a <= ssp.ad <= next) -> 1, 0, -99) <>
+FOR i = a+1 TO next-1 DO !i := UNSET
+                    ELSE real.free +:= size
+                    IF joinfree=0 THEN n.f2 +:= 1
+                    joinfree +:= size
+                $)
+
+                next := a + size
+                IF ((a >> 1) >= (next >> 1)) | // Wrap around
+                        ((next >> 1) > ((topofstore-1) >> 1))
+                $(
+                        changepri(taskid, oldpri)
+                        WRITEF("Store chain corrupt!!  (at %U0)*N", a)
+                        BREAK
+                $)
+                a := next
+        $)
+        changepri(taskid, oldpri)
+        IF (joinfree>>1) > (biggest>>1) biggest:=joinfree
+        WRITEF("%N (%n) free (%N) (%N/%N), %N used (%N)*N",
+                free, real.free, biggest, n.f, n.f2,
+                used, n.u)
+        WRITEF("SSP=%N*N", ssp)
+$)
+                    $)                                                  ENDCASE
+        $<SMALL'
+        CASE priv.command.offset + 3:
+                //IF ms.new.help() THEN GOTO no.wait;                   ENDCASE
+                ms.new.help();                                          ENDCASE
+
+        CASE priv.command.offset + 4:
+                        TEST (rditem(lookat.name, 30/BYTESPERWORD) = 1) &
+                                (convert.name.to.puid(lookat.name,client.puid) =
+                                 convert.ok)
+                        $(
+                            client.group.directory!uid := 0;
+                            IF Get.mail.list(TRUE, 0,
+//              (limited.access=limit.read |
+                                        (mbox.name%0=0) -> 0, mbox.puid, 0,
+                                -1 ) >= 0 THEN  GOTO No.wait    // Changed heade
+                        $)
+                        ELSE writef("Unable to impersonate %S*N", lookat.name)
+                                                                        ENDCASE
+
+        CASE priv.command.offset + 6:
+                        ms.demon();                                     ENDCASE
+
+        CASE priv.command.offset + 7:
+    (root+uid)%%0       := #X800d
+    (root+uid)%%1       := #x2a6e
+    (root+uid)%%2       := #xd59f
+    (root+uid)%%3       := #x79b9;                                      ENDCASE
+
+        CASE priv.command.offset+8:
+                        ms.patch(TRUE);                                 ENDCASE
+
+        CASE priv.command.offset+9:
+                        ms.patch(FALSE);                                ENDCASE
+
+        CASE priv.command.offset+10:
+                        ms.insert(FALSE);                               ENDCASE
+
+        CASE priv.command.offset+11:
+                        ms.insert(TRUE);                                ENDCASE
+        CASE priv.command.offset+12:
+        $( LET debugpkt = TABLE notinuse, 2; IF qpkt(debugpkt)~=0 pktwait() $)
+                                                                        ENDCASE
+        CASE priv.command.offset+13:
+                FOR Type=1 TO 2
+                $(      WRITEF(type=1 -> "Interpreted:*N", "*NNow raw*N")
+                        FOR i = 1 TO 50
+                        $(      LET ch = (type=1) -> cur.rdch(), rdch();
+                                WRITEF("%I2:%I4=X%X4=O%O6=%c, %c", i, ch,ch,ch,
+                                                (' '<= ch < 127) -> ch, '?',
+                                                (i REM 3) = 3 -> '*E', '*N')
+                                IF CAPITALCH(ch) = 'Z' BREAK
+                        $)
+                $)                                                      ENDCASE
+        $>SMALL'
+$>COMMAND'
+        $)               // End of command case structure
+
+//==============================================================================
+//===== DUE FOR A REWRITE -- WAIT TIL USERS ARE HAPPY   ========================
+//==============================================================================
+        // The default:        There has been some output the user wants to read
+        //      Discard currnt input buffer if any.
+        //      If the user has typed-ahead, then go right on ...
+        //      (Otherwise wait for RETURN)
+force.wait.:
+$<TRACE
+IF trace WRITEF("Force.wait: *E")
+$>TRACE
+$<NEWEOL'
+        char := rdch() REPEATUNTIL (char='*N') | (char=endstreamch) | (char='*C')
+        IF char=endstreamch THEN BREAK
+$>NEWEOL'
+$<NEWEOL
+        cis!4 := cis!5
+        IF cis!4=0 BREAK
+$>NEWEOL
+        IF inputwaiting(norm.input)     GOTO no.skip
+
+        //      The CASE has produced some output, so queue the user
+        //      to make it continue. Also, the CASE did some terminal reads!!
+        //      (i.e. Send,Select,type)
+message:
+$<TRACE
+IF trace WRITEF("Message: *E")
+$>TRACE
+        IF SC
+      Writes("*212Type return to continue ...*E*215                           *215")
+//      IF sc & cis!4=cis!5 THEN readline(TRUE)
+
+        //      There was 'no.message', wait for a character to be typed.
+        //      Unless it is a (RETURN), Unread it for decodeing
+no.message:
+$<TRACE
+IF trace WRITEF("No.message: *E")
+$>TRACE
+        IF SC
+        $( LET ch = rdch()
+           UNLESS ch = '*N' | ch = '*C' DO UNRDCH()
+           GOTO no.skip
+        $)
+
+        //      Read until an end of line is reached ....
+        //      Standard return after no output that might have changed the
+        //      header .....
+no.wait:
+$<TRACE
+IF trace WRITEF("No.wait: *E")
+$>TRACE
+        IF sc $(
+        char := rdch() REPEATUNTIL (char='*N') | (char=endstreamch)
+        IF char=endstreamch THEN BREAK
+        $)
+
+        // And off we go !!
+        //      Return after command that read input, but has no comment to make
+        //      Will have lost the header for sure/ will have altered it.
+        //      (i.e. send)
+no.skip:
+$<TRACE
+IF trace WRITEF("No.skip: *E")
+$>TRACE
+//==============================================================================
+//===== DUE FOR A REWRITE -- WAIT TIL USERS ARE HAPPY   ========================
+//==============================================================================
+        little.tidyup()
+
+        $<COMMAND'
+                $<TRACE IF timing THEN time.trace() $>TRACE
+        $>COMMAND'
+
+    $) REPEAT        // End of command loop
+
+    GOTO end
+
+ms.break.main:
+    UNLESS output() = norm.output DO ENDWRITE()
+    selectoutput(norm.output)
+    writes("*n****** Break. Command abandoned*n")
+    little.tidyup()
+    UNRDCH()
+    GOTO force.wait     //==============================================
+
+ms.fs.fail.main:
+    IF validpointer(@norm.output)
+    $(  UNLESS output() = norm.output DO ENDWRITE()
+        selectoutput(norm.output)
+    $)
+    little.tidyup()             // Why not .....
+    writes("FS error - abandoned - ")
+    fs.explain(fs.rc)
+    GOTO end
+
+end:
+    tidyup()
+
+    cur.init(FALSE, FALSE)
+$<COMMAND' UNLESS service DO $>COMMAND'
+    setsc(FALSE)
+$<COMMAND'
+    IF service
+    $(  WRITEF("****** Returning %S to free pool*N",
+                                rootnode ! rtn.info ! rtninfo.ring ! ri.myname)
+        sendpkt(notinuse, task.consolehandler, act.disconnect, ?, ?, TRUE)
+    $)
+$>COMMAND'
+$)
+
+AND allowed() = limited.access -> VALOF
+$(  WRITEF("Command not allowed while looking at other people's mail*N")
+    RESULTIS FALSE
+$) , TRUE
+
+$<LSI4TRIPOS'   /* $>LSI4TRIPOS'
+.
+SECTION "MAIN-2"
+
+GET "header"
+GET "TERMHDR"
+GET "CURHDR"
+GET "IOHDR"
+$<COMMAND'
+GET "CLIHDR"
+$>COMMAND'
+//*/
+$<SC
+$$SUBROUTINE    := TRUE
+GET ":pb.cur.bcp.cur-init"
+GET ":pb.cur.bcp.cur-attr"
+GET ":pb.cur.bcp.cur-pos"
+GET ":pb.cur.bcp.cur-wrch"
+GET ":pb.cur.bcp.cur-rdch"
+$>SC
+
+LET extra.items() = VALOF
+$(  LET argv            = VEC 20
+    LET argv.string     = "NoArg"
+    UNLESS rdargs(argv.string, argv, 20)=0 IF argv!0=0
+    $( UNRDCH(); RESULTIS FALSE $)
+    WRITEF("Unexpected item  -- See HELP COMMANDS*N")
+    UNRDCH()
+    RESULTIS TRUE
+$)
+
+LET rdargs(keys, argv, size) = VALOF
+ $( LET w = argv
+    LET numbargs = ?
+
+    !w := 0
+    FOR p = 1 TO keys%0 DO
+      $( LET kch = keys%p
+         IF kch = '/' DO
+           $( LET c = capitalch(keys%(p+1))
+              IF c = 'A' THEN !w |:= 1
+              IF c = 'K' THEN !w |:= 2
+              IF c = 'S' THEN !w |:= 4
+              LOOP
+           $)
+         IF kch = ','   THEN w +:= 1 <> !w := 0
+      $)
+    w +:= 1
+    numbargs := w-argv
+
+    $( LET argno = -1
+       LET wsize = size + argv - w
+
+       SWITCHON rditem(w, wsize) INTO
+       $( DEFAULT:
+ err:     $( LET ch = ?
+             ch := rdch() REPEATUNTIL ch='*E' | ch='*N' | ch='*C' |
+                        ch=';' | ch=endstreamch
+             result2 := 120
+             RESULTIS 0
+          $)
+
+          CASE 0:  // *N, *E, ;, endstreamch
+             FOR i = 0 TO numbargs - 1 DO
+               $( LET a = argv!i
+                  IF 0 <= a <= 7 THEN
+                  TEST (a & 1) = 0 THEN
+                    argv!i := 0
+                   ELSE
+                    GOTO err
+               $)
+             rdch()
+             RESULTIS w
+
+          CASE 1:  // ordinary item
+             argno := findarg(keys, w)
+             TEST argno>=0 THEN  // get and check argument
+               TEST 4 <= argv!argno <= 7 THEN
+                 $( // no value for key.
+                    argv!argno := -1
+                    LOOP
+                 $)
+               ELSE
+                 $( LET item = rditem(w,wsize)
+                    IF item = -2 THEN
+                       item := rditem(w,wsize)
+                    IF item <= 0 THEN
+                       GOTO err
+                 $)
+             ELSE
+               $( LET ch = RDCH();
+               TEST (ch='*N' | ch='*C') & compstring("?", w)=0 THEN
+                 $( // help facility
+                    writef("%S: *E", keys)
+                    readline(TRUE)              // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                    ENDCASE
+                 $)
+               ELSE
+                 unrdch()
+                $)
+
+          CASE 2:  // quoted item (i.e. arg value)
+             IF argno<0 THEN
+               FOR i = 0 TO numbargs-1 DO
+                 SWITCHON argv!i INTO
+                   $( CASE 0: CASE 1:
+                        argno := i
+                        BREAK
+                      CASE 2: CASE 3:
+                        GOTO err
+                   $)
+             UNLESS argno>=0 GOTO err
+
+             argv!argno := w
+             w +:= w%0/bytesperword + 1
+       $)
+
+    $) REPEAT
+ $)
+
+MANIFEST $( ACT.SC.MODE = 994 $)                        // :g.iohdr
+
+LET setsc(mode) BE UNLESS mode=SC
+$(
+   UNLESS mode THEN delay(10)                   // Allow lines to finish
+   // BEWARE ------ ANY OUTSTANDING USER REQUESTS ARE RETURNED FIRST
+   // This will cause SENDPKT to abort, unless PKTWAIT is redefined
+   SENDPKT(NOTINUSE, ABS CONSOLETASK, ACT.SC.MODE, ?, ?, mode)
+   SC := MODE
+$)
+
+LET refresh(addr) = VALOF
+$(  LET scb     = !addr
+    scb!4, scb!5 := -1, -1
+    RESULTIS TRUE
+$)
+
+

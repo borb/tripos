@@ -1,0 +1,23 @@
+GET "libhdr"
+
+LET start() BE
+$(
+    LET pkt = TABLE notinuse, 5, 0
+    LET v = VEC 15
+
+    $(  LET broken = testflags(1)
+        datstring(v)
+        writef("%S*N", v+5)
+
+        IF broken THEN BREAK
+
+        FOR i = 1 TO 100 DO FOR j = 1 TO 1000 DO
+        $(
+            qpkt(pkt)
+            taskwait()
+        $)
+    $)  REPEAT
+
+$)
+
+

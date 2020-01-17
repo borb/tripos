@@ -1,0 +1,92 @@
+/***********************************************************************
+**             (C) Copyright 1980  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+  #######   #######    ######   ########  ########    #####   ########
+  ########  ########  ########  ########  ########   #######  ########
+  ##    ##  ##    ##  ##    ##     ##     ##        ##           ##
+  #######   ########  ##    ##     ##     ######    ##           ##
+  ##        #######   ##    ##     ##     ##        ##           ##
+  ##        ##  ##    ##    ##     ##     ##        ##           ##
+  ##        ##   ##   ########     ##     ########   #######     ##
+  ##        ##    ##   ######      ##     ########    #####      ##
+
+************************************************************************
+**    Author:   Brian Knight                           June 1980      **
+***********************************************************************/
+
+
+// Command to set the protection bits for a file or directory.
+
+SECTION "PROTECT"
+
+GET "LIBHDR"
+GET "MANHDR"
+GET "FSFHMANIFESTS"
+
+// mod by MFR2 to check for matrix protection scheme.
+
+LET start() BE
+    $(
+    LET argv            = VEC 30
+    LET access.bits     = 0
+    LET task            = ?
+    LET name            = ?
+    LET access.string   = ?
+    LET rdargs.string   = "NAME/A,ACCESS"
+
+    IF rdargs(rdargs.string, argv, 30) = 0
+    THEN
+      $(
+      writef("Bad args for key string *"%S*"*N", rdargs.string)
+      stop(20)
+      $)
+
+    name          := argv!0
+    access.string := argv!1
+
+    // The value of the ACCESS argument is a string of letters representing
+    // the modes of access to be allowed.
+
+    UNLESS access.string = 0
+    THEN FOR i = 1 TO access.string%0
+         DO $(
+            LET c       = access.string%i
+
+            SWITCHON capitalch(c)
+            INTO
+              $(
+              CASE 'R': access.bits := access.bits | access.read; ENDCASE
+              CASE 'W': access.bits := access.bits | access.write; ENDCASE
+              CASE 'D': access.bits := access.bits | access.delete; ENDCASE
+
+              DEFAULT: writef("Unknown access mode *'%c*'*n", c)
+                       writes("Valid letters are: R (read), W (write),*
+                              * D (delete)*n")
+                       stop(20)
+              $)
+            $)
+
+    task        := devicetask(name)
+
+    IF task=0 THEN GOTO fail  // Device not mounted
+
+    UNLESS sendpkt(notinuse, task, action.setaccess, ?, ?,
+                   result2, name, access.bits)
+    THEN GOTO fail
+
+    // Success
+
+    stop(0)
+
+fail:
+    TEST result2=5153
+         THEN writes("Using access matrices: use *"ALTER*" command*N")
+         ELSE $( writes("PROTECT failed: ")
+                 fault(result2)
+              $)
+    stop(20)
+    $)
+
+

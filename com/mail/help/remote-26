@@ -1,0 +1,22 @@
+The documentation is aimed mostly at users with single character channels to
+mailserver, but a 'line mode' method is available.
+
+At certain times, the program may respond before a 'return' is typed. Often it
+is possible to type on directly, and the desired effect is observered, but at
+others, it is desireable to force the characters through without a newline, so
+that the program can process them.  On many systems the character which is used
+to force transmision is 'escape' (the 'standard' is DLE-T (i.e. CNTRL/P T)).
+For this reason, in remote mode all 'escape' characters are ignored.
+
+To further complicate things, many terminals commence their 'keypad' sequences
+with 'escape', so the program uses 'escape' as it's initial META-character.
+E.g. to clear the screen, use the META-charecter 'CLEAR SCEEN', which may be
+types as 'ESC c'.  Note that ESC is used to differentiate it from 'escape',
+as the character backquote (`) is used as the initial META-character on remote
+lines.  Thus to clear the screen on a remote line, type three characters,
+'backquote' c 'escape'.
+
+If you cannot see the mail header, just a 'MS: ' prompt, then the mail command
+will redisplay it.
+
+

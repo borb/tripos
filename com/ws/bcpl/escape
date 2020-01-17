@@ -1,0 +1,179 @@
+// Source file "escape" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+// terminal dependent addons for WS
+// Cifer version, for Cifer PF keys, arrow keys etc.
+
+SECTION "ESCAPE"
+GET "libhdr"
+GET "wrshdr"
+
+LET escape.menu() BE $(
+  cmd.simple(0, "Press *'=*' to define a keyboard macro*n")
+  cmd.simple(0, "Or a digit (n) to obey the current content of macro n*n")
+  cmd.simple(0, "Or space bar to return to main menu*n")
+  cmd.simple(0, "--------------------------------------------*n") $)
+
+
+LET form.escapecode(c) = c ~= escape -> c, VALOF $(
+  // called by 'main' and ^QQ with every char
+  // to allow me to do some behind-the-scenes twiddling
+  // if the fancy takes me
+  LET c = ?
+//  let v = vec 40 // for the menu
+//  cmd.init(v)
+//if ~sys.keywaiting() then $(
+//    sys.keywait(30) // allow plenty of time for Cifer multi-keys
+//    message("  Escape ...*n")
+//    sys.keywait(400)
+//  if ~sys.keywaiting() then $(
+//  $( scr.dolineupdates()
+//     c := sys.rdch() $) repeatwhile c = escape // in case he presses ESC PFn
+//  cmd.finish()
+  c := sys.keywait(30) -> sys.rdch(), // so there's no splodge for
+                                      // Cifer special keys
+    pop.up.menu(
+      "Escape (keyboard macro)...*n",
+      "Escape (keyboard macro)...            (or press ? for explanation)*n",
+      "Defining and using keyboard macros:*n",
+      escape.menu)
+  WHILE c = escape DO c := sys.rdch() // in case of ESC PFn
+  // some Cifer keys generate 3 codes...
+  // ditto DECVT125
+  IF c = '^' THEN $(
+    sys.keywait(30); IF sys.keywaiting() THEN c := #X80 | sys.rdch() $)
+  IF c = '[' THEN $( // bit 9 means DECVT125
+    sys.keywait(30); IF sys.keywaiting() THEN c := #X100 | sys.rdch() $)
+  IF c = 'O' THEN $( // bit 10 means DECVT125 keypad
+    sys.keywait(30); IF sys.keywaiting() THEN c := #X200 | sys.rdch() $)
+//  if c = '/' the $( // bit 11 means second bank of PF keys
+//    sys.keywait(30); if sys.keywaiting() then c := #X400 | sys.rdch() $)
+  IF c >= 'a' & c <= 'z' THEN RESULTIS #X80 + c     // PF 10 - 35
+  SWITCHON c INTO $(
+    CASE #X200+ 'p':
+    CASE #X80 + 'a': CASE '0':             RESULTIS #X80    // PF 0
+    CASE #X200+ 'q':
+    CASE #X200+ 'P':
+    CASE #X80 + 'b': CASE '1':             RESULTIS #X81    // PF 1
+    CASE #X200+ 'r':
+    CASE #X200+ 'Q':
+    CASE #X80 + 'c': CASE '2':             RESULTIS #X82    // PF 2
+    CASE #X200+ 's':
+    CASE #X200+ 'R':
+    CASE #X80 + 'd': CASE '3': CASE '|':   RESULTIS #X83    // PF 3
+    CASE #X200+ 't':
+    CASE #X200+ 'S':
+    CASE #X80 + 'e': CASE '4': CASE '}':   RESULTIS #X84    // PF 4
+    CASE #X200+ 'u':
+    CASE #X80 + 'f': CASE '5':             RESULTIS #X85    // PF 5
+    CASE #X200+ 'v':
+    CASE #X80 + 'g': CASE '6':             RESULTIS #X86    // PF 6
+    CASE #X200+ 'w':
+    CASE #X80 + 'h': CASE '7':             RESULTIS #X87    // PF 7
+    CASE #X200+ 'x':
+    CASE #X80 + 'i': CASE '8':             RESULTIS #X88    // PF 8
+    CASE #X200+ 'y':
+    CASE #X80 + 'j': CASE '9':             RESULTIS #X89    // PF 9
+
+    CASE #X200+ 'M': // DECVT125 'enter' on keypad will be clear screen
+    CASE 'J': RESULTIS escape             // clear screen
+    CASE 'H': RESULTIS #X80 + 'H'         // home
+    CASE        ',': RESULTIS c | #X80    // send line
+    CASE #X80 + ')': RESULTIS ctl & 'Y'   // del line key
+    CASE #X80 + '.': RESULTIS c           // insert line key
+    CASE #X80 + '-': RESULTIS c           // insert char key
+    CASE #X80 + '(': RESULTIS c           // del char key
+    CASE #X80 + '6': RESULTIS c           // skip key
+    CASE        ';'     : RESULTIS c + #X80    // copy key
+    CASE #X80 + '$': RESULTIS c           // clear field key
+       // these will come back and be dealt with specially
+
+    CASE #X100 + 'A':
+    CASE 'A': RESULTIS ctl&'E' // up    arrow key
+    CASE #X100 + 'B':
+    CASE 'B':
+    CASE '@': RESULTIS ctl&'X' // down  arrow key
+    CASE #X100 + 'D':
+    CASE 'D': RESULTIS ctl&'S' // left  arrow key
+    CASE #X100 + 'C':
+    CASE 'C': RESULTIS ctl&'D' // right arrow key
+
+    CASE '-':
+    CASE '=': RESULTIS '=' | #X80 // define PF command
+
+    CASE ' ': RESULTIS ' ' | #X80 // quiet exit
+    DEFAULT :
+        // esc-letter are all programmable from now on
+        IF 'a' <= c <= 'z' THEN RESULTIS #X80 | c
+        IF 'A' <= c <= 'Z' THEN RESULTIS #X80 | (c + ('a' - 'A'))
+        RESULTIS 255 // will come back and be flagged as illegal
+$) $)
+
+LET edit.obey.escapecode(c) BE $(
+  // if edit.obey.main ends up with a code > 127,
+  // is spits it out and it ends up here.
+  c := c & #X7F
+  TEST c < 10 | 'a' <= c <= 'z' THEN $( // it's a PF key
+    LET ad = pf.keys!(c < 10 -> c, (c + (10 - 'a')))
+    LET ptr = 0
+    TEST ad = 0 THEN $( // if no buffer space allocated, do nothing
+      message("  Escape sequence not defined - ignored*n")
+      sys.keywait(180) $)
+    ELSE $(
+      WHILE ad%ptr ~= ch.line DO ptr := ptr + 1
+      meta.chars(ad, 0, ptr, 0) $) $) // ^@ is the ctl prefix
+  ELSE SWITCHON c INTO $(
+    CASE ' ': ENDCASE // quiet exit
+    DEFAULT : message("  Illegal escape sequence - ignored*n")
+              sys.keywait(150); ENDCASE
+    CASE ',': IF t.column THEN meta.string("^KN", '^')
+              meta.string("^QS^KB^X^KK", '^'); ENDCASE // send line
+    CASE 'H': meta.string("^QE^QS", '^'); ENDCASE // home
+    CASE '.': meta.string("^QS^N",  '^'); ENDCASE // insert line key
+    CASE '-': meta.string((t.insertmode ->
+                " ^S", "^V ^S^V"), '^');  ENDCASE // insert char key
+    CASE '(': meta.string("^G", '^');     ENDCASE // del char key
+    CASE '6': meta.string("^F", '^');     ENDCASE // skip key
+    CASE ';': meta.string("^]", '^');     ENDCASE // copy key
+    CASE '$': meta.string("^QY",'^');     ENDCASE // clear field key
+
+    CASE '=': // define PF key
+    $( LET v = VEC 30
+       LET answ = ?
+       LET inbuf = getvec((pf.keys.len + 30) / bytesperword)
+       LET hat = no // used to detect '^'
+       cmd.init(v)
+       scr.updateline(0, "Program which macro key (0 - 9 or a - z):*n",
+         1, queryline)
+       scr.dolineupdates()
+       $( c := sys.rdch()
+          IF c = escape THEN LOOP
+          IF c = '^' THEN $( hat := yes; LOOP $)
+          BREAK $) REPEAT
+       IF c = '|' THEN c := '3' // weird Cifer..
+       IF c = '}' THEN c := '4' // ...
+       IF c >= 'a' & c <= 'j' & hat THEN c := c + '0' - 'a'
+                                         // keypad -> esc^a etc
+       TEST '0' <= c <= '9' THEN c := c - '0' // make it a digit
+       ELSE
+       TEST 'a' <= c <= 'z' THEN c := c + (10 - 'a')
+       ELSE
+       TEST 'A' <= c <= 'Z' THEN c := c + (10 - 'A')
+       ELSE
+         c := 999 // not recognised
+       TEST 0 <= c <= pf.keys.upb THEN $(
+         LET dispch = c + (c < 10 -> '0', 'a' - 10)
+         statusline("Programming macro key %c:*n", dispch)
+         cmd.simple(3, "Enter the string that you want in the macro.*n")
+         cmd.simple(2, "The string can be retrieved by typing ESC-%c*n", dispch)
+         cmd.simple(2, "Precede control chars with ^P to enter them in the string.*n")
+         IF pf.keys!c = 0 THEN pf.keys!c := getvec(pf.keys.len / bytesperword + 2)
+         answ := cmd.query(inbuf, pf.keys.len + 22, pf.keys!c,
+           "MACRO KEY CONTENT? ", 3) $)
+       ELSE $(
+         message("  Command cancelled*n"); sys.keywait(150) $)
+       cmd.finish()
+       freevec(inbuf) $) $) $)
+
+

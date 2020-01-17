@@ -1,0 +1,600 @@
+//******************************************************************************
+//*                                                                            *
+//*    CS-UNPACK             This program can run as a concurrent task with    *
+//*                          CS-COLLECT.  It takes an IEBUPDTE format file,    *
+//*                          and reconstructs the directory or file which      *
+//*                          was originally archived.                          *
+//*                                                                            *
+//******************************************************************************
+//*    I. D. Wilson          Last Modified   -   IDW   -   28/06/83            *
+//******************************************************************************
+
+
+SECTION "CS-UNPACK"
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+GET "BCPL.OBJINFO"
+
+
+GLOBAL
+$(
+    buffp               :  ug
+    buffe               :  ug + 1
+    buff                :  ug + 2
+    oldrdch             :  ug + 3
+    oldunrdch           :  ug + 4
+    sysout              :  ug + 5
+    quiet               :  ug + 6
+    broken              :  ug + 7
+$)
+
+
+
+MANIFEST
+$(
+    a.from              =  0
+    a.to                =  1
+    a.quiet             =  2
+
+    t.file              =  0
+    t.dir               =  1
+    t.unknown           =  2
+
+    maxlength           =  256
+    maxchars.name       =  30
+
+    size.exinfo         =  dirent.size + file.header.size - 1
+$)
+
+
+
+LET start()  =  VALOF
+$(
+    LET args      =  "FROM/A,TO/A/K,QUIET/S"
+    LET argv      =  VEC 50
+    LET fromname  =  0
+    LET toname    =  0
+    LET totype    =  0
+    LET stream    =  0
+    LET seq       =  0
+
+    sysout  :=  output()
+    buff    :=  getvec( maxlength / bytesperword )
+
+    IF  buff = 0  THEN
+    $(
+        writes( "CS-UNPACK:  Cannot get line buffer*N" )
+        RESULTIS  20
+    $)
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "CS-UNPACK:  Bad arguments for string *"%S*"*N", args )
+        freevec( buff )
+        RESULTIS  20
+    $)
+
+    broken    :=  FALSE
+
+    fromname  :=  argv!a.from
+    toname    :=  argv!a.to
+    quiet     :=  argv!a.quiet
+    totype    :=  examineobject( toname )
+
+    stream    :=  findinput( fromname )
+
+    IF  stream = 0  THEN
+    $(
+        writef( "CS-UNPACK:  Cannot open source file *"%S*":  ", fromname )
+        fault( result2 )
+        freevec( buff )
+        RESULTIS  20
+    $)
+
+    selectinput( stream )
+
+    oldrdch    :=  rdch
+    oldunrdch  :=  unrdch
+    rdch       :=  buffrdch
+    unrdch     :=  buffunrdch
+
+    buffe      :=  readline( buff )
+    buffp      :=  0
+
+    IF  checkdotslash()  /*  Ugh! */  THEN
+
+    $(
+        //  Main loop to read the files to be unpacked.  The first record of
+        //  each sub-file should be an IEBUPDTE record of the form:
+        //
+        //      ./ ADD NAME=<pdsname> <triposdir> <triposfile>
+        //
+        //  or  ./ ENDUP
+
+        MANIFEST
+        $(
+            i.add         =  0
+            i.endup       =  1
+            i.name        =  2
+            i.triposdir   =  3
+            i.triposfile  =  4
+        $)
+
+        LET i.argv  =  VEC  100
+        LET i.args  =  "ADD/S,ENDUP/S,NAME/K,TRIPOSDIR,TRIPOSFILE"
+        LET dir     =  0
+        LET file    =  0
+        LET type    =  0
+        LET dest    =  0
+        LET dstream =  0
+
+        UNLESS  rdargs( i.args, i.argv, 100 )  DO
+        $(
+            writef( "CS-UNPACK:  Bad control record *"%S*"*N", buff )
+            BREAK
+        $)
+
+        //  If this was an ENDUP record, then there is no more to do.
+
+        IF  i.argv!i.endup  THEN
+        $(
+            writes( "End of Files.*N" )
+            BREAK
+        $)
+
+        //  Otherwise this is a file to be unpacked.  We are unpacking into
+        //  a directory, which will be a reconstruction of the original
+        //  directory.   This means that sub-directories may have to be
+        //  created.
+
+        dir   :=  i.argv!i.triposdir
+        file  :=  i.argv!i.triposfile
+
+        //  There are possible problems here.  The items could both be
+        //  blank, in which case the 370 PDS member name is taken instead;
+        //  or the file name only could be missing, which means that this
+        //  was a FILE archive, rather than a directory archive.  Rather
+        //  confusingly, this means that the directory name is in fact
+        //  the true file name.
+
+        IF  file = 0  THEN
+        $(
+            TEST  dir = 0  THEN
+            $(
+                //  Help!  We do not have the file name in the control record.
+                //  Substitute the "NAME" field for the file name, and ignore
+                //  the "DIR" field.
+
+                writef( "CS-UNPACK:  File name missing, *"%S*" substituted*N",
+                         i.argv!i.name )
+
+                file  :=  i.argv!i.name
+            $)
+            ELSE
+
+                //  This is a file archive, rather than a directory archive,
+                //  and the file name we have been given must be a FILE,
+                //  or not exist.
+
+                file  :=  ""
+        $)
+
+        //  Now check the data type of the TO file, to make sure that
+        //  it is compatible with what we have been asked to do.  The
+        //  criterion is:
+        //
+        //       File name length of Zero   ->  FILE,  DIR
+
+        type  :=  (file % 0  =  0)  ->  t.file, t.dir
+
+        TEST  totype = t.unknown  THEN
+        $(
+            //  If this is a file, then "findoutput" will create it, but
+            //  if we need a directory, then this must be created explicitly.
+
+            IF  type = t.dir  THEN
+            $(
+                LET obj  =  createdir( toname )
+
+                IF  obj = 0  THEN
+                $(
+                    createsubdirs( "", toname )
+                    
+                    obj  :=  createdir( toname )
+                $)
+
+                IF  obj = 0  THEN
+                $(
+                    writef( "CS-UNPACK:  Cannot create directory *"%S*":  ",
+                             toname )
+                    fault( result2 )
+                    BREAK
+                $)
+                
+                writef( "CS-UNPACK:  Creating Directory *"%S*"*N", toname )
+
+                freeobj( obj )
+            $)
+
+            totype  :=  type
+        $)
+
+        ELSE    //  Check to see that all is compatible.
+
+            UNLESS  totype = type  DO
+            $(
+                writef( "CS-UNPACK:  Object *"%S*" is of the wrong type*N",
+                         toname )
+
+                BREAK
+            $)
+
+        dest  :=  joinstrings( toname, file )
+
+        //  Ok.  Pause for a minute to collect our thoughts.  In theory, we
+        //  should be able to open "dest" for output, but there is the
+        //  possibility that sub-directories need to be created before this
+        //  can be done.
+
+        UNLESS  createsubdirs( toname, file )  DO
+        $(
+            freevec( dest )
+            BREAK
+        $)
+
+        dstream  :=  findoutput( dest )
+
+        //  The findoutput really should have worked, so if it didn't,
+        //  something is really wrong.
+
+        IF  dstream = 0  THEN
+        $(
+            writef( "CS-UNPACK:  Cannot open *"%S*" for output:  ", dest )
+            fault( result2 )
+            freevec( dest )
+            BREAK
+        $)
+
+        seq  :=  seq + 1
+
+        UNLESS  quiet  DO  writef( "  %I3    %S *E", seq, dest )
+
+        selectoutput( dstream )
+
+        //  Now write out the file to its destination.  We continue until
+        //  another "./" record is found, or until the End of File is hit.
+        //  If a line starting in "." is found, then the first "." is
+        //  stripped.
+
+        $(  //  Repeat loop to read records from the file.
+
+            LET ch     =  0
+
+            buffe  :=  readline( buff )
+            buffp  :=  0
+
+            IF  buffe = endstreamch  THEN
+            $(
+                endwrite()
+                selectoutput( sysout )
+
+                writef( "*NCS-UNPACK:  Unexpected End of File in %S*N", dest )
+
+                freevec( dest )
+                broken  :=  TRUE
+                BREAK
+            $)
+
+            ch  :=  rdch()
+
+            IF  ch = '.'  THEN
+            $(
+                //  The only valid options are:
+                //
+                //  "."   -  Escaped "."
+                //  "/"   -  Start of new IEBUPDTE control record
+
+                ch  :=  rdch()
+
+                IF  ch = '/'  THEN
+                $(
+                    endwrite()
+                    selectoutput( sysout )
+                    UNLESS  quiet  DO  newline()
+                    freevec( dest )
+                    BREAK
+                $)
+
+                UNLESS  ch = '.'  DO
+                $(
+                    wrch( '.' )
+                    selectoutput( sysout )
+                    writef( "*NCS-UNPACK:  Bad escape sequence *"%S*"*N", buff )
+                    selectoutput( dstream )
+                $)
+            $)
+
+            UNTIL  ch = '*N'  DO
+            $(
+                wrch( ch )
+                ch  :=  rdch()
+            $)
+
+            newline()
+
+            //  Check for user BREAK
+
+            IF  testflags( #B0001 )  THEN
+            $(
+                //  User Break  -  Print out a message and finish
+
+                endwrite()
+                freevec( dest )
+                selectoutput( sysout )
+                writes( "*N*N****** BREAK*N" )
+                broken  :=  TRUE
+                BREAK
+            $)
+        $)
+        REPEAT
+    $)
+    REPEATUNTIL  broken
+
+    rdch    :=  oldrdch
+    unrdch  :=  oldunrdch
+
+    endread()
+
+    freevec( buff )
+
+    RESULTIS  0
+$)
+
+
+
+AND buffrdch()  =  VALOF
+$(
+    IF  buffe = endstreamch  THEN  RESULTIS  endstreamch
+
+    buffp  :=  buffp + 1
+
+    IF  buffp > buffe        THEN  RESULTIS  '*N'
+
+    RESULTIS  buff % buffp
+$)
+
+
+
+AND buffunrdch()  =  VALOF
+$(
+    TEST  buffp = 0  THEN  RESULTIS  FALSE
+    ELSE
+    $(
+        buffp  :=  buffp - 1
+
+        RESULTIS  TRUE
+    $)
+$)
+
+
+
+AND checkdotslash()  =  VALOF
+$(
+    LET ch1  =  rdch()
+    LET ch2  =  rdch()
+
+    TEST  ch1 = '.'  &  ch2 = '/'  THEN  RESULTIS  TRUE
+    ELSE
+    $(
+        writef( "CS-UNPACK:  Bad control record *"%S*"*N", buff )
+
+        RESULTIS  FALSE
+    $)
+$)
+
+
+
+AND readline( line )  =  VALOF
+$(
+    LET ch      =  oldrdch()
+    LET length  =  0
+
+    UNTIL  ch = '*N'  |  ch = endstreamch  DO
+    $(
+        IF  length = maxlength  |  badch( ch )  THEN
+        $(
+            //  Invalid file (probably binary)
+
+            LET o  =  output()
+
+            selectoutput( sysout )
+            writes( "*NCS-UNPACK:  Illegal input record*N" )
+            selectoutput( o )
+
+            line % 0  :=  0
+
+            RESULTIS  endstreamch
+        $)
+
+        length         :=  length + 1
+        line % length  :=  ch
+        ch             :=  oldrdch()
+    $)
+
+    line % 0  :=  length
+
+    IF  ch = endstreamch  THEN
+        TEST  length = 0  THEN  RESULTIS  endstreamch
+        ELSE  unrdch()
+
+    RESULTIS  length
+$)
+
+
+
+AND badch( ch )  =  VALOF
+$(
+//  Returns true if the character is not a printable  member of the ascii
+//  character set.
+
+    LET c  =  ch & #X7F
+    LET w  =  ch >> 4
+    LET b  =  ch & #X0F
+
+    LET t  =  TABLE   #B0011111110000000,  // SI  to NUL
+                      #B0000100000000000,  // DLE to US
+                      #B1111111111111111,  // /   to SP
+                      #B1111111111111111,  // ?   to 0
+                      #B1111111111111111,  // O   to @
+                      #B1111111111111111,  // _   to P
+                      #B1111111111111111,  // o   to `
+                      #B0111111111111111   // DEL to p
+
+    RESULTIS  ((t!w >> b) & 1)  =  0
+$)
+
+
+
+AND examineobject( name )  =  VALOF
+$(
+    LET lock       =  locateobj( name )
+    LET entryinfo  =  VEC  size.exinfo
+    LET type       =  0
+
+    //  If we can't even locate the object, then it can't have type!
+
+    IF  lock = 0  THEN  RESULTIS  t.unknown
+
+    UNLESS  sendpkt( notinuse, lock!lock.task, action.examineobject, ?, ?,
+                     lock, entryinfo )  DO
+    $(
+        writef( "CS-UNPACK:  Cannot examine *"%S*":  ", name )
+        fault( result2 )
+        freeobj( lock )
+
+        RESULTIS  t.unknown
+    $)
+
+    objinfo.ex( objinfo.type, lock, entryinfo, @type )
+
+    freeobj( lock )
+
+    RESULTIS  type = type.file  ->  t.file,
+              type = type.dir   ->  t.dir,    t.unknown
+$)
+
+
+
+AND createsubdirs( root, name )  =  VALOF
+$(
+    LET workvec  =  getvec( maxchars.name / bytesperword )
+    LET dirname  =  0
+    LET pos      =  0
+
+    IF  workvec = 0  THEN
+    $(
+        writes( "CS-UNPACK:  Cannot get Work Vector (createsubdirs)*N" )
+
+        RESULTIS  FALSE
+    $)
+
+    pos       :=  splitname( workvec, '.', name, 1 )
+    dirname   :=  joinstrings( root, "" )
+
+    UNTIL  pos = 0  DO
+    $(
+        LET ndirname  =  joinstrings( dirname, workvec )
+        LET obj       =  0
+
+        freevec( dirname )
+
+        dirname  :=  ndirname
+        obj      :=  locateobj( dirname )
+
+        IF  obj = 0  THEN
+        $(
+            obj  :=  createdir( dirname )
+
+            IF  obj = 0  THEN
+            $(
+                writef( "CS-UNPACK:  Cannot create Directory *"%S*":  ",
+                         dirname )
+                fault( result2 )
+
+                freevec( workvec )
+                freevec( dirname )
+
+                RESULTIS  FALSE
+            $)
+
+            UNLESS  quiet  DO
+                writef( "CS-UNPACK:  Creating Directory *"%S*"*N", dirname )
+        $)
+
+        freeobj( obj )
+        pos  :=  splitname( workvec, '.', name, pos )
+    $)
+
+    freevec( dirname )
+    freevec( workvec )
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND isdevice( dir )  =  dir % (dir % 0)  =  ':'      //  Naive!!
+
+
+
+AND joinstrings( directory, name )  =  VALOF
+$(
+    LET l.dir   =  directory % 0
+    LET l.name  =  name % 0
+    LET nodot   =  isdevice( directory )  |  (l.dir = 0)  |  (l.name = 0)
+    LET len     =  l.dir + l.name + (nodot  ->  0, 1)
+    LET buff    =  getvec( len / bytesperword )
+    LET ptr     =  1
+
+    IF  buff = 0  THEN
+    $(
+        LET o  =  output()
+
+        selectoutput( sysout )
+        writef( "CS-UNPACK:  Cannot join strings *"%S*" and *"%S*"*N",
+                 directory, name )
+        selectoutput( o )
+
+        RESULTIS  "ERROR"
+    $)
+
+    FOR  i = 1  TO  l.dir  DO
+    $(
+        buff % ptr  :=  directory % i
+        ptr         :=  ptr + 1
+    $)
+
+
+    UNLESS  nodot  DO                  //  Horrible, but necessary!
+    $(
+        buff % ptr      :=  '.'
+        ptr             :=  ptr + 1
+    $)
+
+
+    FOR  i = 1  TO  l.name  DO
+    $(
+        buff % ptr  :=  name % i
+        ptr         :=  ptr + 1
+    $)
+
+    buff % 0  :=  len
+
+    RESULTIS  buff
+$)
+     
+

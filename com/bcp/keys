@@ -1,0 +1,222 @@
+SECTION "KEYS"
+
+GET "LIBHDR"
+GET "TERMHDR"
+GET "BCPL.CONVERTFROMESC"
+GET "BCPL.CONVERTTOESC"
+GET "BCPL.VALIDPOINTER"
+
+MANIFEST
+$( argv.upb=8+200/BYTESPERWORD; TOP.BIT = #X80; ESC = '*E' | TOP.BIT ;
+   A.clear=4; A.list=A.clear+1; A.noset=A.list+1; A.init=A.noset+1
+$)
+
+GLOBAL $( term.tab: UG+1 $)
+
+LET START() BE
+$( LET argv     = VEC argv.upb
+   LET type     = ROOTNODE ! RTN.TASKTAB ! CONSOLETASK ! TCB.GBASE ! TERM.GLOBAL
+   LET termtype = type=0 -> TERM.UNSET, type!TERM.NUMBER
+   LET keytab   = ?
+   LET arg.string = "F1,F2,F3,F4,CLEAR/s,LIST/s,NOSET/s,INIT/k"
+
+   term.tab := type
+
+   UNLESS termtype = TERM.2632
+   ERR(20, "Invalid terminal type - Use SETTERM*N")
+
+   IF RDARGS(arg.string, argv, argv.upb)=0
+   ERR(20, "Bad string for '%S'*N", arg.string)
+
+
+   // If this is the first time, set up a suitable environment
+   IF Key.table() = 0
+   $( MANIFEST $( size = TERM.CHAIN.FKEYS.NUMBER.2632 +TERM.CHAIN.FKEYS.FIRST $)
+      LET V = GETVEC(size)
+      UNLESS V=0
+      $(
+         FOR I = 0 TO size DO V!I := 0
+         V!TERM.CHAIN.TYPE         := TERM.CHAIN.FKEYS
+         V!TERM.CHAIN.FKEYS.NUMBER := TERM.CHAIN.FKEYS.NUMBER.2632
+         V!TERM.CHAIN.CHAIN        := type!TERM.CHAIN
+         type!TERM.CHAIN           := V
+      $)
+   $)
+
+
+   // ----- Set any new keys -----
+
+   keytab := Key.table() + TERM.CHAIN.FKEYS.FIRST
+
+   FOR I = 0 TO 3 UNLESS argv!I = 0
+   $( LET V = ?
+      LET s = VEC 80/BYTESPERWORD
+      CONVERTFROMESC(argv!I, s, 80)
+      FREEVEC.CHAIN(keytab!I, type+term.chain)
+      V := GETVEC(s%0/bytesperword + TERM.CHAIN.TYPE + 1)
+      UNLESS V=0
+      $( LET s2                  = V+TERM.CHAIN.TYPE+1
+         V!TERM.CHAIN.TYPE      := TERM.CHAIN.IGNORE
+         V!TERM.CHAIN.CHAIN     := type!TERM.CHAIN
+         type!TERM.CHAIN        := V
+         FOR I = 0 TO s%0 DO s2%I := s%I
+      $)
+      KEYTAB!I := V
+   $)
+
+   UNLESS argv!A.init = 0
+   $( LET V = ?
+      LET s = VEC 80/BYTESPERWORD
+      CONVERTFROMESC(argv!A.init, s, 80)
+      FREEVEC.CHAIN(init.string(), type+term.chain)
+      V := GETVEC(s%0/bytesperword + TERM.CHAIN.TYPE + 1)
+      UNLESS V=0
+      $( LET s2                  = V+TERM.CHAIN.TYPE+1
+         V!TERM.CHAIN.TYPE      := TERM.CHAIN.INIT
+         V!TERM.CHAIN.CHAIN     := type!TERM.CHAIN
+         type!TERM.CHAIN        := V
+         FOR I = 0 TO s%0 DO s2%I := s%I
+      $)
+   $)
+
+
+   UNLESS argv!A.clear=0        clear.keys  ()
+   UNLESS argv!A.list =0 UNLESS display.keys()  WRITEF("Keys not found*N")
+   IF     argv!A.noset=0 UNLESS set.keys    ()  WRITEF("Keys not set*N")
+$)
+
+AND ERR(n, s, a,b,c) BE WRITEF(s, a,b,c) <> STOP(n)
+
+// ----- Look for the table of Function keys -----
+
+AND Key.table() = VALOF
+$( LET chain = term.tab!TERM.CHAIN
+   UNTIL chain=0
+   DO TEST chain!TERM.CHAIN.TYPE = TERM.CHAIN.FKEYS THEN BREAK
+      ELSE chain := !Chain
+   RESULTIS chain
+$)
+
+// ----- Look for the init string -----
+
+AND Init.string() = VALOF
+$( LET chain = term.tab!TERM.CHAIN
+   UNTIL chain=0
+   DO TEST chain!TERM.CHAIN.TYPE = TERM.CHAIN.INIT THEN BREAK
+      ELSE chain := !Chain
+   RESULTIS chain
+$)
+
+AND Display.keys() = VALOF
+$( LET tab = init.string()
+   UNLESS tab=0
+   $( LET V = VEC 80/BYTESPERWORD
+      WRITEF("Init: ")
+      UNLESS CONVERTTOESC(tab+TERM.CHAIN.TYPE+1, V, 80) WRITEF("(too long) ")
+      WRITEF("'%S'*N", V)
+   $)
+
+   tab := Key.table()
+   IF tab=0 RESULTIS FALSE
+
+   //WRITEF("%I2  keys*N", tab!TERM.CHAIN.FKEYS.NUMBER)
+   FOR I = TERM.CHAIN.FKEYS.FIRST
+                TO TERM.CHAIN.FKEYS.FIRST + tab!TERM.CHAIN.FKEYS.NUMBER -1
+   $( WRITEF("%I2: ", I - TERM.CHAIN.FKEYS.FIRST+1)
+      TEST tab!I=0 THEN WRITEF("unset")
+      ELSE
+      $( LET V = VEC 80/BYTESPERWORD
+         UNLESS CONVERTTOESC(tab!I+TERM.CHAIN.TYPE+1, V, 80) WRITEF("(too long) ")
+         WRITEF("'%S'", V)
+      $)
+      NEWLINE()
+   $)
+   RESULTIS TRUE
+$)
+
+AND SET.KEYS() = VALOF
+$( MANIFEST $( MAX.SLOT = 17 $)
+   LET Tab = init.string()
+   LET slot= 0
+
+   UNLESS tab=0
+   $( LET s = tab+TERM.CHAIN.TYPE+1
+      FOR i=1 TO s%0 DO WRCH(s%i | TOP.BIT)
+   $)
+
+   Tab := Key.table()
+   IF tab=0 RESULTIS FALSE
+
+   FOR I = TERM.CHAIN.FKEYS.FIRST
+                TO TERM.CHAIN.FKEYS.FIRST + tab!TERM.CHAIN.FKEYS.NUMBER -1
+   UNLESS tab!I = 0
+   $( LET string = tab!I+TERM.CHAIN.TYPE+1
+      TEST string%0 = 0
+      $( WRCH(ESC)
+         WRCH('^')
+         WRCH('\')                                      // FKA
+         WRCH(',')
+         WRCH('@' + I - TERM.CHAIN.FKEYS.FIRST)         // F<n>
+         WRITES(" ~")                                   // large -> nothing
+      $)
+      ELSE TEST string%0 = 1
+      $( WRCH(ESC)
+         WRCH('^')
+         WRCH('\')                                      // FKA
+         WRCH(',')
+         WRCH('@' + I - TERM.CHAIN.FKEYS.FIRST)         // F<n>
+         WRITES("(0")                                   // No slot needed
+
+         WRITECH(string%1)
+      $)
+      ELSE TEST string%0/4 + slot < max.slot
+      $( WRCH(ESC)
+         WRCH('^')
+         WRCH('\')                                      // FKA
+         WRCH(',')
+         WRCH('@' + I - TERM.CHAIN.FKEYS.FIRST)         // F<n>
+         WRCH('$')
+         WRCH('@' + slot)                               // Slot <slot>
+
+         FOR I = 1 TO STRING%0 DO WRITECH(string%I)
+
+         WRCH('.')                                      // Term
+
+         slot := slot+ string%0/4 + 1
+      $)
+      ELSE WRITEF("Strings too long for F%N*N", I - TERM.CHAIN.FKEYS.FIRST+1)
+   $)
+   RESULTIS TRUE
+$)
+
+AND WRITECH(ch) BE
+$( LET low = ch & #XF
+   LET high = ((4- (ch >> 4)) & #XF)
+
+   WRCH('@' + high)
+   WRCH('@' + low)
+$)
+
+AND CLEAR.KEYS() BE
+$( LET keytab = Key.table()
+
+   FOR I = TERM.CHAIN.FKEYS.FIRST TO
+           TERM.CHAIN.FKEYS.FIRST + keytab!TERM.CHAIN.FKEYS.NUMBER -1
+   UNLESS keytab!I  = 0 FREEVEC.CHAIN(keytab!I, term.tab+term.chain)
+       <> keytab!I := 0
+ $)
+
+AND FREEVEC.CHAIN( V, chain ) BE UNLESS V=0
+$( LET this = !chain
+   UNTIL this=0
+   $( IF this = V
+      $( !chain := !this
+         FREEVEC(this)
+         RETURN
+      $)
+      chain := this
+      this := !this
+   $)
+$)
+
+

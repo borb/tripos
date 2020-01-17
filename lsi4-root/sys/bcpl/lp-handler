@@ -1,0 +1,159 @@
+GET "libhdr"
+GET "iohdr"
+MANIFEST $( printer.width = 132
+            out.stack = 200
+            print.buffer.size = (printer.width - 1)/ bytesperword
+         $)
+GLOBAL $( device.packet : 150
+          output.queue : 151
+          actual.position : 152
+          intended.position : 153
+      $)
+LET start(packet) BE
+ $( LET action,stop=packet!pkt.type,0
+    LET myseg=(tcb!tcb.seglist)!((tcb!tcb.seglist)!0)
+          // assumes that this segment is the last on the list
+    LET device,scb,out.coroutine = 0,packet!pkt.arg1,?
+
+    output.queue := 0
+    device.packet:= getvec(pkt.arg1) // big enough for one arg
+    TEST device.packet=0 THEN
+        action := 0
+     OR
+    $(  device:=loadseg("SYS:D.LP")
+        TEST device = 0 THEN
+            action := 0
+         OR
+          $( device.packet!pkt.link:= notinuse
+             device.packet!pkt.taskid := createdev(device)
+             device.packet!pkt.type := act.write
+             IF device.packet!pkt.taskid = 0 DO action := 0
+          $)
+     $)
+    UNLESS action=act.findoutput DO
+     $( packet!pkt.res1 := 0
+        packet!pkt.res2 := result2
+        qpkt(packet) // send it back as an error
+        deletedev(device.packet!pkt.taskid)
+        freevec(device.packet)
+        unloadseg(device)
+        endtask(myseg)
+     $)
+    scb!scb.func2,scb!scb.type:=actwrite,-taskid
+    out.coroutine:=createco(output.line,out.stack)
+    packet!pkt.res1:=scb //set scb address as result
+    qpkt(packet) // return parameter packet
+    actual.position,intended.position := 1,1
+
+     $( packet := taskwait()
+        TEST packet!pkt.taskid < 0 THEN
+            device.packet := packet
+         OR
+         $( SWITCHON packet!pkt.type INTO
+             $(
+                CASE act.end:
+                    stop := packet
+                CASE act.write:
+                    add.to.queue(@output.queue,packet)
+                    ENDCASE
+                DEFAULT:
+                    qpkt(packet)
+                    LOOP
+             $)
+         $)
+        UNLESS device.packet = 0 DO callco(out.coroutine)
+     $) REPEATWHILE stop=0 | device.packet=0
+
+    deleteco(out.coroutine)
+    deletedev(device.packet!pkt.taskid)
+    freevec(device.packet)
+    unloadseg(device)
+    endtask(myseg)
+ $)
+
+AND output.line() BE
+ $( IF output.queue \= 0 DO
+     $( LET p=output.queue
+        LET scb=p!pkt.arg1
+        LET buf,end=scb!scb.buf,scb!scb.pos
+        output.queue := !output.queue
+        p!pkt.link := notinuse
+        p!pkt.res1:=TRUE // successful result
+        qpkt(p)
+        FOR i=0 to end-1 DO wrch(buf%i)
+        wrch('*E') // force printing of buffer
+        freevec(buf)
+        LOOP
+     $)
+    cowait()
+ $) REPEAT
+
+AND wrch(ch) BE
+ $(
+    TEST ch<= '*S' THEN
+        SWITCHON ch INTO
+         $(
+            CASE '*P':
+            CASE '*N':
+                print('*c')
+                actual.position,intended.position := 1,1
+                ENDCASE
+            CASE '*C':
+                intended.position := 1
+            CASE '*E':
+                IF actual.position = 1 RETURN
+                actual.position := 1
+                ch := '*C'
+                ENDCASE
+            CASE '*B':
+                intended.position := intended.position < 2 -> 1,
+                                        intended.position-1
+                IF actual.position=1 RETURN
+                actual.position:= 1
+                ch := '*C'
+                ENDCASE
+            CASE '*S':
+                IF intended.position > printer.width THEN wrch('*N')
+                intended.position:=intended.position+1
+            DEFAULT:
+                RETURN
+         $)
+         OR
+         $( IF intended.position>printer.width DO wrch('*N')
+            FOR i=actual.position TO intended.position-1 DO
+                print('*S')
+            actual.position:=intended.position+1
+            intended.position :=actual.position
+         $)
+    print(ch)
+ $)
+
+AND print(ch) BE
+ $( device.packet!pkt.arg1 := ch
+    qpkt(device.packet)
+    device.packet := 0
+    cowait()
+ $)
+
+AND add.to.queue(lvq,pkt) BE
+ $( UNTIL !lvq = 0 DO lvq := !lvq
+    !lvq:=pkt
+    !pkt := 0
+ $)
+
+AND actwrite(scb) = VALOF
+ $( actendoutput(scb)
+    scb!scb.buf := getvec(print.buffer.size)
+    scb!scb.end := printer.width
+    RESULTIS scb ! scb.buf \= 0
+ $)
+
+AND actendoutput(scb) = VALOF
+ $( UNLESS scb ! scb.buf = -1 DO
+        sendpkt(notinuse,-scb!scb.type,act.write,?,?,
+                scb)
+    RESULTIS TRUE
+ $)
+
+
+

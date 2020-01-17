@@ -1,0 +1,139 @@
+section "TO370"
+
+get "libhdr"
+get "iohdr"
+get "ringhdr"
+get "bcpl.bsplib"   // for bsp.test.reset
+
+  // This command sends the specified file to the 370 through
+  // the SUBMIT-CS facility. A job is made up and submitted in the
+  // normal way. The various JD elements are included by quoting them
+  // as arguments to the command. The following JD elements are supported:
+
+  // USER         Required
+  // PW           Required
+  // PROJECT      Default *
+  // ROUTE        Default RECEPTION
+  // COMP         Default 5
+  // LIMSTORE     Default 20K
+  // JD           Default SAVE
+
+// Modifications:
+//  9 Nov 81 by BJK: SAVE made the default JD
+// 26 Nov 81 by BJK: Extra Phoenix commands included to reroute the job to
+//                   dummy and release it if the transfer works.  If the
+//                   transfer fails then the job is left with the original JD
+//                   and ROUTE (saved at reception by default).
+
+global $(
+blibwrch: ug+1
+bs.in   : ug+2
+bs.out  : ug+3
+broken  : ug+4
+$)
+
+let jd.item( parm, def ) =
+    (parm=0 -> def, parm )
+
+let start() be
+$(  let argv = vec 100    // Note rather large
+    let cons.in, cons.out = input(), output()
+    let user, pw, project, route, comp, limstore, jd = ?, ?, ?, ?, ?, ?, ?
+    let fromfile, tofile = ?, ?
+    let mcname = rootnode!rtn.info!rtninfo.ring!ri.myname
+    let file.in = ?
+    let rdargs.string = "FROM/A,TO/A,USER/A,PW/A,*
+                        *PROJECT/K,ROUTE/K,COMP/K,LIMSTORE/K,JD/K"
+
+    blibwrch := wrch
+
+    if rdargs(rdargs.string, argv, 100 ) = 0 THEN
+    $( writef("Bad arguments for key string *"%S*"*N", rdargs.string)
+       stop(16)
+    $)
+
+    fromfile, tofile := argv!0, argv!1
+    user, pw         := argv!2, argv!3
+    project, route   := argv!4, argv!5
+    comp, limstore   := argv!6, argv!7
+    jd               := argv!8
+
+    bs.in := findinput("BSP:SUBMIT-CS")
+    if bs.in = 0 then
+    $( writes("Unable to connect to 370*N")
+       stop(16)
+    $)
+    bs.out := result2
+
+    file.in := findinput(fromfile)
+    if file.in=0 then
+    $( selectinput(bs.in)
+       endread()  // on the bytestream
+       selectinput(cons.in)
+       writef("Unable to open %S*N",fromfile)
+       stop(16)
+    $)
+
+    // All ok. Send off job description
+    // The job commands are in a %H stream as the file is sent in binary
+    // as the last part of the job stream.
+
+    selectoutput( bs.out )
+    broken := FALSE
+    wrch := mywrch
+    writef("JOB %S %S TRIPOS transfer*N",user,jd.item(project,"**"))
+    writef("PASSWORD %S*N",pw)
+    writef("ROUTE %S, COMP %S, LIMSTORE %S*N",
+      jd.item(route,"RECEPTION"),jd.item(comp,"5"),jd.item(limstore,"20K"))
+    writes(jd.item(jd,"SAVE"))
+    newline()
+    writef("PHX*N**** Job submitted from TRIPOS machine %S*N",mcname)
+    writes("to %h#*N")
+    writef("Rsx.linklib:derail ( %%S 20 FROM %%INPUT*N/N  TO %S )*N",tofile)
+    writes("reroute to dummy*N")  // To be executed only if DERAIL succeeds
+    writes("release*N")           // To be executed only if DERAIL succeeds
+    writes("#*N")
+    writes("+++B*N")
+
+    // now copy the input file to the job stream
+    // We must translate *N to *C*N
+
+    selectinput(file.in)
+    $( let ch = rdch()
+       if ch=endstreamch break
+       if ch='*N' then wrch('*C')
+       wrch(ch)
+    $) repeatuntil broken
+    endread()
+
+    // signal this is the end of the job
+
+    unless broken do bsp.request.close( bs.out )
+
+    // get ready to accept response from 370
+    selectinput(bs.in)
+    selectoutput(cons.out)
+    wrch := blibwrch
+
+    $( let ch = rdch()     // from the 370
+       test bsp.test.reset(bs.in) then
+         writes("Job sent*N")
+       else test ch=endstreamch then break
+       else wrch(ch)
+    $) repeat
+
+    if broken then writes("Job deleted*N")
+    endread()   // the BSP
+    selectinput(cons.in)
+
+$)
+
+and mywrch(ch) be
+$( if broken | bsp.test.reset( bs.out ) then
+   $( broken := true
+      return
+   $)
+   blibwrch(ch)
+$)
+
+

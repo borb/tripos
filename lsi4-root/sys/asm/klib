@@ -1,0 +1,2098 @@
+**********************************************************
+*                                                        *
+*        (C) Copyright 1979 Tripos Research Group        *
+*            University of Cambridge                     *
+*            Computer Laboratory                         *
+*                                                        *
+**********************************************************
+
+**********************************************************
+*                                                        *
+* This is the kernel of TRIPOS for the LSI4/30.          *
+*                                                        *
+*       Adrian Aylward          June       1978          *
+*                                                        *
+**********************************************************
+
+* Standard symbols
+
+SECWD   EQU    12345    marks start of a program section
+LIBWD   EQU    23456    marks a machine code library rtn
+KPSW    EQU    :0070    program status within kernel
+IPSW    EQU    :0170    program status with interrupts on
+INTBIT  EQU     8       interrupt bit
+
+* Device driver symbols
+
+D:INIT  EQU     1       initialisation routine
+D:UNIN  EQU     2       uninitialisation routine
+
+* Device control block symbols
+
+D:LINK  EQU     0       link to device driver
+D:ID    EQU     1       device id
+D:WKQ   EQU     2       work queue
+D:STRT  EQU     3       start routine
+D:STOP  EQU     4       stop routine
+D:INT   EQU     5       interrupt routine
+
+* Task control block symbols
+
+T:LINK  EQU     0       link to next TCB
+T:ID    EQU     1       task id
+T:PRI   EQU     2       priority
+T:WKQ   EQU     3       work queue
+T:STAT  EQU     4       state
+T:FLGS  EQU     5       flags
+T:SSIZ  EQU     6       stack size
+T:SEGL  EQU     7       segment list
+T:GBAS  EQU     8       global vector base
+T:SBAS  EQU     9       root stack base
+T:A     EQU    10       MC dependent register save area
+T:Q     EQU    11
+T:X     EQU    12
+T:Y     EQU    13
+T:P     EQU    14
+T:S     EQU    15
+T:K     EQU    16
+T:L     EQU    17
+T:UPB   EQU    17       upperbound
+
+* Task states
+
+S:PKT   EQU    :1       packet bit
+S:HOLD  EQU    :2       held bit
+S:RUN   EQU    :0       free to run
+S:WAIT  EQU    :4       waiting for packet
+S:INT   EQU    :8       interrupted
+S:DEAD  EQU    :C       dead
+
+* Packet symbols
+
+P:LINK  EQU     0       link to next pkt
+P:ID    EQU     1       device or task id
+P:TYPE  EQU     2       type or action
+P:RES1  EQU     3       result
+P:RES2  EQU     4       result 2
+P:A1    EQU     5       argument 1
+
+* Coroutine stack symbols
+
+C:LINK  EQU     0       link to next coroutine
+C:CLLR  EQU     1       caller coroutine or zero
+C:SEND  EQU     2       stack end - 50
+C:RESP  EQU     3       resumption pointer
+C:FUNC  EQU     4       function
+C:RTRN  EQU     5       return link for STOP
+
+* Global vector symbols
+
+G:GSIZ  EQU     0       GLOBSIZE
+G:STRT  EQU     1       START
+G:RES2  EQU    10       RESULT2 used for error codes
+G:SBAS  EQU    12       STACKBASE
+G:TCB   EQU    13       TCB
+G:TID   EQU    14       TASKID
+
+* Kernel primitives
+
+G:ABRT  EQU    38       ABORT
+G:CPRI  EQU    35       CHANGEPRI
+G:CDEV  EQU    31       CREATEDEV
+G:CTSK  EQU    33       CREATETASK
+G:DDEV  EQU    32       DELETEDEV
+G:DTSK  EQU    34       DELETETASK
+G:DQPT  EQU    43       DQPKT
+G:FVEC  EQU    30       FREEVEC
+G:GVEC  EQU    29       GETVEC
+G:GBIN  EQU    28       GLOBIN
+G:HOLD  EQU    39       HOLD
+G:QPKT  EQU    42       QPKT
+G:RLSE  EQU    40       RELEASE
+G:SFLG  EQU    36       SETFLAGS
+G:TSKW  EQU    41       TASKWAIT
+G:TFLG  EQU    37       TESTFLAGS
+
+**********************************************************
+*                                                        *
+*              Scratchpad locations                      *
+*                                                        *
+**********************************************************
+
+        ABS    :0000
+
+* Locations used by the kernel
+
+*       ABS    :0000
+
+        DATA   0                unassigned global routine
+        JSTE   UNASGL           JSTE is not interruptable
+
+ITCBST  DATA   TCBSET           for indirection
+
+*       ABS    :0004
+
+        JMPE   SASTRT           standalone restart
+
+WORK1   DATA   0                two words of workspace
+WORK2   DATA   0                used while interrupts off
+
+*       ABS    :0008
+
+* This is the rootnode. Offsets up to CLKWKQ are machine
+* independent.
+
+RTNODE  EQU    $
+
+TSKTAB  DATA   0                ptr to task table
+DEVTAB  DATA   0                ptr to device table
+TCBLST  DATA   0                TCB priority list
+CRNTSK  DATA   0                current task TCB
+BLKLST  DATA   0                ptr to store block list
+DEBTSK  DATA   KST              DEBUG task TCB
+DAYS    DATA   0                count of days
+MINS    DATA   0                count of minutes
+TICKS   DATA   0                count of ticks
+CLKWKQ  DATA   0                clock work queue
+MEMSIZE DATA   0                memory size (K)
+INFO    DATA   0                secondary information
+KSTART  DATA   KST              kernel start address
+DEVMVP  DATA   MOVPKT           for device drivers
+DEVINT  DATA   INTENT           for device drivers
+DEVRET  DATA   INTRET           for device drivers
+DEVSAV  DATA   INTSAV           for device drivers
+
+**********************************************************
+*                                                        *
+*              Scratchpad locations                      *
+*                                                        *
+*    N.B.  These addresses are shared between MLIB and   *
+*          KLIB, and so should be updated together.      *
+*                                                        *
+*                        IDW                             *
+*                                                        *
+**********************************************************
+
+* ----------------------------- Equivalent code in MLIB
+*
+*ERR    EQU    :0020            Error return
+*RETZ   EQU    ERR+2            Return zero
+*RETI   EQU    ERR+3            Return enabling interrupts
+*RET    EQU    ERR+4            Return from BCPL procedure
+*
+* ----------------------------- Equivalent code in MLIB
+
+        ABS    :0020
+
+ERR     COPY   L,Y              BCPL error return
+        COPY   A,G:RES2(Y)      set RESULT2
+RETZ    COPY   =0,A             return zero
+RETI    EIN                     enable interrupts
+RET     COPY   0(X),Y           BCPL return
+        SUB    0(Y),X
+        JMP    1(Y)
+
+IBASE   EQU    :0027            Base of routine addresses
+
+ILSH    EQU    IBASE+0
+IRSH    EQU    IBASE+1
+IGBYT   EQU    IBASE+2
+IPBYT   EQU    IBASE+3
+IPCNT   EQU    IBASE+4
+ICKST   EQU    IBASE+5
+IGVEC   EQU    IBASE+6
+IFVEC   EQU    IBASE+7
+
+        ABS    IGVEC
+        DATA   GETVEC
+        
+        ABS    IFVEC
+        DATA   FREVEC
+
+**********************************************************
+*                                                        *
+*       Linkage to device drivers and trap handlers      *
+*                                                        *
+**********************************************************
+
+        ABS     :0040
+
+* This code is used to make the standard interrupt entries
+* to device drivers. It saves A,Q,X,Y,P,S and enters the
+* driver with X holding the current task and Y the DCB. It
+* may be called via DEVSAV in the rootnode - it does not
+* require extended addressing.
+
+INTSAV  DATA    0
+        EIN                     interrupts were on
+        SIN     12              disable ints set word mode
+        COPY    X,WORK1         save X
+        COPY    CRNTSK,X        get current TCB ptr
+        COPY    A,T:A(X)        save registers
+        COPY    Q,T:Q(X)
+        COPY    WORK1,A
+        COPY    A,T:X(X)
+        COPY    Y,T:Y(X)
+        COPY    INTSAV,Y
+        COPYE   -2(Y),A
+        COPY    A,T:P(X)
+        CEA     KPSW,A
+        EXCH    A,S             new program status
+        COPY    A,T:S(X)
+        COPY    0(Y),Y          get the DCB ptr
+        JMP     *D:INT(Y)       call the interrupt routine
+
+* This code is used to save the registers after a trap and
+* enter the trap handler. It returns the address of the
+* trap locations in Y.
+
+TRPSAV  DATA    0
+        COPY    X,TRPWRK        save X
+        CEA     DBAREG-T:A,X    dummy DCB to save regs in
+        COPY    A,T:A(X)        save the registers
+        COPY    Q,T:Q(X)
+        COPY    TRPWRK,Q
+        COPY    Q,T:X(X)
+        COPY    Y,T:Y(X)
+        COPY    TRPSAV,Y
+        SUB     =3,Y            address of trap block
+        COPY    0(Y),Q
+        COPY    Q,T:P(X)
+        CEA     KPSW,Q
+        EXCH    Q,S             new program status
+        COPY    Q,T:S(X)
+        COPY    K,Q
+        COPY    Q,T:K(X)
+        COPY    L,Q
+        COPY    Q,T:L(X)
+        JMP     *3(Y)           jump to handler
+
+TRPWRK  DATA    0
+
+* Secondary interrupt vector for the console - made to
+* look like a trap.
+
+CNSVEC  DATA    0               return address
+        JMP     CNSV2           is also dummy trapped inst
+CNSV1   JST     TRPSAV          save registers
+        DATA    CSTRP           trap handler address
+
+CNSV2   SIN     16
+        EIN                     interrupts were on
+        JMP     CNSV1
+
+**********************************************************
+*                                                        *
+*               Exceptions, traps etc.                   *
+*                                                        *
+**********************************************************
+
+        ABS    :0080
+
+        NOP                     power up
+        NOP
+        JST    TRPSAV
+        DATA   PFTRP
+        DATA   0                unimplemented instruction
+        DATA   0
+        JST    TRPSAV
+        DATA   UITRP
+        DATA   0                memory exception
+        DATA   0
+        JST    TRPSAV
+        DATA   MXTRP
+        DATA   0                power fail
+        DATA   0
+        JST    TRPSAV
+        DATA   PFTRP
+        DATA   0
+CLKINC  DATA   -2               clock increment
+        JST    *$+1             clock interrupt
+        DATA   CLKINT
+        JST    CNSVEC           console interrupt
+        DATA   0
+        DATA   0                bus monitor
+        DATA   0
+        DATA   0                char - num exception
+        DATA   0
+        JST    TRPSAV
+        DATA   UITRP
+        DATA   0                stack exception
+        DATA   0
+        JST    TRPSAV
+        DATA   SXTRP
+        DATA   0                user trap
+        DATA   0
+        JST    TRPSAV
+        DATA   UITRP
+        DATA   0                system trap
+        DATA   0
+        JST    TRPSAV
+        DATA   STTRP
+        DATA   0                arithmetic exception
+        DATA   0
+        JST    TRPSAV
+        DATA   AXTRP
+
+**********************************************************
+*                                                        *
+*   Interrupt vectors for the first IO distributor       *
+*                                                        *
+**********************************************************
+
+        ABS    :00C0
+
+        HLT                     channel 0
+        DATA   0
+        DATA   0
+        DATA   0
+        JST    $+1
+        DATA   0
+        JST    *DEVSAV
+        DATA   0
+        HLT                     channel 1
+        DATA   0
+        DATA   0
+        DATA   0
+        JST    $+1
+        DATA   0
+        JST    *DEVSAV
+        DATA   0
+        HLT                     channel 2
+        DATA   0
+        DATA   0
+        DATA   0
+        JST    $+1
+        DATA   0
+        JST    *DEVSAV
+        DATA   0
+        HLT                     channel 3
+        DATA   0
+        DATA   0
+        DATA   0
+        JST    $+1
+        DATA   0
+        JST    *DEVSAV
+        DATA   0
+        HLT                     channel 4
+        DATA   0
+        DATA   0
+        DATA   0
+        JST    $+1
+        DATA   0
+        JST    *DEVSAV
+        DATA   0
+        HLT                     channel 5
+        DATA   0
+        DATA   0
+        DATA   0
+        JST    $+1
+        DATA   0
+        JST    *DEVSAV
+        DATA   0
+        HLT                     channel 6
+        DATA   0
+        DATA   0
+        DATA   0
+        JST    $+1
+        DATA   0
+        JST    *DEVSAV
+        DATA   0
+        HLT                     channel 7
+        DATA   0
+        DATA   0
+        DATA   0
+        JST    $+1
+        DATA   0
+        JST    *DEVSAV
+        DATA   0
+
+**********************************************************
+*                                                        *
+*              The relocatable section                   *
+*                                                        *
+* This is the entry point. The devices are initialised,  *
+* the idle task linked into the priority chain, the free *
+* store zeroed, and the initial task started with a      *
+* dummy packet from task zero.                           *
+*                                                        *
+**********************************************************
+
+        REL    0
+
+KLIB    DATA   KLBEND-KLIB      section length
+        DATA   SECWD
+        DATA   17%8+'K','LI','B ','  '
+        TEXT   ' 01-JUL-78'
+
+KST     CEA    KPSW,A           set up program status
+        COPY   A,S
+        UIS                     reset devices
+
+        COPY   =2,A             initialise the devices
+KST1    COPY   DEVTAB,Y         get device table
+        CSK    A,0(Y)           compare A with table upb
+        JMP    $+2
+        JMP    KST3             outside table
+        ADD    A,Y
+        COPY   0(Y),Y           get DCB ptr
+        JEQ    Y,KST2           no such device
+        NEG    A,A              device ids are negative
+        COPY   A,D:ID(Y)        set DEVID in DCB
+        COPY   =0,Q
+        COPY   Q,D:WKQ(Y)       clear work queue
+        COPY   Y,WORK1          save DCB
+        COPY   D:LINK(Y),Y      get driver
+        COPY   D:INIT(Y),Y      get initialisation routine
+        EXCH   Y,WORK1          recover DCB
+        JST    *WORK1           initialise the device
+        NEG    A,A              make id positive again
+KST2    IJNE   A,KST1           next device (always jumps)
+
+KST3    COPY   =TCBLST,Y        address of TCB chain
+KST4    COPY   Y,WORK1          save last ptr
+        COPY   T:LINK(Y),Y      get next TCB
+        JNE    Y,KST4           loop until end of chain
+        CEA    IDLTCB,A         address of idle task TCB
+        COPY   A,*WORK1         link it in
+
+        COPY   =0,Q
+        COPY   Q,DEBTSK         no DEBUG task yet
+
+        COPY   BLKLST,Y         start of block list
+KST5    COPY   0(Y),A           block size and marker
+        JEQ    A,KST8           end of list
+        TBIT   0,A              test the marker
+        JF     OV,KST7          jump if allocated
+        RBIT   0,A              mask out marker
+        COPY   =1,X             leave the size word
+KST6    COPY   Q,0(X,Y)         zero rest of block
+        ADD    =1,X             next word
+        CSM    X,A              loop until end of block
+        JMP    KST6
+        HLT
+KST7    ADD    A,Y              go on to next block
+        JMP    KST5
+
+KST8    COPY   CRNTSK,X         get initial task
+        CEA    IPKT,A           give it a pkt
+        COPY   A,T:WKQ(X)
+        JMPE   ACTIV            and activate it
+
+IPKT    DATA   0                initial pkt
+        DATA   0                from task zero
+
+* DEBUG's standalone stack overlays the initialisation
+* code. Its length is 100 words.
+
+DEBSAS  EQU    KST
+        RES    100+KST-$,0
+
+**********************************************************
+*                                                        *
+* This is the scheduler. It is entered at SCHED with a   *
+* pointer to the highest priority task that could be     *
+* free to run in X. The task list is searched in order   *
+* of decreasing priority until a task is found that is   *
+* free to run. The state word in the TCB is used as an   *
+* index in a jump table to determine the action for each *
+* task.                                                  *
+*                                                        *
+**********************************************************
+
+SCHED1  COPY   T:LINK(X),X      chain down to next task
+SCHED   COPY   T:STAT(X),Y      get the state
+        JMPE   *SCHTAB(Y)       jump to deal with task
+
+SCHTAB  DATA   RENTER           run
+        DATA   RENTER           run              pkt
+        DATA   SCHED1           run         held
+        DATA   SCHED1           run         held pkt
+        DATA   SCHED1           wait
+        DATA   UNWAIT           wait             pkt
+        DATA   SCHED1           wait        held
+        DATA   SCHED1           wait        held pkt
+        DATA   UNINT            interrupted
+        DATA   UNINT            interrupted      pkt
+        DATA   SCHED1           interrupted held
+        DATA   SCHED1           interrupted held pkt
+        DATA   SCHED1           dead
+        DATA   ACTIV            dead             pkt
+        DATA   SCHED1           dead        held
+        DATA   SCHED1           dead        held pkt
+
+* A task that was suspended by a call of QPKT,RELEASE etc.
+* can be reentered directly, and needs only A,X,L (result,
+* stack pointer, global pointer) restored followed by a
+* normal BCPL function return.
+
+RENTER  COPY   X,CRNTSK         set CRNTSK to current task
+        COPY   T:A(X),A         restore result
+RENT1   COPY   T:L(X),Q
+        COPY   Q,L              restore global pointer
+        COPY   T:X(X),X          and stack pointer
+        JMP    RETI             do a BCPL function return
+
+* A task that was in wait state after a call of TASKWAIT
+* can be reentered when a packet arrives, returning the
+* packet address in A.
+
+UNWAIT  JST    NXTPKT           get the pkt, set CRNTSK
+        JMP    RENT1
+
+* A task that was interrupted needs all its registers to
+* be restored.
+
+UNINT   COPY   X,CRNTSK         set CRNTSK to current task
+        COPY   T:STAT(X),A
+        AND    =:F-S:INT,A      clear interrupted state
+        COPY   A,T:STAT(X)
+UNINT1  COPY   T:K(X),A         restore K
+        COPY   A,K
+        COPY   T:L(X),A         restore L
+        COPY   A,L
+
+* This code may be used by device drivers to restore the
+* registers A,Q,X,Y,P,S from the TCB after an interrupt. X
+* should contain the TCB. It may be entered by a jump via
+* DEVRET in the rootnode.
+
+INTRET  COPY   T:A(X),A         restore A
+        COPY   T:Q(X),Q         restore Q
+        COPY   T:P(X),Y
+        COPY   Y,WORK1          old value of P
+        COPY   T:S(X),Y
+        COPY   Y,S              restore S
+        SIN    2                 and inhibit status
+        COPY   T:Y(X),Y         restore Y
+        COPY   T:X(X),X         restore X
+        JMPE   *WORK1           return to task (JMPE=>XA)
+
+* This code may be used by device drivers to enter the
+* scheduler. Registers A,Q,X,Y,P,S of the current task
+* should have been saved in the TCB; K,L should have been
+* preserved. Q should contain the TCB of the next task to
+* run - unless this is equal to the current task a task
+* swop will occurr. It may be entered by a jump via DEVINT
+* in the rootnode.
+
+INTENT COPY   CRNTSK,X          get current task
+       CSN    Q,X               task swop needed ?
+       JMP    INTRET            no - return
+       COPY   T:STAT(X),A
+       OR     =S:INT,A          set interrupted state
+       COPY   A,T:STAT(X)
+       COPY   K,A               save K
+       COPY   A,T:K(X)
+       COPY   L,A               save L
+       COPY   A,T:L(X)
+       COPY   Q,X
+       JMP    SCHED             enter the scheduler
+
+**********************************************************
+*                                                        *
+*             JST    NXTPKT                              *
+*                                                        *
+* This routine is used by the scheduler to set the       *
+* current task and dequeue its head packet. It is called *
+* with the TCB in X and returns with the packet in A.    *
+*                                                        *
+**********************************************************
+
+NXTPKT  DATA   0
+        COPY   X,CRNTSK         set CRNTSK to current TCB
+        COPY   =S:RUN,Q         set run state
+        COPY   T:WKQ(X),Y       get head pkt
+        COPY   P:LINK(Y),A      rest of work queue
+        JEQ    A,NXTP1          unless no more pkts
+        OR     =S:PKT,Q         set pkt state
+NXTP1   COPY   Q,T:STAT(X)
+        COPY   A,T:WKQ(X)       dequeue the pkt
+        COPY   =-1,A
+        COPY   A,P:LINK(Y)      mark it not queued
+        COPY   Y,A              return pkt in A
+        JMP    *NXTPKT
+
+* A task that was dead and receives a packet must be
+* activated. The size of the global vector is calculated,
+* then it and the stack are allocated and the globals
+* initialised, then START is called with the packet as
+* argument.
+
+ACTIV   JST    NXTPKT           get the pkt and set CRNTSK
+        EIN                     enable interrupts
+        COPY   A,T:SBAS(X)      save pkt in TCB
+        COPY   T:SEGL(X),X      get segment list
+        COPY   X,A
+        ADD    0(X),A           segment list end
+        COPY   =G:TID,Q         at least globals to TASKID
+        COPY  Q,K              highest global yet
+        JMP    ACT3
+
+ACT1    ADD    =1,X             next segment
+        COPY   0(X),Y           find first section
+        JEQ    Y,ACT3           null segment
+ACT2    COPY   1(Y),Q           section length
+        ADD    Y,Q              section end
+        EXCH   Y,Q
+        COPY   0(Y),Y           highest global in section
+        CSM    K,Y              compare with highest yet
+        COPY   Y,K
+        NOP
+        COPY   Q,Y              get back section
+        COPY   0(Y),Y           next section
+        JNE    Y,ACT2
+
+ACT3    CSM    X,A              end of list yet ?
+        JMP    ACT1             no - get next segment
+        NOP
+        COPY   K,A              global vector size
+
+        COPY   CRNTSK,X         current TCB
+        COPY   A,T:GBAS(X)      save size in TCB
+        XOR    L,L              no global vector yet
+ACT4    JST    *IGVEC           get the global vector
+        DATA   0                dummy frame size
+        JNE    A,ACT5           jump if OK
+        STRAP  A,196            abort the task
+        JMP    ACT4             try again
+ACT5    COPY   A,L              set up global vector
+        COPY   T:GBAS(X),Q      global vector size
+        COPY   Q,Y
+        COPY   A,T:GBAS(X)      set global base in TCB
+        ADD    A,Y              global vector end
+        COPY   =0,A
+ACT6    COPY   A,0(Y)           zero the globals
+        CSM    L,Y              back to global base ?
+        JNED   Y,ACT6           no - go round again
+        HLT
+        COPY   Q,G:GSIZ(Y)      GLOBSIZE
+        COPY   X,G:TCB(Y)       TCB
+        COPY   T:ID(X),Q
+        COPY   Q,G:TID(Y)       TASKID
+ACT7    COPY   T:SSIZ(X),A
+        JST    *IGVEC           get the stack
+        DATA   0                dummy frame size
+        JNE    A,ACT8           jump if OK
+        STRAP  A,196            abort the task
+        JMP    ACT7             try again
+ACT8    COPY   L,Y
+        COPY   A,G:SBAS(Y)      STACKBASE
+        COPY   A,Y
+        ADD    T:SSIZ(X),Y      stack end
+        COPY   Y,K
+        COPY   =0,Q
+ACT9    COPY   Q,0(Y)           zero the stack
+        CSM    A,Y              back to stack base ?
+        JNED   Y,ACT9           no - go round again
+        HLT
+        EXCH   T:SBAS(X),A      set SBASE in TCB, get pkt
+        COPY   A,5(Y)           save pkt on the stack
+        COPY   T:SEGL(X),A      get segment list
+        COPY   A,6(Y)           save it on the stack
+        ADD    *6(Y),A          end of segment list
+        COPY   A,7(Y)           save it on the stack
+        COPY   Y,X              set up the stack
+        COPY   Q,C:LINK(X)      zero link to next cortn
+        COPY   =-1,Q
+        COPY   Q,C:CLLR(X)      -1 => root coroutine
+        COPY   K,Q              stack end
+        SUB    =50,Q            safety margin of 50
+        COPY   Q,C:SEND(X)      stack end - 50
+        COPY   L,Y
+        COPY   G:STRT(Y),Q      get START
+        COPY   Q,C:FUNC(X)      function
+
+ACT10   IMS    6(X)             next segment (never skips)
+        COPY   6(X),Y
+        COPY   7(X),Q           end of segment list
+        CSM    Q,Y
+        JMP    ACT11            finished the list
+        NOP
+        COPY   0(Y),A           get the segment
+        JSTE   GLOBIN           initialise the globals
+        DATA   8
+        JMP    ACT10
+
+ACT11   COPY   5(X),A           recover PKT again
+        COPY   L,Y
+        JST    *G:STRT(Y)       start the task
+        DATA   5
+        DIN                     interrupts off
+        COPY   CRNTSK,X         get current TCB ptr
+        COPY   T:STAT(X),A
+        OR     =S:DEAD,A        set dead state
+        COPY   A,T:STAT(X)
+DEACT   COPY   T:SBAS(X),A
+        JST    *IFVEC           free the stack
+        DATA   0                dummy frame size
+        COPY   T:GBAS(X),A
+        JST    *IFVEC           free the global vector
+        DATA   0                dummy frame size
+        COPY   CRNTSK,X         in case after DELETETASK
+        JMPE   SCHED            enter the scheduler
+
+**********************************************************
+*                                                        *
+*              The idle task                             *
+*                                                        *
+**********************************************************
+
+IDLE    JMP    $
+
+IDLTCB  DATA   0                no link
+        DATA   0                task id
+        DATA   0                priority
+        DATA   0                work queue
+        DATA   S:INT            state
+        DATA   0                flags
+        DATA   0                stack size
+        DATA   0                no segment list
+        DATA   0                no global vector
+        DATA   0                no stack
+        DATA   0                A
+        DATA   0                Q
+        DATA   0                X
+        DATA   0                Y
+        DATA   IDLE             P
+        DATA   IPSW             S
+        DATA   0                K
+        DATA   0                L
+
+**********************************************************
+*                                                        *
+* This is the clock interrupt routine. It increments the *
+* timer words in the rootnode, decrements the head clock *
+* packet, and sends back any packets that have expired.  *
+*                                                        *
+**********************************************************
+
+CLKINT  DATA    0
+        EIN                     interrupts were on
+        SIN     16
+        COPY    A,WORK1         save A,Y
+        COPY    Y,WORK2
+        COPY    =-2,A           reset clock increment
+        COPYE   A,CLKINC
+        IMS     TICKS           increment TICKS
+        COPY    TICKS,A         (shouldn't have skipped)
+        CSK     A,MTICKS        end of minute ?
+        JMP     CLK1            no
+        NOP
+        COPY    =0,A            yes - clear TICKS
+        COPY    A,TICKS
+        IMS     MINS              increment MINS
+        COPY    MINS,A          (shouldn't have skipped)
+        SIN     16
+        CSK     A,MMINS         end of day ?
+        JMP     CLK1            no
+        NOP
+        COPY    =0,A            yes - clear MINS
+        COPY    A,MINS
+        IMS     DAYS              increment DAYS
+        NOP
+CLK1    COPY    CLKWKQ,Y        get head clock pkt
+        JEQ     Y,CLK2          no clock pkts
+        COPY    P:RES1(Y),A     get pkt delay
+        SUB     =1,A            decrement it
+        COPY    A,P:RES1(Y)
+        JLE     A,CLK3          jump if expired
+CLK2    SIN     2
+        COPY    WORK1,A         restore A,Y
+        COPY    WORK2,Y
+        JMPE    *CLKINT         and return (JMPE => XA)
+
+* At least one packet has expired. Save registers in TCB.
+
+CLK3    SIN     12
+        COPY    CRNTSK,Y        get current TCB ptr
+        COPY    WORK1,A
+        COPY    A,T:A(Y)
+        COPY    Q,T:Q(Y)
+        COPY    X,T:X(Y)
+        COPY    WORK2,A
+        COPY    A,T:Y(Y)
+        COPY    CLKINT,A
+        COPY    A,T:P(Y)
+        CEA     KPSW,A
+        EXCH    A,S             new program status
+        COPY    A,T:S(Y)
+
+* Send back all the expired packets.
+
+        COPY    Y,Q             TCB ptr for MOVPKT
+CLK4    COPY    CLKWKQ,Y        get next pkt
+        JEQ     Y,CLK5          no more pkts
+        COPY    P:RES1(Y),A     get its delay
+        JGT     A,CLK5          jump if not expired yet
+        COPY    P:LINK(Y),A     unlink the pkt
+        COPY    A,CLKWKQ
+        COPY    =-1,A           clock id
+        JST     *DEVMVP         send the pkt back
+        JMP     CLK4
+
+CLK5    JMP     *DEVINT         exit via INTENT
+
+MTICKS  DATA    50*60           ticks per minute
+MMINS   DATA    60*24           minutes per day
+
+**********************************************************
+*                                                        *
+*       Trap handlers and entries to standalone DEBUG    *
+*                                                        *
+**********************************************************
+
+* The unassigned global routine.
+
+UNASGL  DATA   0
+        COPY   0,Y              get return link
+        COPYE  -1(Y),A          is JST or 2nd word of JSTE
+        XOR    UNAS2,A          try JST first
+        COPY   A,Q
+        AND    =:3F,A           mask to 6 bits
+        CSN    A,Q              was it a JST ?
+        JMP    UNAS1            yes - Q holds global no.
+        XOR    UNAS2,Q          no - restore Q
+        COPYE  -2(Y),A          try JSTE
+        CSK    A,UNAS3
+        COPY   =-1,Q            it wasn't a global call
+        COPY   =-1,Q            it wasn't a global call
+UNAS1   COPY   =98,A            unassigned global abort
+        STRAP  A,0              args in A and Q
+        JMP    1(Y)             return past frame size
+
+UNAS2   JST    *0(Y)            this is data !
+UNAS3   JSTE   *0(Y)            this is data !
+
+* Standalone DEBUG restart.
+
+SASTRT  CEA    KPSW,A           standalone restart entry
+        COPY   A,S              set up program status
+        COPY   =0,A             MODE=0 standalone restart
+        JMP    SADEB
+
+* Trap and breakpoint handlers.
+
+UITRP   COPY   =91,A            unimplemented instruction
+        JMP    TRP1
+
+MXTRP   COPY   =92,A            memory exception
+        JMP    TRP1
+
+PFTRP   COPY   =93,A            power up/fail trap
+        JMP    TRP1
+
+CSTRP   COPY   =96,A            console interrupt
+        OUT    A,:01            turn off INT indicator
+        JMP    TRP1
+
+SXTRP   COPY   =95,A            stack exception
+        JMP    TRP1
+
+STTRP   COPY   1(Y),A           STRAP instruction trap
+        XOR    STRP1,A          remove uninteresting bits
+        COPY   A,Q
+        AND    =:FF,Q           get argument bits
+        CSK    A,Q              check no other bits set
+        JMP    UITRP            STRAP Q,X,Y unimplemented
+        JMP    UITRP            STRAP Q,X,Y unimplemented
+        CLSN   A,=1
+        JMP    BPT1             STRAP A,1 is a breakpoint
+        JNE    A,TRP1           OK - A is CODE unless zero
+        COPY   DBAREG,A         otherwise CODE,ARG in A,Q
+        COPY   DBQREG,Q
+        JMP    TRP2
+
+STRP1   STRAP  A,0              this is data
+
+AXTRP   COPY   =94,A            arithmetic exception
+
+TRP1    COPY   DBPREG,Q         default ARG is trap addr
+TRP2    COPY   A,DBCODE         set CODE
+        COPY   Q,DBARG          and ARG
+        COPY   =1,A             MODE=1 for aborts
+        JMP    SADEB
+
+* Breakpoint handler.
+
+BPT1    COPY   DBPREG,Y         get address of breakpoint
+        SUB    =1,Y
+        COPY   Y,DBARG          pass it to DEBUG
+        COPY   =2,A             MODE=2 for breakoints
+        JMP    SADEB
+
+SADHLT  HLT                     stops here if no DEBUG
+
+* DEBUG's dummy packet, used to pass arguments for the
+* standalone entries.
+
+DBPKT   EQU    $
+
+DBMODE  DATA   0                MODE
+DBTASK  DATA   0                TASK
+DBCODE  DATA   0                CODE
+DBARG   DATA   0                ARG
+DBAREG  DATA   0                A - the saved registers
+DBQREG  DATA   0                Q
+DBXREG  DATA   0                X
+DBYREG  DATA   0                Y
+DBPREG  DATA   0                P
+DBSREG  DATA   0                S
+        DATA   0                K
+        DATA   0                L
+
+* The standalone entry to DEBUG
+
+SADEB   COPY   A,DBMODE         set MODE
+        COPY   =0,Q
+        COPY   DBSREG,A         get old program status
+        TBIT   INTBIT,A         were interrupts on ?
+        JF     OV,SADB1         no - no current task
+        COPY   CRNTSK,X         yes - get current task
+        COPY   T:ID(X),Q        get its id
+SADB1   COPY   Q,DBTASK         set TASK
+        COPY   DEBTSK,X         get DEBUG task TCB
+        JEQ    X,SADHLT         stop if no DEBUG
+        COPY   T:L(X),Y         get DEBUG's global vector
+        COPY   Y,L
+        CEA    DEBSAS,X         get standalone stack
+        CEA    DBPKT,A          get the dummy pkt
+        JST    *G:STRT(Y)       call START(PKT)
+        DATA   0                frame size
+        COPY   DBMODE,Q         get mode
+        XOR    =2,Q             was it a breakpoint ?
+        JEQ    Q,BPTCNT         yes
+
+* DEBUG may hold a task on exit.
+
+TRPHLD  JST    *ITCBST          find task to be held
+        JEQ    Y,TRPH1          no such task or task zero
+        COPY   T:STAT(Y),Q
+        OR     =S:HOLD,Q        set held state
+        COPY   Q,T:STAT(Y)
+
+* Interrupt the task that was running.
+
+TRPH1   COPY   DBTASK,A         the task that was running
+        JST    *ITCBST          locate its TCB
+        JEQ    Y,TRPCNT         wasn't a non zero task
+        COPY   T:STAT(Y),Q
+        OR     =S:INT,Q         set interrupted state
+        COPY   Q,T:STAT(Y)
+        COPY   Y,CRNTSK         task to be interrupted
+        CEA    DBAREG-T:A,Y
+        COPY   =T:A,X
+TRPH2   COPY   0(X,Y),Q         copy the regs into the TCB
+        COPY   Q,*CRNTSK(X)
+        CSK    X,=T:L           loop until done
+        IJNE   X,TRPH2
+        HLT
+        COPY   TCBLST,X         first task on TCB chain
+        JMPE   SCHED            enter the scheduler
+
+* Continue after trap - no task to interrupt.
+
+TRPCNT  CEA    DBAREG-T:A,X     pseudo TCB in X
+        JMPE   UNINT1           use UNINT to return
+
+* Continue after breakpoint.
+
+BPTCNT  COPY   DBARG,Y          address of breakpoint
+        SUB    =1,Y             address of entry point
+        COPY   0(Y),Y           the return address
+        COPY   DBCODE,Q         the broken instruction
+        XOR    BPTC1,Q          should be COPY $-1,-
+        SHIFT  Q,R,13           find which register
+        CLSN   Q,=0
+        COPY   Y,DBAREG
+        CLSN   Q,=1
+        COPY   Y,DBXREG
+        CLSN   Q,=2
+        COPY   Y,DBQREG
+        CLSN   Q,=3
+        COPY   Y,DBYREG
+        JMP    TRPHLD           return from trap
+
+BPTC1   COPY   $-1,A            this is data
+
+**********************************************************
+*                                                        *
+*              Kernel primitives                         *
+*                                                        *
+**********************************************************
+
+**********************************************************
+*                                                        *
+*              GLOBIN(SEG)                               *
+*                                                        *
+* This function initialises the globals defined in the   *
+* given segment. It is included amongst the kernel       *
+* primitives as it is called by the task activation      *
+* code. It returns non zero, or zero if an error is      *
+* detected - if an attempt was made to initialise a      *
+* global beyond the bound given by GLOBSIZE.             *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'g','lo','bi','n '
+
+GLOBIN  DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        COPY   A,2(X)           save SEG
+        COPY   L,Y
+        COPY   G:GSIZ(Y),A
+        COPY   A,K              GLOBSIZE
+        COPY   =-1,A            set result to -1
+        COPY   2(X),Y           first section
+GLB1    JEQ    Y,GLB5           jump if end of segment
+        ADD    1(Y),Y           find section end
+        COPY   0(Y),Q           highest ref global
+        CSM    K,Q              compare with GLOBSIZE
+        JMP    GLB3             too big - error
+        NOP
+GLB2    SUB    =2,Y             next pair of words
+        COPY   1(Y),Q           offset from section base
+        JEQ    Q,GLB4           zero - end of globals
+        ADD    =1,Q             allow for link word
+        ADD    2(X),Q           value of global
+        COPY   Q,3(X)           save it on the stack
+        COPY   0(Y),Q           global number
+        JLE    Q,GLB3           don't modify GLOBSIZE
+        CSM    Q,K              compare with GLOBSIZE
+        JMP    $+2
+        JMP    GLB3             too big - error
+        ADD    L,Q              address of global
+        EXCH   Y,3(X)           get value, save list ptr
+        EXCH   Q,Y
+        COPY   Q,0(Y)           initialise the global
+        COPY   3(X),Y           recover init list ptr
+        JMP    GLB2
+
+GLB3    COPY   =111,A
+        EXCH   L,Y
+        COPY   A,G:RES2(Y)      set RESULT2
+        EXCH   Y,L
+        COPY   =0,A             indicate error
+        JMP    GLB2             and continue
+
+GLB4    COPY   2(X),Y
+        COPY   0(Y),Y           get next section
+        COPY   Y,2(X)
+        JMP    GLB1
+
+GLB5    JMP    RET              return
+
+**********************************************************
+*                                                        *
+*              GETVEC(UPB)                               *
+*                                                        *
+* This function returns the address of a vector with at  *
+* least the given upperbound. (Actually UPB is rounded   *
+* up to the next even number.) The word at offset -1 of  *
+* the vector contains the marker bit to indicate whether *
+* the block is allocated or free, and the size, which is *
+* always an even integer. It does not need a BCPL stack  *
+* or global vector.                                      *
+*                                                        *
+**********************************************************
+
+        DATA   LIBWD
+        DATA   7%8+'g','et','ve','c '
+
+GETVEC  DATA   0
+        COPY   $-1,Y
+        COPY   Y,K              save return address in K
+        IJEQ   A,GVCZER         UPB+1 - error if zero
+        SBIT   0,A              make odd number
+        IJEQ   A,GVCZER         block size - error if zero
+        DIN                     interrupts off
+GVCRTY  COPY   CRNTSK,Q         record caller task
+        COPY   Q,GVTSK           in GVTSK
+        COPY   BLKLST,Y         start of block list
+GVC1    EIN                     allow interrupts
+        NOP                     EIN is not interruptable
+
+* Since the search for a suitable free block may be long
+* interrupts are allowed here. If another task is run and
+* it calls GETVEC then GVTSK will be reset and the search
+* must start again at the beginning of the block list in
+* case it has been updated meanwile.
+
+        DIN                     interrupts off
+        COPY   CRNTSK,Q         get current task
+        XOR    GVTSK,Q          compare with GVTSK
+        JNE    Q,GVCRTY         retry unless equal
+        COPY   0(Y),Q           get block size and marker
+        TBIT   0,Q              test marker bit
+        JT     OV,GVC3          jump if free
+        ADD    Y,Q              go on to next block
+        EXCH   Q,Y
+        CSM    Q,Y              check for end of chain
+        JMP    GVC1             OK - try next block
+        JMP    GVCERR           loop in store chain
+
+* End of block list - no suitable block found
+
+GVCZER  COPY   L,Y              return zero
+        JEQ    Y,GVC2           jump if no global vector
+        COPY   =103,A           error code
+        COPY   A,G:RES2(Y)      set RESULT2
+GVC2    COPY   =0,A             return zero
+        JMP    GVC6
+
+* A free block has been discovered. Continue down the
+* chain to amalgamate any adjacent free blocks.
+
+GVC3    COPY   Y,WORK1          save start of free area
+GVC4    RBIT   0,Q              size of block
+        ADD    Y,Q              go on to next block
+        EXCH   Q,Y
+        CSM    Q,Y
+        JMP    GVC5             OK try next block
+        NOP                     loop in store chain
+
+* If there is an error in the block list such that the
+* chain loops then the system aborts.
+
+GVCERR  STRAP  A,197            abort
+        JMP    GVCRTY
+
+GVC5    COPY   0(Y),Q           get size and marker bit
+        TBIT   0,Q              test marker bit
+        JT     OV,GVC4          jump if free
+
+* End of free area.
+*  A     holds block size required
+*  WORK1       beginning of free area
+*  Y           end of free area + 1
+
+        COPY   Y,Q
+        SUB    WORK1,Q          size of area
+        COPY   Q,*WORK1         amalgamate blocks
+        IMS    *WORK1           set marker (never skips)
+        CSM    Q,A              is block big enough ?
+        JMP    GVC1             no - carry on searching
+        JMP    $+2
+        JMP    GVC7             no split if right size
+        SUB    A,Q              yes - split the block
+        SUB    Q,Y              find upper part
+        SBIT   0,Q              set marker bit
+        COPY   Q,0(Y)           make a free block
+GVC7    COPY   A,*WORK1         make an allocated block
+        COPY   WORK1,A
+        ADD    =1,A             return block+1
+GVC6    EIN                     restore interrupts
+        COPY   K,Y              recover return address
+        JMP    1(Y)
+
+GVTSK   DATA   0                caller task
+
+**********************************************************
+*                                                        *
+*              FREEVEC(VECTOR)                           *
+*                                                        *
+* This routine frees a vector which was allocated by     *
+* GETVEC. It aborts the task if an error is detected.    *
+* If the vector is zero then the call has no effect. It  *
+* does not need a BCPL stack or global vector and may be *
+* called with interrupts on or off.                      *
+*                                                        *
+**********************************************************
+
+        DATA   LIBWD
+        DATA   7%8+'f','re','ev','ec'
+
+FREVEC  DATA   0
+        COPY   $-1,Q            save return address
+        JEQD   A,FVC1           zero => do nothing
+        COPY   A,Y              ptr to block
+        COPY   0(Y),A           get size and marker bit
+        TBIT   0,A              test marker bit
+        JT     OV,FVCERR        error if already free
+        IMS    0(Y)             set it free (never skips)
+FVC1    COPY   Q,Y
+        JMP    1(Y)             return past frame size
+
+FVCERR  STRAP  A,199            abort the task
+        JMP    FVC1
+
+**********************************************************
+*                                                        *
+*              CREATEDEV(DCB)                            *
+*                                                        *
+* This function creates a device using the first free    *
+* slot in the device table. The DCB should have already  *
+* been linked to a device driver. It returns the device  *
+* id, or zero on error.                                  *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'c','re','at','ed'
+
+CRTDEV  DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        DIN                     interrupts off
+        COPY   =2,Q             start with slot 2
+CRD1    COPY   DEVTAB,Y         get device table
+        CSK    Q,0(Y)           compare with table upb
+        JMP    $+2
+        JMP    CRD3             end of table
+        ADD    Q,Y
+        COPY   Y,WORK1          save entry ptr
+        COPY   0(Y),Y           get table entry
+        JEQ    Y,CRD2           found empty slot
+        IJNE   Q,CRD1           try next (always jumps)
+
+CRD2    COPY   A,*WORK1         fill the slot
+        COPY   A,Y
+        COPY   D:LINK(Y),Y      get device driver
+        COPY   D:INIT(Y),Y      get initialisation routine
+        COPY   Y,WORK2
+        COPY   A,Y
+        NEG    Q,A              device ids are negative
+        COPY   A,D:ID(Y)        set DEVID in DCB
+        COPY   =0,Q
+        COPY   Q,D:WKQ(Y)       clear work queue
+        JST    *WORK2           initialise the device
+        JMP    RETI             return - id still in A
+
+CRD3    COPY   =104,A           device table full
+        JMP    ERR              error return
+
+**********************************************************
+*                                                        *
+*              DELETEDEV(DEVID)                          *
+*                                                        *
+* This function deletes a device, which must have an     *
+* empty work queue. It returns the DCB, or zero on error *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'d','el','et','ed'
+
+DELDEV  DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        DIN                     interrupts off
+        NEG    A,A              make id positive
+        JLE    A,DELD1          check id now > zero
+        COPY   DEVTAB,Y         get device table ptr
+        CSK    A,0(Y)           compare id with table upb
+        JMP    $+2
+DELD1   JMP    *IDERRI          outside table
+        ADD    A,Y
+        COPY   Y,WORK1          save table entry ptr
+        COPY   0(Y),Y           get DCB ptr
+        JEQ    Y,DELD1          no such device
+        COPY   Y,A              save DCB ptr
+        COPY   D:LINK(Y),Y      get device dvriver
+        COPY   D:UNIN(Y),Y      get uninitialisation rtn
+        COPY   Y,WORK2
+        COPY   A,Y              recover DCB ptr
+        COPY   D:WKQ(Y),Q       get work queue
+        JNE    Q,DELD2          error unless empty
+        COPY   Q,*WORK1         clear device table entry
+        JST    *WORK2           uninitialise the device
+        JMP    RETI
+
+DELD2   COPY   =107,A           device not deleteable
+        JMP    ERR              error return
+
+IDERRI  DATA   IDERR
+
+**********************************************************
+*                                                        *
+*              CREATETASK(SEGLIST,STSIZE,PRI)            *
+*                                                        *
+* This function creates a task using the first free slot *
+* in the task table. It gets space for a copy of the     *
+* segment list and a TCB, initialises them, and inserts  *
+* the TCB in the task table and priority chain. It       *
+* returns the taskid, or zero on error.                  *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'c','re','at','et'
+
+CRTTSK  DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        COPY   A,2(X)           save the arguments
+        COPY   Q,3(X)
+        COPY   4(X),Q           get the priority
+        JGT    Q,$+2
+        JMP    PRERR            invalid priority
+
+* Get a copy of the segment list and a new TCB.
+
+        JEQ    A,CRT2           null segment list
+        COPY   A,Y
+        COPY   0(Y),A
+        JST    *IGVEC           get space for segment list
+        DATA   0                dummy frame size
+        JEQ    A,CRT5           error if GETVEC failed
+        COPY   A,Y
+        EXCH   Y,2(X)           get old seglist, save new
+        COPY   Y,Q
+        ADD    0(Y),Q           old seglist end
+        COPY   Q,K
+CRT1    COPY   0(Y),Q           copy the segment list
+        EXCH   A,Y
+        COPY   Q,0(Y)
+        EXCH   A,Y
+        ADD    =1,A
+        CSM    Y,K              end of list ?
+        IJNE   Y,CRT1           no  (always jumps)
+        HLT
+        COPY   =T:UPB,A
+        JST    *IGVEC           get space for TCB
+        DATA   0                dummy frame size
+        JEQ    A,CRT4           error if GETVEC failed
+
+* Look for next task table slot.
+
+        DIN                     interrupts off
+        COPY   =1,Q             start with slot 1
+CRT2    COPY   TSKTAB,Y         get task table ptr
+        CSK    Q,0(Y)           compare with table upb
+        JMP    $+2
+        JMP    CRT3             end of table
+        ADD    Q,Y
+        COPY   Y,WORK1          save entry ptr
+        COPY   0(Y),Y           get table entry
+        JEQ    Y,CRT6           found empty slot
+        IJNE   Q,CRT2           try next (always jumps)
+
+* Error - table full or GETVEC failed
+
+CRT3    COPY   =105,Q           task table full
+CRTX    COPY   L,Y
+        COPY   Q,G:RES2(Y)      set error code
+        JST    *IFVEC           free the TCB
+        DATA   0                dummy frame size
+CRT4    COPY   2(X),A
+        JST    *IFVEC           free the segment list
+        DATA   0                dummy frame size
+CRT5    JMP    RETZ             error return
+
+* Fill the slot and initialise the TCB
+
+CRT6    COPY   A,*WORK1         fill the slot
+        COPY   A,Y
+        COPY   Q,T:ID(Y)        task id
+        COPY   =0,Q
+        COPY   Q,T:WKQ(Y)       work queue
+        COPY   Q,T:FLGS(Y)      flags
+        COPY   Q,T:GBAS(Y)      global base
+        COPY   Q,T:SBAS(Y)      stack base
+        COPY   =S:DEAD,Q
+        COPY   Q,T:STAT(Y)      state
+        COPY   2(X),Q
+        COPY   Q,T:SEGL(Y)      segment list
+        COPY   3(X),Q
+        COPY   Q,T:SSIZ(Y)      stack size
+        COPY   4(X),Q
+        COPY   Q,T:PRI(Y)       priority
+
+* Now link the TCB into the priority chain.
+
+        COPY   =TCBLST,Y        address of TCB chain
+CRT7    COPY   Y,WORK2          save last ptr
+        COPY   T:LINK(Y),Y      get next TCB
+        CSK    Q,T:PRI(Y)       compare priorities
+        JMP    CRT7             chain still higher
+        JMP    CRT8             chain lower
+        COPY    =0,Q            !! chain equal - error
+        COPY    Q,*WORK1        !! zero task table slot
+        COPY    =102,Q          !! error code
+        JMP     CRTX            !! tidy up
+
+CRT8    EXCH   A,Y
+        COPY   Y,*WORK2         link it in
+        COPY   A,T:LINK(Y)
+        COPY   T:ID(Y),A        return the task id
+        JMP    RETI
+
+PRERR   COPY   =102,A           invalid priority
+        JMP    ERR
+
+**********************************************************
+*                                                        *
+*              DELETETASK(TASKID)                        *
+*                                                        *
+* This function deletes a task, which must have an empty *
+* work queue and either be the current task or be dead   *
+* and not held. Its segment list is freed and the TCB    *
+* unlinked and freed. If it was the current task the     *
+* task deactivation code is entered to free the stack    *
+* and global vector. It returns non zero, or zero on     *
+* error.                                                 *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'d','el','et','et'
+
+DELTSK  DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        JST    *ITCBST          locate the TCB
+        JEQ    Y,IDERR4         invalid id
+        COPY   Y,K              save TCB ptr
+        COPY   T:STAT(Y),Q      get task state
+        XOR    =S:DEAD,Q        dead, not held, no pkts ?
+        JEQ    Q,DELT2          yes - can delete
+        XOR    =S:DEAD,Q        run,  not held, no pkts ?
+        JNE    Q,DELT1          no - can't delete
+        COPY   CRNTSK,Y
+        CSN    Y,K              is it the current task ?
+        JMP    DELT2            yes - can delete
+DELT1   COPY   =108,A           task not deletable
+        JMP    ERR              error return
+
+DELT2   COPY   TSKTAB,Y
+        ADD    A,Y              find task table entry addr
+        COPY   =0,Q
+        COPY   Q,0(Y)           clear task table entry
+        COPY   =TCBLST,Y        address of TCB chain
+DELT3   COPY   Y,WORK1          save last ptr
+        COPY   T:LINK(Y),Y      get next TCB
+        CSK    Y,K              found it yet ?
+        JMP    DELT3            no - continue down chain
+        JMP    DELT3            no - continue down chain
+        COPY   T:LINK(Y),Q      yes
+        COPY   Q,*WORK1         unlink the TCB
+        COPY   T:SEGL(Y),A
+        JST    *IFVEC           free the segment list
+        DATA   0                dummy frame size
+        COPY   K,A
+        JST    *IFVEC           free the TCB
+        DATA   0                dummy frame size
+        COPY   CRNTSK,Y
+        CSK    Y,K              deleting current task ?
+        JMP    RETI             no - normal return
+        JMP    RETI             no - normal return
+        COPY   T:LINK(Y),A      yes - schedule next task
+        COPY   A,CRNTSK
+        COPY   Y,X
+        JMPE   DEACT            after deactivating current
+
+**********************************************************
+*                                                        *
+*              CHANGEPRI(TASKID,PRI)                     *
+*                                                        *
+* This function changes the priority of a task. Its TCB  *
+* is relinked into the new position in the TCB priority  *
+* chain, and the task scheduler entered if necessary. It *
+* returns the non zero, or zero on error.                *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'c','ha','ng','ep'
+
+CHGPRI  DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        JLE    Q,PRERR          invalid priority
+        JST    *ITCBST          locate the TCB
+IDERR4  JEQ    Y,IDERR3         invalid id
+        COPY   Y,A              save TCB ptr
+
+* First unlink the TCB from the priority chain
+
+        COPY   =TCBLST,Y        address of TCB chain
+CGP1    COPY   Y,WORK1          save last ptr
+        COPY   T:LINK(Y),Y      get next TCB
+        CSK    Y,A              found it yet ?
+        JMP    CGP1             no - continue down chain
+        JMP    CGP1             no - continue down chain
+        COPY   T:LINK(Y),Y      yes
+        COPY   Y,*WORK1         unlink the TCB
+
+* Now relink it at the new priority
+
+        COPY   =TCBLST,Y        address of TCB chain
+CGP2    COPY   Y,WORK2          save last ptr
+        COPY   T:LINK(Y),Y      get next TCB
+        CSK    Q,T:PRI(Y)       compare priorities
+        JMP    CGP2             chain still higher
+        JMP    CGPX             !! chain lower
+        COPY   A,*WORK1         !! error - relink tcb
+        JMP    PRERR            !!
+CGPX    EXCH   A,Y
+        COPY   Y,*WORK2         link it in
+        COPY   A,T:LINK(Y)
+        EXCH   Q,T:PRI(Y)       set new priority, save old
+        COPY   CRNTSK,A         get current task
+        CSN    A,Y              changing own priority ?
+        JMP    CGP3             yes
+        CSK    Q,T:PRI(Y)       no - compare priorities
+        JMP    $+2
+        JMP    RETI
+        COPY   T:PRI(Y),Q       get new priority
+        EXCH   A,Y
+        CSK    Q,T:PRI(Y)       compare with current
+        JMP    RETI             new < curr. - no swop
+        NOP                     new > curr. - task swop
+        COPY   A,Q              new = curr. - task swop
+        JMP    TWTSAV           enter scheduler via TWTSAV
+
+CGP3    CSK    Q,T:PRI(Y)       changing own priority
+        JMP    RETI             old < new - no swop
+        JMP    RELSAV           old > new - task swop
+        JMP    RETI             old = new - no swop
+
+**********************************************************
+*                                                        *
+*              SETFLAGS(TASKID,FLAGS)                    *
+*                                                        *
+* This function sets flags in the TCB of the specified   *
+* task. It returns the non zero, or zero on error.       *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'s','et','fl','ag'
+
+SETFLG  DATA   0
+        COPY   $-1,Y            standard BCPL entry but
+        ADD    0(Y),X            no P dump since no ints
+        COPY   Y,0(X)
+        JST    *ITCBST          locate the TCB
+IDERR3  JEQ    Y,IDERR2         invalid id
+        OR     T:FLGS(Y),Q      OR in the flags
+        COPY   Q,T:FLGS(Y)
+        JMP    TFLG1            return non zero
+
+**********************************************************
+*                                                        *
+*              TESTFLAGS(FLAGS)                          *
+*                                                        *
+* This function tests and clears flags in the TCB of the *
+* current task. It returns TRUE if any of the specified  *
+* flags were set, otherwise FALSE. The cleared flags are *
+* returned in RESULT2.                                   *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'t','es','tf','la'
+
+TSTFLG  DATA   0
+        COPY   $-1,Y            standard BCPL entry but
+        ADD    0(Y),X            no P dump since no ints
+        COPY   Y,0(X)
+        DIN                     interrupts off
+        COPY   CRNTSK,Y         get current TCB
+        COPY   T:FLGS(Y),Q
+        AND    Q,A              these bits to be cleared
+        XOR    A,Q              clear the bits
+        COPY   Q,T:FLGS(Y)
+        COPY   L,Y
+        COPY   A,G:RES2(Y)      cleared bits in RESULT2
+        JEQ    A,TFLG2          returns zero or -1
+TFLG1   COPY   =-1,A
+TFLG2   JMP    RETI
+
+**********************************************************
+*                                                        *
+*              ABORT(CODE,ARG)                           *
+*                                                        *
+* This routine aborts the current task and enters DEBUG  *
+* in standalone mode passing arguments CODE and ARG.     *
+* DEBUG will usually hold the task on exit.              *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'a','bo','rt','  '
+
+ABORT   DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X            for backtrace
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        STRAP  A,0              args in A and Q
+        JMP    RET
+
+**********************************************************
+*                                                        *
+*              HOLD(TASKID)                              *
+*                                                        *
+* This function holds the specified task - prevents it   *
+* from being scheduled to run by setting the HOLD bit in *
+* the task state in the TCB. The task scheduler is then  *
+* entered in case it was the current task that was held. *
+* It returns non zero, or zero on error.                 *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'h','ol','d ','  '
+
+HOLD    DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        JST    *ITCBST          locate the TCB
+IDERR2  JEQ    Y,IDERR1         invalid id
+        COPY   T:STAT(Y),Q      get task state
+        OR     =S:HOLD,Q        set held bit
+        EXCH   Q,T:STAT(Y)
+        AND    =S:HOLD,Q        check original state
+        JEQ    Q,RELSAV
+        COPY   =110,A           task already held
+        JMP    ERR              error return
+
+**********************************************************
+*                                                        *
+*              RELEASE(TASKID)                           *
+*                                                        *
+* This function releases a held task. The task scheduler *
+* is then entered, in case the released task was of      *
+* higher priority. It returns non zero, or zero on error.*
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'r','el','ea','se'
+
+RELEAS  DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        JST    *ITCBST          locate the TCB
+IDERR1  JEQ    Y,IDERRX         invalid id
+        COPY   T:STAT(Y),Q      get task state
+        AND    =:F-S:HOLD,Q     clear held bit
+        COPY   Q,T:STAT(Y)
+RELSAV  COPY   TCBLST,Q         beginning of TCB chain
+        COPY   CRNTSK,Y          as not worth optimising
+        JMP    TWTSAV
+
+**********************************************************
+*                                                        *
+*              TASKWAIT()                                *
+*                                                        *
+* This function returns the next packet on the current   *
+* task's work queue. If the queue is empty then the task *
+* is suspended until it next receives a packet.          *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'t','as','kw','ai'
+
+TASKWT  DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        DIN                     interrupts off
+        COPY   CRNTSK,Y         get current task
+        COPY   T:STAT(Y),A
+        OR     =S:WAIT,A        set wait state
+        COPY   A,T:STAT(Y)
+        COPY   Y,Q              new task = current task
+
+* A task that suspends itself by calling TASKWAIT, QPKT
+* etc. needs to save only A,X,L (result, stack pointer,
+* global pointer), all other registers being lost.
+* Q holds new TCB, Y the current TCB.
+
+TWTSAV  COPY   A,T:A(Y)         (not needed for TASKWAIT)
+        COPY   X,T:X(Y)
+        COPY   L,A
+        COPY   A,T:L(Y)
+        COPY   Q,X              TCB ptr for SCHED
+        JMPE   SCHED            enter the scheduler
+
+**********************************************************
+*                                                        *
+*              QPKT(PKT)                                 *
+*                                                        *
+* This function queues the packet onto the task or       *
+* device whose id is specified in the devtaskid field of *
+* the packet, which is then set to the id of the sender. *
+* It returns non zero, or zero on error.                 *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'q','pk','t ','  '
+
+QPKT    DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+QPK1    DIN                     interrupts off
+        COPY   A,Y
+        COPY   P:LINK(Y),Q      get packet link word
+        IJEQ   Q,QPK2           error unless link = -1
+        EIN                     interrupts on
+        STRAP  A,198            abort
+        JMP    QPK1
+QPK2    COPY   P:ID(Y),Q        get destination id
+        JGT    Q,QPTSK          id >  0 - task
+        ADD    =1,Q
+        JEQD   Q,QPCLK          id = -1 - clock
+
+* Destination is a device. If the device has an empty work
+* queue then its start routine must be called.
+
+        NEG    Q,Q              make device id positive
+        JLE    Q,IDERRX         in case id = 0 or MININT
+        COPY   DEVTAB,Y         get device table ptr
+        CSK    Q,0(Y)           compare id with table upb
+        JMP    $+2
+IDERRX  JMP    IDERR            outside table
+        ADD    Q,Y
+        COPY   0(Y),Q           get DCB ptr
+        JEQ    Q,IDERRX         check device exists
+        COPY   CRNTSK,Y         get current TCB
+        COPY   T:ID(Y),Y        get current task's id
+        EXCH   A,Y
+        COPY   A,P:ID(Y)        set sender's id in the pkt
+        COPY   =0,A
+        COPY   A,P:LINK(Y)      clear its link word
+        COPY   Y,A
+        COPY   Q,Y              DCB ptr
+        COPY   D:WKQ(Y),Q       get device work queue
+        JNE    Q,QPDEV1         jump if not empty
+
+* Device start - the work queue was empty.
+
+        COPY   A,D:WKQ(Y)       queue the pkt
+        JST    *D:STRT(Y)       start the device
+        JMP    RETI
+
+* Append the packet to the device work queue.
+
+QPDEV1  COPY   Q,Y
+        COPY   P:LINK(Y),Q      chain down one
+        JNE    Q,QPDEV1         loop until end of queue
+        COPY   A,P:LINK(Y)      append the pkt
+        JMP    RETI
+
+* Destination is the clock. The timer packet must be
+* inserted at the right place in the queue - the delays
+* of any previous packets in the queue are subtracted.
+
+QPCLK   COPY   CRNTSK,Y         get current TCB
+        COPY   T:ID(Y),Y        get current task's id
+        COPY   A,K              save the pkt
+        EXCH   A,Y
+        COPY   A,P:ID(Y)        set sender's id in the pkt
+        COPY   P:A1(Y),A        get the delay
+        JLE    A,QPCLK4         jump if delay <= 0
+        COPY   =CLKWKQ,Y        head of clock work queue
+QPCLK1  COPY   Y,Q              save last ptr
+        COPY   P:LINK(Y),Y      get next pkt
+        JEQ    Y,QPCLK3         jump if end of queue
+        CSK    A,P:RES1(Y)      insert yet ?
+        JMP    QPCLK2           yes - insert here
+        NOP
+        SUB    P:RES1(Y),A      no - subtract the delay
+        JMP    QPCLK1           and continue down queue
+
+QPCLK2  EXCH   A,P:RES1(Y)      subtract the delay
+        SUB    P:RES1(Y),A       from the next pkt
+        EXCH   A,P:RES1(Y)
+QPCLK3  EXCH   K,Y              recover the pkt
+        COPY   A,P:RES1(Y)      set its delay
+        COPY   K,A
+        COPY   A,P:LINK(Y)      set its link
+        EXCH   Q,Y
+        COPY   Q,P:LINK(Y)      link it in
+        COPY   =-1,A            return non zero
+        JMP    RETI
+
+QPCLK4  COPY   =-1,A            return pkt immediately
+        COPY   CRNTSK,Q          as if from the clock
+        JMP    QPTSK1
+
+* Destination is a task. A task swop will occurr if the
+* destination is of higher priority than the current task.
+
+QPTSK   COPY   CRNTSK,Q         get current task in Q
+        COPY   Q,Y
+        COPY   T:ID(Y),Y        get current task's id
+        EXCH   A,Y              sender's id in A, pkt in Y
+QPTSK1  JST    MOVPKT           send the pkt
+        JEQ    Y,IDERR          invalid destination id
+        COPY   CRNTSK,Y
+        COPY   =-1,A            return non zero
+        CSN    Q,Y              task swop ?
+        JMP    RETI             no - normal return
+        JMP    TWTSAV           yes - exit via TWTSAV
+
+IDERR   COPY   =101,A           invalid id
+        JMP    ERR              error return
+
+**********************************************************
+*                                                        *
+*              JST    MOVPKT                             *
+*                                                        *
+* This subroutine is used to queue a packet onto the     *
+* work queue of the task specified by its id field. It   *
+* is entered with the id of the sender in A, the highest *
+* priority task in Q, and the packet in Y. It returns    *
+* non zero, or zero on error in Y, and updates Q if the  *
+* destination task was of higher priority. It preserves  *
+* X,K,L,WORK1,WORK2. It may be called from device        *
+* drivers via DEVMVP.                                    *
+*                                                        *
+**********************************************************
+
+MOVPKT  DATA   0
+        COPY   Y,MVPPKT         save pkt
+        COPY   A,MVPSID         save sender's id
+        COPY   P:ID(Y),A        get destination task id
+        JST    TCBSET           locate the TCB
+        JEQ    Y,MVP3           error exit
+        COPY   Y,MVPTSK         save the TCB
+        COPY   T:STAT(Y),A
+        OR     =S:PKT,A         set pkt state
+        COPY   A,T:STAT(Y)
+        ADD    =T:WKQ,Y         work queue address
+MVP1    COPY   Y,A              save last ptr
+        COPY   P:LINK(Y),Y      get next pkt
+        JNE    Y,MVP1           loop util end of queue
+        COPY   A,Y
+        COPY   MVPPKT,A
+        COPY   A,P:LINK(Y)      append the pkt
+        COPY   A,Y
+        COPY   =0,A
+        COPY   A,P:LINK(Y)      clear its link word
+        COPY   MVPSID,A
+        COPY   A,P:ID(Y)        set sender's id
+        COPY   Q,Y
+MVP2    COPY   T:PRI(Y),A       highest priority so far
+        EXCH   Y,MVPTSK
+        CSK    A,T:PRI(Y)       compare with dest priority
+        COPY   Y,Q               < dest - task swop
+        JMP    *MOVPKT           > dest - no change
+        CSME   Y,MVPTSK          = dest - equal priority
+        JMP    $+3              different task
+        JMP    $+2              different task
+MVP3    JMP    *MOVPKT          same task - no swop
+        EXCH   Y,MVPTSK         look at next task
+        COPY   T:LINK(Y),Y       after highest so far
+        JMP    MVP2
+
+MVPTSK  DATA   0                destination task
+MVPSID  DATA   0                sender's id
+MVPPKT  DATA   0                the packet
+
+**********************************************************
+*                                                        *
+*              DQPKT(DEVTASKID,PKT)                      *
+*                                                        *
+* This function attempts to dequeue the packet from the  *
+* work queue of the specified task or device. If the     *
+* packet is not found there then the work queue of the   *
+* calling task is searched. If the packet is found on a  *
+* work queue other than that of the calling task then    *
+* its DEVTASKID field is reset. It returns the id of     *
+* queue from which the packet was removed, or zero on    *
+* error.                                                 *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'d','qp','kt','  '
+
+DQPKT   DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        DIN                     interrupts off
+        COPY   Q,K              save the pkt
+        COPY   A,Q
+        JGT    Q,DQPTSK         id >  0 - task
+        ADD    =1,Q
+        JEQD   Q,DQPCLK         id = -1 - clock
+
+* Packet expected to be on a device work queue.
+
+        NEG    A,Q              make device id positive
+        JLE    Q,IDERRY         in case id = 0 or MAXINT
+        COPY   DEVTAB,Y         get device table ptr
+        CSK    Q,0(Y)           compare id with table upb
+        JMP    $+2
+IDERRY  JMP    IDERR            outside table
+        ADD    Q,Y
+        COPY   0(Y),Y           get DCB ptr
+        JEQ    Y,IDERRY         check device exists
+        COPY   Y,Q
+        ADD    =D:WKQ,Y         work queue address
+        JMP    PKTDQ
+
+* Packet expected to be on the clock work queue.
+
+DQPCLK  COPY   =CLKWKQ,Y        clock work queue address
+        JMP    PKTDQ
+
+* Packet expected to be on a task work queue.
+
+DQPTSK  JST     TCBSET          locate the TCB
+        JEQ     Y,IDERRY        invalid id
+DQPT1   COPY    Y,Q             TCB
+        ADD     =T:WKQ,Y        work queue address
+        JMP     PKTDQ
+
+* Now try to find the packet on the queue.
+*  A holds the queue's id
+*  Q           queue's TCB or DCB
+*  Y           address of the queue
+*  K           pkt
+
+PKTDQ   COPY   Y,WORK1          save last ptr
+        COPY   P:LINK(Y),Y      get next pkt
+        JEQ    Y,DQPCNT         end of queue
+        CSK    Y,K              found it yet ?
+        JMP    PKTDQ            no - continue down chain
+        JMP    PKTDQ            no - continue down chain
+
+* Found the packet. Unless it was on the current task work
+* queue its id field must be reset.
+
+        COPY   CRNTSK,Y
+        CSN    Y,Q              on current task wkQ ?
+        JMP    PKTF3
+        COPY   K,Y              no -
+        COPY   A,P:ID(Y)         reset pkt id field
+        JGT    A,PKTF3          found on task wkQ
+        ADD    =1,A
+        JEQD   A,PKTF2          found on clock wkQ
+
+* Found on a device work queue. If it was the head packet
+* the device stop routine is called, the packet unlinked,
+* and if there are any more packets the device start
+* routine is called.
+
+        EXCH   Q,Y
+        CSK    Q,D:WKQ(Y)       was it the head pkt ?
+        JMP    PKTF3            no - treat as task
+        JMP    PKTF3            no - treat as task
+        JST    *D:STOP(Y)       call device stop routine
+        EXCH   Y,K
+        COPY   =-1,Q
+        EXCH   Q,P:LINK(Y)      mark pkt not queued
+        COPY   Q,*WORK1         and unlink it
+        JEQ    Q,PKTF1          jump if no more pkts
+        EXCH   Y,K
+        JST    *D:STRT(Y)       call device start routine
+        EXCH   Y,K
+PKTF1   COPY   P:ID(Y),A        return queue id
+        JMP    RETI
+
+* Found on the clock work queue. The next packet must be
+* corrected.
+
+PKTF2   COPY   P:RES1(Y),Q      get pkt delay
+        COPY   P:LINK(Y),Y      get the next pkt
+        JEQ    Y,PKTF3          no more pkts
+        ADD    P:RES1(Y),Q      correct next pkt delay
+        COPY   Q,P:RES1(Y)      then treat as task
+
+* Found on a task work queue. If it was the only packet
+* then the packet bit must be cleared in the task state.
+
+PKTF3   COPY   K,Y
+        COPY   Q,K              save TCB ptr
+        COPY   =-1,Q
+        EXCH   Q,P:LINK(Y)      mark pkt not queued
+        COPY   Q,*WORK1         and unlink it
+        JLE    A,PKTF4          jump if not a task
+        COPY   K,Y              recover TCB ptr
+        COPY   T:WKQ(Y),Q       get work queue
+        JNE    Q,PKTF4          jump if no other pkts
+        COPY   T:STAT(Y),Q
+        AND    :F-S:PKT,Q       clear pkt state
+        COPY   Q,T:STAT(Y)
+PKTF4   JMP    RETI
+
+* Packet not found. Try the current task unless we were
+* looking on the current task's work queue already.
+
+DQPCNT  COPY   CRNTSK,Y         get current TCB
+        COPY   =109,A           pkt not found error code
+        CSN    Y,Q              looking at current task ?
+        JMP    ERR              yes - error return
+        COPY   T:ID(Y),A        no - get task id
+        JMP    DQPT1
+
+**********************************************************
+*                                                        *
+*              JST    TCBSET                             *
+*                                                        *
+* This subroutine is used to locate a TCB via the task   *
+* table. It is entered with the task id in A and returns *
+* the TCB in Y, with A,Q,X,K,L preserved. If the task id *
+* is invalid then it returns zero. It turns interrupts   *
+* off on entry.                                          *
+*                                                        *
+**********************************************************
+
+TCBSET  DATA   0
+        DIN                     interrupts off
+        JLE    A,TCBST1         eror unless id > zero
+        COPY   TSKTAB,Y         get task table
+        CSK    A,0(Y)           compare A with tasktab upb
+        JMP    $+2
+        JMP    TCBST1           id too large
+        ADD    A,Y
+        COPY   0(Y),Y           get TCB ptr or zero
+        JMP    *TCBSET
+
+TCBST1  COPY   =0,Y             error - return zero in Y
+        JMP    *TCBSET
+
+* Global initialisation list
+
+        DATA   0                end of list
+
+        DATA   G:GBIN,GLOBIN-KLIB
+        DATA   G:GVEC,GETVEC-KLIB
+        DATA   G:FVEC,FREVEC-KLIB
+        DATA   G:CDEV,CRTDEV-KLIB
+        DATA   G:DDEV,DELDEV-KLIB
+        DATA   G:CTSK,CRTTSK-KLIB
+        DATA   G:DTSK,DELTSK-KLIB
+        DATA   G:CPRI,CHGPRI-KLIB
+        DATA   G:SFLG,SETFLG-KLIB
+        DATA   G:TFLG,TSTFLG-KLIB
+        DATA   G:ABRT,ABORT-KLIB
+        DATA   G:HOLD,HOLD-KLIB
+        DATA   G:RLSE,RELEAS-KLIB
+        DATA   G:TSKW,TASKWT-KLIB
+        DATA   G:QPKT,QPKT-KLIB
+        DATA   G:DQPT,DQPKT-KLIB
+
+        DATA   49               highest ref global
+
+KLBEND  END
+
+

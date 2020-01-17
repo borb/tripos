@@ -1,0 +1,591 @@
+$<HEADER'
+SECTION "TRACE"
+
+GET "header"
+
+$>HEADER'
+
+$$FULL := ~$$LSI4TRIPOS | ~$$COMMAND
+
+//*****************************************************************************
+//        Mail server subrouines used for tracing and diagnosticising        //
+//*****************************************************************************
+$<FULL
+LET switch(string) = VALOF
+$(  LET v = vec 10
+    WRITEF("%S : *E", string)
+    readline(TRUE)
+    IF rdargs(string, v, 10)=0 THEN RESULTIS 1
+    RESULTIS v!0
+$)
+$>FULL
+LET write.uid (uid) BE write..uid(uid, 0)
+
+LET write..uid (uid, offset) BE
+$(
+    // For diagnostic use only
+    WRCH('#')
+    FOR n=0 TO 3 DO writehex(uid%%(n+offset),4)
+$)
+
+//=============================================================================
+
+LET trace.file (file,string) BE
+$(
+    // Print out info from the file descriptor at "file".
+    writef("%TF U=", string)
+    write.uid(file+uid)
+    writes(" P=")
+    write.uid(file+uid2)
+    writef(" SOB=%X4 CS=#%X4 @#%X4*N",
+                file!start.of.block, file!cache.size, file!cache.address)
+$)
+
+//=============================================================================
+
+LET ptrace (string,file.desc1,entry,file.desc2) BE
+$(
+    // Print tracing information on file action
+    writes(string)
+    UNLESS file.desc1=-1 THEN $( writes("  "); write.uid(file.desc1+uid) $)
+    UNLESS entry=-1 THEN writef("  #%X4", entry)
+    UNLESS file.desc2=-1 THEN $( writes("  "); write.uid(file.desc2+uid) $)
+    newline()
+$)
+
+//=============================================================================
+LET ms.analyse () BE
+$<SMALL
+WRITEF("No analyse!!*N")
+$>SMALL
+$<SMALL'
+$(  MANIFEST
+    $(  analyse.all.data        = 1;
+        analyse.all.users       = 2
+        A.User                  = 0
+        A.Quick                 = A.user                + 1
+        A.send                  = A.Quick               + 1
+        A.check                 = A.send                + 1
+        A.data                  = A.check               + 1
+        A.interactive           = A.data                + 1
+        A.strings               = A.interactive         + 1
+        A.puids                 = A.strings             + 1
+        A.skip                  = A.puids               + 1
+        A.chain                 = A.skip                + 1
+    $)
+    LET f(string) = VALOF
+    $(  LET pos = 1
+        LET base = 10
+        LET res=0
+        LET val(ch) = '0' <= ch <= '9' -> ch-'0',
+                      'A' <= capitalch(ch) <= 'F' -> capitalch(ch)-'A'+10, 0
+        IF string%1 = '#'
+        $(      pos +:= 2
+                base := 16
+                UNLESS capitalch(string%2)='X'
+                DO TEST capitalch(string%2)='O' THEN base := 8 ELSE pos -:= 1
+        $)
+        FOR i = pos TO string%0 DO res := res*base+val(string%i)
+        RESULTIS res
+    $)
+
+    // Print out structure of mail system database
+    LET file            = VEC file.desc.size
+    LET index           = VEC file.desc.size
+    LET md              = VEC file.desc.size
+    LET md.cache        = VEC 600/rwpw
+    LET um.cache.address= um!cache.address
+    LET um.number       = -1
+    LET um.hash         = 0
+    LET next.chain.um   = 0
+    LET chain.um, chain.md, md.number, interactive      = ?, ?, ?, ?
+    LET user,send,quick,check,data,string,puids,chain   = ?,?,?,?,?,?,?,?
+    LET rdargs.string   = "User/K,Quick/s,send/s,check/s,data/s,*
+                                *interactive=i/s,strings/s,puids/s,skip/k,*
+                                *chain/k"
+    LET argv            = VEC 20
+
+    user := rdargs(rdargs.string, argv, 20)
+    UNRDCH()
+    IF user=0 $( WRITEF("Bad string for '%S'*N", rdargs.string); RETURN $)
+    user                := argv!A.user
+    quick               := argv!A.quick
+    send                := argv!A.send
+    check               := argv!A.check
+    data                := argv!A.data
+    interactive         := argv!A.interactive
+    strings             := argv!A.strings
+    puids               := argv!A.puids
+    IF user=0 THEN user := argv!A.skip
+    chain               := argv!A.chain
+    UNLESS chain=0 um.hash              := f(chain) -1
+
+    zap.file(file)
+    zap.file(index)
+    zap.file(md)
+    md ! cache.address  := md.cache
+    md ! cache.size     := 600
+
+    read.cache(um, 0)
+
+    writes("*nMAIL SYSTEM DATABASE ANALYSIS *N*
+             *============================= *n")
+
+    ms.fs.fail.level    := level()
+    ms.fs.fail.link     := ms.analyse.fail
+    IF send THEN retrieve.entry(root, root.send.index, md)
+
+ms.analyse.loop:
+    TEST send
+    $(  LET this = um.hash
+        LET base = ?
+        IF um.hash >= 100 THEN BREAK
+        um.hash := um.hash+2
+
+        base := address.offset(md, this * 4, 4*4)       // Four puids ....
+        TEST md.cache!((4+base)/rwpw) = 0
+        $(EMPTY
+                UNLESS (md.cache!(base/rwpw)) = 0
+                $(      WRITEF("**** Slot %N contains data! *****N", this)
+
+                        IF interactive
+                        $(  RDCH();
+                            IF (switch("delete/s") = TRUE)
+                            $(  WRITEF("Delete %N from ", this)
+                                trace.file(md, "send index")
+                                delete(md, this)
+                            $)
+                            UNRDCH()
+                        $)
+                $)
+        $)EMPTY
+        ELSE
+        $(
+            WRITEF("Offset %I2: ssp:", this)
+            write..uid(md.cache, base)
+            writes("  Text:")
+            write..uid(md.cache, base+4)
+            writes("  Head:")
+            write..uid(md.cache, base+8)
+            writes("  Rest:")
+            write..uid(md.cache, base+12)
+            NEWLINE()
+            IF data
+            $(  LET ssp.file    = VEC File.desc.size
+                LET cache       = VEC 400/rwpw
+                LET next.new.string=-1
+                zap.file(ssp.file)
+                ssp.file ! cache.address:= cache
+                ssp.file ! cache.size   := 400
+                copy.uid(md.cache, base, ssp.file+uid, 0)
+
+                read.cache(ssp.file, 0)
+                FOR I = 0 TO 2 DO WRITEF("%X4 ", cache%%i)
+                WRITEF("*NTUID: "); FOR I = 3 TO 6 DO WRITEF("%X4 ", cache%%i)
+                WRITEF("  PUID: "); FOR I = 7 TO 10 DO WRITEF("%X4 ", cache%%i)
+                WRITEF("*N")
+
+                FOR I = 11 TO ssp.file!cache.size -1
+                DO TEST cache%%i = #XFFFF
+                   THEN BREAK
+                   ELSE WRITEF("%X4 ", cache%%i)
+                NEWLINE()
+
+                FOR I = 22 TO (ssp.file!cache.size -1)*2
+                DO TEST cache%i = #XFF & cache%(i+1) = #XFF
+                   THEN BREAK
+                   ELSE
+                   $(   LET len = cache%i
+                        LET valid = len > 2                     &
+                                 (len + i < (ssp.file!cache.size-1)*2) &
+                                 (len ~= ' ' | next.new.string < i)
+                        IF valid FOR off = i+1 TO i+len SWITCHON cache%off INTO
+                        $(      DEFAULT:
+                                        UNLESS (' ' <= cache%off <= 177)
+                                        DO      valid := FALSE;         ENDCASE
+                                case '*T':                              ENDCASE
+                        $)
+                        IF valid 
+                        $(      WRITEF("%I2: %n: '", i, len)
+                                FOR off = i+1 TO i+len DO WRCH(cache%off)
+                                writef("'*N")
+                                next.new.string := i+len
+                        $)
+                    $)
+                NEWLINE()
+
+                IF data & (md.cache %% (base+8) ~= 0)
+                $(DO.HEADER
+                copy.uid(md.cache, base+8, ssp.file+uid, 0)
+                read.cache(ssp.file, 0)
+                WRITEF("Head:");
+                IF check THEN FOR I = 0 TO ssp.file!cache.size -1
+                DO WRITEF("%X4 ", cache%%i)
+                WRITEF("*N'")
+                FOR I = 50 TO (((cache%%2)+50) > ((ssp.file!cache.size-1)*2)) ->
+                        (ssp.file!cache.size-1)*2, ((cache%%2)+49)
+                   $(   SWITCHON cache%i INTO
+                        $(      DEFAULT:
+                                        TEST (' ' <= cache%i <= 177)
+                                        THEN WRCH(cache%i)
+                                        ELSE WRITEF("<%X2>", cache%i)
+                                        ENDCASE
+                                case '*T':WRCH(cache%i);        ENDCASE
+                                case '*N':WRITEF("'*N'");       ENDCASE
+                        $)
+                    $)
+                WRITEF("'*N")
+                $)DO.HEADER
+
+                IF data & (md.cache %% (base+4) ~= 0)
+                $(DO.TEXT
+                WRITEF("text:")
+                copy.uid(md.cache, base+4, ssp.file+uid, 0)
+                read.cache(ssp.file, 0)
+                IF CHECK THEN FOR I = 0 TO ssp.file!cache.size -1
+                DO WRITEF("%X4 ", cache%%i)
+                WRITEF("*N'")
+                FOR I = 50 TO (((cache%%2)+50) > ((ssp.file!cache.size-1)*2)) ->
+                        (ssp.file!cache.size-1)*2, ((cache%%2)+49)
+                $(      SWITCHON cache%i INTO
+                        $(      DEFAULT:
+                                        TEST (' ' <= cache%i <= 177)
+                                        THEN WRCH(cache%i)
+                                        ELSE WRITEF("<%X2>", cache%i)
+                                        ENDCASE
+                                case '*T':WRCH(cache%i);        ENDCASE
+                                case '*N': WRITEF("'*N'");      ENDCASE
+                        $)
+                    $)
+                WRITEF("'*N")
+                $)DO.TEXT
+
+                IF data & (md.cache %% (base+12) ~= 0)
+                $(DO.REST
+                WRITEF("rest:")
+                copy.uid(md.cache, base+12, ssp.file+uid, 0)
+                read.cache(ssp.file, 0)
+                IF CHECK THEN FOR I = 0 TO ssp.file!cache.size -1
+                DO WRITEF("%X4 ", cache%%i)
+                WRITEF("*N'")
+                FOR I = 50 TO (((cache%%2)+50) > ((ssp.file!cache.size-1)*2)) ->
+                        (ssp.file!cache.size-1)*2, ((cache%%2)+49)
+                $(      SWITCHON cache%i INTO
+                        $(      DEFAULT:
+                                        TEST (' ' <= cache%i <= 177)
+                                        THEN WRCH(cache%i)
+                                        ELSE WRITEF("<%X2>", cache%i)
+                                        ENDCASE
+                                case '*T':WRCH(cache%i);        ENDCASE
+                                case '*N': WRITEF("'*N'");      ENDCASE
+                        $)
+                    $)
+                WRITEF("'*N")
+                $)DO.REST
+
+                IF interactive
+                $(  RDCH();
+                    IF (switch("delete/s") = TRUE)
+                    $(  WRITEF("Delete %N - %N from ", this, this+3)
+                        trace.file(md, "send index")
+                        delete(md, this)
+                        delete(md, this+1)
+                        delete(md, this+2)
+                        delete(md, this+3)
+                    $)
+                    UNRDCH()
+                $)
+            $)
+            NEWLINE()
+        $)
+    $) REPEAT
+    ELSE                // Not send !!
+    $(
+        LET um.offset.dibyte    = ?
+        LET first.strings       = TRUE
+        // Loop for each element in MML
+
+        chain.um := next.chain.um
+
+        // If the end of the current hash chain has been reached, find the next
+        // one with anything on it.
+        IF chain.um = 0
+        $(  $(  um.hash := um.hash+1
+                IF um.hash = 128 THEN BREAK
+            $) REPEATWHILE um.cache.address%%um.hash = 0
+
+            IF um.hash=128 THEN BREAK
+            chain.um := um.cache.address %% um.hash
+            IF user=0 & puids
+            THEN writef("HASH CHAIN %I3 giving %I3*N", um.hash, chain.um)
+        $)
+        break.test()
+//      um.ea := chain.um + um!cache.address
+        next.chain.um := um.cache.address %% (chain.um + um.chain)
+        um.number := (chain.um - User.um.Base)/um.element.size
+
+        um.offset.dibyte := address.offset(um, chain.um, um.element.size)
+
+        //----------------------------------
+        // Look at the info saying who it is
+        //----------------------------------
+        $(  LET name = VEC 20
+            convert..puid.to.name(um.cache.address,
+                                  um.offset.dibyte+um.user.puid, name)
+            IF um.cache.address %% (um.offset.dibyte+um.user.puid) = 0
+            THEN name := "<unused>"
+            UNLESS user=0
+            TEST compstring(user, name)=0
+            THEN IF puids writef("On hash chain %N at %N, ", um.hash, chain.um)
+            ELSE WRITEF("NOT %I2 %T8*C", um.number, name) <> LOOP
+            WRITEF("User %I2 %T8 =", um.number, name)
+            write..uid(um.cache.address, um.offset.dibyte + um.user.puid)
+            UNLESS 0 < name%0 < 6
+            $(  WRITEF("*NLong name at %N: ", um.number * um.element.size)
+                trace.file(um, "UM")
+                FOR i = 0 TO um.element.size -1
+                DO WRITEF("%X4 ", um.cache.address %% (um.offset.dibyte+i))
+                NEWLINE()
+            $)
+        $)
+        IF um.cache.address %% (um.offset.dibyte+um.user.puid) = 0
+        $(  NEWLINE(); LOOP  $)
+
+        IF puids
+        $(  writes(" MD=")
+            write..uid(um.cache.address, um.offset.dibyte + um.md.puid)
+        $)
+        WRCH('*C')              // In case not wanted ...
+
+        copy.uid  (um.cache.address, um.offset.dibyte + um.md.puid, md+uid,0)
+
+        retrieve.entry(master.index,(um.number*master.index.slot.size)+
+                                                master.index.user.index,index)
+        retrieve.entry(master.index,(um.number*master.index.slot.size)+
+                                                master.index.md,file)
+
+        TEST compare.uid(file+uid, 0, md+uid, 0)
+        $(  IF puids THEN NEWLINE()
+            IF quick
+            $(  UNLESS argv!A.skip = 0 user := 0
+                TEST user=0
+                THEN LOOP
+                ELSE BREAK
+            $)
+            md.number           := 0
+            md!start.of.block   := -1
+            chain.md            := 0
+
+            $(  // Loop for each element in a message info file
+
+                LET Current.disp        = chain.md
+                LET flags               = ?
+                LET ismail              = ?
+                LET remote              = ?
+                LET error               = ?
+                read.cache(md, chain.md)
+                chain.md := md.cache %% md.chain
+                UNLESS (chain.md & #X8000) = 0
+                DO chain.md |= #XFFFF0000
+                IF chain.md<0 THEN BREAK
+
+WRITEF(" ->%X4 ", chain.md)
+
+                flags           := md.cache %% md.flags
+                ismail          := (flags & md.notmail.flag) = 0
+                remote          := (flags & md.remote.flag) ~= 0
+                error           := (flags & md.error.flag) ~= 0
+
+
+                IF puids
+                $(  writef("  @%X4 Mess ID ", md!start.of.block)
+                    write..uid(md.cache, md.umid)
+                    writes(ismail -> " Text   file ", " First  Puid ")
+                    write..uid(md.cache, md.message.puid)
+                    TEST ismail
+                    THEN IF md.sizebytes.version <= md.cache %% md.version <= md.max.version
+                         THEN WRITEF(" %I5 bytes", md.cache %% md.message.bytes)
+                    ELSE WRITEF(" Notmail %N", md.cache %% md.nm.type)
+                    IF remote
+                    $(  WRITEF("*N Remote file ")
+                        write..uid(md.cache, md.remote.list)
+                        IF data
+                        $(      LET file        = VEC file.desc.size
+                                LET cache       = VEC 100/rwpw
+                                LET bytes       = ?
+                                ZAP.file(file)
+                                file!cache.address      := cache
+                                file!cache.size         := 100
+                                file!next.read          := 50
+                                copy.uid(md.cache, md.remote.list, file+uid, 0)
+
+                                read.cache(file, 0)
+                                bytes := cache %% 2
+                                WRITEF(" %N bytes '", bytes)
+                                FOR i = 1 TO bytes DO WRCH(read.byte.from.file(file))
+                                WRITEF("'")
+                        $)
+                    $)
+
+                    IF error
+                    $(  WRITEF("*N Error file ")
+                        write..uid(md.cache, md.error.header)
+                        IF data
+                        $(      LET file        = VEC file.desc.size
+                                LET cache       = VEC 100/rwpw
+                                LET bytes       = ?
+                                ZAP.file(file)
+                                file!cache.address      := cache
+                                file!cache.size         := 100
+                                file!next.read          := 50
+                                copy.uid(md.cache, md.error.header, file+uid, 0)
+
+                                read.cache(file, 0)
+                                bytes := cache %% 2
+                                WRITEF(" %N bytes '", bytes)
+                                FOR i = 1 TO bytes
+                                DO WRCH(read.byte.from.file(file))
+                                WRITEF("'")
+                        $)
+                    $)
+
+
+                    writef("*N        Flags %X4", md.cache %% md.flags)
+                    writef(" Ver %I4/%I2,  ",
+                                md.cache %% md.version, md.current.version)
+                    writes(ismail -> " Header file ", " Second Puid ")
+                    write..uid(md.cache, md.header.puid)
+                    IF ismail
+                    THEN IF md.sizebytes.version <= md.cache %% md.version <= md.max.version
+                         THEN WRITEF(" %I5 bytes ", md.cache %% md.header.bytes)
+                    IF interactive
+                    $(  LET     res = ?
+                        RDCH();
+                        IF (switch("update/s") = TRUE)
+                        $(  WRITEF("Virtual update !!*N")
+                        $)
+                        UNRDCH()
+                    $)
+                $)
+                IF check & ismail
+                $(  retrieve.entry(index, md.number+1, file)
+                    UNLESS compare.uid(file+uid, 0, md.cache, md.header.puid)
+                    $(  writes("U/S*N ----------- In index header file =")
+                        write..uid(file + uid, 0)
+                    $)
+
+                    retrieve.entry(index, md.number, file)
+                    UNLESS compare.uid(file+uid, 0, md.cache, md.message.puid)
+                    $(  writes("U/S*N ----------- In index Text file =")
+                        write..uid(file + uid, 0)
+                    $)
+
+                    IF remote
+                    $(  retrieve.entry(index, md.number+2, file)
+                        UNLESS compare.uid(file+uid, 0, md.cache, md.remote.list)
+                        $(  writes("U/S*N ----------- In index Remote file =")
+                            write..uid(file + uid, 0)
+                        $)
+                    $)
+
+                    IF error
+                    $(  retrieve.entry(index, md.number+(remote->3,2), file)
+                        UNLESS compare.uid(file+uid, 0, md.cache, md.error.header)
+                        $(  writes("U/S*N ----------- In index Error file =")
+                            write..uid(file + uid, 0)
+                        $)
+                    $)
+
+                $)
+                IF puids newline()
+                IF strings
+                $(  LET sender  = md.cache %% md.sender
+                    LET subject = md.cache %% md.subject
+                    LET flags   = md.cache %% md.flags
+                    LET day     = md.cache % (md.umid*bprw + 2)
+                    LET month   = md.cache % (md.umid*bprw + 1)
+                    LET year    = md.cache % (md.umid*bprw + 0)
+
+                    LET offset  = address.offset(md, current.disp+sender, 16) *
+                                                                        bprw
+                    LET len     = md.cache%offset
+                    LET written = FALSE
+
+                    UNLESS puids IF first.strings THEN NEWLINE()
+                    first.strings := FALSE
+                    TEST ismail
+                    $(  WRITEF("From%C", ((flags & 1) = 0) -> ' ', 'D')
+                        written := TRUE
+                        IF len > 14
+                        $(  WRITEF("<string is length %N> ", len)
+                            len := 14
+                        $)
+                        FOR I = 1 TO len DO WRCH(md.cache % (i+offset))
+                        FOR i = len TO 3 DO WRCH(' ')
+
+                        WRITEF(" @ %I2/%I2/%I2 %C ", day, month, year,
+                                                ((flags & 2) = 0) -> 'n', ' ' )
+                    $)
+                    ELSE
+                    $(  UNLESS sender=0
+                        $(  WRITES("String 1 '")
+                            written := TRUE
+                            FOR i = 1 TO len DO wrch(md.cache % (i+offset))
+                            WRITES("'  ")
+                        $)
+                    $)
+
+                    offset      := address.offset(md, current.disp+subject,255)*
+                                                                         bprw
+                    UNLESS subject=0
+                    $(  len             := md.cache%offset
+                        written := TRUE
+                        UNLESS ismail WRITES("String 2")
+                        WRITES(" '")
+                        FOR I = 1 TO len DO WRCH(md.cache % (i+offset))
+                        WRITES("'")
+                    $)
+                    IF written THEN newline()
+                $)
+                md.number +:= remote -> 3, 2
+                if error md.number +:= 1
+            $) REPEAT        // End of message loop
+            UNLESS argv!A.skip=0 DO user := 0
+            UNLESS user = 0 & chain=0                                   BREAK
+            newline()
+        $)             // End of conditional "IF b ..."
+        ELSE
+        $(  writes("U/S*N ----------- IMD=")
+            write..uid(file + uid, 0)
+        $)
+    $) REPEAT     // End of user loop
+
+    GOTO ms.analyse.end
+
+ms.analyse.fail:
+    writes("*N*N FAILED - ")
+    fs.explain(fs.rc)
+    GOTO ms.analyse.loop
+
+ms.analyse.end:
+    Zap.file(md)
+    writes("END OF ANALYSIS*N*N")
+$)
+$>SMALL'
+//=============================================================================
+
+LET time.trace() BE
+$(
+    // Print out the time taken since "start.time" was set.  This is in terms
+    // of the ticks-within-minute timer only.
+    LET t = rootnode!rtn.ticks - start.time
+
+    IF t<0 THEN t:= t + (60*tickspersecond)
+
+    writef("Time = %I4.%I2*N", t/tickspersecond,
+                                ( (t REM tickspersecond) *100) / tickspersecond)
+$)
+
+//=============================================================================
+
+

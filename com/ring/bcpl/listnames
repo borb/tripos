@@ -1,0 +1,555 @@
+/***********************************************************************
+**             (C) Copyright 1980  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+  ##        ########   ######   ########  ##    ##    ####    ##    ##
+  ##        ########  ########  ########  ###   ##   ######   ###  ###
+  ##           ##     ##           ##     ####  ##  ##    ##  ########
+  ##           ##     #######      ##     ## ## ##  ########  ## ## ##
+  ##           ##           ##     ##     ##  ####  ##    ##  ##    ##
+  ##           ##           ##     ##     ##  ####  ##    ##  ##    ##
+  ########  ########  ########     ##     ##   ###  ##    ##  ##    ##
+  ########  ########   ######      ##     ##    ##  ##    ##  ##    ##
+
+************************************************************************
+**    Author:   Brian Knight                       February 1980      **
+***********************************************************************/
+
+
+// Program to list all the names currently in the data ring
+// name lookup server.
+
+// Modifications:
+// 26 Jun 82 by NJO to use the new nameserver's different
+//      listnames function if the name of this (NAMELIST) is defined.
+//      Also changed to use get and put2bytes for filling in ring blocks.
+
+//  1 Jul 82 by NJO to use the SSP function in SSPLIB, and to sort
+//      the list before printing.
+
+// 17 Dec 82 by NJO to produce an output file suitable to feed to CGG's
+//      name table assembler as input, including site and subnet information.
+
+// 20 Jan 83 by MAJ to get the station name from the program's internal
+//      data structures rather than by calling 'write machine name'.  This
+//      avoids picking up names from the wrong ring.
+
+// 23 Jan 83 by MAJ to put station and site numbers in hexadecimal.
+
+// 20 Jul 83 by NJO.  Given a "FROM=SERVICE" key to allow listing of other
+//      nameservers' contents.  Also support for old nameserver removed.
+
+//  9 Aug 83 by NJO.  Name of header file changed to reflect change in world.
+//      Quotes put round "extended name" strings.
+
+//  1 Sep 83 by NJO.  Name of header file changed yet again, and quotes put
+//      round service names not beginning with a letter.
+
+// 22 Sep 83 by NJO.  Sorting revised:  whole list now sorted in one pass
+//      using a more sophisticated "compare" routine.  Bug fixed in quoted
+//      names - must not lower-case them.
+
+// 16 Nov 83 by NJO.  Change output format to give machine names rather than
+//      numbers.  Retry on SSP failure.  MCORDER key added to request that
+//      services be sorted into machine order, rather than alphabetical.
+
+//  9 Dec 83 by NJO.  Bug fixed:  leaves TO file open if name lookup fails!
+//      Also more retries on SSP failure.
+
+SECTION "listnames"
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+GET "BCPL.SORTLIST"
+
+GLOBAL
+    $(
+    mcorder     : ug          //If TRUE sort services into host m/c order
+    $)
+
+MANIFEST
+    $(
+    ssp.retries = 10
+
+    bb.ssp.arg4 = bb.ssp.arg3 + 1
+    bb.ssp.arg5 = bb.ssp.arg4 + 1
+    bb.ssp.arg6 = bb.ssp.arg5 + 1
+
+    site.offset       = bb.ssp.arg2*2      //Reply fields (byte offsets)
+    subnet.offset     = bb.ssp.arg2*2 + 1
+    flags.offset      = bb.ssp.arg6*2
+    namestring.offset = bb.ssp.arg6*2 + 1
+    version.offset    = bb.ssp.arg1        //(dibyte offsets)
+    station.offset    = bb.ssp.arg3
+    port.offset       = bb.ssp.arg4
+    function.offset   = bb.ssp.arg5
+
+    domstring.offset  = bb.ssp.arg2*2      //Byte offset in a DOMLIST reply
+
+    nd.link               = 0   //Fields of name descriptor
+    nd.station            = 1
+    nd.flags              = 2
+    nd.port               = 3
+    nd.func               = 4
+    nd.site               = 5
+    nd.subnet             = 6
+    nd.extstring          = 7
+    nd.string             = 8
+
+    dd.link               = 0   //Fields of domain descriptor
+    dd.string             = 1
+    $)
+
+
+
+LET start() BE
+    $(
+    LET console.stream = output()
+    LET to.stream      = 0
+    LET breakcondition = FALSE
+    LET rc             = 20
+
+    LET argv           = VEC 30
+    LET datv           = VEC 14
+    LET default.serv   = TRUE //Set FALSE if explicit service name given
+    LET namelist.stn   = ?    //Result of name lookup (may be a bridge!)
+    LET namelist.port  = ?
+    LET namelist.func  = ?
+    LET tx.buff        = VEC bb.ssp.arg1
+    LET rx.buff        = VEC 63
+
+    LET name.count     = 0
+    LET name.anchor    = 0
+    LET version.set    = FALSE // version must be set first time round loop
+    LET version        = ?
+    LET current.site   = -1
+    LET current.subnet = -1
+    LET nd             = ?    //Name descriptor
+
+    $(
+       LET rdargs.string  = "to,from=service/k,mcorder/s"
+       LET namelist.serv  = "NAMELIST"
+       LET nsvec          = VEC nsv.upb
+
+       IF rdargs(rdargs.string, argv, 30) = 0
+       THEN
+         $(
+         writef("Bad args for key string *"%S*"*N", rdargs.string)
+         Stop(20)
+         $)
+
+       IF argv!0 \= 0
+       THEN
+       $( // TO file specified
+          to.stream := findoutput(argv!0)
+
+          IF to.stream = 0 THEN
+          $( writef("Can't open %S*N", argv!0)
+             stop(20)
+          $)
+       $)
+
+       IF argv!1 \= 0 THEN     //  SERVICE name specified
+       $(
+          namelist.serv := argv!1
+          default.serv  := FALSE
+       $)
+
+       mcorder := argv!2 \= 0
+
+       UNLESS lookup.name(namelist.serv, nsvec) DO
+       $( writef("Lookup of namelist service *"%S*" failed: ", namelist.serv)
+          GOTO ns.problem
+       $)
+       namelist.stn  := nsv.machine.id ! nsvec
+       namelist.func := nsv.func ! nsvec
+       namelist.port := nsv.port ! nsvec
+    $)
+
+
+    // Ask the nameserver for each name in turn, until
+    // it gives a null name string, meaning that there
+    // are no more.
+    // The version number is returned with each data block.
+    // This changes each time the name server is updated,
+    // and must remain the same for this to be a consistent
+    // listing.
+
+    FOR namenum=0 TO maxint
+    DO
+    $( LET len      = ?
+       LET flags    = ?
+       LET quoted   = ?       //TRUE if the name string requires quotes
+
+       IF testflags(1) THEN $( breakcondition := TRUE; result2 := 96; BREAK $)
+
+       IF testflags(8) THEN  //Print status information
+          writef("Reading names - %N read so far*N", namenum)
+
+       put2bytes(tx.buff, bb.ssp.arg1, namenum)  //Fill in tx data
+
+       FOR retry = 1 TO ssp.retries DO
+       $( IF ssp(0,
+                 tx.buff, bb.ssp.arg1+1,
+                 rx.buff, 64,
+                 0, namelist.func, namelist.stn, namelist.port)
+          THEN GOTO ssp.ok
+       $)
+
+       writef("Too many SSP faults after %N names, last fault:  ", name.count)
+       GOTO ns.problem
+
+ssp.ok:
+       UNLESS version.set
+       THEN
+         $( // This is the first time round the loop
+         // Record the version number and date and time.
+         version.set := TRUE
+         version     := get2bytes(rx.buff, version.offset)
+         datstring(datv)
+         $)
+
+       // Check nameserver not updated
+
+       IF version \= get2bytes(rx.buff, version.offset)
+       THEN
+         $( // It has been updated - error.
+         result2 := 208   //Say "device busy"
+         GOTO ns.problem
+         $)
+       // Valid reply - read length of name string
+
+       len := byteget(rx.buff, namestring.offset)
+
+       // Null string indicates normal end of table
+
+       IF len = 0 THEN BREAK
+
+       // Check that the name starts with a letter.
+       // If not then it must be quoted.
+
+       $( LET first.ch = byteget(rx.buff, namestring.offset+1)
+
+          quoted := NOT (('A' <= first.ch <= 'Z') | ('a' <= first.ch <= 'z'))
+       $)
+
+       // Get and fill in a descriptor block
+
+       nd := getvec(nd.string + (len+(quoted -> 2, 0))/bytesperword)
+       IF nd = 0 THEN GOTO ns.problem
+
+       nd.site ! nd    := byteget(rx.buff, site.offset)
+       nd.subnet ! nd  := byteget(rx.buff, subnet.offset)
+       nd.station ! nd := get2bytes(rx.buff, station.offset)
+       nd.port ! nd    := get2bytes(rx.buff, port.offset)
+       nd.func ! nd    := get2bytes(rx.buff, function.offset)
+
+       flags           := byteget(rx.buff, flags.offset)
+       nd.flags ! nd   := flags
+
+       $( LET extstr.len = byteget(rx.buff, namestring.offset+len+1)
+
+          TEST extstr.len = 0
+
+          DO nd.extstring ! nd := 0
+          OR
+          $( LET v = getvec(extstr.len/bytesperword)
+
+             IF v = 0 THEN GOTO ns.problem
+
+             FOR i = 0 TO extstr.len DO
+                v%i := byteget(rx.buff, namestring.offset+len+1+i)
+
+             nd.extstring ! nd := v
+          $)
+       $)
+
+       TEST quoted
+       DO
+       $( (nd+nd.string)%1 := '*"'
+          FOR i = 1 TO len DO
+             (nd+nd.string)%(i+1) :=
+                              capitalch(byteget(rx.buff, namestring.offset+i))
+          len := len+2
+          (nd+nd.string)%len := '*"'
+       $)
+       OR
+       $( FOR i = 0 TO len DO
+             (nd+nd.string)%i :=
+                              smallch(byteget(rx.buff, namestring.offset+i))
+       $)
+       (nd+nd.string)%0 := len
+
+       // Link new block into name chain
+
+       nd.link ! nd := name.anchor
+       name.anchor  := nd
+
+       name.count := name.count+1
+    $)
+
+    IF breakcondition THEN GOTO exit
+
+    IF to.stream \= 0 THEN
+       selectoutput(to.stream)
+
+    writef("(Generated from name table version %N at %S on %S %S)*N*N",
+           version, datv+5, datv+10, datv)
+    writef("Version %N*N*N", version)
+
+    //Now write out the header file for the name table containing the
+    //site and subnet topology.  This is simply copied in from a file for
+    //the local nameserver.  This is inappropriate for a foreign nameserver
+    //so a message is given to that effect.
+
+    TEST NOT default.serv
+
+    DO writef("****** Site topology info. for %S not read*N*N", argv!1)
+    OR
+    $( LET hdr.name   = "sys:ring.nametables.header"
+       LET hdr.stream = findinput(hdr.name)
+
+       TEST hdr.stream = 0
+       DO
+       $( writef("(****** Couldn't find header file %S - guessing info)*N*
+                 *DOMAIN CAMB*N*
+                 *SITE 18 SUBNETS 1*N*
+                 *SUBNET 1 BRIDGE #XA9*N*
+                 *NAMES*N", hdr.name)
+       $)
+       OR
+       $( LET sysin = input()
+
+          selectinput(hdr.stream)
+
+          $( LET ch = rdch()
+
+             UNTIL ch = endstreamch DO
+             $( wrch(ch)
+                ch := rdch()
+             $)
+          $)
+
+          endread()
+          selectinput(sysin)
+       $)
+    $)
+
+    writes("*
+*(    Type           Name                   Station                Port   Func)*
+**N*N")
+
+    $( LET cmpnames(nd1, nd2) = VALOF
+
+       $( LET type2     = (nd.flags!nd2) & #B111
+          LET mc.or.brg = (type2 = nsv.flags.mc.name) |
+                                                 (type2 = nsv.flags.brg.name)
+
+          // First check the type fields:  a machine or bridge name is
+          // always "less than" any other type of name.
+
+          SWITCHON (nd.flags!nd1) & #B111 INTO
+          $( CASE nsv.flags.mc.name:
+             CASE nsv.flags.brg.name:
+             UNLESS mc.or.brg RESULTIS -1
+             ENDCASE
+
+             DEFAULT:
+             IF mc.or.brg RESULTIS 1
+             ENDCASE
+          $)
+
+          // Now check the site and subnet.
+
+          UNLESS nd.site!nd1 = nd.site!nd2 DO
+             RESULTIS nd.site!nd1 - nd.site!nd2
+
+          UNLESS nd.subnet!nd1 = nd.subnet!nd2 DO
+             RESULTIS nd.subnet!nd1 - nd.subnet!nd2
+
+          // If machine ordering specified check the station number
+
+          IF mcorder & NOT mc.or.brg THEN
+          $( UNLESS nd.station!nd1 = nd.station!nd2 DO
+                RESULTIS nd.station!nd1 - nd.station!nd2
+          $)
+
+          RESULTIS compstring(nd1+nd.string, nd2+nd.string)
+       $)
+
+       sortlist(@name.anchor, 0, 0, nd.link, cmpnames)
+    $)
+
+    nd := name.anchor
+
+    FOR namenum = 1 TO name.count DO
+
+    $( LET namestr = nd.string + nd
+       LET len     = namestr % 0
+       LET station = nd.station ! nd
+       LET flags   = nd.flags ! nd
+       LET port    = nd.port ! nd
+       LET func    = nd.func ! nd
+       LET site    = nd.site ! nd
+       LET subnet  = nd.subnet ! nd
+       LET extstr  = nd.extstring ! nd
+
+       IF nd = 0 THEN     //Internal inconsistency - bomb out!!
+       $( result2 := 40; GOTO ns.problem $)
+
+       IF site ~= current.site THEN
+
+       $( writef("At site #X%X2 subnet %N*N", site, subnet)
+          current.site := site
+          current.subnet := subnet
+       $)
+
+       IF subnet ~= current.subnet THEN
+
+       $( writef("At subnet %N*N", subnet)
+          current.subnet := subnet
+       $)
+
+       $( LET typestr = VALOF SWITCHON flags & nsv.flags.pmask INTO
+                              $(
+                                 CASE nsv.flags.nsp:      RESULTIS "nonstand"
+                                 CASE nsv.flags.bsp:      RESULTIS "open    "
+                                 CASE nsv.flags.ssp:      RESULTIS "ssp     "
+                                 CASE nsv.flags.datagram: RESULTIS "datagram"
+                                 CASE nsv.flags.mc.name:  RESULTIS "machine "
+                                 CASE nsv.flags.brg.name: RESULTIS "bridge  "
+                              $)
+          writef("%S %S %S  ", (flags & nsv.flags.slow) = 0 -> "    ", "slow",
+                                                                     typestr,
+                            (flags & nsv.flags.nofunc) = 0 -> "    ", "nofn")
+       $)
+
+       writes(namestr)
+
+       IF extstr ~= 0 THEN
+       $( writef("/*"%S*"", extstr)
+          len := len + extstr%0 + 3
+          nd.extstring ! nd := 0
+          freevec(extstr)
+       $)
+
+       UNTIL len > 23 DO
+       $( wrch(' ')
+          len := len+1
+       $)
+       wrch(' ') // In case it's a long name
+
+       TEST (flags & #B111) = nsv.flags.mc.name |
+            (flags & #B111) = nsv.flags.brg.name
+
+       DO writef("#X%X2", station)   //Machine or bridge - write station number
+       OR
+       $(
+          // Other service - try to find corresponding machine.
+          // Scan the chain, looking at machine names until one is
+          // found with the right station number, site and subnet.
+
+          LET mnd        = name.anchor
+          LET len.mcname = 0    // will be updated if name found
+
+          writef("on ")
+
+          UNTIL mnd = 0 DO
+          $(
+             IF (nd.flags ! mnd & #B111) ~= nsv.flags.mc.name &
+                (nd.flags ! mnd & #B111) ~= nsv.flags.brg.name THEN BREAK
+                                                 //no more m/c names (they are
+                                                 //all at the head of the chain)
+             IF (nd.station ! mnd = station) &
+                (nd.site ! mnd = site) &
+                (nd.subnet ! mnd = subnet) THEN
+             $(
+                len.mcname := (nd.string + mnd)%0
+                BREAK
+             $)
+             mnd := nd.link ! mnd
+          $)
+
+          TEST len.mcname = 0
+
+          DO
+          $( writef("#X%X2 (?)", station)
+             len := len+8
+          $)
+          OR
+          $( writes(nd.string + mnd)
+             len := len+len.mcname
+             UNTIL len > 34 DO    //Pad out name
+             $( wrch(' ')
+                len := len+1
+             $)
+             writef(" (#X%X2)", station)
+             len := len+7
+          $)
+          UNTIL len > 41 DO
+          $( wrch(' ')
+             len := len+1
+          $)
+
+          writef("%U6", port)
+
+          IF (flags & nsv.flags.nofunc) = 0
+          THEN writef("%U6", func)
+       $)
+
+       IF (flags & #B01000000) \= 0 THEN
+          writes(" (flag 6 set)")
+
+       IF (flags & #B10000000) \= 0 THEN
+          writes(" (flag 7 set)")
+
+
+       newline()
+
+       nd := nd.link ! nd // step on to next name descriptor
+
+       IF testflags(1) THEN $( breakcondition := TRUE; result2:=96; BREAK $)
+
+       IF (to.stream ~= 0) & testflags(8) THEN
+       $( selectoutput(console.stream)
+          writef("Writing O/P file - %N names written*N", namenum)
+          selectoutput(to.stream)
+       $)
+    $)
+
+exit:
+    // All OK
+
+    rc  := 0
+
+    TEST breakcondition
+    THEN writes("******BREAK*n")
+    ELSE writef("*N(%n names)*N", name.count)
+
+    writes("*NEndtable*N")
+
+ns.problem:
+
+    IF to.stream \= 0 THEN
+    $( selectoutput(to.stream)
+       endwrite()
+    $)
+
+    UNTIL name.anchor = 0 DO
+    $( LET nd = name.anchor
+       name.anchor := nd.link ! nd
+       freevec(nd)
+    $)
+
+    selectoutput(console.stream)
+    IF rc \= 0 THEN
+       fault(result2)
+    stop(rc)
+    $)
+
+
+AND smallch(c) = 'A' <= c <= 'Z' -> c - 'A' + 'a',  c
+
+

@@ -1,0 +1,234 @@
+SECTION "LOGON"
+
+GET "header"
+GET "clihdr"
+GET "bcpl.ringhdr-MANIFESTS"
+GET "bcpl.enteruidset"
+
+
+MANIFEST
+$(  act.disconnect      = 801           // Console handler disconnect action
+    aot.writing         = #XA004        // USERAUTH & PRIVMAN rc for AOT writing to disc
+    userauth.baduser    = #XDFDB        // USERAUTH rc for bad <user,pw> pair
+    userauth.badsyntax  = #XDFD7        // USERAUTH rc for bad syntax
+    privman.badpriv     = #XA00E        // PRIVMAN rc for bad <user,priv> pair
+    noreflect           = ~1            // All but reflect
+$)
+
+
+//=============================================================================
+
+LET authenticate (puid, pw) = VALOF
+// puid       : an unique identifier (a name)
+// pw         : a string representing a password
+
+//     This procedure calls 'userauth' to generate a UIDset for 'puid'
+// under the authentity 'user' which is returned in 'uidset'.  It's initial life
+// time is set to 'timeout' seconds.  The authority for this operation
+// is provided by the corectness of the password 'pw' for 'puid'.
+//     In the event of a calling errot the result will be FALSE
+
+$(  MANIFEST
+    $(  data.puid       =  bb.ssp.args+1
+        data.pw         = (data.puid+4) * bprw
+        data.timeout    = (data.pw+8)   / bprw
+        result.tuid     = 3
+        result.tpuid    = 7
+    $)
+
+    LET tx.buff         = VEC 40/bytesperword
+    LET rx.buff         = VEC 30/bytesperword   // TUID and TPUID expected
+    LET nsvec           = VEC 3    // Address reurned by SSP, which is discarded
+    LET user            = $<68000TRIPOS
+                                        TABLE #XFF02FBF7, #X8FB014C3
+                          $>68000TRIPOS
+                          $<LSI4TRIPOS
+                                        TABLE #XFF02, #XFBF7, #X8FB0, #X14C3
+                          $>LSI4TRIPOS
+    LET pwlen           = pw%0
+    LET r = ?
+
+    // Set ssp parameters (entry number, user's PUID, timeout, password)
+    tx.buff %% bb.ssp.args      := 1          // authenticate entry number
+    FOR i=0 TO 3 DO
+    tx.buff %% (data.puid+i)    := puid %% i
+    tx.buff %% (data.timeout)   := 0
+    tx.buff %% (data.timeout+1) := 5*60         // Seconds
+    FOR i=1 TO 8 DO
+    tx.buff %  (data.pw-1 +i)   := (i<=pwlen -> pw%i, '*S')
+
+    FOR i=0 TO 60
+    $(  r := ssp("USERAUTH", tx.buff, 14, rx.buff, 15, nsvec)
+
+        IF full.trace
+        $(  writef("USERAUTH failure RC = #%X4*N", rx.buff %% bb.ssp.rc)
+            FOR i=0 TO 20 DO writef("%X4 ", tx.buff%%i)
+            newline()
+            FOR i=0 TO 15 DO writef("%X4 ", rx.buff%%i)
+            newline()
+        $)
+        IF (rx.buff%%bb.ssp.rc = userauth.badsyntax) & (i=0) &
+                (pw%1='@') & (capitalch(pw%2)='Z')
+        $(  FOR i = 1 TO 6
+            DO tx.buff % (data.pw-1 +i) := tx.buff % (data.pw+1 +i)
+            FOR i = 9 TO 10
+            DO tx.buff % (data.pw-3 +i) := (i <= pwlen -> pw%i, '*S')
+            WRITEF("You do not need to type @Z before your password*N")
+            LOOP
+        $)
+        IF r THEN BREAK
+        IF rx.buff %% bb.ssp.rc = aot.writing THEN delay(2*tickspersecond)
+        IF rx.buff %% bb.ssp.rc = userauth.baduser |
+           rx.buff %% bb.ssp.rc = userauth.badsyntax THEN RESULTIS FALSE
+
+        IF i=59
+        $(  writes("*NUnable to contact USERAUTH ")
+            RESULTIS FALSE
+        $)
+    $)
+
+    // This point is only reached on success
+    // Get a vector for the new UID set.
+    $(  LET uids = VEC capsize
+        FOR i=0 TO 3 DO
+        $(  (uids + cap.tuid) %% i      := rx.buff %% (result.tuid + i)
+            (uids + cap.tpuid)%% i      := rx.buff %% (result.tpuid + i)
+            (uids + cap.puid) %% i      := puid %% i
+            (uids + cap.auty) %% i      := user %% i
+        $)
+        RESULTIS enteruidset(uids, 21) ~= 0     //??7????????????????????????????
+    $)
+$)
+
+//=============================================================================
+
+LET user.find.and.set.up() BE
+$(
+    // Log user on.
+    LET savein          = input()
+    LET password        = VEC 20
+//    LET address               = VEC 6
+    LET rc              = FALSE
+    LET eof             = FALSE
+    LET break.made      = FALSE
+    LET error.count     = 0
+
+    //=========================================================================
+    LET read.user.pass(user, pw) = VALOF
+    $(
+        LET argv = VEC 20
+        LET rdargs.string = "Initials/A,PW/k"
+        LET prompt = "*CUser: *E"
+        UNTIL testflags(1)
+        $(  writes(prompt)
+            READLINE(TRUE)              // SC
+            TEST 0=rdargs(rdargs.string,argv,20)
+            THEN IF cis!5 = 0 THEN cis!4, cis!5 := 1,1
+            ELSE
+            $(  FOR i=0 TO (argv!0)%0 DO user%i := (argv!0)%i
+                TEST argv!1=0
+                THEN pw%0 := 0
+                ELSE FOR i=0 TO (argv!1)%0 DO pw%i := (argv!1)%i
+                UNLESS argv!0 = 0 THEN RESULTIS TRUE
+           $)
+        $)
+        RESULTIS FALSE    // This is due to a break in
+    $)
+    //=========================================================================
+
+//    UNLESS lookup.name("PS.MAP",address) THEN writef("Can't find PS.MAP %N*N", RESULT2)
+//                                        <> DELAY(50)
+//                                        <>  log.user.off()
+    map.station := 0    //address!0
+//    map.port := address!2
+//    map.func := address!3
+
+//------------------------------------------------------------------------------
+    norm.input := input()       //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    writes(validroutine(@ms.checker) ->
+                        "Dynamic Mailserver V 2.4.09 (25 Sep 84)*N*N",
+                        "Dynamic Mailserver V 2.4.04 (testing)*N")
+//------------------------------------------------------------------------------
+
+    $(
+        password%0 := 0
+        break.made :=  ~ read.user.pass(client.name, password)
+        UNLESS break.made THEN
+        $(
+            IF password%0=0
+$<SC        $(  eof := ~ask(sc -> "*CPassword:", "*CPassword?",
+                                                password, 10, noreflect)
+$>SC
+$<SC'       $(  eof := ~ask("*CPassword?", password, 10, noreflect) $>SC'
+                newline()
+            $)
+            break.made := testflags(1)
+            UNLESS break.made
+            $(  rc := check.pw(client.name, password)
+                UNLESS rc=TRUE
+                $(  error.count := error.count + 1
+                    writef("Unknown user or wrong password %N = %X8*N",
+                                                        RESULT2, RESULT2)
+                $)
+            $)
+        $)
+    $) REPEATUNTIL rc=TRUE | error.count>=3 | break.made
+
+    UNLESS rc
+    $(  writef("*C****** %S*N", (break.made -> "BREAK", "Too many retries"))
+        log.user.off()
+    $)
+$)
+
+//=============================================================================
+
+AND ask(question, ansvec, anssize, reflect) = VALOF
+$(  LET i = ?
+    LET ch= ?
+    $(rpt
+        i       := 1
+        writes(question)
+        writes(" *E")
+        READLINE(reflect)                                               //SC
+        ch:=rdch()
+        WHILE ch~='*C' & ch~='*N' & ch~='*E' & ch~=endstreamch DO
+        $(  UNLESS ch='*S' THEN
+            $(  IF i< bpw*anssize THEN ansvec%i := ch
+                i:=i+1
+            $)
+            ch:=rdch()
+        $)
+        IF i>=bpw*anssize THEN writes("Answer too long!*N")
+    $)rpt REPEATUNTIL i<bpw*anssize | ch=endstreamch
+    ansvec%0 := i-1
+    RESULTIS ch~=endstreamch
+$)
+
+//=============================================================================
+
+AND log.user.off() BE
+$(  writef("*N****** Returning %S to free pool*N",
+                                rootnode ! rtn.info ! rtninfo.ring ! ri.myname)
+    sendpkt(notinuse, consoletask, act.disconnect, ?, ?, TRUE)
+$)
+
+//=============================================================================
+
+AND check.pw(name, pw) = VALOF
+$(  // Returns TRUE if user loggs on successfully
+    // Fills 'user.puid' with user's PUID if successfull
+
+    LET rc=0
+    rc := convert.name.to.puid(name, client.puid)
+
+    IF rc = convert.no.map THEN
+            writes("Unable to convert name to PUID - can't reach MAP service*N")
+
+    UNLESS rc = convert.ok THEN RESULTIS FALSE
+
+    RESULTIS authenticate(client.puid, pw)
+$)
+
+//=============================================================================
+
+

@@ -1,0 +1,302 @@
+/***********************************************************************
+**             (C) Copyright 1981  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+*                                                                      *
+*       ######    ######   #######   ##        ########  #######       *
+*      ########  ########  ########  ##        ########  ########      *
+*      ##        ##        ##    ##  ##           ##     ##    ##      *
+*      #######   #######   #######   ##           ##     #######       *
+*            ##        ##  ##        ##           ##     ##    ##      *
+*            ##        ##  ##        ##           ##     ##    ##      *
+*      ########  ########  ##        ########  ########  ########      *
+*       ######    ######   ##        ########  ########  #######       *
+*                                                                      *
+************************************************************************
+**    Author:  Brian Knight                            August 1980    **
+***********************************************************************/
+
+
+
+// This is designed to be used as a BCPL header file, to provide a
+// set of library routines for doing Single Shot Protocol interactions,
+// and forward and reverse nameserver lookup.
+//
+// Some manifest constants defined here are included in the header
+// file "RINGHDR", which programs should GET before this one.
+//
+// The routines are:
+//
+//   extend.ssp         SSP with extra arguments
+//
+//   SSP                Perform a Single Shot Protocol call
+//                      to a ring service.
+//
+//   LOOKUP.NAME        Look up a text name in the nameserver
+//                      to yield a ring address.
+//
+//   GLOBAL.LOOKUP      As LOOKUP.NAME, but does a nameserver
+//                      global lookup yielding site and subnet but
+//                      not setting up a path to a non-local service.
+//
+//   GENERAL.LOOKUP     Has a type parameter allowing either of the
+//                      above functions to be performed.
+//
+//   WRITE.MACHINE.NAME Write out the name of a machine, given
+//                      its ring station number.
+//
+// See the comments at the head of each routine for further details.
+//
+// Modifications:
+//   21 Oct 81 by BJK: changed to use GET2BYTES & PUT2BYTES to remove
+//                     the assumption that machine words are the same
+//                     length as ring words.
+//
+//   17 Nov 82 by NJO: added the global and general lookup functions.
+//
+//    2 Apr 83 by PB:  extend.ssp added (Write.machine.name deleted)
+
+
+MANIFEST
+$(
+    maxlen              = 121 // max chars in name string
+    ringwordsperword    = bytesperword / bytesperringword
+
+    short.timeout.      = tickspersecond*5
+    long.timeout.       = tickspersecond*25
+    UNSET.VAL           = -1
+    END.VAL             = -2
+$)
+
+
+LET extend.ssp(service.name, txbuff, txwords, rxbuff, rxwords, nsvec,
+        func, station, port, timeout, short.timeout, long.timeout, end) = VALOF
+$(
+    // Do an SSP transaction to the named service.
+    // The data part of the basic block to be transmitted is in TXBUFF,
+    // with the SSP arguments starting at (ring word) offset 3.
+    // TXBUFF is TXWORDS ring words long in total.
+    // RXBUFF is a buffer for the data part of the reply basic block.
+    // It is RXWORDS ring words long.
+    // NSVEC is a vector of upperbound NSV.UPB in which the results of
+    // the nameserver lookup of SERVICE.NAME are returned. If a value of zero
+    // is passed for NSVEC, then a local vector will be used.
+    // FUNC is used as the function code iff the service is one with
+    // no specified function code.
+    //
+    // SERVICE.NAME may be zero instead of a string.  In this case,
+    // the machine address and port of the service should be supplied
+    // in STATION and PORT, and the function code in FUNC.
+    //
+    // Result: TRUE if transaction successful; size of reply block
+    //              (in dibytes) in RESULT2.
+    //         FALSE otherwise (error code in RESULT2).
+
+    LET rhtaskid   = rootnode ! rtn.info ! rtninfo.ring ! ri.rhtaskid
+    LET rx.pkt     = VEC rhpkt.lifetime
+    LET flags      = nsv.flags.slow
+    LET tx.status  = ?
+    LET reply.port = ?
+    LET my.nsvec   = VEC nsv.upb
+    LET long.timeout    = long.timeout.
+
+    IF rhtaskid=0 THEN $( result2 := 400; RESULTIS FALSE $)
+
+    FOR i = @timeout TO @end IF !I = END.VAL
+    $(  FOR j = i TO @end DO !J := UNSET.VAL
+        BREAK
+    $)
+
+    IF nsvec=0 THEN nsvec := my.nsvec
+    TEST timeout > 0
+    THEN short.timeout, long.timeout := timeout, timeout
+    ELSE
+    $(  UNLESS long.timeout  > 0        long.timeout    := long.timeout.
+        UNLESS short.timeout > 0        short.timeout   := short.timeout.
+    $)
+
+    rx.pkt ! pkt.link           := notinuse
+    rx.pkt ! pkt.id             := rhtaskid
+    rx.pkt ! pkt.type           := act.rx.bb
+    rx.pkt ! rhpkt.lifetime     := short.timeout
+    reply.port := sendpkt(notinuse, rhtaskid, act.findfreeport)
+
+    // If a service name string was supplied, then look up that string
+    // in the name server to get the station, port and function code.
+    // If SERVICE.NAME was zero, then use the values supplied in
+    // STATION, PORT and FUNC.
+
+    UNLESS service.name = 0
+    $(
+      UNLESS lookup.name(service.name, nsvec)           GOTO fail
+
+      flags       := nsvec ! nsv.flags
+
+      IF (flags & nsv.flags.pmask) \= nsv.flags.ssp
+      THEN $( result2 := 421 /* not SSP */; GOTO fail $)
+
+      UNLESS (flags & nsv.flags.slow) = 0
+      DO rx.pkt ! rhpkt.lifetime := long.timeout // Slow machine
+
+      station   := nsvec ! nsv.machine.id
+      port      := nsvec ! nsv.port
+
+      // If the flags say "no function code" then use the one
+      // supplied in FUNC
+
+      IF (flags & nsv.flags.nofunc) = 0 THEN func := nsvec ! nsv.func
+    $)
+
+    // Send off receive packet
+
+    rx.pkt ! rhpkt.buff      := rxbuff
+    rx.pkt ! rhpkt.size      := rxwords
+    rx.pkt ! rhpkt.port      := reply.port
+    rx.pkt ! rhpkt.station   := station
+
+//WRITEF("Try SSP with TO=%N*N", rx.pkt ! rhpkt.lifetime) <> DELAY(50)
+    qpkt(rx.pkt)
+
+    txbuff %% bb.ssp.type       := code.sspreq
+    txbuff %% bb.ssp.replyport  := reply.port
+    txbuff %% bb.ssp.func       := func
+
+    tx.status := sendpkt(notinuse, rhtaskid,
+                         act.tx, 0, 0,
+                         txbuff, txwords,
+                         station,
+                         port)
+//WRITEF("SSP OK*N") <> DELAY(50)
+    UNLESS tx.status = txst.accepted
+    THEN $( result2 := tx.status; GOTO fail $)
+
+    pktwait(rhtaskid, rx.pkt) //for receive packet
+
+    IF pkt.res1 ! rx.pkt = 0
+    THEN $( result2 := 409 /* no reply */ ; GOTO fail $)
+
+    result2     := rxbuff %% bb.ssp.rc
+    IF result2 \= 0 THEN GOTO fail
+
+    // Successful SSP transaction
+
+    sendpkt(notinuse, rhtaskid, act.releaseport, ?, ?, reply.port)
+    result2     := rx.pkt ! pkt.res1  // Size of reply block
+    RESULTIS TRUE
+
+fail:
+    $(
+    LET r2      = result2
+    sendpkt(notinuse, rhtaskid, act.releaseport, 0, 0, reply.port)
+    result2     := r2
+    $)
+
+    RESULTIS FALSE
+    $)
+
+AND     ssp(service.name, txbuff, txwords, rxbuff, rxwords, nsvec,
+                                func, station, port) =
+ extend.ssp(service.name, txbuff, txwords, rxbuff, rxwords, nsvec,
+                                func, station, port, END.VAL)
+
+AND lookup.name(string, resvec) =  general.lookup(gl.normal, string, resvec, 0)
+
+AND global.lookup(string, resvec, newname.len, newname) =
+    general.lookup(gl.global, string, resvec, newname.len, newname)
+
+AND general.lookup(type, string, resvec, newname.len, newname) = VALOF
+$(
+    // Uses the name server to look up the given string.
+    //
+    // Result TRUE => success:
+    //   resvec!0 = station number
+    //   resvec!1 = flags
+    //   resvec!2 = port number
+    //   resvec!3 = function code
+    //   resvec!4 = site  (for global lookup only)
+    //   resvec!5 = subnet
+    //
+    // Result FALSE => failure:  reason in result2
+    //
+    // The string may not have more than maxlen characters.
+    //
+    // A vector 'newname' may be passed in to hold the transformed name
+    // returned by the name server.
+    // The length of this buffer (upper bound + 1) should be passed
+    // in newname.len.
+    // If this is not required then newname.len may be set to zero
+    // and the transformed name will be discarded.
+    // If the transformed name is too long then the lookup will be
+    // faulted, and the string truncated on the right.
+
+    LET result     = TRUE
+    LET len        = string%0
+    LET rx.block   = VEC 63/ringwordsperword
+    LET tx.block   = VEC 63/ringwordsperword // Max size of SSP block
+    LET nsvr.port  = ?
+
+    SWITCHON type INTO
+    $( DEFAULT:
+       result2 := 40  //Change this
+       RESULTIS FALSE
+
+       CASE gl.normal:
+       nsvr.port := 1
+       ENDCASE
+
+       CASE gl.global:
+       nsvr.port := 10
+       ENDCASE
+    $)
+
+    IF len > maxlen THEN $( result2 := 446; RESULTIS FALSE $)
+
+    // Construct request block
+    // Pack in the characters
+
+    FOR z=0 TO len
+    DO byteput(tx.block, bb.ssp.args*bytesperringword + z, string%z)
+
+    TEST ssp(0, tx.block, 4 + len/bytesperringword, rx.block, 64, resvec,
+             0, id.nameserver, nsvr.port)
+    $(
+      // Name server has replied
+
+      LET str.offset = ?
+
+      TEST type = gl.normal
+      $( resvec ! nsv.machine.id := byteget(rx.block, bb.ssp.args*2)
+         resvec ! nsv.flags      := byteget(rx.block, bb.ssp.args*2 + 1)
+         resvec ! nsv.port       := rx.block %% bb.ssp.arg2
+         resvec ! nsv.func       := rx.block %% bb.ssp.arg3
+         str.offset              := 6
+      $)
+      ELSE
+      $( resvec ! nsv.machine.id := rx.block %% bb.ssp.arg2
+         resvec ! nsv.flags      := byteget(rx.block, bb.ssp.args*2 + 8)
+         resvec ! nsv.port       := rx.block %% bb.ssp.arg3
+         resvec ! nsv.func       := rx.block %% bb.ssp.arg4
+         resvec ! nsv.site       := byteget(rx.block, bb.ssp.args*2)
+         resvec ! nsv.subnet     := byteget(rx.block, bb.ssp.args*2 + 1)
+         str.offset              := 9
+      $)
+
+      UNLESS newname.len = 0    //Copy in transformed name from nameserver
+      $( LET nnlen = byteget(rx.block, bb.ssp.args*2 + str.offset)
+
+         IF nnlen > newname.len-1       //It won't all fit in the user's buffer
+         $( nnlen   := newname.len-1
+            result  := FALSE
+            result2 := 40   //Change this
+         $)
+
+         FOR i = 0 TO nnlen
+         DO newname%i := byteget(rx.block, bb.ssp.args*2 + str.offset + i)
+      $)
+
+      RESULTIS result
+    $)
+    ELSE RESULTIS FALSE
+$)
+
+

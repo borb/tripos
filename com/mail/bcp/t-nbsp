@@ -1,0 +1,44 @@
+GET "bcp.bsppair"
+GET "BCPL.ssplib"
+
+LET START() BE
+$(      LET in, out     = ?, ?
+        LET write       = "WRITE-TRIPOS/:pb.XY"
+        LET read        = "READ-TRIPOS/:pb.XX"
+        LET o = output()
+        WRITEF("Starting*N")
+        in      := bsp.find.stream.pair(write)
+        out     := RESULT2
+        WRITEF("Got %N, %N*N", in, out)
+        IF in=0 $( WRITEF("so quit*N"); RESULT2 := out; stop(20) $)
+
+        SELECTOUTPUT(out)
+        WRITEF("....... ?? .......*N")
+        //bsp.request.close(out)        //
+        ENDWRITE()
+
+        SELECTOUTPUT(o)
+//      WRITEF("Written, now try reading ...*N")
+//      SELECTINPUT(in)
+//      $(      LET ch = RDCH()
+//              IF ch = ENDSTREAMCH THEN BREAK
+//              WRITEF("%N ", ch)
+//      $) REPEATUNTIL testflags(1)
+//      ENDREAD()
+        WRITEF("Done*N")
+
+        in      := bsp.find.stream.pair(read)
+        out     := RESULT2
+        WRITEF("Got %N, %N*N", in, out)
+        IF in=0 $( WRITEF("so quit*N"); RESULT2 := out; stop(20) $)
+
+        SELECTINPUT(in)
+        $(      LET ch = RDCH()
+                IF ch = ENDSTREAMCH THEN BREAK
+                WRITEF("%N=%C ", ch, ch)
+        $) REPEATUNTIL testflags(1)
+        ENDREAD()
+        WRITEF("Done*N")
+$)
+
+

@@ -1,0 +1,121 @@
+SECTION "BSPPAIR"
+GET "header"
+GET "IOHDR"
+GET "BCPL.bsplib"
+
+MANIFEST $( err.suffix.too.long = 425; max.name.chars = 39 + 1 + 60 $)
+                                // 39 char service name/60 char file name
+
+LET bsp.find.stream.pair(service.name) = VALOF
+$(
+    LET rhtaskid   = rootnode ! rtn.info ! rtninfo.ring ! ri.rhtaskid
+    LET nsvec      = VEC 3
+    LET tx.block   = VEC bb.ssp.arg3  + max.name.chars/bytesperword
+    LET rx.block   = VEC bb.ssp.arg3
+    LET rx.pkt     = TABLE notinuse, 0, act.rx.bb,
+                         0, 0, 0, bb.ssp.arg3+1, 0, 0, short.timeout
+    LET max.tx.blocksize = pref.blocksize
+    LET max.rx.blocksize = pref.blocksize
+    LET rx.port    = 0
+
+    LET tx.port    = ?
+    LET machine.id = ?
+    LET rhtcb      = ?
+    LET suffix.len = ?
+    LET flags      = ?
+
+    IF rhtaskid=0
+    THEN $( result2 := 400; RESULTIS 0 $) // No ring handler
+
+    UNLESS lookup.name(service.name, nsvec) THEN RESULTIS 0
+
+    // Test that this really is a BSP service
+    flags := nsv.flags ! nsvec
+    UNLESS (flags&nsv.flags.pmask)=nsv.flags.bsp $( result2:=422; RESULTIS 0 $)
+
+    rx.port                     := sendpkt(notinuse, rhtaskid, act.findfreeport)
+    tx.port                     := nsvec ! nsv.port
+    machine.id                  := nsvec ! nsv.machine.id
+
+    rx.pkt ! pkt.id             := rhtaskid
+    rx.pkt ! rhpkt.buff         := rx.block
+    rx.pkt ! rhpkt.port         := rx.port
+    rx.pkt ! rhpkt.station      := #XFF //machine.id
+
+    UNLESS (flags&nsv.flags.slow)=0     rhpkt.lifetime ! rx.pkt := long.timeout
+
+    tx.block %% bb.ssp.type     := code.open
+    tx.block %% bb.ssp.replyport:= rx.port
+    tx.block %% bb.ssp.func     := nsvec ! nsv.func
+    tx.block %% bb.ssp.arg1     := 2      // Bsp parameters
+    tx.block %% bb.ssp.arg2     := pref.blocksize
+    tx.block %% bb.ssp.arg3     := pref.blocksize
+
+    // Put part of service name after '/' (if any) after BSP parms.
+    $(  LET len = service.name%0
+        LET pos = 0
+
+        UNTIL pos=len $( pos +:= 1; IF service.name%pos = '/' THEN BREAK $)
+
+        suffix.len := len - pos
+
+    IF suffix.len>max.name.chars $( result2:=err.suffix.too.long; GOTO failed $)
+
+        FOR i=1 TO suffix.len
+      DO byteput(tx.block, bb.ssp.arg4*bytesperringword+i, service.name%(pos+i))
+         byteput(tx.block, bb.ssp.arg4*bytesperringword+0, suffix.len)
+    $)
+
+    qpkt(rx.pkt)
+    $(  LET status = sendpkt(notinuse, rhtaskid, act.tx,
+                      0, 0, tx.block, 7 + suffix.len/bytesperringword,
+                      machine.id, tx.port)
+
+
+        UNLESS status = txst.accepted $( result2 := status; GOTO failed $)
+    $)
+
+    taskwait()
+
+    IF rx.pkt!pkt.res1=0                        $( result2:=409; GOTO failed $)
+
+    UNLESS rx.block%%bb.ssp.type = code.openack
+    $( result2 := 424; GOTO failed $) // Invalid OPENACK block
+
+    result2 := rx.block %% bb.ssp.rc
+    UNLESS result2 = 0                                          GOTO failed
+
+    // Engage in a 'who wants the smallest blocks' competition
+
+    $(  LET num.bsp.parms = rx.block %% bb.ssp.arg1
+        IF num.bsp.parms >= 1 & rx.block %% bb.ssp.arg2 < max.tx.blocksize
+        THEN max.tx.blocksize := rx.block %% bb.ssp.arg2
+
+        IF num.bsp.parms >= 2 & rx.block %% bb.ssp.arg3 < max.rx.blocksize
+        THEN max.rx.blocksize := rx.block %% bb.ssp.arg3
+    $)
+
+    tx.port := rx.block %% bb.ssp.replyport
+
+    // Find out task id of BSP handler, loading it if necessary.
+
+    $(  LET bsp.handler = BSP.handler.taskid()
+        UNLESS bsp.handler = 0
+        $(  LET instr = sendpkt(notinuse, bsp.handler, act.make.bytestreampair,
+                                0, 0,
+                                rx.pkt ! pkt.res2, tx.port, rx.port,
+                                max.tx.blocksize, max.rx.blocksize)
+
+            RESULTIS instr // Result2 is outstr
+        $)
+    $)
+
+failed:
+    $(  LET r2 = result2
+        sendpkt(notinuse, rhtaskid, act.releaseport, 0, 0, rx.port)
+        result2 := r2
+    $)
+    RESULTIS 0
+$)
+
+

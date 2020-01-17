@@ -1,0 +1,22 @@
+// Source file "wspl" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) October 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+SECTION "WSPL"
+GET "libhdr"
+GET "wrshdr"
+
+// This section allows WS to call the PL lisp interpreter and the
+// interpreter to control useful editing operations inside WS.
+
+// somewhat dud version, as PL is not fully implemented yet.
+
+// We communicate with PL via the "start" global -
+// The first call is init
+// others are 'read' , 'help' or 'finish' in that order
+// for the former two return yes if error, else no
+
+LET wspl(heap) BE
+  wspl.status := pl.unavailable
+
+

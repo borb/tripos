@@ -1,0 +1,1216 @@
+//
+//
+// MiniLisp
+// ========
+//
+//        This is Lisp is purely for demonstration purposes.
+//        It is not suitable as a Lisp system for project use,
+//        since it is missing some important facilities, and is
+//        written in the simplest way:  eval and mark are recursive
+//        and hence use up stack, and bindings are all looked up
+//        first in the alist, making things slow.
+//
+//        Any other problems may be reported to J. Fairbairn (JF, JF15)
+//
+//        A. C. Norman      November 1981
+//
+//        S J Buck,
+//        J. Fairbairn      January 1983
+//
+//        J. Fairbairn      May 1983 (improvements to backtrace)
+
+// Numbers are in range #XE0000000 to #X1FFFFFFF
+// Codepointers are #X40000000 to #X4FFFFFFF
+// Identifiers are in range #X50000000 to #X50FFFFFF
+// Lists are #X80000000 to #X80FFFFFF
+
+Section "DemoLisp"
+Get "DemoLisp-header"
+
+
+// This Lisp is very crude, but demonstrates many of the essentials of
+// the language. It is implemented assuming a 32-bit machine, and
+// assuming that the top 8 bits of a word do not participate in address
+// generation. I.e. it is intended for 68000s, or pre-XA IBM 370s and the
+// like.
+// This version contains many features which depend on the environment
+// of Tripos (store layout and mamagement, break handling etc).
+
+Static $( the.store = 0
+          standard.input.idf = ?
+          standard.output.idf = ?
+       $)
+
+Let start () Be
+$( Let n = 480000
+   And v = getvec (words.in.boffo)
+   length.of.a.line := 80
+   debugging := FALSE
+   // To avoid confusion caused by closing the CLI's stream,
+   // and to avoid the hassle of decoding an argument list,
+   // Set the stream ids to be the terminal
+   standard.input.idf := "**"
+   standard.output.idf := "**"
+   standard.input := findinput (standard.input.idf)
+   standard.output := findoutput (standard.output.idf)
+   Test (standard.input = 0) | (standard.output = 0)
+   Then $( writes ("++ Unable to open terminal stream*n") // impossible?
+           finish
+        $)
+   Else $( selectinput (standard.input)
+           selectoutput (standard.output)
+        $)
+
+   If v = 0
+   Then $( writes ("++ Unable to allocate character buffer*n")
+           finish
+        $)
+   boffo := v
+   stackend := stackbase ! pointer.to.stack.end
+
+   $( n := (2 * n) / 3
+      n := (n & #x00fffff8)
+      the.store := getvec (n)
+   $) repeatuntil the.store \= 0
+   writef ("++ Demonstration LISP:  store size %n cells*n", n / 2)
+   If stackend - stackbase < n / 8
+   Then writef ("++ A stacksize of %n words seems rather small!*n",
+                stackend - stackbase)
+   main (the.store, n) // and call MAIN with a big vector as argument
+   windup (0)
+$)
+
+And windup (rc) Be
+$( freevec (the.store)
+   writes ("*n++ Stopping")
+   Unless rc = 0
+   Do writef (" with code %n", rc)
+   newline ()
+   stop (rc)
+$)
+
+// MAIN sets up major Lisp datastructures, then runs a READ/EVAL/PRINT loop
+And main (v, n) Be
+$( startstackbase := level ()
+   restartlabel := readevalprint
+
+   Unless v Rem 2 = 0
+   Do $( v := v + 1
+         n := n - 1
+      $) // Ensure that cell pointers are even
+
+   heapbase := v
+   heapend := v + n - 1
+   freechain := 0
+   // Build an initial freelist
+   For i = heapbase To heapend By 2 Do
+   $( !i, 1 ! i := 0, freechain
+      freechain := i + p.list
+   $)
+   oblist := 0
+   // Since NIL is self-referential setting it up is a slightly
+   // delicate procedure....
+   nil := cons (0, 0) + (p.id - p.list)
+   !nil := nil
+   1 ! nil := nil
+   oblist := cons (nil, nil)
+   pname := 0
+   pname := mkatom ("pname",nil)
+   1 ! nil := cons (cons (pname, stringtolist ("nil")), nil)
+   1 ! pname := cons (cons (pname, stringtolist ("pname")), nil)
+   // ... the rest of the predefined atoms are fairly easy.
+   lisptrue := mkatom ("t",0)
+   !lisptrue := lisptrue
+
+
+    declare.atoms ()
+readevalprint:
+    selectinput (standard.input)
+    selectoutput (standard.output) // In case of errors in readfrom or printto
+
+    curchar := '*n'
+    posn := 0
+    $( Let u = read ()
+       If u = eofmarker
+       Then Return
+       print (eval (u, nil))
+    $) Repeat
+$)
+
+And restart ()
+Be longjump (startstackbase, restartlabel)
+
+// READ can cope with parenthesized Lisp expressions, and with
+// the shorthand 'X that stands for (QUOTE X)
+// The hardest case is when it finds a '(', and then it calls READLIST.
+
+And read () = Valof
+$( Let k = nil
+   If stackend - (level () >> 2) < stack.margin // check the stack
+   Then error ("Ran out of stack in read")
+
+   $( k := readsymbol ()
+      Test k = leftparen
+      Then Resultis readlist ()
+      Or Test k = rightparen
+         Then Loop // Ignore excess ')'
+      Or Test k = dot
+         Then Loop
+      Or Test k = quotesymbol
+         Then Resultis mkquote (read ())
+      Or Resultis k
+   $) Repeat
+$)
+
+And mkquote (x) = cons (quote, cons (x, nil))
+
+// READLIST is coded here for conciseness and clarity, not for ultimate
+// efficiency (the same is true of many functions in this Lisp!). It
+// parses lists using a rather trivial recursive descent algorithm.
+
+And readlist () = Valof
+$( Let k = readsymbol ()
+   If stackend - (level () >> 2) < stack.margin
+   Then error ("ran out of stack while reading a list")
+
+   If k = rightparen | k = eofmarker
+   Then Resultis nil
+   If k = dot Then
+   $( k := read ()
+      Unless readsymbol () = rightparen
+      Do error ("malformed dotted pair")
+      Resultis k
+   $)
+   Test k = leftparen
+   Then k := readlist ()
+   Or If k = quotesymbol
+      Then k := mkquote (read ())
+   Resultis cons (k, readlist ())
+$)
+
+// READSYMBOL is responsible for lexical analysis. It detects the special
+// syntactic markers '(', ')', '.' and '''. It also does some processing
+// on blanks, newlines and end of file. It reads decimal numbers and
+// assembles identifiers into the buffer BOFFO.
+
+And readsymbol () = Valof
+$( curchar := rdch ()
+
+   If testflags (#B1101) // Check break flags
+   Then deal.with.break ()
+
+   Switchon curchar Into
+   $( Case endstreamch:
+           Resultis eofmarker
+      Case '*n':
+      Case '*c':
+
+      Case '*p':
+      Case '*e':
+      Case '*s':
+      Case '*t': // Ignore those characters
+           Loop
+      Case '(':
+           Resultis leftparen
+      Case '.':
+           Resultis dot
+      Case ')':
+           Resultis rightparen
+      Case '*'':
+           Resultis quotesymbol
+      Default:
+           If '0' <= curchar <= '9'
+           Then Resultis readnumber (curchar - '0')
+           // ! turns any following character into a 'letter'
+           If (Not symchar (curchar)) & curchar \= '!' Then
+           $( // Single character atom
+              boffo % 0 := 1
+              boffo % 1 := curchar
+              Resultis mkatom (boffo, unset)
+           $)
+           boffp := 0
+           $( Test curchar = '!'
+              Then curchar := rdch ()
+              Else Unless symchar (curchar)
+                   Do Break
+              append.char.to.boffo (curchar)
+              curchar := rdch ()
+           $) Repeat
+           unrdch ()
+           boffo % 0 := boffp
+           Resultis mkatom (boffo, unset)
+   $)
+$) Repeat
+
+
+// Test if a character is a letter or digit. Note that the code given here
+// is adequate on an ASCII machine but is not proper on an EBCDIC one because
+// the letters do not lie in a neat consecutive block of character codes.
+// For present purposes I don't intend to worry about that!
+
+And symchar (c) = ('a' <= c <= 'z') | ('A' <= c <= 'Z') | ('0' <= c <= '9')
+
+And readnumber (n) = Valof
+$( $( // Start of loop here
+      curchar := rdch ()
+      Unless '0' <= curchar <= '9'
+      $( unrdch ()
+         Resultis n
+      $)
+      // I am rather careful about overflow here, because an overlarge number
+      // could look, in this Lisp's environment, like a symbol or pair or
+      // something.
+      If n >= (p.maxnum / 10)
+      Do error ("numeric overflow on input")
+      n := 10 * n + curchar - '0'
+      If n >= p.maxnum
+      Do error ("numeric overflow on input")
+   $) Repeat
+$)
+
+
+// PRIN is PRINT without the final TERPRI
+
+And prin (a) = Valof
+$(// This function is used from the Lisp backtrace, and so may
+  // (unfortunately) be called with bogus and nasty arguments. It
+  // therefore contains a number of ugly tests that try to protect
+  // it from embarassment in such cases.
+  Let sep = '('
+
+  // Test to see if someone has pressed a break key
+  If testflags (#B1101)
+  Then deal.with.break ()
+
+  If notlistp (a)
+  Then $( prinatom(a)
+          Resultis a
+       $)
+     // check stack in recursion
+     Test stackend - (level () >> 2) < (stack.margin / 2)
+     Then $( princhar ('.')
+             princhar ('.')
+             princhar ('.')
+             a := cdr (a)
+          $)
+     Else Until notlistp (a) Do
+          $( princhar1 (sep)
+             sep := ' '
+
+             prin (car (a))
+             a := cdr (a)
+
+             // Test to see if someone has pressed a break key
+             If testflags (#B1101)
+             Then deal.with.break ()
+          $)
+  Unless a = nil Do
+  $( writes (" . ")
+     prinatom (a)
+  $)
+  princhar1 (')')
+  Resultis a
+$)
+
+// The more interesting case in PRIN is when it has to deal with an atom
+
+And prinatom (x) Be
+$( Let v = nil
+
+   If numberp (x)
+   Then $( If x < 0
+           Then princhar ('-')
+           prinnumber (ABS x)
+           return
+        $)
+   // Not being a symbol probably means X is a pointer to some binary code.
+   If notsymp (x)
+   Then Test (x & #Xf0000000) = #X40000000
+        Then $( // We bet that it is a codepointer.
+                princhar1 ('<')
+                writef ("BCPL: %S", routine.name (x))
+                princhar ('>')
+                Return
+             $)
+        Else $( princhar ('<'); prinnumber (x >> 24); princhar (':')
+                prinnumber (x & value.mask); princhar ('>')
+                // That was not VERY informative, but at least it was something
+                Return
+             $)
+   // Identifiers have their name stored under the tag PNAME on their
+   // property list.
+   v := lispget (x, pname)
+   until notlistp (v) do
+   $( let w = car (v)
+      princhar ((w >> 16) & #xff) // Unpack 3 characters per word
+      princhar ((w >> 8) & #xff)
+      princhar(w & #xff)
+      v := cdr (v)
+   $)
+   return
+$)
+
+// NOTLISTP and NOTSYMP are cautious tests intended to save trouble
+// with garbage pointers. They are MUCH more expensive than Lisp's
+// normal checks, and are only called when printing
+
+and notlistp (x) = valof
+$( unless (x & (tag.mask | #X00000001)) = p.list // Pointers assumed to be even, too
+   then resultis true
+   x := x & value.mask
+   resultis x < heapbase | x > heapend
+$)
+
+and notsymp (x) = valof
+$( unless (x & (tag.mask | #x00000001)) = p.id
+   resultis true
+   x := x & value.mask
+// check for well-formed property list
+   resultis x < heapbase | x > heapend -> true, notplistp (1 ! x)
+$)
+
+and notplistp (l) = valof
+$( if l = nil
+   then resultis false
+   if notlistp (l) \/ notlistp (!l) resultis true
+   resultis notplistp (1!l)
+$)
+
+
+// PRINTNUMBER prints in decimal, counting how many characters get printed on
+// the line.
+
+and prinnumber (x) be
+$( If x>=10
+   Then prinnumber (x / 10)
+   princhar ('0' + (x Rem 10))
+$)
+
+and princhar (c) be
+$( If c = 0 Return // degenerate case of a null character
+   If c = '*n'
+   Then $( newline (); posn:=0; Return
+        $)
+   Test posn >= length.of.a.line
+   Then $( newline (); posn:=1
+        $)
+   Or posn := posn + 1
+   wrch (c)
+$)
+// PRINCHAR1 is called when I am not in the middle of printing a symbol,
+// and it forces a line break if we are getting close to the end of the
+// line (PRINCHAR only forces a newline when we hit the 80th column).
+
+and princhar1 (c) be
+$( If posn >= length.of.a.line - 8
+   Then $( newline ()
+           posn := 0
+        $)
+   princhar (c)
+$)
+
+
+
+
+And numberp (x) = (x >= p.minnum) & (x < p.maxnum)
+
+And symp (x) = (x & #xf0000000) = p.id
+
+
+And equal (a,b) = Valof
+$( // And compare the complexity of EQUAL
+   If atom (a)
+   Then resultis (a = b)
+   If atom (b)
+   Then Resultis False
+   If equal (car (a), car (b))
+   Then Resultis equal (cdr (a), cdr (b))
+   Resultis False
+$)
+
+// MKATOM builds an identifier with name as specified by the BCPL
+// string NAME. If the atom did not already exist it is created with
+// default value VALUE.
+
+And mkatom (name, value) = Valof
+$( Let ah = stringtolist (name)
+   And w = oblist
+   Until atom (w)
+   $( If equal (lispget (car (w), pname), ah)
+      Then Resultis car (w)
+      w := cdr (w)
+   $)
+   // Here the identifier is really a new one
+   ah := cons (pname, ah)
+   ah := cons (ah, nil)
+   ah := cons (value, ah) + (p.id - p.list)
+   oblist := cons (ah, oblist)
+   Resultis ah
+$)
+
+And stringtolist (name) = Valof
+$( Let k = nil
+   And l = name % 0
+   And w = 0
+   // Pack characters 3 to a Lisp pair
+   For i = 1 To l Do
+   $( w := (w << 8) | name % i
+      If (i rem 3) = 0 Do
+      $( k := cons (w, k); w := 0
+      $)
+   $)
+   Unless (l rem 3) = 0
+   Do $( Until (l rem 3) = 0
+         $( w := w<<8; l:=l+1
+         $)
+         k := cons (w,k)
+      $)
+   // I have to call REVERSEWOC because the list of characters got built
+   // up in the wrong order.
+   resultis reversewoc (k)
+$)
+
+
+
+
+// This REVERSE function overwrites the cells that made up its
+// argument. This saves some store at the cost of some worry!
+
+And reversewoc (l) = Valof
+$( Let p = nil
+   And w = nil
+   Until atom (l) Do
+   $( w := cdr (l)
+      1 ! l := p
+      p := l
+      l := w
+   $)
+   Resultis p
+$)
+
+And function (x, alist) =
+    cons (funarg,
+          cons (car (x),
+                cons (alist, nil)))
+
+
+
+And eval.last (r, l, alist) = Valof
+$( Until l = nil
+   $( r := eval (car (l), alist)
+      l := cdr (l)
+   $)
+   Resultis r
+$)
+
+// The function EVAL does almost all the work of evaluating Lisp expressions.
+// the second argument is an association list holding an environment of
+// name-value pairs.
+
+And eval (x, alist) = Valof
+$( Let fn = x
+   And penultimate.fn = x // This variable in stackframe for use by BACKTRACE
+   And state = args.not.evaluated // For backtrace
+   And args = nil // If the order of these variables is changed, backtrace
+                  // will have to be changed too.
+
+   // Attempt to check stack available:
+   If stackend - (level () >> 2) < stack.margin
+   Then error ("stack overflow")
+
+   // Check to see whether a break has happened:
+   If testflags (#B1101)
+   Then deal.with.break ()
+
+   If atom (x) Then
+   $( if symp (x) Then
+      $( Let v = assoc (x, alist) // Look name up in environment
+         Test v = nil
+         Then v := !x // Look in value cell
+         Or v := cdr (v)
+         If v = unset
+         Then mixerror ("unbound variable", x)
+         Resultis v
+      $)
+      Resultis x
+   $)
+   fn, args := car (x), cdr (x) // We could change state here
+   penultimate.fn := fn  // For backtrace, this is the thing before last
+preparefunction:
+   If atom (fn)
+   Do Test symp (fn)
+      Then $( fn := eval (fn, alist); Goto preparefunction
+           $)
+      Or Test (fn & #xf0000000) = #x40000000
+         Then Goto binarycode
+      Or mixerror ("illegal object used as function", fn)
+   If car (fn) = lambda
+   Then Goto applylambda
+   If car (fn) = funarg
+   Then Goto applyfunarg
+   penultimate.fn := fn    // again for backtrace
+   fn := eval (fn, alist)
+   Goto preparefunction
+
+binarycode:
+   $( Let f = fn & value.mask
+      If (fn & #X0f000000) = #X0f000000
+      Then Resultis f (args, alist)
+      args := evlis (args, alist)
+      state := args.evaluated
+      $( Let nargs = (fn >> 24) & #X0f
+         spread (args, nargs)
+         Switchon nargs Into
+         $( Case 0:  Resultis f ()
+
+            Case 1:  Resultis f (arg1)
+
+            Case 2:  Resultis f (arg1,arg2)
+
+            Case 3:  Resultis f (arg1,arg2,arg3)
+
+            Case 4:  Resultis f (arg1,arg2,arg3,arg4)
+
+            Default: error ("improper function type")
+         $)
+      $)
+   $)
+
+
+applylambda:
+   args := evlis (args, alist)
+   state := args.evaluated
+   alist := pair (car (cdr (fn)), args, alist)
+   Resultis eval.last (nil, cdr (cdr (fn)), alist)
+
+applyfunarg:
+   Resultis apply (car (cdr (fn)), evlis (args, alist), car (cdr (cdr (fn))))
+
+$)
+
+// APPLY is used when the arguments of a function have already been
+// evaluated: this means that the function (its first argument) must
+// not be a special form (QUOTE, COND etc)
+
+And apply (fn,args,alist) = Valof
+$(// The version coded here is cheap and nasty - in a real system EVAL and
+  // APPLY would share their work rather more evenly than is suggested here
+   args := makequoted (args)
+   Resultis eval (cons (fn, args), alist)
+$)
+
+And makequoted (l) = Valof
+$( If l = nil
+   Then Resultis nil
+   Resultis cons (mkquote (car (l)), makequoted (cdr (l)))
+$)
+
+// EVLIS is used for evaluating the arguments for a function.
+
+and evlis (l, alist) = Valof
+$( If atom (l)
+   Then Resultis nil
+   Resultis cons (eval (car (l), alist), evlis (cdr (l), alist))
+$)
+
+// SPREAD is a subfunction of EVAL used when calling a machine-code (in this
+// Lisp a BCPL) function
+
+And spread (l, nargs) Be
+$( Let p = @arg1
+   arg1, arg2, arg3, arg4 := nil, nil, nil, nil
+   For i = 1 To nargs Do
+   $( If l = nil
+      Then error ("not enough arguments for a function")
+      !p := car (l)
+      l := cdr (l)
+      p := p + 1
+   $)
+   Unless l = nil
+   Do error ("too many arguments for a function")
+   Return
+$)
+
+
+// PAIR adds some new bindings to the front of an association list L
+
+And pair (a, b, l) = Valof
+$( If atom (a) & atom (b)
+   Then Resultis l
+   If atom (a)
+   Then error ("function called with too many arguments")
+   If atom (b)
+   Then error ("function called with insufficient arguments")
+   Resultis cons (cons (car (a), car (b)), pair (cdr (a), cdr (b), l))
+$)
+
+// The break handler
+And deal.with.break () Be
+$( writef ("++ Break*n")
+   If stackend - (level () >> 2) < stack.margin
+   Then $( writef ("+++ No stack left: restarting.*n")
+           restart ()
+        $)
+
+   $( discard.pending.input ()
+      writef ("++ Type b for a backtrace, c to continue, or r to reenter system: *e")
+      Switchon rdch () Into
+      $( Case 'b':
+         Case 'B':
+              lispbacktrace ()
+         Endcase
+         Case 'c':
+         Case 'C':
+              Return
+         Endcase
+         Case 'r':
+         Case 'R':
+         Case endstreamch:
+              restart ()
+         Default:
+         writef ("%C*E", #X07 /* bel */)
+      $)
+   $) Repeat
+$)
+
+// Error recovery is, at present, rather coarse!
+
+And error (a) Be
+$( writef ("*n++ Error:  %s*n", a)
+   lispbacktrace ()
+   restart ()
+$)
+
+And mixerror (a, l) Be
+$( writef ("*n++ Error:  %s ",a)
+   print (l)
+   lispbacktrace ()
+   restart ()
+$)
+
+And lispbacktrace () Be
+$( Let l = level () >> 2 // This frame
+   Let f = ?
+   Let prints.done = 0
+
+   Until Valof $( f := previous ! l
+                  RESULTIS f = startstackbase
+               $)
+   Do $( Let e = f >> 2
+         Let r = routine ! e
+         If r = eval
+         Do $( If prints.done >= 10
+               Do $( discard.pending.input () // So that any type-ahead doesn't cause problems
+                     writef ("*n*n++ Backtrace:  type q to quit, or return for next frame:  *e")
+                     prints.done := 0
+                     $( Let ch = rdch ()
+                        If ch = 'q' | ch = 'Q' | ch = endstreamch
+                        Then Return
+                        If ch = '*n' | ch = '*e'
+                        Then Break
+                        writef ("%c*e", #X07 /* bel */)
+                     $)
+                     newline ()
+                  $) Repeat
+               Test r = eval
+               Then $( // Decode eval's stackframe
+                       Let x,     alist, fn,    p.fn,  state, args =
+                           0 ! e, 1 ! e, 2 ! e, 3 ! e, 4 ! e, 5 ! e // Locals
+                       Test state = args.not.evaluated
+                       Then $( writef ("++ Evaluating ")
+                               print (x)
+                               prints.done := prints.done + 1
+                            $)
+                       Else $( Let applying = "++ Applying "
+                               And to.s =     "++       to "
+                               writes (applying)
+                               posn := applying % 0
+                               print (p.fn)
+                               writef (to.s)
+                               posn := to.s % 0
+                               print (args)
+                               prints.done := prints.done + 2
+                            $)
+                    $)
+               Else $( writef ("in *'%S*'*n", routine.name (r)) // For any others
+                       For i = 1 To l - e - stack.frame.header.size
+                       $( writef ("   Var %n:  ", i)
+                          print ((i - 1) ! e)
+                       $)
+                    $)
+            $)
+         l := e
+      $)
+   writef ("++ End of backtrace*n")
+   Return
+$)
+
+And discard.pending.input () Be
+$( Let n = ? // Jesus! What a pain.
+   endread ()
+   standard.input := findinput (standard.input.idf)
+   selectinput (standard.input)
+   n := sendpkt (notinuse, ConsoleTask, Act.How.Much.Input)
+   For i = 1 To n
+   Do rdch ()
+$)
+
+And routine.name (r) = @((-2) ! (r / 4)) // Machine dependent address
+
+And userpostmortem () Be
+$( writes ("*n++ Serious error detected*n")
+   windup (16)
+$)
+
+
+
+// The garbage collector used here is a classical mark-and-sweep one.
+
+And reclaim () = Valof
+$( // First mark all cells reachable via the stack. Note that this code
+   // necessarily depends on stack organization, so it will need adjustment
+   // when this code gets moved from one machine to another
+
+   $( Let p = level ()
+      Static $( reclamation = 0
+             $)
+      reclamation := reclamation + 1
+      writef ("*n++ Reclamation %n*E", reclamation)
+
+      until p = startstackbase do
+      $( let q = p >> 2
+         p := previous ! q
+         For i = (p>> 2) To q - 1 - stack.frame.header.size By 1
+         Do mark (!i)
+      $)
+      If debugging
+      Then writef ("*nStack marked*E")
+
+      // Also mark all things referred to by (relevant) global variables
+
+      For i = @nil To @lastglobal-1
+      Do mark (!i)
+      If debugging
+      Then writef ("*nGlobals marked*E")
+   $)
+
+   // Now sweep over store looking for things that have not been marked.
+   $( Let p = 0
+      freechain := 0
+      For i = heapbase To heapend By 2 Do
+      $( Let v = !i
+         Test marked (v)
+         Then !i := v neqv gcbit
+         Or $( p := p + 1  // Count cells reclaimed
+               !i, 1 ! i := 0, freechain
+               freechain := i + p.list
+            $)
+      $)
+
+      writef (":  %n cells now available*n", p)
+      Unless p > 0
+      Do $( error ("more store needed")
+         $)
+      Resultis p
+   $)
+$)
+
+
+And mark (p) Be
+$( If stackend - (level () >> 2) < stack.margin
+   Then $( // Must unmark all cells before quitting
+           unmark.all.cells ()
+           error ("Ran out of stack in garbage collector")
+        $)
+   $( Unless atom (p) & Not symp (p)
+      If heapbase <= (p & value.mask) <= heapend
+      $( If (p & 1) = 0 // Valid pointers are even!
+         $( Let carp = !p
+            Unless marked (carp)
+            $( !p := carp neqv gcbit  // Mark this cell
+               mark (carp)
+               p := 1 ! p
+               loop
+            $)
+         $)
+      $)
+      Break
+   $) Repeat
+$)
+
+And marked (p) =
+(p >> 29) ! Table false, true, false, true, false, true, true, false
+
+And unmark.all.cells () Be
+$( For i = heapbase To heapend
+   Do !i := !i & (Not gcbit) // clear the mark bit
+$)
+
+And lispstring.to.boffo (v) = Valof
+$( boffp := 0
+   until notlistp (v) do
+   $( let w = car (v)
+      append.char.to.boffo ((w >> 16) &#Xff)
+      append.char.to.boffo ((w >> 8) &#Xff)
+      append.char.to.boffo (w &#Xff)
+      v := cdr (v)
+   $)
+   boffo % 0 := boffp
+   Resultis boffo
+$)
+
+And append.char.to.boffo (c) Be
+Test c = 0
+Then Return // ignore nulls
+Else Test boffp <= characters.in.boffo
+Then $( boffp := boffp + 1
+        boffo % boffp := c
+     $)
+Else error ("character buffer overflow")
+
+.
+Section "Functions"
+Get "DemoLisp-Header"
+
+Let declare.atoms () Be
+$( unset := mkatom ("indefinite value", nil)
+   !unset := unset
+
+   !pname := unset
+   leftparen := mkatom ("**lpar**", unset)
+   rightparen := mkatom ("**rpar**", unset)
+   dot := mkatom ("**dot**", unset)
+   quotesymbol := mkatom ("**quote**", unset)
+   eofmarker := mkatom ("**eof**", unset)
+   mkatom ("car", p.code1 + car)
+   mkatom ("cdr", p.code1 + cdr)
+   mkatom ("cons", p.code2 + cons)
+   mkatom ("atom", p.code1 + lispatom)
+   mkatom ("eq", p.code2 + lispeq)
+   quote := mkatom ("quote", p.fcode + lispquote)
+   mkatom ("cond", p.fcode + cond)
+   mkatom ("de", p.fcode + de)
+   mkatom ("equal", p.code2 + lispequal)
+   mkatom ("numberp", p.code1 + lispnumberp)
+   mkatom ("put", p.code3 + put)
+   mkatom ("get", p.code2 + lispget)
+   mkatom ("print", p.code1 + print)
+   mkatom ("prin", p.code1 + prin)
+   mkatom ("terpri", p.code0 + terpri)
+   mkatom ("eval", p.code2 + eval)
+   lambda := mkatom ("lambda", unset)
+   mkatom ("function", p.fcode + function)
+   funarg := mkatom ("funarg", unset)
+   mkatom ("read", p.code0 + read)
+   mkatom ("assoc", p.code2 + assoc)
+   mkatom ("reclaim", p.code0 + reclaim)
+
+   mkatom ("plus", p.code2 + plus)
+   mkatom ("difference", p.code2 + difference)
+   mkatom ("times", p.code2 + times)
+   mkatom ("quotient", p.code2 + quotient)
+   mkatom ("remainder", p.code2 + remainder)
+   mkatom ("lessp", p.code2 + lessp)
+   mkatom ("greaterp", p.code2 + greaterp)
+   mkatom ("set", p.code2 + set)
+   mkatom ("oblist", p.code0 + lispoblist)
+   mkatom ("stop", p.code1 + lisp.stop)
+   mkatom ("progn", p.fcode + progn)
+   mkatom ("debug", p.code0 + debug)
+   mkatom ("readchar", p.code0 + readchar)
+   mkatom ("plist", p.code1 + plist)
+   mkatom ("symp", p.code1 + lispsymp)
+   mkatom ("list", p.fcode + evlis)
+   mkatom ("def", p.fcode + def)
+   mkatom ("readfrom", p.code1 + readfrom)
+   mkatom ("printto", p.code2 + printto)
+   mkatom ("escape", p.code0 + escape)
+   mkatom ("eject", p.code0 + eject)
+   mkatom ("column", p.code0 + column)
+   mkatom ("linelength", p.code1 + linelength)
+   mkatom ("rplaca", p.code2 + rplaca)
+   mkatom ("rplacd", p.code2 + rplacd)
+$)
+
+// Some basic Lisp functions...
+
+And car (a) = Valof
+$( If atom (a)
+   Then mixerror ("attempt to take car of the atom", a);
+   Resultis !a
+$)
+
+And cdr (a) = Valof
+$( If atom (a)
+   Then mixerror ("attempt to take cdr of the atom", a);
+   Resultis 1 ! a
+$)
+
+And cons (a,b) = valof
+$( Let k = freechain
+   freechain := 1 ! freechain
+   !k, 1 ! k := a, b
+   If freechain=0
+   Do reclaim ()
+   Resultis k
+$)
+
+// Note that the atom test depends on conventions I am using in this
+// Lisp about the storage of objects
+
+And atom (x) = x >= p.minnum
+
+// ATOM is for calling from this BCPL program, and returns TRUE or FALSE
+// LISPATOM is what the Lisp programmer sees, and it returns T or NIL
+
+And lispatom (x) = boolean (x >= p.minnum)
+
+And lispeq (a,b) = boolean (a = b)
+
+
+// QUOTE is special in that it does not evaluate its argument
+
+And lispquote (x, alist) = car (x)
+
+// COND is Lisp's version of IF ... THEN ... ELSE.
+
+And cond (l, alist) = Valof
+$( Until atom (l)
+   Do $( Let w = car (l)
+         Let c = eval (car (w), alist)
+         Unless c = nil
+         Do resultis eval.last (c, cdr (w), alist)
+         l := cdr (l)
+      $)
+   Resultis nil
+$)
+
+// DE is for defining functions
+
+And de (l, alist) = Valof
+$( Let d = cdr (l)
+   Resultis define (car (l), car (d), cdr (d))
+$)
+
+And lispequal (a, b) = boolean (equal (a, b))
+
+And lispnumberp (x) = boolean (numberp (x))
+
+// This Lisp function PUT
+
+And put (name, tag, value) = Valof
+$( Let pl = nil
+   If not symp (name)
+   Then mixerror ("put called on a nonatomic argument", name)
+   pl := 1 ! name
+   Until atom (pl)
+   Do Test atom (car (pl))
+      Then pl := cdr (pl)
+      Or Test tag = car (car (pl))
+         Then $( 1 ! (!pl) := value
+                 Resultis value
+              $)
+      Or pl := cdr (pl)
+   1 ! name := cons (cons (tag, value), 1 ! name)
+   Resultis value
+$)
+
+
+// The Lisp function GET
+
+And lispget (name, tag) = Valof
+$( Let pl = nil
+   If Not symp (name)
+   Then mixerror ("get called on a nonatomic argument", name)
+   pl := 1 ! name
+   Until atom (pl)
+   Do Test atom (car (pl))
+      Then pl := cdr (pl)
+      Or Test tag = car (car (pl))
+      Then Resultis cdr (car (pl))
+      Or pl := cdr (pl)
+   Resultis nil // Not found
+$)
+
+// PRINT is the Lisp PRINT function, and it is supposed to be able to
+// display any structure that Lisp has, except possibly in the case of
+// looped up lists.
+
+And print (a) = Valof
+$( prin (a)
+   terpri ()
+   Resultis a
+$)
+
+// TERPRI is Lisp's name for what BCPL calls NEWLINE()
+
+And terpri () = Valof
+$( newline ()
+   posn := 0
+   Resultis nil
+$)
+
+// The Lisp function ASSOC
+
+And assoc (tag, alist) = Valof
+$( Until atom (alist)
+   Do Test atom (car (alist))
+      Then alist := cdr (alist)
+      Or Test equal (tag, car (car (alist)))
+         Then resultis car (alist)
+      Or alist := cdr (alist)
+   Resultis nil // Not found
+$)
+
+And plus (a, b) = arithmetic (a, b, a + b)
+
+And difference (a, b) = arithmetic (a, b, a - b)
+
+And times (a, b) = arithmetic (a, b, a * b)
+
+And quotient (a, b) = arithmetic (a, b, b = 0 ->
+                                        error ("Division by zero"),
+                                        a / b)
+
+And remainder (a, b) = arithmetic (a, b, b = 0 ->
+                                         error ("Division by zero"),
+                                         a Rem b)
+
+And greaterp (a, b) = relational (a, b, a > b)
+
+And lessp (a, b) = relational (a, b, a < b)
+
+And set (a, b) = Valof
+$( Unless symp (a)
+   Then mixerror ("Attempt to set non name:  ", a)
+   !a := b
+   resultis b
+$)
+
+And lispoblist () = oblist
+
+And lisp.stop (n) = numberp (n) -> windup (n),
+                                   mixerror ("Nonnumeric stop code", n)
+
+And progn (args, alist) = eval.last (nil, args, alist)
+
+And debug () = Valof
+$( debugging := Not debugging
+   Resultis boolean (debugging)
+$)
+
+And readchar () = Valof
+$( Let ch = rdch ()
+   boffo % 0, boffo % 1 := 1, ch
+   If ch = endstreamch
+   Then Resultis eofmarker
+   Resultis mkatom (boffo, unset)
+$)
+
+And plist (a) = symp (a) -> 1 ! a, mixerror ("plist of non identifier:  ", a)
+
+And lispsymp (a) = boolean (symp (a))
+
+And def (args, alist) = define (car (car (args)),
+                                cdr (car (args)),
+                                cdr (args))
+
+And readfrom (file) = Valof  // For the time being, permit exactly one read
+                             // form the beginning of a file
+$( If not symp (file)
+   Then mixerror ("filenames must be symbols, not: ", file)
+   $( Let filename = lispstring.to.boffo (lispget (file, pname))
+      Let new.input = findinput (filename)
+      Let result = ?
+      If new.input = 0
+      Then mixerror ("Cannot open a file with the name: ", file)
+      selectinput (new.input)
+      result := read ()
+      endread (new.input)
+      selectinput (standard.input)
+      Resultis result
+   $)
+$)
+
+And printto (file, object) = Valof  // For the time being, permit exactly one
+                                    // print to a file
+$( If not symp (file)
+   Then mixerror ("filenames must be symbols, not: ", file)
+   $( Let filename = lispstring.to.boffo (lispget (file, pname))
+      Let new.output = findoutput (filename)
+      Let result = ?
+      If new.output = 0
+      Then mixerror ("Cannot open a file with the name: ", file)
+      selectoutput (new.output)
+      result := print (object)
+      endwrite (new.output)
+      selectoutput (standard.output)
+      Resultis result
+   $)
+$)
+
+And escape () = Valof
+$( wrch ('*e')
+   Resultis nil
+$)
+
+And eject () = Valof
+$( wrch ('*p')
+   posn := 0
+   Resultis nil
+$)
+
+And column () = numeric (posn + 1)
+
+And linelength (n) = Valof
+$( Test numberp (n)
+   Then $( Let l = length.of.a.line
+           length.of.a.line := n
+           Resultis numeric (n)
+        $)
+   Else error ("number expected")
+$)
+
+And rplaca (a, v) = Valof
+$( If atom (a)
+   Then error ("Pair expected")
+   0 ! a := v
+   Resultis a
+$)
+
+And rplacd (a, v) = Valof
+$( If atom (a)
+   Then error ("Pair expected")
+   1 ! a := v
+   Resultis a
+$)
+
+//
+//   Subsidiary functions in bcpl used in the above definitions
+
+And boolean (x) = x -> lisptrue, nil
+
+And numeric (x) = x < 0 -> x | top.three.bits, x & (NOT top.three.bits)
+
+And arithmetic (a, b, r) = Valof
+$( Unless numberp (a) & numberp (b)
+   Then error ("Non numeric operand")
+   Resultis numeric (r)
+$)
+
+And relational (a, b, r) = Valof
+$( Unless numberp (a) & numberp (b)
+   Then error ("Non numeric comparand")
+   Resultis boolean (r)
+$)
+
+And define (f, p, b) = Valof
+$( Test symp (f)
+   $( !f := cons (lambda, cons (p, b))
+      Resultis f
+   $)
+   Else mixerror ("identifier expected for definition, not ", f)
+$)
+
+
+

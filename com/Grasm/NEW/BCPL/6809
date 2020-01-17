@@ -1,0 +1,1996 @@
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*************************************************************************
+*  (C) Copyright 1979  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*                   6 8 0 9    A S S E M B L E R                        *
+*                                                                       *
+*************************************************************************
+**  C  Gray  Girling      COMPUTER LAB,  CAMBRIDGE           24.07.80  **
+*************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*/
+
+
+
+
+
+
+
+//  LOG OF CHANGES:
+//  ===============
+//
+//  Log entry is <date> <general assembler version no.> <initials> <change>
+//
+//  04.08.80  3.031  CGG   First installed
+//  13.08.80  3.033  CGG   Bugs in BRA and in indexing fixed
+//  22.08.80  3.034  CGG   Bug in PCR fixed
+//                         ADDD mnemonic added
+//                         bugs in LBRA fixed
+//  24.01.81  3.044  CGG   FSB mnemonic name changed to FCB
+//                         SPACE mnemonic name changed to SPC
+//                         Argument to SETDP changed from address to page no.
+//                         Added mnemonics BSZ, REG, SCALL, UCALL, SKIP1 and
+//                         SKIP2
+//  14.01.82  3.056  CGG   <expression>:<bits>,PCR made to take account of
+//                         relative addressing when finding size of <expression>
+//  10.03.82  3.064  CGG   Macro directives added
+//  17.03.82  3.064  CGG   Bug in PCR 5 bit offsets (which do not exist) fixed
+
+
+
+
+
+SECTION "n6809"
+
+
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+
+/*<CAP:
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+
+
+/*<IBM:
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+
+
+
+
+
+
+
+
+MANIFEST
+$(  // Error messages
+    e.immed     = e.e+1
+    e.direct    = e.e+2
+    e.dblreg    = e.e+3
+    e.sgnind    = e.e+4
+    e.snglreg   = e.e+5
+    e.pcorpcr   = e.e+6
+    e.extend    = e.e+7
+    e.brange    = e.e+8
+    e.badreg    = e.e+9
+    e.badu      = e.e+10
+    e.bads      = e.e+11
+    e.badrsize  = e.e+12
+    e.badpage   = e.e+13
+    e.nodpcheck = e.e+14
+    e.badbitsize= e.e+15
+    e.nocoerce  = e.e+16
+    e.samereg   = e.e+17
+    e.badpbyte  = e.e+18
+    e.regexp    = e.e+19
+    e.uands     = e.e+20
+    // Register  Discriptions
+    b.double  = bit9
+    b.single  = bit10
+    b.cc      = bit11
+    b.dp      = bit12
+    b.pc      = bit13
+    b.pcr     = bit14
+    r.bad = 0
+    r.s   = #X3 | b.double
+    r.u   = #X2 | b.double
+    r.dp  = b.dp
+    r.y   = #X1 | b.double
+    r.pc  = b.pc
+    r.x   = #X0 | b.double
+    r.a   = #X6 | b.single
+    r.b   = #X5 | b.single
+    r.cc  = b.cc
+    r.d   = #XB | b.single
+    r.all = byte1
+    r.pcr = b.pcr
+    fd.data  =  #X3         // mask for extracting data from b.double registers
+    fs.data  =  #XF         // mask for extracting data from b.single registers
+    // size of expressions:
+    bits.0 = 0
+    bits.5 = 5
+    bits.8 = 8
+    bits.16 = 16
+    bits.any = 32
+    // meaningless mask for 'parse.arg':
+    impossible = #XFFFF
+    // register type : manifests
+    type.regs  = type.+1
+    regs.val   = #XFF           // mask for value of register symbol
+    u.flag     = #X0100         // marks U register
+    s.flag     = #X0200         // marks S register
+    // op code for NOP
+    nop.code   = #X12
+$)
+
+
+GLOBAL
+$(  f.reg     : ag         // field for register ID in postbyte
+    f.mod1    : ag+1       // field for modifying fmt1,fmt2,fmt3 mnemonics
+    f.mod2    : ag+2       // field for modifying fmd4 mnemonics
+    getsym    : ag+3       // for parsing registers and special symbols
+    parse.arg : ag+4       // parses and generates hex for standard arguments
+    dp.val    : ag+5       // holds supposed value of DP register
+    dp.ok     : ag+6       // TRUE if dp.val is valid
+    fmt0      : ag+7       // Parsing procedures:
+    fmt1      : ag+8
+    fmt2      : ag+9
+    fmt3      : ag+10
+    fmt4      : ag+11
+    fmt5      : ag+12
+    fmt6      : ag+13
+    fmt7      : ag+14
+    fmt8      : ag+15
+    fmt9      : ag+16
+    fmt10     : ag+17
+    fmt11     : ag+18
+    regproc   : ag+19
+    callproc  : ag+20
+    bszproc   : ag+21
+    fdbproc   : ag+22
+    setdpproc : ag+23
+$)
+
+
+
+
+
+
+
+//
+//                     Error  messages
+//
+
+
+
+
+
+
+LET errormess(rc) = VALOF
+SWITCHON rc INTO
+$(  CASE e.immed:     RESULTIS "immediate value not allowed here"
+    CASE e.direct:    RESULTIS "direct page mode illegal here"
+    CASE e.dblreg:    RESULTIS "register U,S,X or Y expected here"
+    CASE e.sgnind:    RESULTIS "single auto offset is illegal in an indirection"
+    CASE e.snglreg:   RESULTIS "register A,B or D expected"
+    CASE e.pcorpcr:   RESULTIS "PC or PCR expected"
+    CASE e.extend:    RESULTIS "extended value illegal here"
+    CASE e.brange:    RESULTIS "destination out of range - use long branch"
+    CASE e.badreg:    RESULTIS "regiser A,B,D,U,S,X,Y,CC,DP or PC expected"
+    CASE e.badu:      RESULTIS "register U illegal here"
+    CASE e.bads:      RESULTIS "register S illegal here"
+    CASE e.badrsize:  RESULTIS "incompatible register size"
+    CASE e.badpage:   RESULTIS "not a valid page number"
+    CASE e.nodpcheck: RESULTIS "top byte of address is not DP"
+    CASE e.badbitsize:RESULTIS "0,5,8 or 16 bits expected"
+    CASE e.nocoerce:  RESULTIS "cannot coerce expression to %N bits"
+    CASE e.samereg:   RESULTIS "duplicate register specification"
+    CASE e.badpbyte:  RESULTIS "argument must be positive less than 128"
+    CASE e.regexp:    RESULTIS "REG variable expected"
+    CASE e.uands:     RESULTIS "U and S cannot share a REG value"
+    DEFAULT:          RESULTIS "unknown return code given"
+$)
+
+
+
+
+
+
+
+
+//
+//                    Register  Discriptions
+//
+
+
+
+
+
+
+LET initsyms() BE
+$(  reg.put("S",r.s)
+    reg.put("SP",r.s)
+    reg.put("U",r.u)
+    reg.put("US",r.u)
+    reg.put("DP",r.dp)
+    reg.put("DPR",r.dp)
+    reg.put("Y",r.y)
+    reg.put("IY",r.y)
+    reg.put("PC",r.pc)
+    reg.put("X",r.x)
+    reg.put("IX",r.x)
+    reg.put("A",r.a)
+    reg.put("ACCA",r.a)
+    reg.put("B",r.b)
+    reg.put("ACCB",r.b)
+    reg.put("CC",r.cc)
+    reg.put("CCR",r.cc)
+    reg.put("D",r.d)
+    reg.put("ALL",r.all)
+    reg.put("PCR",r.pcr)
+$)
+
+
+
+
+
+
+
+//
+//                        Symbol   Types
+//
+
+
+
+
+LET valtype(type, val) = VALOF
+$(  warn(e.badtype)
+    RESULTIS (type=type.regs -> val&regs.val, -1)
+$)
+
+
+
+LET printtype(type,val) BE
+TEST type=type.regs THEN
+$(  LET str=VEC 5
+    LET cat(bit,str,ch) BE
+    UNLESS bit=0 THEN
+    $(  str%0 := str%0+1
+        str%(str%0) := ch
+    $)
+    str%0 := 0
+    TEST (val & #X06) = #X06 THEN cat(#X06,str,'D') ELSE
+    $(  cat(val & #X04,str,'A')
+        cat(val & #X02,str,'B')
+    $)
+    cat(val & #X01,str,'C')     // CC
+    cat(val & #X08,str,'I')     // DP  ('D' is already used!)
+    cat(val & #X10,str,'X')
+    cat(val & #X20,str,'Y')
+    cat(val & #X40,str,((val & (u.flag|s.flag))=(u.flag|s.flag)->'?',
+                        (val & u.flag)~=0 -> 'U','S'))
+    cat(val & #X80,str,'P')     // PC
+    writes("reg ")
+    FOR i=1 TO 7-str%0 DO wrch('*S')
+    writes(str)
+$) ELSE writes(" ????????? ")
+
+
+
+
+
+
+
+
+//
+//                     Pre-declared  Fields
+//
+
+
+
+
+
+
+
+/*
+
+                +---+---+---+---+---+---+---+---+
+                | f.reg |                       |
+                +---+---+---+---+---+---+---+---+
+
+
+                +---+---+---+---+---+---+---+---+
+                |       |f.mod1 |               |
+                +---+---+---+---+---+---+---+---+
+
+
+                +---+---+---+---+---+---+---+---+
+                |   |  f.mod2   |               |
+                +---+---+---+---+---+---+---+---+
+
+*/
+
+
+
+
+
+
+//
+//                         Parsing  Functions
+//
+
+
+
+
+
+
+
+LET getsym(symspec) = VALOF
+    TEST item.type~=i.iden THEN RESULTIS r.bad ELSE
+    $(  LET r=getreg(item.info)
+        TEST (r&symspec)=0 THEN RESULTIS r.bad ELSE
+        $(  getitem()
+            RESULTIS r
+        $)
+    $)
+
+
+
+
+LET scan.expression(spec) = VALOF
+// one of the 'bits' sizes above
+$(  LET size = bits.any
+    label.expression(spec)
+    TEST ~scan(i.colon) THEN IF dontknow THEN size := bits.16 ELSE
+    $(  LET new.size=?
+        TEST item.type\=i.number THEN error(e.badnum) ELSE
+        new.size:= VALOF SWITCHON item.info INTO
+        $(  CASE 0:  RESULTIS bits.0
+            CASE 5:  RESULTIS bits.5
+            CASE 8:  RESULTIS bits.8
+            CASE 16: RESULTIS bits.16
+            DEFAULT: error(e.badbitsize)
+                     RESULTIS bits.any
+        $)
+        getitem()
+        size:=new.size
+    $)
+    RESULTIS size
+$)
+
+
+
+LET get.expression.size(spec, coerce.size, relative) = VALOF
+$(  LET size = bits.0
+    LET val = ?
+    IF relative THEN spec!0 := spec!0 - pc - (binbuf!0-1) - 1
+    // subtract bytes written this line + postbyte
+    val := spec!0
+    TEST spec!1~=0 THEN size:=bits.16
+    ELSE TEST val=0 THEN size:=bits.0
+    ELSE TEST -16<=val-(relative -> 1, 0)<16 THEN size:=bits.5
+    ELSE TEST -128<=val-(relative -> 2, 0)<128 THEN size:=bits.8
+    ELSE size:=bits.16
+    UNLESS coerce.size = bits.any THEN
+    $(  IF coerce.size<size THEN warn(e.nocoerce, coerce.size)
+        size := coerce.size
+    $)
+    IF relative THEN
+        // there is no format for 0 and 5 bit offsets in a PCR address
+        spec!0 := spec!0 - (size < bits.16 -> 1, 2)
+    RESULTIS size
+$)
+
+
+
+
+
+LET putaddress(n) BE
+$(  LET sign=n&~#XFFFF
+    putword( (n&(255<<8)) >> 8)
+    putword(n&255)
+    UNLESS sign=(-1&~#XFFFF) | sign=0 THEN warn(e.badbyte)
+$)
+
+
+
+LET parse.arg(regsize, f.mod, if.direct, if.extended, if.immediate, if.indexed)
+BE
+$(  // 'regsize' is a 'bits' value (above) defining the size of the register
+    // being used as destination
+    // 'f.mod' is a "field" defining where last byte is to be modified
+    // other arguments are the values that 'f.mod' is to be set to in each of
+    // the corresponding addressing modes (when found)..  these values can be
+    // 'impossible' in which case an error will be flaged if the wrong syntax
+    // is parsed.
+    LET spec=VEC spec.size
+    LET reg=r.bad
+    TEST scan(i.equals) THEN                      /* immediate */
+        TEST if.immediate=impossible THEN error(e.immed) ELSE
+        $(  putwordf(if.immediate, f.mod)
+            label.expression(spec)
+            IF regsize\=bits.16 & spec!1~=0 THEN error(e.badrel)
+            TEST regsize=bits.16 THEN putlabelspec(spec) ELSE putword(!spec)
+        $)
+    ELSE TEST r.bad~=getsym(b.dp) THEN            /* direct page */
+        TEST if.direct=impossible THEN error(e.direct) ELSE
+        $(  LET i=?
+            UNLESS scan(i.comma) THEN error(e.expected,',')
+            i:=expression()
+            putwordf(if.direct,f.mod)
+            putword(i&#XFF)
+            IF (i>>8)~=0 & ~dontknow & dp.ok & (i&#XFF00)~=dp.val THEN
+            error(e.nodpcheck)
+        $)
+    ELSE                                          /* extended or indexed */
+    $(  LET indirect=scan(i.lsqb)
+        LET postbyte=(indirect->#X90,#X80)
+        putwordf(if.indexed, f.mod)    // assume indexed for time being
+        TEST scan(i.comma) THEN        // [,--R++]
+        $(  LET nibble=#X4
+            IF scan(i.minus) THEN nibble:=(scan(i.minus)->#X3,#X2)
+            reg:=getsym(b.double)
+            IF reg=r.bad THEN error(e.dblreg)
+            IF scan(i.plus) THEN nibble:=(scan(i.plus)->#X1,#X0)
+            putword(postbyte+nibble)
+            putwordf(reg & fd.data, f.reg)
+            IF indirect & (nibble=#X0 | nibble=#X2) THEN error(e.sgnind)
+        $)
+        ELSE TEST VALOF
+        $(  reg:=getsym(b.single)
+            RESULTIS reg~=r.bad
+        $)
+        THEN                           // [ABD,R]
+        $(  putword(postbyte+(reg & fs.data))
+            UNLESS scan(i.comma) THEN error(e.expected, ',')
+            reg:=getsym(b.double)
+            IF reg=r.bad THEN error(e.dblreg)
+            putwordf(reg & fd.data, f.reg)
+        $)
+        ELSE               /* we must be looking at an expression */
+        $(  LET size = scan.expression(spec)
+            TEST scan(i.comma) THEN    // [A,PC PCR]
+            $(  reg:=getsym(b.pc | b.pcr)
+                TEST reg~=r.bad THEN
+                $(  IF reg=r.pcr THEN  /* must subtract current value of pc */
+                    $(  IF spec!1>1 THEN error(e.badext)
+                        IF mode=null THEN mode:=absolute
+                        UNLESS mode=absolute THEN spec!1:=spec!1-1
+                        UNLESS spec!1=0 THEN warn(e.badrel)
+                        size := get.expression.size(spec, size, TRUE)
+                    $)
+                    putword(postbyte+(size>bits.8->#XD,#XC))
+                    TEST size>bits.8 THEN putlabelspec(spec) ELSE putword(!spec)
+                $)
+                ELSE                   // [n,XYUS]
+                $(  size := get.expression.size(spec, size, FALSE)
+                    reg:=getsym(b.double)
+                    IF reg=r.bad THEN error(e.dblreg)
+                    postbyte:=putf(reg&fd.data, f.reg, postbyte)
+                    SWITCHON size INTO
+                    $(  CASE bits.0:
+                            putword(postbyte+#X4)
+                            ENDCASE
+                        CASE bits.5:
+                        CASE bits.8:
+                            TEST size=bits.5 & ~indirect THEN
+                                putword(putf(reg&fd.data, f.reg, !spec&#X1F))
+                            ELSE
+                            $(  putword(postbyte+#X8)
+                                putword(!spec)
+                            $)
+                            UNLESS spec!1=0 THEN error(e.badrel)
+                            ENDCASE
+                        CASE bits.16:
+                            putword(postbyte+#X9)
+                            putlabelspec(spec)
+                            ENDCASE
+                        DEFAULT: error(e.interror, 10)
+                    $)
+                $)
+            $)
+            ELSE TEST indirect THEN               /* extended indirect */
+            $(  putword(#X9F)
+                putlabelspec(spec)
+            $)
+            ELSE                                  /* extended */
+            TEST if.extended=impossible THEN error(e.extend) ELSE
+            // if you can reach this address with the Direct Page register
+            // we use DP addressing in preference to full addressing.
+            TEST (spec!1=0 & ~dontknow & dp.ok & if.direct~=impossible ->
+                 -126 <= !spec-dp.val <256,  FALSE) THEN
+            $(  putwordf(if.direct, f.mod)
+                putword(!spec-dp.val)
+            $) ELSE
+            $(  putwordf(if.extended, f.mod)
+                putlabelspec(spec)
+            $)
+        $)
+        IF indirect THEN UNLESS scan(i.rsqb) THEN error(e.expected,']')
+    $)
+$)
+
+
+
+
+
+
+
+.
+
+
+
+SECTION "n6809a"
+
+
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+
+/*<CAP:
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+
+
+/*<IBM:
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+
+
+
+
+
+
+
+
+MANIFEST
+$(  // Error messages
+    e.immed     = e.e+1
+    e.direct    = e.e+2
+    e.dblreg    = e.e+3
+    e.sgnind    = e.e+4
+    e.snglreg   = e.e+5
+    e.pcorpcr   = e.e+6
+    e.extend    = e.e+7
+    e.brange    = e.e+8
+    e.badreg    = e.e+9
+    e.badu      = e.e+10
+    e.bads      = e.e+11
+    e.badrsize  = e.e+12
+    e.badpage   = e.e+13
+    e.nodpcheck = e.e+14
+    e.badbitsize= e.e+15
+    e.nocoerce  = e.e+16
+    e.samereg   = e.e+17
+    e.badpbyte  = e.e+18
+    e.regexp    = e.e+19
+    e.uands     = e.e+20
+    // Register  Discriptions
+    b.double  = bit9
+    b.single  = bit10
+    b.cc      = bit11
+    b.dp      = bit12
+    b.pc      = bit13
+    b.pcr     = bit14
+    r.bad = 0
+    r.s   = #X3 | b.double
+    r.u   = #X2 | b.double
+    r.dp  = b.dp
+    r.y   = #X1 | b.double
+    r.pc  = b.pc
+    r.x   = #X0 | b.double
+    r.a   = #X6 | b.single
+    r.b   = #X5 | b.single
+    r.cc  = b.cc
+    r.d   = #XB | b.single
+    r.all = byte1
+    r.pcr = b.pcr
+    fd.data  =  #X3         // mask for extracting data from b.double registers
+    fs.data  =  #X7         // mask for extracting data from b.single registers
+    // size of expressions:
+    bits.0 = 0
+    bits.5 = 5
+    bits.8 = 8
+    bits.16 = 16
+    bits.any = 32
+    // meaningless mask for 'parse.arg':
+    impossible = #XFFFF
+    // register type : manifests
+    type.regs  = type.+1
+    regs.val   = #XFF           // mask for value of register symbol
+    u.flag     = #X0100         // marks U register
+    s.flag     = #X0200         // marks S register
+    // op code for NOP
+    nop.code   = #X12
+$)
+
+
+
+GLOBAL
+$(  f.reg     : ag         // field for register ID in postbyte
+    f.mod1    : ag+1       // field for modifying fmt1,fmt2,fmt3 mnemonics
+    f.mod2    : ag+2       // field for modifying fmd4 mnemonics
+    getsym    : ag+3       // for parsing registers and special symbols
+    parse.arg : ag+4       // parses and generates hex for standard arguments
+    dp.val    : ag+5       // holds supposed value of DP register
+    dp.ok     : ag+6       // TRUE if dp.val is valid
+    fmt0      : ag+7       // Parsing procedures:
+    fmt1      : ag+8
+    fmt2      : ag+9
+    fmt3      : ag+10
+    fmt4      : ag+11
+    fmt5      : ag+12
+    fmt6      : ag+13
+    fmt7      : ag+14
+    fmt8      : ag+15
+    fmt9      : ag+16
+    fmt10     : ag+17
+    fmt11     : ag+18
+    regproc   : ag+19
+    callproc  : ag+20
+    bszproc   : ag+21
+    fdbproc   : ag+22
+    setdpproc : ag+23
+$)
+
+
+
+
+
+//
+//                     Mnemonic   Format  Routines
+//
+
+
+
+
+
+
+LET fmt0(lab) = get.and.declare(lab)
+
+
+
+AND fmt1(lab) BE
+$(  get.and.declare(lab)
+    parse.arg(bits.8, f.mod1, #X1, #X3, #X0, #X2)
+$)
+
+
+
+AND fmt2(lab) BE
+$(  get.and.declare(lab)
+    parse.arg(bits.16, f.mod1, #X1, #X3, #X0, #X2)
+$)
+
+
+
+AND fmt3(lab) BE
+$(  get.and.declare(lab)
+    parse.arg(bits.8, f.mod1, #X1, #X3, impossible, #X2)
+$)
+
+
+
+AND fmt4(lab) BE
+$(  get.and.declare(lab)
+    parse.arg(bits.8, f.mod2, #X0, #X7, impossible, #X6)
+$)
+
+
+
+AND fmt5(lab) BE
+$(  // deals with short relative branches
+    LET i=?
+    get.and.declare(lab)
+    i:=pcrel.expression()-2
+    UNLESS -128<=i<=127 THEN warn(e.brange)
+    putword(i)
+$)
+
+
+
+AND fmt6(lab) BE
+$(  // deals with long relative branches
+    get.and.declare(lab)
+    putaddress(pcrel.expression()-(binbuf!0-1)-2)
+$)
+
+
+
+AND fmt7(lab) BE
+$(  get.and.declare(lab)
+    parse.arg(bits.16, 0, impossible, impossible, impossible, 0)
+$)
+
+
+AND fmt8(lab) BE
+$(  // for ORCC and ANDCC
+    get.and.declare(lab)
+    UNLESS scan(i.equals) THEN error(e.expected,'=')
+    putword(expression())
+$)
+
+
+
+LET fmt9(lab) BE
+$(  // for TFR and EXG
+    LET regval() = VALOF
+    $(  LET r=getsym(b.single | b.double | b.cc | b.dp | b.pc)
+        SWITCHON r INTO
+        $(  CASE r.d:   RESULTIS #X0
+            CASE r.x:   RESULTIS #X1
+            CASE r.y:   RESULTIS #X2
+            CASE r.u:   RESULTIS #X3
+            CASE r.s:   RESULTIS #X4
+            CASE r.pc:  RESULTIS #X5
+            CASE r.a:   RESULTIS #X8
+            CASE r.b:   RESULTIS #X9
+            CASE r.cc:  RESULTIS #XA
+            CASE r.dp:  RESULTIS #XB
+            DEFAULT:    error(e.badreg)
+                        RESULTIS #XFF
+        $)
+    $)
+    LET r1=?
+    LET r2=?
+    LET double.reg=?
+    get.and.declare(lab)
+    r1:=regval()
+    double.reg:=(r1<#X8)
+    UNLESS scan(i.comma) THEN error(e.expected,',')
+    r2:=regval()
+    putword((r1<<4) | r2)
+    UNLESS (r2<#X8)=double.reg THEN error(e.badrsize)
+$)
+
+
+
+
+LET stackregval(regs.so.far) = VALOF
+$(  LET r=getsym(b.single | b.double | b.cc | b.dp | b.pc)
+    LET rval = VALOF
+    SWITCHON r INTO
+    $(  CASE r.d:   RESULTIS #X006
+        CASE r.x:   RESULTIS #X010
+        CASE r.y:   RESULTIS #X020
+        CASE r.u:   RESULTIS #X140
+        CASE r.s:   RESULTIS #X240
+        CASE r.a:   RESULTIS #X002
+        CASE r.b:   RESULTIS #X004
+        CASE r.cc:  RESULTIS #X001
+        CASE r.dp:  RESULTIS #X008
+        CASE r.pc:  RESULTIS #X080
+        DEFAULT:    error(e.badreg)
+                    RESULTIS #X000
+    $)
+    IF (regs.so.far & rval)=rval THEN warn(e.samereg)
+    RESULTIS rval
+$)
+
+
+
+
+LET parsereglist(badreg) = VALOF
+$(  // for PSH and PUL
+    LET set=0
+    $(rpt
+        TEST scan(i.equals) THEN
+            TEST is.type(type.regs) THEN
+            $(  LET newregs=gettype(type.regs, item.info)
+                getitem()
+                IF (newregs & set)~=0 THEN error(e.samereg)
+                set := set | newregs
+            $) ELSE error(e.regexp)
+        ELSE set := set | stackregval(set)
+    $)rpt REPEATUNTIL ~scan(i.comma)
+    TEST badreg~=0 & (set & badreg)=badreg THEN
+    error(badreg=u.flag -> e.badu, e.bads)
+    ELSE IF (set & (u.flag|s.flag))=(u.flag|s.flag) THEN error(e.uands)
+    RESULTIS set
+$)
+
+
+
+
+LET fmt10(lab) BE
+$(  get.and.declare(lab)
+    putword(regs.val & parsereglist(s.flag))
+$)
+
+
+LET fmt11(lab) BE
+$(  get.and.declare(lab)
+    putword(regs.val & parsereglist(u.flag))
+$)
+
+
+LET regproc(lab) BE
+$(  getitem()
+    putlab(lab, parsereglist(0), type.regs)
+$)
+
+
+
+AND callproc(lab) BE
+$(  LET i=?
+    get.and.declare(lab)
+    i:=expression()
+    TEST dontknow THEN error(e.forward) ELSE
+    TEST 0<=i<=127 THEN putwordf(i, newf(0,7)) ELSE
+    error(e.badpbyte)
+$)
+
+
+AND bszproc(lab) BE
+$(  LET i=?
+    get.and.declare(lab)
+    i:=expression()
+    TEST dontknow THEN error(e.forward) ELSE
+    FOR n=1 TO i DO putword(0)
+$)
+
+
+AND fdbproc(lab) BE
+$(  LET spec=VEC spec.size
+    get.and.declare(lab)
+    putlabelspec(label.expression(spec)) REPEATWHILE scan(i.comma)
+$)
+
+
+AND setdpproc(lab) BE
+$(  get.and.declare(lab)
+    TEST is.expression() THEN
+    $(  LET i=expression()
+        TEST dontknow THEN error(e.forward) ELSE
+        TEST i/256 ~= 0 THEN error(e.badpage) ELSE
+        $(  dp.val := (i&#XFF) << 8
+            dp.ok := TRUE
+        $)
+    $) ELSE dp.ok:= FALSE
+$)
+
+
+
+
+//
+//                        Initialisation
+//
+
+
+
+
+
+
+LET startasm(version) = (version/1000)\=3 -> "version 3.056 06-Jan-82", VALOF
+$(  name:="6809"
+    comntcheck:=TRUE
+    binbufwidth:=5
+    msbytefirst := TRUE  // byte ordering defined
+    f.mod1:=newf(4,2)
+    f.mod2:=newf(4,3)
+    f.reg:=newf(5,2)
+    // tell Code.gen byte to use for undefined locations
+    code.gen(cd.undef, nop.code)
+    RESULTIS 0
+$)
+
+
+
+
+AND startparse() BE
+$(  dp.ok := FALSE
+    dp.val := 0
+$)
+
+.
+
+
+SECTION "n6809b"
+
+
+
+//*<TRIPOS:
+//*<STANDINIT
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+/*<RSX
+//*<STANDINIT
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+
+/*<CAP:
+//*<STANDINIT
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+
+
+/*<IBM:
+//*<STANDINIT
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+
+
+
+//*<STANDINIT
+// not necessary unless the real INITCODES is used
+
+MANIFEST
+$(  // op code for NOP
+    nop.code = #X12
+$)
+
+
+
+
+GLOBAL
+$(  f.reg     : ag         // field for register ID in postbyte
+    f.mod1    : ag+1       // field for modifying fmt1,fmt2,fmt3 mnemonics
+    f.mod2    : ag+2       // field for modifying fmd4 mnemonics
+    getsym    : ag+3       // for parsing registers and special symbols
+    parse.arg : ag+4       // parses and generates hex for standard arguments
+    dp.val    : ag+5       // holds supposed value of DP register
+    dp.ok     : ag+6       // TRUE if dp.val is valid
+    fmt0      : ag+7       // Parsing procedures:
+    fmt1      : ag+8
+    fmt2      : ag+9
+    fmt3      : ag+10
+    fmt4      : ag+11
+    fmt5      : ag+12
+    fmt6      : ag+13
+    fmt7      : ag+14
+    fmt8      : ag+15
+    fmt9      : ag+16
+    fmt10     : ag+17
+    fmt11     : ag+18
+    regproc   : ag+19
+    callproc  : ag+20
+    bszproc   : ag+21
+    fdbproc   : ag+22
+    setdpproc : ag+23
+$)
+/*STANDINIT>*/
+
+
+
+
+
+/*<RSXINIT     06.01.82   Version 3.056
+GLOBAL  $(  start : 1;  codes : 252;  initcodes : 278  $)
+
+LET initcodes() BE
+$(  // table for the 6809 assembler:
+    // this table must be regenerated if the globals change
+    LET tab = TABLE
+    #X053D, #X014C, #X0000, #X000A, #X006C, #X053D, #X0000, #X053F, #X00DD,
+    #X0000, #X0011, #X001F, #X053F, #X0007, #X0541, #X00DD, #X0000, #X0018,
+    #XFFFF, #X0541, #X000E, #X0543, #X014D, #X0000, #X0026, #XFFFF, #X0543,
+    #X0015, #X064E, #X00DF, #X0000, #X0519, #X0042, #X064E, #X001C, #X0545,
+    #X00E0, #X0000, #X0034, #X002D, #X0545, #X0023, #X0589, #X00E2, #X0000,
+    #X0065, #X003B, #X0589, #X002A, #X0547, #X00E3, #X0000, #XFFFF, #X0050,
+    #X0547, #X0031, #X05AE, #X00E4, #X0000, #X0049, #X0057, #X05AE, #X0038,
+    #X0652, #X00E1, #X0000, #X0088, #X00CE, #X0652, #X003F, #X05B1, #X00E5,
+    #X0000, #X0521, #X005E, #X05B1, #X0046, #X054A, #X00E6, #X0000, #X00AD,
+    #X0096, #X054A, #X004D, #X05D6, #X00DE, #X0000, #XFFFF, #X007A, #X05D6,
+    #X0054, #X05C0, #X00EB, #X0000, #X008F, #X012E, #X05C0, #X005B, #X058B,
+    #X00EC, #X0000, #X00B6, #X0073, #X058B, #X0062, #X0692, #X00E9, #X0000,
+    #X0146, #XFFFF, #X0692, #X0069, #X05AA, #X00EA, #X0000, #XFFFF, #X00A4,
+    #X05AA, #X0070, #X05D8, #X00E7, #X0000, #X0081, #XFFFF, #X05D8, #X0077,
+    #X05DA, #X00EF, #X0000, #X0106, #X00F6, #X05DA, #X007E, #X0654, #X00E8,
+    #X0000, #X0208, #XFFFF, #X0654, #X0085, #X05C2, #X00EE, #X0000, #XFFFF,
+    #XFFFF, #X05C2, #X008C, #X055A, #X00ED, #X0000, #X01B6, #X009D, #X055A,
+    #X0093, #X057E, #X014E, #X0000, #X00BE, #XFFFF, #X057E, #X009A, #X05AC,
+    #X014A, #X0000, #XFFFF, #XFFFF, #X05AC, #X00A1, #X054D, #X014B, #X0002,
+    #X003F, #X0080, #XFFFF, #X01C6, #X054D, #X00A8, #X058D, #X014B, #X0002,
+    #X003F, #X0000, #XFFFF, #X017E, #X058D, #X00B1, #X0581, #X013E, #X0001,
+    #X0021, #X00C6, #X01AE, #X0581, #X00BA, #X0584, #X013E, #X0001, #X008C,
+    #XFFFF, #XFFFF, #X0584, #X00C2, #X065C, #X013E, #X0001, #X0043, #X00D6,
+    #X016E, #X065C, #X00CA, #X065F, #X013E, #X0001, #X0053, #X00DE, #XFFFF,
+    #X065F, #X00D2, #X0662, #X013E, #X0001, #X0019, #X00E6, #X04F9, #X0662,
+    #X00DA, #X0664, #X013E, #X0001, #X005A, #XFFFF, #X00EE, #X0664, #X00E2,
+    #X0667, #X013E, #X0001, #X004A, #XFFFF, #X0350, #X0667, #X00EA, #X05EF,
+    #X013E, #X0001, #X005C, #X0218, #X00FE, #X05EF, #X00F2, #X0649, #X013E,
+    #X0001, #X004C, #XFFFF, #X0358, #X0649, #X00FA, #X05DD, #X013E, #X0001,
+    #X0058, #X0116, #X010E, #X05DD, #X0102, #X05EA, #X013E, #X0001, #X0048,
+    #XFFFF, #X0368, #X05EA, #X010A, #X05E0, #X013E, #X0001, #X0054, #X0126,
+    #X011E, #X05E0, #X0112, #X05E5, #X013E, #X0001, #X0044, #XFFFF, #X0370,
+    #X05E5, #X011A, #X05E3, #X013E, #X0001, #X003D, #XFFFF, #XFFFF, #X05E3,
+    #X0122, #X05C5, #X013E, #X0001, #X0050, #X013E, #X0136, #X05C5, #X012A,
+    #X05D1, #X013E, #X0001, #X0040, #XFFFF, #X0378, #X05D1, #X0132, #X05C8,
+    #X013E, #X0001, #X0012, #X0228, #XFFFF, #X05C8, #X013A, #X0694, #X013E,
+    #X0001, #X003A, #X014E, #XFFFF, #X0694, #X0142, #X0696, #X013E, #X0001,
+    #X0058, #X015E, #X0156, #X0696, #X014A, #X06C9, #X013E, #X0001, #X0048,
+    #XFFFF, #X0248, #X06C9, #X0152, #X0699, #X013E, #X0001, #X0057, #X0278,
+    #X0166, #X0699, #X015A, #X06C4, #X013E, #X0001, #X0047, #XFFFF, #X0338,
+    #X06C4, #X0162, #X066F, #X013E, #X0001, #X005F, #X0238, #X0176, #X066F,
+    #X016A, #X0689, #X013E, #X0001, #X004F, #XFFFF, #X0340, #X0689, #X0172,
+    #X0590, #X013E, #X0001, #X0059, #X018E, #X0186, #X0590, #X017A, #X05A5,
+    #X013E, #X0001, #X0049, #XFFFF, #X0380, #X05A5, #X0182, #X0593, #X013E,
+    #X0001, #X0056, #X019E, #X0196, #X0593, #X018A, #X05A0, #X013E, #X0001,
+    #X0046, #XFFFF, #X0388, #X05A0, #X0192, #X0596, #X013E, #X0001, #X003B,
+    #X01A6, #XFFFF, #X0596, #X019A, #X0598, #X013E, #X0001, #X0039, #X01E8,
+    #XFFFF, #X0598, #X01A2, #X0587, #X013E, #X0001, #X001D, #XFFFF, #XFFFF,
+    #X0587, #X01AA, #X055C, #X013E, #X0001, #X003F, #X01BE, #X01F8, #X055C,
+    #X01B2, #X055E, #X013E, #X0001, #X0013, #XFFFF, #X01D7, #X055E, #X01BA,
+    #X0550, #X013E, #X0001, #X005D, #XFFFF, #X01CE, #X0550, #X01C2, #X0553,
+    #X013E, #X0001, #X004D, #XFFFF, #X0390, #X0553, #X01CA, #X0561, #X013E,
+    #X0002, #X0010, #X003F, #X01E0, #XFFFF, #X0561, #X01D2, #X0564, #X013E,
+    #X0002, #X0011, #X003F, #XFFFF, #XFFFF, #X0564, #X01DB, #X059A, #X013F,
+    #X0001, #X0082, #X01F0, #XFFFF, #X059A, #X01E4, #X059D, #X013F, #X0001,
+    #X00C2, #XFFFF, #XFFFF, #X059D, #X01EC, #X0567, #X013F, #X0001, #X0080,
+    #X0200, #X02F6, #X0567, #X01F4, #X056A, #X013F, #X0001, #X00C0, #X0288,
+    #XFFFF, #X056A, #X01FC, #X0656, #X013F, #X0001, #X0088, #X0210, #XFFFF,
+    #X0656, #X0204, #X0659, #X013F, #X0001, #X00C8, #XFFFF, #XFFFF, #X0659,
+    #X020C, #X05F2, #X013F, #X0001, #X0086, #X0220, #X02EE, #X05F2, #X0214,
+    #X05F4, #X013F, #X0001, #X00C6, #X0290, #XFFFF, #X05F4, #X021C, #X05CA,
+    #X013F, #X0001, #X008A, #X0230, #XFFFF, #X05CA, #X0224, #X05CC, #X013F,
+    #X0001, #X00CA, #X0509, #XFFFF, #X05CC, #X022C, #X0672, #X013F, #X0001,
+    #X0081, #X0240, #XFFFF, #X0672, #X0234, #X0675, #X013F, #X0001, #X00C1,
+    #X02BB, #XFFFF, #X0675, #X023C, #X06CC, #X013F, #X0001, #X0089, #X0250,
+    #XFFFF, #X06CC, #X0244, #X06CF, #X013F, #X0001, #X00C9, #X0258, #XFFFF,
+    #X06CF, #X024C, #X06D2, #X013F, #X0001, #X008B, #X0260, #XFFFF, #X06D2,
+    #X0254, #X06D5, #X013F, #X0001, #X00CB, #X0268, #XFFFF, #X06D5, #X025C,
+    #X06D8, #X013F, #X0001, #X0084, #X0270, #X02E6, #X06D8, #X0264, #X06DB,
+    #X013F, #X0001, #X00C4, #X0330, #XFFFF, #X06DB, #X026C, #X069C, #X013F,
+    #X0001, #X0085, #X0280, #X0398, #X069C, #X0274, #X069F, #X013F, #X0001,
+    #X00C5, #X03D0, #XFFFF, #X069F, #X027C, #X056D, #X0140, #X0001, #X0083,
+    #XFFFF, #XFFFF, #X056D, #X0284, #X05F6, #X0140, #X0001, #X00CC, #X0299,
+    #XFFFF, #X05F6, #X028C, #X05F8, #X0140, #X0002, #X0010, #X00CE, #X02A1,
+    #XFFFF, #X05F8, #X0294, #X05FA, #X0140, #X0001, #X00CE, #X02A9, #XFFFF,
+    #X05FA, #X029D, #X05FC, #X0140, #X0001, #X008E, #X02B2, #XFFFF, #X05FC,
+    #X02A5, #X05FE, #X0140, #X0002, #X0010, #X008E, #X04D9, #XFFFF, #X05FE,
+    #X02AD, #X0678, #X0140, #X0002, #X0010, #X0083, #X02C4, #XFFFF, #X0678,
+    #X02B6, #X067B, #X0140, #X0002, #X0011, #X00BC, #X02CD, #XFFFF, #X067B,
+    #X02BF, #X067E, #X0140, #X0002, #X0011, #X0083, #X02D5, #XFFFF, #X067E,
+    #X02C8, #X0681, #X0140, #X0001, #X00BC, #X02DE, #XFFFF, #X0681, #X02D1,
+    #X0684, #X0140, #X0002, #X0010, #X00BC, #X0348, #XFFFF, #X0684, #X02D9,
+    #X06E3, #X0140, #X0001, #X00C3, #XFFFF, #XFFFF, #X06E3, #X02E2, #X060C,
+    #X0141, #X0001, #X008D, #X0431, #X0360, #X060C, #X02EA, #X0570, #X0141,
+    #X0001, #X0087, #X02FE, #XFFFF, #X0570, #X02F2, #X0572, #X0141, #X0001,
+    #X00C7, #X0306, #XFFFF, #X0572, #X02FA, #X0574, #X0141, #X0001, #X00CD,
+    #X030F, #XFFFF, #X0574, #X0302, #X0576, #X0141, #X0002, #X0010, #X00CF,
+    #X0317, #XFFFF, #X0576, #X030A, #X0578, #X0141, #X0001, #X00CF, #X031F,
+    #XFFFF, #X0578, #X0313, #X057A, #X0141, #X0001, #X008F, #X0328, #XFFFF,
+    #X057A, #X031B, #X057C, #X0141, #X0002, #X0010, #X008F, #XFFFF, #XFFFF,
+    #X057C, #X0323, #X06DE, #X0142, #X0001, #X0008, #XFFFF, #X0501, #X06DE,
+    #X032C, #X06C7, #X0142, #X0001, #X0007, #XFFFF, #XFFFF, #X06C7, #X0334,
+    #X068C, #X0142, #X0001, #X000F, #XFFFF, #X0420, #X068C, #X033C, #X0687,
+    #X0142, #X0001, #X0003, #XFFFF, #XFFFF, #X0687, #X0344, #X066A, #X0142,
+    #X0001, #X000A, #XFFFF, #XFFFF, #X066A, #X034C, #X064C, #X0142, #X0001,
+    #X000C, #XFFFF, #XFFFF, #X064C, #X0354, #X0647, #X0142, #X0001, #X000E,
+    #XFFFF, #XFFFF, #X0647, #X035C, #X05ED, #X0142, #X0001, #X0008, #XFFFF,
+    #XFFFF, #X05ED, #X0364, #X05E8, #X0142, #X0001, #X0004, #XFFFF, #XFFFF,
+    #X05E8, #X036C, #X05D4, #X0142, #X0001, #X0000, #XFFFF, #XFFFF, #X05D4,
+    #X0374, #X05A8, #X0142, #X0001, #X0009, #XFFFF, #XFFFF, #X05A8, #X037C,
+    #X05A3, #X0142, #X0001, #X0006, #XFFFF, #XFFFF, #X05A3, #X0384, #X0556,
+    #X0142, #X0001, #X000D, #XFFFF, #X0511, #X0556, #X038C, #X06B6, #X0143,
+    #X0001, #X0024, #X03A0, #XFFFF, #X06B6, #X0394, #X06B8, #X0143, #X0001,
+    #X0025, #X03A8, #XFFFF, #X06B8, #X039C, #X06BA, #X0143, #X0001, #X0027,
+    #X03B0, #XFFFF, #X06BA, #X03A4, #X06BC, #X0143, #X0001, #X002C, #X03B8,
+    #XFFFF, #X06BC, #X03AC, #X06BE, #X0143, #X0001, #X002E, #X03C0, #XFFFF,
+    #X06BE, #X03B4, #X06C0, #X0143, #X0001, #X0022, #X03C8, #XFFFF, #X06C0,
+    #X03BC, #X06C2, #X0143, #X0001, #X0024, #XFFFF, #XFFFF, #X06C2, #X03C4,
+    #X06A2, #X0143, #X0001, #X002F, #X03D8, #XFFFF, #X06A2, #X03CC, #X06A4,
+    #X0143, #X0001, #X0025, #X03E0, #XFFFF, #X06A4, #X03D4, #X06A6, #X0143,
+    #X0001, #X0023, #X03E8, #XFFFF, #X06A6, #X03DC, #X06A8, #X0143, #X0001,
+    #X002D, #X03F0, #XFFFF, #X06A8, #X03E4, #X06AA, #X0143, #X0001, #X002B,
+    #X03F8, #XFFFF, #X06AA, #X03EC, #X06AC, #X0143, #X0001, #X0026, #X0400,
+    #XFFFF, #X06AC, #X03F4, #X06AE, #X0143, #X0001, #X002A, #X0408, #XFFFF,
+    #X06AE, #X03FC, #X06B0, #X0143, #X0001, #X0020, #X0410, #XFFFF, #X06B0,
+    #X0404, #X06B2, #X0143, #X0001, #X0021, #X0418, #XFFFF, #X06B2, #X040C,
+    #X06B4, #X0143, #X0001, #X008D, #XFFFF, #XFFFF, #X06B4, #X0414, #X068E,
+    #X0143, #X0001, #X0028, #X0428, #XFFFF, #X068E, #X041C, #X0690, #X0143,
+    #X0001, #X0029, #XFFFF, #XFFFF, #X0690, #X0424, #X060E, #X0144, #X0002,
+    #X0010, #X0024, #X043A, #XFFFF, #X060E, #X042C, #X0611, #X0144, #X0002,
+    #X0010, #X0025, #X0443, #XFFFF, #X0611, #X0435, #X0614, #X0144, #X0002,
+    #X0010, #X0027, #X044C, #XFFFF, #X0614, #X043E, #X0617, #X0144, #X0002,
+    #X0010, #X002C, #X0455, #XFFFF, #X0617, #X0447, #X061A, #X0144, #X0002,
+    #X0010, #X002E, #X045E, #XFFFF, #X061A, #X0450, #X061D, #X0144, #X0002,
+    #X0010, #X0022, #X0467, #XFFFF, #X061D, #X0459, #X0620, #X0144, #X0002,
+    #X0010, #X0024, #X0470, #XFFFF, #X0620, #X0462, #X0623, #X0144, #X0002,
+    #X0010, #X002F, #X0479, #XFFFF, #X0623, #X046B, #X0626, #X0144, #X0002,
+    #X0010, #X0025, #X0482, #XFFFF, #X0626, #X0474, #X0629, #X0144, #X0002,
+    #X0010, #X0023, #X048B, #XFFFF, #X0629, #X047D, #X062C, #X0144, #X0002,
+    #X0010, #X002D, #X0494, #XFFFF, #X062C, #X0486, #X062F, #X0144, #X0002,
+    #X0010, #X002B, #X049D, #XFFFF, #X062F, #X048F, #X0632, #X0144, #X0002,
+    #X0010, #X0026, #X04A6, #XFFFF, #X0632, #X0498, #X0635, #X0144, #X0002,
+    #X0010, #X002A, #X04AE, #XFFFF, #X0635, #X04A1, #X0638, #X0144, #X0001,
+    #X0016, #X04B7, #XFFFF, #X0638, #X04AA, #X063B, #X0144, #X0002, #X0010,
+    #X0021, #X04BF, #XFFFF, #X063B, #X04B2, #X063E, #X0144, #X0001, #X0017,
+    #X04C8, #XFFFF, #X063E, #X04BB, #X0641, #X0144, #X0002, #X0010, #X0028,
+    #X04D1, #XFFFF, #X0641, #X04C3, #X0644, #X0144, #X0002, #X0010, #X0029,
+    #XFFFF, #XFFFF, #X0644, #X04CC, #X0600, #X0145, #X0001, #X0032, #X04E1,
+    #XFFFF, #X0600, #X04D5, #X0603, #X0145, #X0001, #X0033, #X04E9, #XFFFF,
+    #X0603, #X04DD, #X0606, #X0145, #X0001, #X0030, #X04F1, #XFFFF, #X0606,
+    #X04E5, #X0609, #X0145, #X0001, #X0031, #XFFFF, #XFFFF, #X0609, #X04ED,
+    #X066C, #X0146, #X0001, #X003C, #XFFFF, #XFFFF, #X066C, #X04F5, #X06E0,
+    #X0146, #X0001, #X001C, #XFFFF, #XFFFF, #X06E0, #X04FD, #X05CE, #X0146,
+    #X0001, #X001A, #XFFFF, #XFFFF, #X05CE, #X0505, #X0558, #X0147, #X0001,
+    #X001F, #XFFFF, #XFFFF, #X0558, #X050D, #X0650, #X0147, #X0001, #X001E,
+    #XFFFF, #XFFFF, #X0650, #X0515, #X05B4, #X0148, #X0001, #X0034, #X0529,
+    #XFFFF, #X05B4, #X051D, #X05B7, #X0149, #X0001, #X0036, #X0531, #XFFFF,
+    #X05B7, #X0525, #X05BA, #X0148, #X0001, #X0035, #X0539, #XFFFF, #X05BA,
+    #X052D, #X05BD, #X0149, #X0001, #X0037, #XFFFF, #XFFFF, #X05BD, #X0535,
+    #X4203, #X5A53, #X4603, #X4243, #X4603, #X4343, #X4603, #X4244, #X5303,
+    #X5445, #X5704, #X4552, #X0046, #X5404, #X5845, #X0054, #X5505, #X4143,
+    #X4C4C, #X5404, #X5453, #X0042, #X5404, #X5453, #X0041, #X5403, #X5453,
+    #X5403, #X5246, #X5303, #X4350, #X5303, #X4957, #X5304, #X4E59, #X0043,
+    #X5304, #X4957, #X0032, #X5304, #X4957, #X0033, #X5304, #X4255, #X0041,
+    #X5304, #X4255, #X0042, #X5304, #X4255, #X0044, #X5303, #X4154, #X5303,
+    #X4254, #X5303, #X4454, #X5303, #X5354, #X5303, #X5554, #X5303, #X5854,
+    #X5303, #X5954, #X5305, #X5445, #X5044, #X5305, #X494B, #X3150, #X5305,
+    #X494B, #X3250, #X5303, #X5845, #X5203, #X4645, #X5203, #X424D, #X5305,
+    #X4143, #X4C4C, #X5204, #X4C4F, #X0042, #X5204, #X524F, #X0042, #X5203,
+    #X4954, #X5203, #X5354, #X5304, #X4342, #X0041, #X5304, #X4342, #X0042,
+    #X5204, #X524F, #X0041, #X5203, #X524F, #X5204, #X4C4F, #X0041, #X5203,
+    #X4C4F, #X5203, #X4C45, #X5203, #X4745, #X4E05, #X4545, #X5344, #X5004,
+    #X4152, #X0047, #X5004, #X4853, #X0053, #X5004, #X4853, #X0055, #X5004,
+    #X4C55, #X0053, #X5004, #X4C55, #X0055, #X4F03, #X4752, #X5004, #X4741,
+    #X0045, #X4E04, #X4745, #X0042, #X4E03, #X504F, #X4F03, #X4152, #X4F03,
+    #X4252, #X4F04, #X4352, #X0043, #X4E04, #X4745, #X0041, #X4E03, #X4745,
+    #X4E03, #X4D41, #X4703, #X5445, #X4C04, #X5349, #X0054, #X4C04, #X4C53,
+    #X0042, #X4C04, #X5253, #X0042, #X4D03, #X4C55, #X4C04, #X5253, #X0041,
+    #X4C03, #X5253, #X4C04, #X4C53, #X0041, #X4C03, #X4C53, #X4904, #X434E,
+    #X0042, #X4C03, #X4144, #X4C03, #X4244, #X4C03, #X4444, #X4C03, #X5344,
+    #X4C03, #X5544, #X4C03, #X5844, #X4C03, #X5944, #X4C04, #X4145, #X0053,
+    #X4C04, #X4145, #X0055, #X4C04, #X4145, #X0058, #X4C04, #X4145, #X0059,
+    #X4A03, #X5253, #X4C04, #X4342, #X0043, #X4C04, #X4342, #X0053, #X4C04,
+    #X4542, #X0051, #X4C04, #X4742, #X0045, #X4C04, #X4742, #X0054, #X4C04,
+    #X4842, #X0049, #X4C04, #X4842, #X0053, #X4C04, #X4C42, #X0045, #X4C04,
+    #X4C42, #X004F, #X4C04, #X4C42, #X0053, #X4C04, #X4C42, #X0054, #X4C04,
+    #X4D42, #X0049, #X4C04, #X4E42, #X0045, #X4C04, #X5042, #X004C, #X4C04,
+    #X5242, #X0041, #X4C04, #X5242, #X004E, #X4C04, #X5342, #X0052, #X4C04,
+    #X5642, #X0043, #X4C04, #X5642, #X0053, #X4A03, #X504D, #X4904, #X434E,
+    #X0041, #X4903, #X434E, #X4503, #X5551, #X4503, #X4758, #X4403, #X4645,
+    #X4503, #X444E, #X4504, #X524F, #X0041, #X4504, #X524F, #X0042, #X4304,
+    #X4D4F, #X0041, #X4304, #X4D4F, #X0042, #X4403, #X4141, #X4404, #X4345,
+    #X0042, #X4404, #X4345, #X0041, #X4403, #X4345, #X4304, #X4157, #X0049,
+    #X4304, #X524C, #X0042, #X4304, #X504D, #X0041, #X4304, #X504D, #X0042,
+    #X4304, #X504D, #X0044, #X4304, #X504D, #X0053, #X4304, #X504D, #X0055,
+    #X4304, #X504D, #X0058, #X4304, #X504D, #X0059, #X4303, #X4D4F, #X4304,
+    #X524C, #X0041, #X4303, #X524C, #X4203, #X4356, #X4203, #X5356, #X4103,
+    #X5342, #X4103, #X5842, #X4104, #X4C53, #X0042, #X4104, #X5253, #X0042,
+    #X4204, #X5449, #X0041, #X4204, #X5449, #X0042, #X4203, #X454C, #X4203,
+    #X4F4C, #X4203, #X534C, #X4203, #X544C, #X4203, #X494D, #X4203, #X454E,
+    #X4203, #X4C50, #X4203, #X4152, #X4203, #X4E52, #X4203, #X5253, #X4203,
+    #X4343, #X4203, #X5343, #X4203, #X5145, #X4203, #X4547, #X4203, #X5447,
+    #X4203, #X4948, #X4203, #X5348, #X4104, #X5253, #X0041, #X4103, #X5253,
+    #X4104, #X4C53, #X0041, #X4104, #X4344, #X0041, #X4104, #X4344, #X0042,
+    #X4104, #X4444, #X0041, #X4104, #X4444, #X0042, #X4104, #X444E, #X0041,
+    #X4104, #X444E, #X0042, #X4103, #X4C53, #X4105, #X444E, #X4343, #X4104,
+    #X4444, #X0044
+    LET tab.start = 3
+    LET locate(lv.tree, at) BE
+    TEST !lv.tree<0 THEN !lv.tree:=0 ELSE
+    $(  MANIFEST
+        $(  c.size = 0; c.str  = 0; c.fn   = 1; c.opstr= 2
+            t.left = 0; t.right= 1; t.str  = 2; t.val  = 3
+            t.size = 4
+        $)
+        LET tree = !lv.tree+at
+        LET val = tree!t.val+at
+        val!c.fn := (@start-1)!(val!c.fn)
+        val!c.str := val!c.str+at
+        !lv.tree := !lv.tree+at
+        tree!t.str := val!c.str
+        tree!t.val := val
+        locate(tree+t.left, at)
+        locate(tree+t.right, at)
+    $)
+    locate(@tab.start, tab)
+    codes := tab.start
+$)
+/*RSXINIT>*/
+
+
+
+
+/*<68000INIT  07.01.82   Version 3.056
+GLOBAL  $(  start : 1;  codes : 252;  initcodes : 278  $)
+
+LET initcodes() BE
+$(  // table for the 6809 assembler:
+    // this table must be regenerated if the globals change
+    LET tab = TABLE
+    #X0000053D, #X0000014C, #X00000000, #X0000000A, #X0000006C, #X0000053D,
+    #X00000000, #X0000053E, #X000000DD, #X00000000, #X00000011, #X0000001F,
+    #X0000053E, #X00000007, #X0000053F, #X000000DD, #X00000000, #X00000018,
+    #XFFFFFFFF, #X0000053F, #X0000000E, #X00000540, #X0000014D, #X00000000,
+    #X00000026, #XFFFFFFFF, #X00000540, #X00000015, #X000005E4, #X000000DF,
+    #X00000000, #X00000519, #X00000042, #X000005E4, #X0000001C, #X00000541,
+    #X000000E0, #X00000000, #X00000034, #X0000002D, #X00000541, #X00000023,
+    #X0000056A, #X000000E2, #X00000000, #X00000065, #X0000003B, #X0000056A,
+    #X0000002A, #X00000542, #X000000E3, #X00000000, #XFFFFFFFF, #X00000050,
+    #X00000542, #X00000031, #X00000580, #X000000E4, #X00000000, #X00000049,
+    #X00000057, #X00000580, #X00000038, #X000005E6, #X000000E1, #X00000000,
+    #X00000088, #X000000CE, #X000005E6, #X0000003F, #X00000582, #X000000E5,
+    #X00000000, #X00000521, #X0000005E, #X00000582, #X00000046, #X00000544,
+    #X000000E6, #X00000000, #X000000AD, #X00000096, #X00000544, #X0000004D,
+    #X00000599, #X000000DE, #X00000000, #XFFFFFFFF, #X0000007A, #X00000599,
+    #X00000054, #X0000058C, #X000000EB, #X00000000, #X0000008F, #X0000012E,
+    #X0000058C, #X0000005B, #X0000056B, #X000000EC, #X00000000, #X000000B6,
+    #X00000073, #X0000056B, #X00000062, #X0000060E, #X000000E9, #X00000000,
+    #X00000146, #XFFFFFFFF, #X0000060E, #X00000069, #X0000057E, #X000000EA,
+    #X00000000, #XFFFFFFFF, #X000000A4, #X0000057E, #X00000070, #X0000059A,
+    #X000000E7, #X00000000, #X00000081, #XFFFFFFFF, #X0000059A, #X00000077,
+    #X0000059B, #X000000EF, #X00000000, #X00000106, #X000000F6, #X0000059B,
+    #X0000007E, #X000005E7, #X000000E8, #X00000000, #X00000208, #XFFFFFFFF,
+    #X000005E7, #X00000085, #X0000058D, #X000000EE, #X00000000, #XFFFFFFFF,
+    #XFFFFFFFF, #X0000058D, #X0000008C, #X0000054E, #X000000ED, #X00000000,
+    #X000001B6, #X0000009D, #X0000054E, #X00000093, #X00000563, #X0000014E,
+    #X00000000, #X000000BE, #XFFFFFFFF, #X00000563, #X0000009A, #X0000057F,
+    #X0000014A, #X00000000, #XFFFFFFFF, #XFFFFFFFF, #X0000057F, #X000000A1,
+    #X00000546, #X0000014B, #X00000002, #X0000003F, #X00000080, #XFFFFFFFF,
+    #X000001C6, #X00000546, #X000000A8, #X0000056C, #X0000014B, #X00000002,
+    #X0000003F, #X00000000, #XFFFFFFFF, #X0000017E, #X0000056C, #X000000B1,
+    #X00000565, #X0000013E, #X00000001, #X00000021, #X000000C6, #X000001AE,
+    #X00000565, #X000000BA, #X00000567, #X0000013E, #X00000001, #X0000008C,
+    #XFFFFFFFF, #XFFFFFFFF, #X00000567, #X000000C2, #X000005EC, #X0000013E,
+    #X00000001, #X00000043, #X000000D6, #X0000016E, #X000005EC, #X000000CA,
+    #X000005EE, #X0000013E, #X00000001, #X00000053, #X000000DE, #XFFFFFFFF,
+    #X000005EE, #X000000D2, #X000005F0, #X0000013E, #X00000001, #X00000019,
+    #X000000E6, #X000004F9, #X000005F0, #X000000DA, #X000005F1, #X0000013E,
+    #X00000001, #X0000005A, #XFFFFFFFF, #X000000EE, #X000005F1, #X000000E2,
+    #X000005F3, #X0000013E, #X00000001, #X0000004A, #XFFFFFFFF, #X00000350,
+    #X000005F3, #X000000EA, #X000005A8, #X0000013E, #X00000001, #X0000005C,
+    #X00000218, #X000000FE, #X000005A8, #X000000F2, #X000005E1, #X0000013E,
+    #X00000001, #X0000004C, #XFFFFFFFF, #X00000358, #X000005E1, #X000000FA,
+    #X0000059D, #X0000013E, #X00000001, #X00000058, #X00000116, #X0000010E,
+    #X0000059D, #X00000102, #X000005A5, #X0000013E, #X00000001, #X00000048,
+    #XFFFFFFFF, #X00000368, #X000005A5, #X0000010A, #X0000059F, #X0000013E,
+    #X00000001, #X00000054, #X00000126, #X0000011E, #X0000059F, #X00000112,
+    #X000005A2, #X0000013E, #X00000001, #X00000044, #XFFFFFFFF, #X00000370,
+    #X000005A2, #X0000011A, #X000005A1, #X0000013E, #X00000001, #X0000003D,
+    #XFFFFFFFF, #XFFFFFFFF, #X000005A1, #X00000122, #X0000058F, #X0000013E,
+    #X00000001, #X00000050, #X0000013E, #X00000136, #X0000058F, #X0000012A,
+    #X00000596, #X0000013E, #X00000001, #X00000040, #XFFFFFFFF, #X00000378,
+    #X00000596, #X00000132, #X00000591, #X0000013E, #X00000001, #X00000012,
+    #X00000228, #XFFFFFFFF, #X00000591, #X0000013A, #X0000060F, #X0000013E,
+    #X00000001, #X0000003A, #X0000014E, #XFFFFFFFF, #X0000060F, #X00000142,
+    #X00000610, #X0000013E, #X00000001, #X00000058, #X0000015E, #X00000156,
+    #X00000610, #X0000014A, #X0000062C, #X0000013E, #X00000001, #X00000048,
+    #XFFFFFFFF, #X00000248, #X0000062C, #X00000152, #X00000612, #X0000013E,
+    #X00000001, #X00000057, #X00000278, #X00000166, #X00000612, #X0000015A,
+    #X00000629, #X0000013E, #X00000001, #X00000047, #XFFFFFFFF, #X00000338,
+    #X00000629, #X00000162, #X000005F8, #X0000013E, #X00000001, #X0000005F,
+    #X00000238, #X00000176, #X000005F8, #X0000016A, #X00000609, #X0000013E,
+    #X00000001, #X0000004F, #XFFFFFFFF, #X00000340, #X00000609, #X00000172,
+    #X0000056E, #X0000013E, #X00000001, #X00000059, #X0000018E, #X00000186,
+    #X0000056E, #X0000017A, #X0000057B, #X0000013E, #X00000001, #X00000049,
+    #XFFFFFFFF, #X00000380, #X0000057B, #X00000182, #X00000570, #X0000013E,
+    #X00000001, #X00000056, #X0000019E, #X00000196, #X00000570, #X0000018A,
+    #X00000578, #X0000013E, #X00000001, #X00000046, #XFFFFFFFF, #X00000388,
+    #X00000578, #X00000192, #X00000572, #X0000013E, #X00000001, #X0000003B,
+    #X000001A6, #XFFFFFFFF, #X00000572, #X0000019A, #X00000573, #X0000013E,
+    #X00000001, #X00000039, #X000001E8, #XFFFFFFFF, #X00000573, #X000001A2,
+    #X00000569, #X0000013E, #X00000001, #X0000001D, #XFFFFFFFF, #XFFFFFFFF,
+    #X00000569, #X000001AA, #X0000054F, #X0000013E, #X00000001, #X0000003F,
+    #X000001BE, #X000001F8, #X0000054F, #X000001B2, #X00000550, #X0000013E,
+    #X00000001, #X00000013, #XFFFFFFFF, #X000001D7, #X00000550, #X000001BA,
+    #X00000548, #X0000013E, #X00000001, #X0000005D, #XFFFFFFFF, #X000001CE,
+    #X00000548, #X000001C2, #X0000054A, #X0000013E, #X00000001, #X0000004D,
+    #XFFFFFFFF, #X00000390, #X0000054A, #X000001CA, #X00000552, #X0000013E,
+    #X00000002, #X00000010, #X0000003F, #X000001E0, #XFFFFFFFF, #X00000552,
+    #X000001D2, #X00000554, #X0000013E, #X00000002, #X00000011, #X0000003F,
+    #XFFFFFFFF, #XFFFFFFFF, #X00000554, #X000001DB, #X00000574, #X0000013F,
+    #X00000001, #X00000082, #X000001F0, #XFFFFFFFF, #X00000574, #X000001E4,
+    #X00000576, #X0000013F, #X00000001, #X000000C2, #XFFFFFFFF, #XFFFFFFFF,
+    #X00000576, #X000001EC, #X00000556, #X0000013F, #X00000001, #X00000080,
+    #X00000200, #X000002F6, #X00000556, #X000001F4, #X00000558, #X0000013F,
+    #X00000001, #X000000C0, #X00000288, #XFFFFFFFF, #X00000558, #X000001FC,
+    #X000005E8, #X0000013F, #X00000001, #X00000088, #X00000210, #XFFFFFFFF,
+    #X000005E8, #X00000204, #X000005EA, #X0000013F, #X00000001, #X000000C8,
+    #XFFFFFFFF, #XFFFFFFFF, #X000005EA, #X0000020C, #X000005AA, #X0000013F,
+    #X00000001, #X00000086, #X00000220, #X000002EE, #X000005AA, #X00000214,
+    #X000005AB, #X0000013F, #X00000001, #X000000C6, #X00000290, #XFFFFFFFF,
+    #X000005AB, #X0000021C, #X00000592, #X0000013F, #X00000001, #X0000008A,
+    #X00000230, #XFFFFFFFF, #X00000592, #X00000224, #X00000593, #X0000013F,
+    #X00000001, #X000000CA, #X00000509, #XFFFFFFFF, #X00000593, #X0000022C,
+    #X000005FA, #X0000013F, #X00000001, #X00000081, #X00000240, #XFFFFFFFF,
+    #X000005FA, #X00000234, #X000005FC, #X0000013F, #X00000001, #X000000C1,
+    #X000002BB, #XFFFFFFFF, #X000005FC, #X0000023C, #X0000062E, #X0000013F,
+    #X00000001, #X00000089, #X00000250, #XFFFFFFFF, #X0000062E, #X00000244,
+    #X00000630, #X0000013F, #X00000001, #X000000C9, #X00000258, #XFFFFFFFF,
+    #X00000630, #X0000024C, #X00000632, #X0000013F, #X00000001, #X0000008B,
+    #X00000260, #XFFFFFFFF, #X00000632, #X00000254, #X00000634, #X0000013F,
+    #X00000001, #X000000CB, #X00000268, #XFFFFFFFF, #X00000634, #X0000025C,
+    #X00000636, #X0000013F, #X00000001, #X00000084, #X00000270, #X000002E6,
+    #X00000636, #X00000264, #X00000638, #X0000013F, #X00000001, #X000000C4,
+    #X00000330, #XFFFFFFFF, #X00000638, #X0000026C, #X00000614, #X0000013F,
+    #X00000001, #X00000085, #X00000280, #X00000398, #X00000614, #X00000274,
+    #X00000616, #X0000013F, #X00000001, #X000000C5, #X000003D0, #XFFFFFFFF,
+    #X00000616, #X0000027C, #X0000055A, #X00000140, #X00000001, #X00000083,
+    #XFFFFFFFF, #XFFFFFFFF, #X0000055A, #X00000284, #X000005AC, #X00000140,
+    #X00000001, #X000000CC, #X00000299, #XFFFFFFFF, #X000005AC, #X0000028C,
+    #X000005AD, #X00000140, #X00000002, #X00000010, #X000000CE, #X000002A1,
+    #XFFFFFFFF, #X000005AD, #X00000294, #X000005AE, #X00000140, #X00000001,
+    #X000000CE, #X000002A9, #XFFFFFFFF, #X000005AE, #X0000029D, #X000005AF,
+    #X00000140, #X00000001, #X0000008E, #X000002B2, #XFFFFFFFF, #X000005AF,
+    #X000002A5, #X000005B0, #X00000140, #X00000002, #X00000010, #X0000008E,
+    #X000004D9, #XFFFFFFFF, #X000005B0, #X000002AD, #X000005FE, #X00000140,
+    #X00000002, #X00000010, #X00000083, #X000002C4, #XFFFFFFFF, #X000005FE,
+    #X000002B6, #X00000600, #X00000140, #X00000002, #X00000011, #X000000BC,
+    #X000002CD, #XFFFFFFFF, #X00000600, #X000002BF, #X00000602, #X00000140,
+    #X00000002, #X00000011, #X00000083, #X000002D5, #XFFFFFFFF, #X00000602,
+    #X000002C8, #X00000604, #X00000140, #X00000001, #X000000BC, #X000002DE,
+    #XFFFFFFFF, #X00000604, #X000002D1, #X00000606, #X00000140, #X00000002,
+    #X00000010, #X000000BC, #X00000348, #XFFFFFFFF, #X00000606, #X000002D9,
+    #X0000063D, #X00000140, #X00000001, #X000000C3, #XFFFFFFFF, #XFFFFFFFF,
+    #X0000063D, #X000002E2, #X000005B9, #X00000141, #X00000001, #X0000008D,
+    #X00000431, #X00000360, #X000005B9, #X000002EA, #X0000055C, #X00000141,
+    #X00000001, #X00000087, #X000002FE, #XFFFFFFFF, #X0000055C, #X000002F2,
+    #X0000055D, #X00000141, #X00000001, #X000000C7, #X00000306, #XFFFFFFFF,
+    #X0000055D, #X000002FA, #X0000055E, #X00000141, #X00000001, #X000000CD,
+    #X0000030F, #XFFFFFFFF, #X0000055E, #X00000302, #X0000055F, #X00000141,
+    #X00000002, #X00000010, #X000000CF, #X00000317, #XFFFFFFFF, #X0000055F,
+    #X0000030A, #X00000560, #X00000141, #X00000001, #X000000CF, #X0000031F,
+    #XFFFFFFFF, #X00000560, #X00000313, #X00000561, #X00000141, #X00000001,
+    #X0000008F, #X00000328, #XFFFFFFFF, #X00000561, #X0000031B, #X00000562,
+    #X00000141, #X00000002, #X00000010, #X0000008F, #XFFFFFFFF, #XFFFFFFFF,
+    #X00000562, #X00000323, #X0000063A, #X00000142, #X00000001, #X00000008,
+    #XFFFFFFFF, #X00000501, #X0000063A, #X0000032C, #X0000062B, #X00000142,
+    #X00000001, #X00000007, #XFFFFFFFF, #XFFFFFFFF, #X0000062B, #X00000334,
+    #X0000060B, #X00000142, #X00000001, #X0000000F, #XFFFFFFFF, #X00000420,
+    #X0000060B, #X0000033C, #X00000608, #X00000142, #X00000001, #X00000003,
+    #XFFFFFFFF, #XFFFFFFFF, #X00000608, #X00000344, #X000005F5, #X00000142,
+    #X00000001, #X0000000A, #XFFFFFFFF, #XFFFFFFFF, #X000005F5, #X0000034C,
+    #X000005E3, #X00000142, #X00000001, #X0000000C, #XFFFFFFFF, #XFFFFFFFF,
+    #X000005E3, #X00000354, #X000005E0, #X00000142, #X00000001, #X0000000E,
+    #XFFFFFFFF, #XFFFFFFFF, #X000005E0, #X0000035C, #X000005A7, #X00000142,
+    #X00000001, #X00000008, #XFFFFFFFF, #XFFFFFFFF, #X000005A7, #X00000364,
+    #X000005A4, #X00000142, #X00000001, #X00000004, #XFFFFFFFF, #XFFFFFFFF,
+    #X000005A4, #X0000036C, #X00000598, #X00000142, #X00000001, #X00000000,
+    #XFFFFFFFF, #XFFFFFFFF, #X00000598, #X00000374, #X0000057D, #X00000142,
+    #X00000001, #X00000009, #XFFFFFFFF, #XFFFFFFFF, #X0000057D, #X0000037C,
+    #X0000057A, #X00000142, #X00000001, #X00000006, #XFFFFFFFF, #XFFFFFFFF,
+    #X0000057A, #X00000384, #X0000054C, #X00000142, #X00000001, #X0000000D,
+    #XFFFFFFFF, #X00000511, #X0000054C, #X0000038C, #X00000622, #X00000143,
+    #X00000001, #X00000024, #X000003A0, #XFFFFFFFF, #X00000622, #X00000394,
+    #X00000623, #X00000143, #X00000001, #X00000025, #X000003A8, #XFFFFFFFF,
+    #X00000623, #X0000039C, #X00000624, #X00000143, #X00000001, #X00000027,
+    #X000003B0, #XFFFFFFFF, #X00000624, #X000003A4, #X00000625, #X00000143,
+    #X00000001, #X0000002C, #X000003B8, #XFFFFFFFF, #X00000625, #X000003AC,
+    #X00000626, #X00000143, #X00000001, #X0000002E, #X000003C0, #XFFFFFFFF,
+    #X00000626, #X000003B4, #X00000627, #X00000143, #X00000001, #X00000022,
+    #X000003C8, #XFFFFFFFF, #X00000627, #X000003BC, #X00000628, #X00000143,
+    #X00000001, #X00000024, #XFFFFFFFF, #XFFFFFFFF, #X00000628, #X000003C4,
+    #X00000618, #X00000143, #X00000001, #X0000002F, #X000003D8, #XFFFFFFFF,
+    #X00000618, #X000003CC, #X00000619, #X00000143, #X00000001, #X00000025,
+    #X000003E0, #XFFFFFFFF, #X00000619, #X000003D4, #X0000061A, #X00000143,
+    #X00000001, #X00000023, #X000003E8, #XFFFFFFFF, #X0000061A, #X000003DC,
+    #X0000061B, #X00000143, #X00000001, #X0000002D, #X000003F0, #XFFFFFFFF,
+    #X0000061B, #X000003E4, #X0000061C, #X00000143, #X00000001, #X0000002B,
+    #X000003F8, #XFFFFFFFF, #X0000061C, #X000003EC, #X0000061D, #X00000143,
+    #X00000001, #X00000026, #X00000400, #XFFFFFFFF, #X0000061D, #X000003F4,
+    #X0000061E, #X00000143, #X00000001, #X0000002A, #X00000408, #XFFFFFFFF,
+    #X0000061E, #X000003FC, #X0000061F, #X00000143, #X00000001, #X00000020,
+    #X00000410, #XFFFFFFFF, #X0000061F, #X00000404, #X00000620, #X00000143,
+    #X00000001, #X00000021, #X00000418, #XFFFFFFFF, #X00000620, #X0000040C,
+    #X00000621, #X00000143, #X00000001, #X0000008D, #XFFFFFFFF, #XFFFFFFFF,
+    #X00000621, #X00000414, #X0000060C, #X00000143, #X00000001, #X00000028,
+    #X00000428, #XFFFFFFFF, #X0000060C, #X0000041C, #X0000060D, #X00000143,
+    #X00000001, #X00000029, #XFFFFFFFF, #XFFFFFFFF, #X0000060D, #X00000424,
+    #X000005BA, #X00000144, #X00000002, #X00000010, #X00000024, #X0000043A,
+    #XFFFFFFFF, #X000005BA, #X0000042C, #X000005BC, #X00000144, #X00000002,
+    #X00000010, #X00000025, #X00000443, #XFFFFFFFF, #X000005BC, #X00000435,
+    #X000005BE, #X00000144, #X00000002, #X00000010, #X00000027, #X0000044C,
+    #XFFFFFFFF, #X000005BE, #X0000043E, #X000005C0, #X00000144, #X00000002,
+    #X00000010, #X0000002C, #X00000455, #XFFFFFFFF, #X000005C0, #X00000447,
+    #X000005C2, #X00000144, #X00000002, #X00000010, #X0000002E, #X0000045E,
+    #XFFFFFFFF, #X000005C2, #X00000450, #X000005C4, #X00000144, #X00000002,
+    #X00000010, #X00000022, #X00000467, #XFFFFFFFF, #X000005C4, #X00000459,
+    #X000005C6, #X00000144, #X00000002, #X00000010, #X00000024, #X00000470,
+    #XFFFFFFFF, #X000005C6, #X00000462, #X000005C8, #X00000144, #X00000002,
+    #X00000010, #X0000002F, #X00000479, #XFFFFFFFF, #X000005C8, #X0000046B,
+    #X000005CA, #X00000144, #X00000002, #X00000010, #X00000025, #X00000482,
+    #XFFFFFFFF, #X000005CA, #X00000474, #X000005CC, #X00000144, #X00000002,
+    #X00000010, #X00000023, #X0000048B, #XFFFFFFFF, #X000005CC, #X0000047D,
+    #X000005CE, #X00000144, #X00000002, #X00000010, #X0000002D, #X00000494,
+    #XFFFFFFFF, #X000005CE, #X00000486, #X000005D0, #X00000144, #X00000002,
+    #X00000010, #X0000002B, #X0000049D, #XFFFFFFFF, #X000005D0, #X0000048F,
+    #X000005D2, #X00000144, #X00000002, #X00000010, #X00000026, #X000004A6,
+    #XFFFFFFFF, #X000005D2, #X00000498, #X000005D4, #X00000144, #X00000002,
+    #X00000010, #X0000002A, #X000004AE, #XFFFFFFFF, #X000005D4, #X000004A1,
+    #X000005D6, #X00000144, #X00000001, #X00000016, #X000004B7, #XFFFFFFFF,
+    #X000005D6, #X000004AA, #X000005D8, #X00000144, #X00000002, #X00000010,
+    #X00000021, #X000004BF, #XFFFFFFFF, #X000005D8, #X000004B2, #X000005DA,
+    #X00000144, #X00000001, #X00000017, #X000004C8, #XFFFFFFFF, #X000005DA,
+    #X000004BB, #X000005DC, #X00000144, #X00000002, #X00000010, #X00000028,
+    #X000004D1, #XFFFFFFFF, #X000005DC, #X000004C3, #X000005DE, #X00000144,
+    #X00000002, #X00000010, #X00000029, #XFFFFFFFF, #XFFFFFFFF, #X000005DE,
+    #X000004CC, #X000005B1, #X00000145, #X00000001, #X00000032, #X000004E1,
+    #XFFFFFFFF, #X000005B1, #X000004D5, #X000005B3, #X00000145, #X00000001,
+    #X00000033, #X000004E9, #XFFFFFFFF, #X000005B3, #X000004DD, #X000005B5,
+    #X00000145, #X00000001, #X00000030, #X000004F1, #XFFFFFFFF, #X000005B5,
+    #X000004E5, #X000005B7, #X00000145, #X00000001, #X00000031, #XFFFFFFFF,
+    #XFFFFFFFF, #X000005B7, #X000004ED, #X000005F6, #X00000146, #X00000001,
+    #X0000003C, #XFFFFFFFF, #XFFFFFFFF, #X000005F6, #X000004F5, #X0000063B,
+    #X00000146, #X00000001, #X0000001C, #XFFFFFFFF, #XFFFFFFFF, #X0000063B,
+    #X000004FD, #X00000594, #X00000146, #X00000001, #X0000001A, #XFFFFFFFF,
+    #XFFFFFFFF, #X00000594, #X00000505, #X0000054D, #X00000147, #X00000001,
+    #X0000001F, #XFFFFFFFF, #XFFFFFFFF, #X0000054D, #X0000050D, #X000005E5,
+    #X00000147, #X00000001, #X0000001E, #XFFFFFFFF, #XFFFFFFFF, #X000005E5,
+    #X00000515, #X00000584, #X00000148, #X00000001, #X00000034, #X00000529,
+    #XFFFFFFFF, #X00000584, #X0000051D, #X00000586, #X00000149, #X00000001,
+    #X00000036, #X00000531, #XFFFFFFFF, #X00000586, #X00000525, #X00000588,
+    #X00000148, #X00000001, #X00000035, #X00000539, #XFFFFFFFF, #X00000588,
+    #X0000052D, #X0000058A, #X00000149, #X00000001, #X00000037, #XFFFFFFFF,
+    #XFFFFFFFF, #X0000058A, #X00000535, #X0342535A, #X03464342, #X03464343,
+    #X03464442, #X03534554, #X04575245, #X46000000, #X04544558, #X54000000,
+    #X05554341, #X4C4C0000, #X04545354, #X42000000, #X04545354, #X41000000,
+    #X03545354, #X03544652, #X03535043, #X03535749, #X0453594E, #X43000000,
+    #X04535749, #X32000000, #X04535749, #X33000000, #X04535542, #X41000000,
+    #X04535542, #X42000000, #X04535542, #X44000000, #X03535441, #X03535442,
+    #X03535444, #X03535453, #X03535455, #X03535458, #X03535459, #X05534554,
+    #X44500000, #X05534B49, #X50310000, #X05534B49, #X50320000, #X03534558,
+    #X03524546, #X03524D42, #X05534341, #X4C4C0000, #X04524F4C, #X42000000,
+    #X04524F52, #X42000000, #X03525449, #X03525453, #X04534243, #X41000000,
+    #X04534243, #X42000000, #X04524F52, #X41000000, #X03524F52, #X04524F4C,
+    #X41000000, #X03524F4C, #X0352454C, #X03524547, #X054E4545, #X44530000,
+    #X04505241, #X47000000, #X04505348, #X53000000, #X04505348, #X55000000,
+    #X0450554C, #X53000000, #X0450554C, #X55000000, #X034F5247, #X04504147,
+    #X45000000, #X044E4547, #X42000000, #X034E4F50, #X034F5241, #X034F5242,
+    #X044F5243, #X43000000, #X044E4547, #X41000000, #X034E4547, #X034E414D,
+    #X03474554, #X044C4953, #X54000000, #X044C534C, #X42000000, #X044C5352,
+    #X42000000, #X034D554C, #X044C5352, #X41000000, #X034C5352, #X044C534C,
+    #X41000000, #X034C534C, #X04494E43, #X42000000, #X034C4441, #X034C4442,
+    #X034C4444, #X034C4453, #X034C4455, #X034C4458, #X034C4459, #X044C4541,
+    #X53000000, #X044C4541, #X55000000, #X044C4541, #X58000000, #X044C4541,
+    #X59000000, #X034A5352, #X044C4243, #X43000000, #X044C4243, #X53000000,
+    #X044C4245, #X51000000, #X044C4247, #X45000000, #X044C4247, #X54000000,
+    #X044C4248, #X49000000, #X044C4248, #X53000000, #X044C424C, #X45000000,
+    #X044C424C, #X4F000000, #X044C424C, #X53000000, #X044C424C, #X54000000,
+    #X044C424D, #X49000000, #X044C424E, #X45000000, #X044C4250, #X4C000000,
+    #X044C4252, #X41000000, #X044C4252, #X4E000000, #X044C4253, #X52000000,
+    #X044C4256, #X43000000, #X044C4256, #X53000000, #X034A4D50, #X04494E43,
+    #X41000000, #X03494E43, #X03455155, #X03455847, #X03444546, #X03454E44,
+    #X04454F52, #X41000000, #X04454F52, #X42000000, #X04434F4D, #X41000000,
+    #X04434F4D, #X42000000, #X03444141, #X04444543, #X42000000, #X04444543,
+    #X41000000, #X03444543, #X04435741, #X49000000, #X04434C52, #X42000000,
+    #X04434D50, #X41000000, #X04434D50, #X42000000, #X04434D50, #X44000000,
+    #X04434D50, #X53000000, #X04434D50, #X55000000, #X04434D50, #X58000000,
+    #X04434D50, #X59000000, #X03434F4D, #X04434C52, #X41000000, #X03434C52,
+    #X03425643, #X03425653, #X03414253, #X03414258, #X0441534C, #X42000000,
+    #X04415352, #X42000000, #X04424954, #X41000000, #X04424954, #X42000000,
+    #X03424C45, #X03424C4F, #X03424C53, #X03424C54, #X03424D49, #X03424E45,
+    #X0342504C, #X03425241, #X0342524E, #X03425352, #X03424343, #X03424353,
+    #X03424551, #X03424745, #X03424754, #X03424849, #X03424853, #X04415352,
+    #X41000000, #X03415352, #X0441534C, #X41000000, #X04414443, #X41000000,
+    #X04414443, #X42000000, #X04414444, #X41000000, #X04414444, #X42000000,
+    #X04414E44, #X41000000, #X04414E44, #X42000000, #X0341534C, #X05414E44,
+    #X43430000, #X04414444, #X44000000
+    LET tab.start = 3
+    LET locate(lv.tree, at) BE
+    TEST !lv.tree<0 THEN !lv.tree:=0 ELSE
+    $(  MANIFEST
+        $(  c.size = 0; c.str  = 0; c.fn   = 1; c.opstr= 2
+            t.left = 0; t.right= 1; t.str  = 2; t.val  = 3
+            t.size = 4
+        $)
+        LET tree = !lv.tree+at
+        LET val = tree!t.val+at
+        val!c.fn := (@start-1)!(val!c.fn)
+        val!c.str := val!c.str+at
+        !lv.tree := !lv.tree+at
+        tree!t.str := val!c.str
+        tree!t.val := val
+        locate(tree+t.left, at)
+        locate(tree+t.right, at)
+    $)
+    locate(@tab.start, tab)
+    codes := tab.start
+$)
+/*68000INIT>*/
+
+
+
+
+
+
+
+/*<LSI4INIT   06.01.82   Version 3.056
+GLOBAL  $(  start : 1;  codes : 252;  initcodes : 278  $)
+
+LET initcodes() BE
+$(  // table for the 6809 assembler:
+    // this table must be regenerated if the globals change
+    LET tab = TABLE
+    #X053D, #X014C, #X0000, #X000A, #X006C, #X053D, #X0000, #X053F, #X00DD,
+    #X0000, #X0011, #X001F, #X053F, #X0007, #X0541, #X00DD, #X0000, #X0018,
+    #XFFFF, #X0541, #X000E, #X0543, #X014D, #X0000, #X0026, #XFFFF, #X0543,
+    #X0015, #X064E, #X00DF, #X0000, #X0519, #X0042, #X064E, #X001C, #X0545,
+    #X00E0, #X0000, #X0034, #X002D, #X0545, #X0023, #X0589, #X00E2, #X0000,
+    #X0065, #X003B, #X0589, #X002A, #X0547, #X00E3, #X0000, #XFFFF, #X0050,
+    #X0547, #X0031, #X05AE, #X00E4, #X0000, #X0049, #X0057, #X05AE, #X0038,
+    #X0652, #X00E1, #X0000, #X0088, #X00CE, #X0652, #X003F, #X05B1, #X00E5,
+    #X0000, #X0521, #X005E, #X05B1, #X0046, #X054A, #X00E6, #X0000, #X00AD,
+    #X0096, #X054A, #X004D, #X05D6, #X00DE, #X0000, #XFFFF, #X007A, #X05D6,
+    #X0054, #X05C0, #X00EB, #X0000, #X008F, #X012E, #X05C0, #X005B, #X058B,
+    #X00EC, #X0000, #X00B6, #X0073, #X058B, #X0062, #X0692, #X00E9, #X0000,
+    #X0146, #XFFFF, #X0692, #X0069, #X05AA, #X00EA, #X0000, #XFFFF, #X00A4,
+    #X05AA, #X0070, #X05D8, #X00E7, #X0000, #X0081, #XFFFF, #X05D8, #X0077,
+    #X05DA, #X00EF, #X0000, #X0106, #X00F6, #X05DA, #X007E, #X0654, #X00E8,
+    #X0000, #X0208, #XFFFF, #X0654, #X0085, #X05C2, #X00EE, #X0000, #XFFFF,
+    #XFFFF, #X05C2, #X008C, #X055A, #X00ED, #X0000, #X01B6, #X009D, #X055A,
+    #X0093, #X057E, #X014E, #X0000, #X00BE, #XFFFF, #X057E, #X009A, #X05AC,
+    #X014A, #X0000, #XFFFF, #XFFFF, #X05AC, #X00A1, #X054D, #X014B, #X0002,
+    #X003F, #X0080, #XFFFF, #X01C6, #X054D, #X00A8, #X058D, #X014B, #X0002,
+    #X003F, #X0000, #XFFFF, #X017E, #X058D, #X00B1, #X0581, #X013E, #X0001,
+    #X0021, #X00C6, #X01AE, #X0581, #X00BA, #X0584, #X013E, #X0001, #X008C,
+    #XFFFF, #XFFFF, #X0584, #X00C2, #X065C, #X013E, #X0001, #X0043, #X00D6,
+    #X016E, #X065C, #X00CA, #X065F, #X013E, #X0001, #X0053, #X00DE, #XFFFF,
+    #X065F, #X00D2, #X0662, #X013E, #X0001, #X0019, #X00E6, #X04F9, #X0662,
+    #X00DA, #X0664, #X013E, #X0001, #X005A, #XFFFF, #X00EE, #X0664, #X00E2,
+    #X0667, #X013E, #X0001, #X004A, #XFFFF, #X0350, #X0667, #X00EA, #X05EF,
+    #X013E, #X0001, #X005C, #X0218, #X00FE, #X05EF, #X00F2, #X0649, #X013E,
+    #X0001, #X004C, #XFFFF, #X0358, #X0649, #X00FA, #X05DD, #X013E, #X0001,
+    #X0058, #X0116, #X010E, #X05DD, #X0102, #X05EA, #X013E, #X0001, #X0048,
+    #XFFFF, #X0368, #X05EA, #X010A, #X05E0, #X013E, #X0001, #X0054, #X0126,
+    #X011E, #X05E0, #X0112, #X05E5, #X013E, #X0001, #X0044, #XFFFF, #X0370,
+    #X05E5, #X011A, #X05E3, #X013E, #X0001, #X003D, #XFFFF, #XFFFF, #X05E3,
+    #X0122, #X05C5, #X013E, #X0001, #X0050, #X013E, #X0136, #X05C5, #X012A,
+    #X05D1, #X013E, #X0001, #X0040, #XFFFF, #X0378, #X05D1, #X0132, #X05C8,
+    #X013E, #X0001, #X0012, #X0228, #XFFFF, #X05C8, #X013A, #X0694, #X013E,
+    #X0001, #X003A, #X014E, #XFFFF, #X0694, #X0142, #X0696, #X013E, #X0001,
+    #X0058, #X015E, #X0156, #X0696, #X014A, #X06C9, #X013E, #X0001, #X0048,
+    #XFFFF, #X0248, #X06C9, #X0152, #X0699, #X013E, #X0001, #X0057, #X0278,
+    #X0166, #X0699, #X015A, #X06C4, #X013E, #X0001, #X0047, #XFFFF, #X0338,
+    #X06C4, #X0162, #X066F, #X013E, #X0001, #X005F, #X0238, #X0176, #X066F,
+    #X016A, #X0689, #X013E, #X0001, #X004F, #XFFFF, #X0340, #X0689, #X0172,
+    #X0590, #X013E, #X0001, #X0059, #X018E, #X0186, #X0590, #X017A, #X05A5,
+    #X013E, #X0001, #X0049, #XFFFF, #X0380, #X05A5, #X0182, #X0593, #X013E,
+    #X0001, #X0056, #X019E, #X0196, #X0593, #X018A, #X05A0, #X013E, #X0001,
+    #X0046, #XFFFF, #X0388, #X05A0, #X0192, #X0596, #X013E, #X0001, #X003B,
+    #X01A6, #XFFFF, #X0596, #X019A, #X0598, #X013E, #X0001, #X0039, #X01E8,
+    #XFFFF, #X0598, #X01A2, #X0587, #X013E, #X0001, #X001D, #XFFFF, #XFFFF,
+    #X0587, #X01AA, #X055C, #X013E, #X0001, #X003F, #X01BE, #X01F8, #X055C,
+    #X01B2, #X055E, #X013E, #X0001, #X0013, #XFFFF, #X01D7, #X055E, #X01BA,
+    #X0550, #X013E, #X0001, #X005D, #XFFFF, #X01CE, #X0550, #X01C2, #X0553,
+    #X013E, #X0001, #X004D, #XFFFF, #X0390, #X0553, #X01CA, #X0561, #X013E,
+    #X0002, #X0010, #X003F, #X01E0, #XFFFF, #X0561, #X01D2, #X0564, #X013E,
+    #X0002, #X0011, #X003F, #XFFFF, #XFFFF, #X0564, #X01DB, #X059A, #X013F,
+    #X0001, #X0082, #X01F0, #XFFFF, #X059A, #X01E4, #X059D, #X013F, #X0001,
+    #X00C2, #XFFFF, #XFFFF, #X059D, #X01EC, #X0567, #X013F, #X0001, #X0080,
+    #X0200, #X02F6, #X0567, #X01F4, #X056A, #X013F, #X0001, #X00C0, #X0288,
+    #XFFFF, #X056A, #X01FC, #X0656, #X013F, #X0001, #X0088, #X0210, #XFFFF,
+    #X0656, #X0204, #X0659, #X013F, #X0001, #X00C8, #XFFFF, #XFFFF, #X0659,
+    #X020C, #X05F2, #X013F, #X0001, #X0086, #X0220, #X02EE, #X05F2, #X0214,
+    #X05F4, #X013F, #X0001, #X00C6, #X0290, #XFFFF, #X05F4, #X021C, #X05CA,
+    #X013F, #X0001, #X008A, #X0230, #XFFFF, #X05CA, #X0224, #X05CC, #X013F,
+    #X0001, #X00CA, #X0509, #XFFFF, #X05CC, #X022C, #X0672, #X013F, #X0001,
+    #X0081, #X0240, #XFFFF, #X0672, #X0234, #X0675, #X013F, #X0001, #X00C1,
+    #X02BB, #XFFFF, #X0675, #X023C, #X06CC, #X013F, #X0001, #X0089, #X0250,
+    #XFFFF, #X06CC, #X0244, #X06CF, #X013F, #X0001, #X00C9, #X0258, #XFFFF,
+    #X06CF, #X024C, #X06D2, #X013F, #X0001, #X008B, #X0260, #XFFFF, #X06D2,
+    #X0254, #X06D5, #X013F, #X0001, #X00CB, #X0268, #XFFFF, #X06D5, #X025C,
+    #X06D8, #X013F, #X0001, #X0084, #X0270, #X02E6, #X06D8, #X0264, #X06DB,
+    #X013F, #X0001, #X00C4, #X0330, #XFFFF, #X06DB, #X026C, #X069C, #X013F,
+    #X0001, #X0085, #X0280, #X0398, #X069C, #X0274, #X069F, #X013F, #X0001,
+    #X00C5, #X03D0, #XFFFF, #X069F, #X027C, #X056D, #X0140, #X0001, #X0083,
+    #XFFFF, #XFFFF, #X056D, #X0284, #X05F6, #X0140, #X0001, #X00CC, #X0299,
+    #XFFFF, #X05F6, #X028C, #X05F8, #X0140, #X0002, #X0010, #X00CE, #X02A1,
+    #XFFFF, #X05F8, #X0294, #X05FA, #X0140, #X0001, #X00CE, #X02A9, #XFFFF,
+    #X05FA, #X029D, #X05FC, #X0140, #X0001, #X008E, #X02B2, #XFFFF, #X05FC,
+    #X02A5, #X05FE, #X0140, #X0002, #X0010, #X008E, #X04D9, #XFFFF, #X05FE,
+    #X02AD, #X0678, #X0140, #X0002, #X0010, #X0083, #X02C4, #XFFFF, #X0678,
+    #X02B6, #X067B, #X0140, #X0002, #X0011, #X00BC, #X02CD, #XFFFF, #X067B,
+    #X02BF, #X067E, #X0140, #X0002, #X0011, #X0083, #X02D5, #XFFFF, #X067E,
+    #X02C8, #X0681, #X0140, #X0001, #X00BC, #X02DE, #XFFFF, #X0681, #X02D1,
+    #X0684, #X0140, #X0002, #X0010, #X00BC, #X0348, #XFFFF, #X0684, #X02D9,
+    #X06E3, #X0140, #X0001, #X00C3, #XFFFF, #XFFFF, #X06E3, #X02E2, #X060C,
+    #X0141, #X0001, #X008D, #X0431, #X0360, #X060C, #X02EA, #X0570, #X0141,
+    #X0001, #X0087, #X02FE, #XFFFF, #X0570, #X02F2, #X0572, #X0141, #X0001,
+    #X00C7, #X0306, #XFFFF, #X0572, #X02FA, #X0574, #X0141, #X0001, #X00CD,
+    #X030F, #XFFFF, #X0574, #X0302, #X0576, #X0141, #X0002, #X0010, #X00CF,
+    #X0317, #XFFFF, #X0576, #X030A, #X0578, #X0141, #X0001, #X00CF, #X031F,
+    #XFFFF, #X0578, #X0313, #X057A, #X0141, #X0001, #X008F, #X0328, #XFFFF,
+    #X057A, #X031B, #X057C, #X0141, #X0002, #X0010, #X008F, #XFFFF, #XFFFF,
+    #X057C, #X0323, #X06DE, #X0142, #X0001, #X0008, #XFFFF, #X0501, #X06DE,
+    #X032C, #X06C7, #X0142, #X0001, #X0007, #XFFFF, #XFFFF, #X06C7, #X0334,
+    #X068C, #X0142, #X0001, #X000F, #XFFFF, #X0420, #X068C, #X033C, #X0687,
+    #X0142, #X0001, #X0003, #XFFFF, #XFFFF, #X0687, #X0344, #X066A, #X0142,
+    #X0001, #X000A, #XFFFF, #XFFFF, #X066A, #X034C, #X064C, #X0142, #X0001,
+    #X000C, #XFFFF, #XFFFF, #X064C, #X0354, #X0647, #X0142, #X0001, #X000E,
+    #XFFFF, #XFFFF, #X0647, #X035C, #X05ED, #X0142, #X0001, #X0008, #XFFFF,
+    #XFFFF, #X05ED, #X0364, #X05E8, #X0142, #X0001, #X0004, #XFFFF, #XFFFF,
+    #X05E8, #X036C, #X05D4, #X0142, #X0001, #X0000, #XFFFF, #XFFFF, #X05D4,
+    #X0374, #X05A8, #X0142, #X0001, #X0009, #XFFFF, #XFFFF, #X05A8, #X037C,
+    #X05A3, #X0142, #X0001, #X0006, #XFFFF, #XFFFF, #X05A3, #X0384, #X0556,
+    #X0142, #X0001, #X000D, #XFFFF, #X0511, #X0556, #X038C, #X06B6, #X0143,
+    #X0001, #X0024, #X03A0, #XFFFF, #X06B6, #X0394, #X06B8, #X0143, #X0001,
+    #X0025, #X03A8, #XFFFF, #X06B8, #X039C, #X06BA, #X0143, #X0001, #X0027,
+    #X03B0, #XFFFF, #X06BA, #X03A4, #X06BC, #X0143, #X0001, #X002C, #X03B8,
+    #XFFFF, #X06BC, #X03AC, #X06BE, #X0143, #X0001, #X002E, #X03C0, #XFFFF,
+    #X06BE, #X03B4, #X06C0, #X0143, #X0001, #X0022, #X03C8, #XFFFF, #X06C0,
+    #X03BC, #X06C2, #X0143, #X0001, #X0024, #XFFFF, #XFFFF, #X06C2, #X03C4,
+    #X06A2, #X0143, #X0001, #X002F, #X03D8, #XFFFF, #X06A2, #X03CC, #X06A4,
+    #X0143, #X0001, #X0025, #X03E0, #XFFFF, #X06A4, #X03D4, #X06A6, #X0143,
+    #X0001, #X0023, #X03E8, #XFFFF, #X06A6, #X03DC, #X06A8, #X0143, #X0001,
+    #X002D, #X03F0, #XFFFF, #X06A8, #X03E4, #X06AA, #X0143, #X0001, #X002B,
+    #X03F8, #XFFFF, #X06AA, #X03EC, #X06AC, #X0143, #X0001, #X0026, #X0400,
+    #XFFFF, #X06AC, #X03F4, #X06AE, #X0143, #X0001, #X002A, #X0408, #XFFFF,
+    #X06AE, #X03FC, #X06B0, #X0143, #X0001, #X0020, #X0410, #XFFFF, #X06B0,
+    #X0404, #X06B2, #X0143, #X0001, #X0021, #X0418, #XFFFF, #X06B2, #X040C,
+    #X06B4, #X0143, #X0001, #X008D, #XFFFF, #XFFFF, #X06B4, #X0414, #X068E,
+    #X0143, #X0001, #X0028, #X0428, #XFFFF, #X068E, #X041C, #X0690, #X0143,
+    #X0001, #X0029, #XFFFF, #XFFFF, #X0690, #X0424, #X060E, #X0144, #X0002,
+    #X0010, #X0024, #X043A, #XFFFF, #X060E, #X042C, #X0611, #X0144, #X0002,
+    #X0010, #X0025, #X0443, #XFFFF, #X0611, #X0435, #X0614, #X0144, #X0002,
+    #X0010, #X0027, #X044C, #XFFFF, #X0614, #X043E, #X0617, #X0144, #X0002,
+    #X0010, #X002C, #X0455, #XFFFF, #X0617, #X0447, #X061A, #X0144, #X0002,
+    #X0010, #X002E, #X045E, #XFFFF, #X061A, #X0450, #X061D, #X0144, #X0002,
+    #X0010, #X0022, #X0467, #XFFFF, #X061D, #X0459, #X0620, #X0144, #X0002,
+    #X0010, #X0024, #X0470, #XFFFF, #X0620, #X0462, #X0623, #X0144, #X0002,
+    #X0010, #X002F, #X0479, #XFFFF, #X0623, #X046B, #X0626, #X0144, #X0002,
+    #X0010, #X0025, #X0482, #XFFFF, #X0626, #X0474, #X0629, #X0144, #X0002,
+    #X0010, #X0023, #X048B, #XFFFF, #X0629, #X047D, #X062C, #X0144, #X0002,
+    #X0010, #X002D, #X0494, #XFFFF, #X062C, #X0486, #X062F, #X0144, #X0002,
+    #X0010, #X002B, #X049D, #XFFFF, #X062F, #X048F, #X0632, #X0144, #X0002,
+    #X0010, #X0026, #X04A6, #XFFFF, #X0632, #X0498, #X0635, #X0144, #X0002,
+    #X0010, #X002A, #X04AE, #XFFFF, #X0635, #X04A1, #X0638, #X0144, #X0001,
+    #X0016, #X04B7, #XFFFF, #X0638, #X04AA, #X063B, #X0144, #X0002, #X0010,
+    #X0021, #X04BF, #XFFFF, #X063B, #X04B2, #X063E, #X0144, #X0001, #X0017,
+    #X04C8, #XFFFF, #X063E, #X04BB, #X0641, #X0144, #X0002, #X0010, #X0028,
+    #X04D1, #XFFFF, #X0641, #X04C3, #X0644, #X0144, #X0002, #X0010, #X0029,
+    #XFFFF, #XFFFF, #X0644, #X04CC, #X0600, #X0145, #X0001, #X0032, #X04E1,
+    #XFFFF, #X0600, #X04D5, #X0603, #X0145, #X0001, #X0033, #X04E9, #XFFFF,
+    #X0603, #X04DD, #X0606, #X0145, #X0001, #X0030, #X04F1, #XFFFF, #X0606,
+    #X04E5, #X0609, #X0145, #X0001, #X0031, #XFFFF, #XFFFF, #X0609, #X04ED,
+    #X066C, #X0146, #X0001, #X003C, #XFFFF, #XFFFF, #X066C, #X04F5, #X06E0,
+    #X0146, #X0001, #X001C, #XFFFF, #XFFFF, #X06E0, #X04FD, #X05CE, #X0146,
+    #X0001, #X001A, #XFFFF, #XFFFF, #X05CE, #X0505, #X0558, #X0147, #X0001,
+    #X001F, #XFFFF, #XFFFF, #X0558, #X050D, #X0650, #X0147, #X0001, #X001E,
+    #XFFFF, #XFFFF, #X0650, #X0515, #X05B4, #X0148, #X0001, #X0034, #X0529,
+    #XFFFF, #X05B4, #X051D, #X05B7, #X0149, #X0001, #X0036, #X0531, #XFFFF,
+    #X05B7, #X0525, #X05BA, #X0148, #X0001, #X0035, #X0539, #XFFFF, #X05BA,
+    #X052D, #X05BD, #X0149, #X0001, #X0037, #XFFFF, #XFFFF, #X05BD, #X0535,
+    #X0342, #X535A, #X0346, #X4342, #X0346, #X4343, #X0346, #X4442, #X0353,
+    #X4554, #X0457, #X5245, #X4600, #X0454, #X4558, #X5400, #X0555, #X4341,
+    #X4C4C, #X0454, #X5354, #X4200, #X0454, #X5354, #X4100, #X0354, #X5354,
+    #X0354, #X4652, #X0353, #X5043, #X0353, #X5749, #X0453, #X594E, #X4300,
+    #X0453, #X5749, #X3200, #X0453, #X5749, #X3300, #X0453, #X5542, #X4100,
+    #X0453, #X5542, #X4200, #X0453, #X5542, #X4400, #X0353, #X5441, #X0353,
+    #X5442, #X0353, #X5444, #X0353, #X5453, #X0353, #X5455, #X0353, #X5458,
+    #X0353, #X5459, #X0553, #X4554, #X4450, #X0553, #X4B49, #X5031, #X0553,
+    #X4B49, #X5032, #X0353, #X4558, #X0352, #X4546, #X0352, #X4D42, #X0553,
+    #X4341, #X4C4C, #X0452, #X4F4C, #X4200, #X0452, #X4F52, #X4200, #X0352,
+    #X5449, #X0352, #X5453, #X0453, #X4243, #X4100, #X0453, #X4243, #X4200,
+    #X0452, #X4F52, #X4100, #X0352, #X4F52, #X0452, #X4F4C, #X4100, #X0352,
+    #X4F4C, #X0352, #X454C, #X0352, #X4547, #X054E, #X4545, #X4453, #X0450,
+    #X5241, #X4700, #X0450, #X5348, #X5300, #X0450, #X5348, #X5500, #X0450,
+    #X554C, #X5300, #X0450, #X554C, #X5500, #X034F, #X5247, #X0450, #X4147,
+    #X4500, #X044E, #X4547, #X4200, #X034E, #X4F50, #X034F, #X5241, #X034F,
+    #X5242, #X044F, #X5243, #X4300, #X044E, #X4547, #X4100, #X034E, #X4547,
+    #X034E, #X414D, #X0347, #X4554, #X044C, #X4953, #X5400, #X044C, #X534C,
+    #X4200, #X044C, #X5352, #X4200, #X034D, #X554C, #X044C, #X5352, #X4100,
+    #X034C, #X5352, #X044C, #X534C, #X4100, #X034C, #X534C, #X0449, #X4E43,
+    #X4200, #X034C, #X4441, #X034C, #X4442, #X034C, #X4444, #X034C, #X4453,
+    #X034C, #X4455, #X034C, #X4458, #X034C, #X4459, #X044C, #X4541, #X5300,
+    #X044C, #X4541, #X5500, #X044C, #X4541, #X5800, #X044C, #X4541, #X5900,
+    #X034A, #X5352, #X044C, #X4243, #X4300, #X044C, #X4243, #X5300, #X044C,
+    #X4245, #X5100, #X044C, #X4247, #X4500, #X044C, #X4247, #X5400, #X044C,
+    #X4248, #X4900, #X044C, #X4248, #X5300, #X044C, #X424C, #X4500, #X044C,
+    #X424C, #X4F00, #X044C, #X424C, #X5300, #X044C, #X424C, #X5400, #X044C,
+    #X424D, #X4900, #X044C, #X424E, #X4500, #X044C, #X4250, #X4C00, #X044C,
+    #X4252, #X4100, #X044C, #X4252, #X4E00, #X044C, #X4253, #X5200, #X044C,
+    #X4256, #X4300, #X044C, #X4256, #X5300, #X034A, #X4D50, #X0449, #X4E43,
+    #X4100, #X0349, #X4E43, #X0345, #X5155, #X0345, #X5847, #X0344, #X4546,
+    #X0345, #X4E44, #X0445, #X4F52, #X4100, #X0445, #X4F52, #X4200, #X0443,
+    #X4F4D, #X4100, #X0443, #X4F4D, #X4200, #X0344, #X4141, #X0444, #X4543,
+    #X4200, #X0444, #X4543, #X4100, #X0344, #X4543, #X0443, #X5741, #X4900,
+    #X0443, #X4C52, #X4200, #X0443, #X4D50, #X4100, #X0443, #X4D50, #X4200,
+    #X0443, #X4D50, #X4400, #X0443, #X4D50, #X5300, #X0443, #X4D50, #X5500,
+    #X0443, #X4D50, #X5800, #X0443, #X4D50, #X5900, #X0343, #X4F4D, #X0443,
+    #X4C52, #X4100, #X0343, #X4C52, #X0342, #X5643, #X0342, #X5653, #X0341,
+    #X4253, #X0341, #X4258, #X0441, #X534C, #X4200, #X0441, #X5352, #X4200,
+    #X0442, #X4954, #X4100, #X0442, #X4954, #X4200, #X0342, #X4C45, #X0342,
+    #X4C4F, #X0342, #X4C53, #X0342, #X4C54, #X0342, #X4D49, #X0342, #X4E45,
+    #X0342, #X504C, #X0342, #X5241, #X0342, #X524E, #X0342, #X5352, #X0342,
+    #X4343, #X0342, #X4353, #X0342, #X4551, #X0342, #X4745, #X0342, #X4754,
+    #X0342, #X4849, #X0342, #X4853, #X0441, #X5352, #X4100, #X0341, #X5352,
+    #X0441, #X534C, #X4100, #X0441, #X4443, #X4100, #X0441, #X4443, #X4200,
+    #X0441, #X4444, #X4100, #X0441, #X4444, #X4200, #X0441, #X4E44, #X4100,
+    #X0441, #X4E44, #X4200, #X0341, #X534C, #X0541, #X4E44, #X4343, #X0441,
+    #X4444, #X4400
+    LET tab.start = 3
+    LET locate(lv.tree, at) BE
+    TEST !lv.tree<0 THEN !lv.tree:=0 ELSE
+    $(  MANIFEST
+        $(  c.size = 0; c.str  = 0; c.fn   = 1; c.opstr= 2
+            t.left = 0; t.right= 1; t.str  = 2; t.val  = 3
+            t.size = 4
+        $)
+        LET tree = !lv.tree+at
+        LET val = tree!t.val+at
+        val!c.fn := (@start-1)!(val!c.fn)
+        val!c.str := val!c.str+at
+        !lv.tree := !lv.tree+at
+        tree!t.str := val!c.str
+        tree!t.val := val
+        locate(tree+t.left, at)
+        locate(tree+t.right, at)
+    $)
+    locate(@tab.start, tab)
+    codes := tab.start
+$)
+/*LSI4INIT>*/
+
+
+
+
+
+//*<STANDINIT
+LET initcodes() BE
+$(  code.put("BSZ",bszproc,0)
+    code.put("FCB",dataproc,0)
+    code.put("FCC",dataproc,0)
+    code.put("FDB",fdbproc,0)
+    code.put("EQU",equproc,0)
+    code.put("SET",setproc,0)
+    code.put("REF",refproc,0)
+    code.put("WREF",wrefproc,0)
+    code.put("NEEDS",needsproc,0)
+    code.put("DEF",defproc,0)
+    code.put("PRAG",pragproc,0)
+    code.put("TEXT",textproc,0)
+    code.put("NAM",titlproc,0)
+    code.put("ORG",orgproc,0)
+    code.put("RMB",storeproc,0)
+    code.put("ABS",absproc,0)
+    code.put("REL",relproc,0)
+    code.put("GET",getproc,0)
+    code.put("LIST",listproc,0)
+    code.put("END",endproc,0)
+    code.put("PAGE",ejectproc,0)
+    code.put("SPC",spaceproc,0)
+    code.put("SETDP",setdpproc,0)
+//*<MACROS:
+    code.put("MACRO",macroproc,0)
+    code.put("REPT",rptmacroproc,0)
+    code.put("ENDM",endmacroproc,0)
+    code.put("EXITM",breakmacroproc,0)
+    code.put("IF",ifproc,-1,#X01)
+    code.put("IFT",ifproc,-1,#X01)
+    code.put("IFE",ifproc,-1,#X00)
+    code.put("IFF",ifproc,-1,#X00)
+    code.put("IFDEF",ifproc,-1,#X80)
+    code.put("IFNDEF",ifproc,-1,#X81)
+    code.put("IFB",ifproc,-1,#X08)
+    code.put("IFNB",ifproc,-1,#X09)
+    code.put("IFIDN",ifproc,-1,#X0A)
+    code.put("IFDIF",ifproc,-1,#X0B)
+    code.put("ELSE",elseproc,0)
+    code.put("ENDIF",fiproc,0)
+    code.put("LOCAL",localproc,0)
+    code.put("OPT",optproc,0)
+    code.put("PRINTX",printproc,0)
+/*MACROS>*/
+//*<STANDINIT
+    code.put("REG",regproc,0)
+    code.put("UCALL",callproc,2,#X3F,#X80)
+    code.put("SCALL",callproc,2,#X3F,#X00)
+    code.put("SKIP1",fmt0,1,#X21)
+    code.put("SKIP2",fmt0,1,#X8C)
+    code.put("COMA",fmt0,1,#X43)
+    code.put("COMB",fmt0,1,#X53)
+    code.put("DAA" ,fmt0,1,#X19)
+    code.put("DECB",fmt0,1,#X5A)
+    code.put("DECA",fmt0,1,#X4A)
+    code.put("INCB",fmt0,1,#X5C)
+    code.put("INCA",fmt0,1,#X4C)
+    code.put("LSLB",fmt0,1,#X58)
+    code.put("LSLA",fmt0,1,#X48)
+    code.put("LSRB",fmt0,1,#X54)
+    code.put("LSRA",fmt0,1,#X44)
+    code.put("MUL" ,fmt0,1,#X3D)
+    code.put("NEGB",fmt0,1,#X50)
+    code.put("NEGA",fmt0,1,#X40)
+    code.put("NOP" ,fmt0,1, nop.code)
+    code.put("ABX" ,fmt0,1,#X3A)
+    code.put("ASLB",fmt0,1,#X58)
+    code.put("ASLA",fmt0,1,#X48)
+    code.put("ASRB",fmt0,1,#X57)
+    code.put("ASRA",fmt0,1,#X47)
+    code.put("CLRB",fmt0,1,#X5F)
+    code.put("CLRA",fmt0,1,#X4F)
+    code.put("ROLB",fmt0,1,#X59)
+    code.put("ROLA",fmt0,1,#X49)
+    code.put("RORB",fmt0,1,#X56)
+    code.put("RORA",fmt0,1,#X46)
+    code.put("RTI" ,fmt0,1,#X3B)
+    code.put("RTS" ,fmt0,1,#X39)
+    code.put("SEX" ,fmt0,1,#X1D)
+    code.put("SWI" ,fmt0,1,#X3F)
+    code.put("SYNC",fmt0,1,#X13)
+    code.put("TSTB",fmt0,1,#X5D)
+    code.put("TSTA",fmt0,1,#X4D)
+    code.put("SWI2",fmt0,2,#X10,#X3F)
+    code.put("SWI3",fmt0,2,#X11,#X3F)
+    code.put("SBCA",fmt1,1,#X82)
+    code.put("SBCB",fmt1,1,#XC2)
+    code.put("SUBA",fmt1,1,#X80)
+    code.put("SUBB",fmt1,1,#XC0)
+    code.put("EORA",fmt1,1,#X88)
+    code.put("EORB",fmt1,1,#XC8)
+    code.put("LDA" ,fmt1,1,#X86)
+    code.put("LDB" ,fmt1,1,#XC6)
+    code.put("ORA" ,fmt1,1,#X8A)
+    code.put("ORB" ,fmt1,1,#XCA)
+    code.put("CMPA",fmt1,1,#X81)
+    code.put("CMPB",fmt1,1,#XC1)
+    code.put("ADCA",fmt1,1,#X89)
+    code.put("ADCB",fmt1,1,#XC9)
+    code.put("ADDA",fmt1,1,#X8B)
+    code.put("ADDB",fmt1,1,#XCB)
+    code.put("ANDA",fmt1,1,#X84)
+    code.put("ANDB",fmt1,1,#XC4)
+    code.put("BITA",fmt1,1,#X85)
+    code.put("BITB",fmt1,1,#XC5)
+    code.put("SUBD",fmt2,1,#X83)
+    code.put("LDD" ,fmt2,1,#XCC)
+    code.put("LDS" ,fmt2,2,#X10,#XCE)
+    code.put("LDU" ,fmt2,1,#XCE)
+    code.put("LDX" ,fmt2,1,#X8E)
+    code.put("LDY" ,fmt2,2,#X10,#X8E)
+    code.put("CMPD",fmt2,2,#X10,#X83)
+    code.put("CMPS",fmt2,2,#X11,#XBC)
+    code.put("CMPU",fmt2,2,#X11,#X83)
+    code.put("CMPX",fmt2,1,#XBC)
+    code.put("CMPY",fmt2,2,#X10,#XBC)
+    code.put("ADDD",fmt2,1,#XC3)
+    code.put("JSR" ,fmt3,1,#X8D)
+    code.put("STA" ,fmt3,1,#X87)
+    code.put("STB" ,fmt3,1,#XC7)
+    code.put("STD" ,fmt3,1,#XCD)
+    code.put("STS" ,fmt3,2,#X10,#XCF)
+    code.put("STU" ,fmt3,1,#XCF)
+    code.put("STX" ,fmt3,1,#X8F)
+    code.put("STY" ,fmt3,2,#X10,#X8F)
+    code.put("ASL" ,fmt4,1,#X08)
+    code.put("ASR" ,fmt4,1,#X07)
+    code.put("CLR" ,fmt4,1,#X0F)
+    code.put("COM" ,fmt4,1,#X03)
+    code.put("DEC" ,fmt4,1,#X0A)
+    code.put("INC" ,fmt4,1,#X0C)
+    code.put("JMP" ,fmt4,1,#X0E)
+    code.put("LSL" ,fmt4,1,#X08)
+    code.put("LSR" ,fmt4,1,#X04)
+    code.put("NEG" ,fmt4,1,#X00)
+    code.put("ROL" ,fmt4,1,#X09)
+    code.put("ROR" ,fmt4,1,#X06)
+    code.put("TST" ,fmt4,1,#X0D)
+    code.put("BCC" ,fmt5,1,#X24)
+    code.put("BCS" ,fmt5,1,#X25)
+    code.put("BEQ" ,fmt5,1,#X27)
+    code.put("BGE" ,fmt5,1,#X2C)
+    code.put("BGT" ,fmt5,1,#X2E)
+    code.put("BHI" ,fmt5,1,#X22)
+    code.put("BHS" ,fmt5,1,#X24)
+    code.put("BLE" ,fmt5,1,#X2F)
+    code.put("BLO" ,fmt5,1,#X25)
+    code.put("BLS" ,fmt5,1,#X23)
+    code.put("BLT" ,fmt5,1,#X2D)
+    code.put("BMI" ,fmt5,1,#X2B)
+    code.put("BNE" ,fmt5,1,#X26)
+    code.put("BPL" ,fmt5,1,#X2A)
+    code.put("BRA" ,fmt5,1,#X20)
+    code.put("BRN" ,fmt5,1,#X21)
+    code.put("BSR" ,fmt5,1,#X8D)
+    code.put("BVC" ,fmt5,1,#X28)
+    code.put("BVS" ,fmt5,1,#X29)
+    code.put("LBCC",fmt6,2,#X10,#X24)
+    code.put("LBCS",fmt6,2,#X10,#X25)
+    code.put("LBEQ",fmt6,2,#X10,#X27)
+    code.put("LBGE",fmt6,2,#X10,#X2C)
+    code.put("LBGT",fmt6,2,#X10,#X2E)
+    code.put("LBHI",fmt6,2,#X10,#X22)
+    code.put("LBHS",fmt6,2,#X10,#X24)
+    code.put("LBLE",fmt6,2,#X10,#X2F)
+    code.put("LBLO",fmt6,2,#X10,#X25)
+    code.put("LBLS",fmt6,2,#X10,#X23)
+    code.put("LBLT",fmt6,2,#X10,#X2D)
+    code.put("LBMI",fmt6,2,#X10,#X2B)
+    code.put("LBNE",fmt6,2,#X10,#X26)
+    code.put("LBPL",fmt6,2,#X10,#X2A)
+    code.put("LBRA",fmt6,1,#X16)
+    code.put("LBRN",fmt6,2,#X10,#X21)
+    code.put("LBSR",fmt6,1,#X17)
+    code.put("LBVC",fmt6,2,#X10,#X28)
+    code.put("LBVS",fmt6,2,#X10,#X29)
+    code.put("LEAS",fmt7,1,#X32)
+    code.put("LEAU",fmt7,1,#X33)
+    code.put("LEAX",fmt7,1,#X30)
+    code.put("LEAY",fmt7,1,#X31)
+    code.put("CWAI",fmt8,1,#X3C)
+    code.put("ANDCC",fmt8,1,#X1C)
+    code.put("ORCC" ,fmt8,1,#X1A)
+    code.put("TFR" ,fmt9,1,#X1F)
+    code.put("EXG" ,fmt9,1,#X1E)
+    code.put("PSHS",fmt10,1,#X34)
+    code.put("PSHU",fmt11,1,#X36)
+    code.put("PULS",fmt10,1,#X35)
+    code.put("PULU",fmt11,1,#X37)
+$)
+/*STANDINIT>*/
+
+
+
+

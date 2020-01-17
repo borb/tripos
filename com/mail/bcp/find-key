@@ -1,0 +1,59 @@
+MANIFEST $( buff.size   = 300 $)
+
+// Find a line beginning with '<key>' in the file whose PUID is <offset> dibytes
+// above base, and put the whole line into <result> which is <res.size> bytes.
+
+LET find.key(base, offset, key, result, res.size) = VALOF
+$(  LET file    = VEC file.desc.size
+    LET buff    = VEC buff.size/rwpw
+
+    LET byte.pos= 0
+    LET keysize = key%0
+    LET size    = ?
+    LET pos     = 0
+
+    IF keysize > res.size RESULTIS FALSE
+
+    Zap.file(file)
+    copy.uid(base, offset, file+uid, 0)
+
+    file ! cache.address        := buff
+    file ! cache.size           := buff.size
+    file ! next.write           := 0
+    file ! next.read            := 50
+    read.cache(file, 0)
+    size        := buff %% 2
+
+    UNTIL pos >= size
+    $(Each.line
+        LET matched     = TRUE
+        LET ch          = ?
+
+        FOR i = 1 TO keysize
+        $(Each.ch.in.key
+            ch := read.byte.from.file(file)
+            pos +:= 1
+            TEST compch(key%i, ch) = 0
+            THEN result%i := ch
+            ELSE $( matched := FALSE; BREAK $)
+        $)Each.ch.in.key
+
+        TEST matched
+        $(      FOR i = keysize+1 TO res.size
+                $(  ch := read.byte.from.file(file)
+                    pos +:= 1
+                    IF ch = '*N' | ch = #XFF | pos > size
+                    $( RESULT%0 := i-1; RESULTIS TRUE $)
+                    result%i    := ch
+                $)
+                // Too long ...
+                RESULTIS FALSE
+        $)
+        ELSE UNTIL ch = '*N' | ch = #XFF | pos > size // Dispose of rest of line .......
+             $( ch := read.byte.from.file(file); pos +:= 1 $)
+    $)Each.Line
+
+    RESULTIS FALSE
+$)
+
+

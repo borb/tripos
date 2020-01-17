@@ -1,0 +1,381 @@
+
+
+
+
+
+
+
+
+SECTION "asm8"
+
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+
+
+//
+//                   MNEMONIC  IMPLEMENTATION
+//
+
+
+
+
+
+
+//      This is a list of predeclared Mnemonic Procedures.  They must be
+// inserted into the tree of mnemonic definitions using 'code.put'.
+// They interpret their command lines in standard ways that are likely to
+// 'fit' (perhaps a little losely) the prefered directives given in a
+// target assembler.
+
+
+
+
+
+LET dataproc(lab) BE
+$(  get.and.declare(lab)
+    $(rpt
+        TEST item.type=i.string | item.type=i.sstring | item.type=i.strlbkt THEN
+        $(  LET offset=(item.type=i.string->0,1)
+            IF item.type=i.strlbkt THEN item.info := strexp(null, 0, FALSE)
+            FOR i=offset TO offset+(item.info%0-offset)/bytesperasmword DO
+            $(  LET pack=0
+                FOR j=0 TO bytesperasmword-1 DO
+                 $(  LET char=(i*bytesperasmword+j>item.info%0 -> '*S',
+                          cvtchar(item.info%(i*bytesperasmword+j)) )
+                     TEST mscharfirst THEN pack:=(pack<<8) | char ELSE
+                     pack := (pack>>8) | (char<<(8*(bytesperword-1)))
+                  $)
+                  putword(pack)
+             $)
+             getitem()
+         $) ELSE TEST scan(i.equals) THEN
+         TEST \is.expression() THEN error(e.badnum) ELSE
+         $(  LET spec=VEC spec.size
+             putlabelspec(label.expression(spec))
+         $) ELSE
+         TEST \is.expression() THEN error(e.badnum) ELSE
+         $(  LET no = expression()
+             putword(no)
+         $)
+    $)rpt REPEATWHILE scan(i.comma)
+$)
+
+
+
+AND titlproc(lab) BE
+$(  getitem()
+    TEST pass=first THEN
+    $(  LET savout=output()
+        STATIC
+        $(  done=-1
+        $)
+        IF done<sectno THEN
+        $(  pagetitle := getstr(strexp(null, 0, TRUE), simplegetvec)
+            modulename := (lab=null -> pagetitle, getstr(lab, simplegetvec))
+            selectoutput(out)
+            writef("Assembling *"%S*" ", pagetitle)
+            selectoutput(savout)
+            done:=sectno
+        $)
+    $) ELSE
+    $(  STATIC
+        $(  done=-1
+        $)
+        LET str = ?
+        UNLESS done<sectno THEN error(e.titledone)
+        str := strexp(null, 0, TRUE)
+        code.gen(cd.prag, str, "TITLE")
+        done:=sectno
+    $)
+    getitem()
+$)
+
+
+
+AND equproc(lab) BE
+TEST lab=null THEN error(e.nolab) ELSE
+$(  getitem()
+    TEST \is.expression() THEN warn(e.badnum) ELSE
+    $(  LET spec=VEC spec.size
+        label.expression(spec)
+        TEST spec!2 /* external */\=0 THEN error(e.badrel) ELSE
+        putlab(lab, spec!0, (dontknow & flag.fwd) |
+                    (spec!1=0->type.const, type.relconst))
+    $)
+$)
+
+
+
+AND setproc(lab) BE
+TEST lab=null THEN error(e.nolab) ELSE
+$(  getitem()
+    TEST \is.expression() THEN error(e.badnum) ELSE
+    $(  LET spec=VEC spec.size
+        label.expression(spec)
+        TEST dontknow THEN error(e.forward) ELSE
+        TEST spec!2 /* external */\=0 THEN error(e.badrel) ELSE
+        putlab(lab, spec!0, (spec!1=0->type.var, type.relvar))
+    $)
+    getitem()
+$)
+
+
+
+AND textproc(lab) BE
+$(  LET str = ?
+    getitem()
+    IF lab=null DO error(e.nolab)
+    str := strexp(null, 0, TRUE)
+    IF pass=first DO putlab(lab, getstr(str, simplegetvec), type.text)
+    getitem()
+$)
+
+
+
+AND endproc(lab) BE
+$(  get.and.declare(lab)
+    IF is.expression() THEN
+    $(  LET spec=VEC spec.size
+        LET e= !label.expression(spec)
+        TEST spec!1\=0 & spec!1\=1 THEN  error(e.badrel) ELSE
+        IF pass=second THEN
+        TEST entrypoint=#XFFFF THEN
+        entrypoint:=e
+        ELSE error(e.newentry)
+    $)
+    finishpass:=TRUE
+$)
+
+
+
+AND orgproc(lab) BE
+$(  LET spec=VEC spec.size
+    get.and.declare(lab)
+    label.expression(spec)
+    TEST spec!1\=0 & spec!1\=1 THEN error(e.badrel) ELSE
+    TEST dontknow THEN error(e.forward) ELSE
+    $(  pc:=spec!0
+        startpc:=pc
+    $)
+$)
+
+
+
+AND storeproc(lab) BE
+$(  LET i=?
+    get.and.declare(lab)
+    i:=expression()
+    TEST dontknow THEN error(e.forward) ELSE
+    TEST i<0 THEN error(e.posnum) ELSE
+    $(  code.gen(cd.newpc, pc)
+        pc:=pc+i
+        code.gen(cd.newpc, pc)
+    $)
+$)
+
+
+
+AND absproc(lab) BE
+$(  pc:=0
+    startpc:=0
+    TEST mode=null THEN mode:=absolute ELSE error(e.modeset)
+    UNLESS lab=null | pass=second THEN putlab(lab,pc,type.lab)
+    getitem()
+$)
+
+
+
+AND relproc(lab) BE
+$(  pc:=0
+    startpc:=0
+    TEST mode=null THEN mode:=relative ELSE error(e.modeset)
+    UNLESS lab=null | pass=second THEN putlab(lab,pc,type.rellab)
+    getitem()
+$)
+
+
+
+AND declaration.list(lab, default.value, type) BE
+$(  get.and.declare(lab)
+    $(rpt
+        UNLESS item.type=i.iden THEN error(e.nolab)
+        putlab(item.info, default.value, type)
+        getitem()
+    $)rpt REPEATUNTIL \scan(i.comma)
+$)
+
+
+
+AND refproc(lab) BE declaration.list(lab, #XFFFF, type.ref)
+
+
+
+AND wrefproc(lab) BE declaration.list(lab, #XFFFF, type.wref)
+
+
+
+AND needsproc(lab) BE
+$(  // The #XFFFF in this procedures definition represents a null pointer in
+    // the generated code.  This, like REF variables, is because all references
+    // to this symbol will be assembled as a pointer to the last reference to
+    // that symbol in the output code. (and so the first must be the null
+    // pointer to terminate the list).
+    // This feature is rather Intel/Mostec/Cambridge Hex ortientated and may
+    // be improved at length.   20.01.81
+    get.and.declare(lab)
+    $(rpt
+        TEST item.type=i.iden THEN
+        putlab(item.info, #XFFFF, type.ref | flag.needs) ELSE
+        $(  LET level=0
+            UNLESS item.type=i.string | item.type=i.sstring THEN
+            $(  level:=expression()
+                scan(i.colon)
+            $)
+            TEST item.type=i.string | item.type=i.sstring THEN
+            code.gen(cd.opt, item.info, level) ELSE error(e.nostr)
+        $)
+        getitem()
+    $)rpt REPEATUNTIL \scan(i.comma)
+$)
+
+
+
+AND defproc(lab) BE
+$(  //  DEF variables start of life with undefined types 'type.none' and are
+    //  only given a type when they are defined and given a proper value.
+    get.and.declare(lab)
+    $(rpt
+        TEST item.type=i.iden THEN
+        $(  putlab(item.info, -1, type.def)
+            getitem()
+        $) ELSE
+        $(  LET i=expression()
+            TEST dontknow THEN error(e.forward) ELSE def.count:=i
+        $)
+    $)rpt REPEATUNTIL \scan(i.comma)
+$)
+
+
+
+AND pragproc(lab) BE
+TEST lab=0 THEN error(e.nolab) ELSE
+$(  LET str = ?
+    getitem()
+    str := strexp(null, 0, TRUE)
+    IF pass=second THEN code.gen(cd.prag, str, lab)
+    getitem()
+$)
+
+
+
+AND spaceproc(lab) BE
+$(  LET spaces=?
+    get.and.declare(lab)
+    spaces:=expression()
+    IF pass=second THEN
+    TEST dontknow THEN error(e.forward) ELSE
+    IF list>0 THEN
+    $(  deleteline()
+        FOR i=1 TO spaces-1 DO putch('*N')
+    $)
+$)
+
+
+AND ejectproc(lab) BE
+$(  LET lines=?
+    get.and.declare(lab)
+    lines := is.expression() -> expression(), pl
+    IF pass=second THEN
+    TEST dontknow THEN error(e.forward) ELSE
+    IF list>0 THEN
+    $(  deleteline()
+        neads(lines)
+    $)
+$)
+
+
+AND listproc(lab) BE
+$(  get.and.declare(lab)
+    UNLESS list>0 THEN deleteline()
+    TEST is.expression() THEN
+    list:=list+expression() ELSE list:=list+1
+$)
+
+
+AND getproc(lab) BE
+$(  get.and.declare(lab)
+    TEST (i.string\=item.type\=i.sstring)
+    THEN error(e.nostr) ELSE
+    $(  LET s=findgetin(item.info%0=0->fromfile, item.info)
+        TEST s=0
+        THEN error(e.badfile,item.info) ELSE
+        $(  LET savein = input()
+            LET saveln = line.of.file
+            LET savelist = list
+            LET savefno = file.id
+            LET fno = newfile((item.info%0=0->fromfile,item.info))
+            endline(TRUE)
+            file.id:=fno
+            selectinput(s)
+            list:=list-1
+            line.of.file:=0
+            parseline() REPEATUNTIL
+                item.type=i.end | finishpass | fatal
+            endread()
+            selectinput(savein)
+//*<SECT:
+            finishpass:=fatal
+/*SECT>*/
+            endfile(fno)
+            file.id := savefno
+            item.type := i.stop    // i.e. not i.end or we'll stop!
+            ch  :=  '*N'           // or we'll stop because of end of file!
+            line.of.file := saveln
+            list := savelist
+        $)
+    $)
+$)
+
+
+
+
+/*  This procedure unnecessary since introduction of relocation 13.03.80
+AND envproc(lab) BE
+$(  get.and.declare(lab)
+    TEST item.type\=i.string
+    THEN error(e.nostr)
+    ELSE IF pass=first DO savedic(findoutput(item.info))
+    getitem()
+$)
+*/
+
+
+
+
+
+
+

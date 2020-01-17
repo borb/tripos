@@ -1,0 +1,246 @@
+// Source file "help" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+SECTION "HELP"
+GET "libhdr"
+GET "wrshdr"
+
+LET edit.obey.help() BE $(
+  LET c = pop.up.menu(
+    (helplevel = 3 -> "^J - enter 'help' request  (or wait for menu to appear)*n",
+                      "^J - enter 'help' request*N"),
+    "^J - enter 'help' request             (or press ? for list of subjects)*N",
+    "These are the subjects on which help is available:*n",
+    help.menu)
+  IF 'a' <= c <= 'z' | 'A' <= c <= 'Z' THEN c := ctl & c
+  SWITCHON c INTO $(
+    CASE ' ': ENDCASE // graceful exit
+    CASE ':':
+    CASE '**':      IF processbufallowed THEN help.processbuf(); ENDCASE
+    CASE '^':       IF splitallowed THEN help.split(); ENDCASE
+    CASE ctl & 'P': help.ctl(); ENDCASE
+    CASE ctl & 'B':
+    CASE ctl & 'K': help.block(); ENDCASE
+    CASE ctl & 'H': sys.keywait(120) // in case he knows what he's doing, reduce screen crap
+                    request.helplevel(); ENDCASE
+    CASE ctl & 'I':
+    CASE ctl & 'T': help.tabs(); ENDCASE
+    CASE ctl & 'L': wspl(2); ENDCASE
+    CASE ctl & 'F':
+    CASE ctl & 'A': help.find(); ENDCASE
+    CASE '0': CASE '1': CASE '2': CASE '3': CASE '4':
+    CASE '5': CASE '6': CASE '7': CASE '8': CASE '9':
+        help.markers(); ENDCASE
+    CASE ctl & 'R': help.ruler(); ENDCASE
+    DEFAULT: message("  No help is available on that topic*N"); sys.keywait(350) $) $)
+
+AND help.menu() BE $(
+  LET c = cmd.simple
+  c(0, "-----------------------------H E L P-------------------------------------------*n")
+  c(0, "H    -  set help level          P     -  control characters in text*n")
+  c(0, "T    -  the tab key             0-9   -  place markers*n")
+  c(0, "F, A -  Find and Replace        B, K  -  block operations*n")
+  c(0, "R    -  the Ruler line%s*n",
+    (splitallowed ->         "          ^     -  split screen", ""))
+  IF processbufallowed THEN
+    c(0,  "**    -  Process Buffers*n")
+  IF wspl.status ~= pl.unavailable THEN
+    c(0,   "L    -  Lisp system and programmed complex edits*N")
+  c(2, "Press one of the above keys for information on that subject,*n")
+  c(2, "or press space to continue editing your file.*n")
+  c(0, "-------------------------------------------------------------------------------*n") $)
+
+AND help.ctl() BE $(
+  LET v = getvec(100)
+  LET c = cmd.simple
+  cmd.init(v)
+  c(0, "Control characters (ASCII values 0-31) may appear in your text. A control*n")
+  c(0, "character is displayed on the screen as ^ followed by the character itself.*n")
+  c(0, "However the editor thinks of it as a single character and it is edited,*n")
+  c(0, "moved over and deleted as such.*n")
+  c(0, "  As most control characters are commmands to the editor, in order to*n")
+  c(0, "enter one into the text it must be preceeded with control-p (^P).*n")
+  c(0, "^J is the character used to represent a newline.*n")
+  c(0, "^I is a tab, and displays as enough spaces to reach the next tabstop.*n")
+  c(0, "Characters with ASCII values greater than 127 may not occur in the*n")
+  c(0, "edited text.*n")
+  c(0, "The escape character appears in the text as ^[. It may be entered into*n")
+  c(0, "the text by typing ^P-escape.*n")
+  c(0, "*n")
+  c(0, "Control characters and tab characters sometimes cause confusion because they*n")
+  c(0, "represent a single TEXT position in the file but use more than one SCREEN*n")
+  c(0, "positions. This editor always edits the TEXT rather than the SCREEN, which*n")
+  c(0, "sometimes leads to results that are logical but unexpected.*n")
+  c(0, "The simplest rule is to avoid having control characters in your text.*n")
+  c(0, "------------------------------------------------------------(press any key)-----*n")
+  message("CONTROL CHARACTERS:*n"); sys.rdch(); cmd.finish(); freevec(v) $)
+
+AND help.block() BE $(
+  LET v = getvec(100)
+  LET c = cmd.simple
+  cmd.init(v)
+  c(0, "<B> and <K> are place markers in the text.*n")
+  c(0, "They can be set or hidden using ^KB and ^KK, or moved to using ^QB and ^QK.*n")
+  c(0, "See information on place markers (^J0) for details.*n")
+  c(0, "The block of text with <B> at the beginning and <K> at the end can be*n")
+  c(0, "moVed, Copied, Written to a file or deleted(Y).*n")
+  c(0, "Simply position <B> and <K>, and use ^KV, ^KC, ^KW or ^KY.*n")
+  c(0, "     ^KB  set the <B> marker (start of block) at the current cursor position*n")
+  c(0, "     ^KK  set the <K> marker (end   of block) at the current cursor position*n")
+  c(0, "     ^KV  moVe the block thus marked to where the cursor is now*n")
+  c(0, "     ^KC  Copy the block thus marked to where the cursor is now*n")
+  c(0, "     ^KW  copy the block thus marked to a disc file (Write)*n")
+  c(0, "*n")
+  c(0, "Usually the block consists of all characters and newlines between <B> and <K>.*n")
+  c(0, "However if column mode is set (using ^KN), then the block is a*n")
+  c(0, "rectangular area of text with <B> at top left and <K> at bottom right.*n")
+  c(0, "This block can also be moVed, Copied, Written or deleted(Y) using the same*n")
+  c(0, "commands.*n")
+  c(0, "     ^KN  turn column mode on (or off if it is already on)*n")
+  c(0, "     ^KH  Hide (or reshow) the block, to improve screen appearance*n")
+  c(0, "*n")
+  c(0, "Remember, ^K gives you the complete menu of block commands*n")
+  c(0, "You are encouraged to experiment.*n")
+  c(0, "---------------------------------------------------------(press any key)-------*n")
+  message("BLOCK  OPERATIONS:*n"); sys.rdch(); cmd.finish(); freevec(v) $)
+
+AND help.tabs() BE $(
+  LET v = getvec(100)
+  LET c = cmd.simple
+  cmd.init(v)
+//  c(0, "A tab character (^I) in the text appears on the screen as enough spaces*n")
+//  c(0, "to reach the next tabstop (every 8 characters). However it is edited as*n")
+//  c(0, "a single character.*n")
+//  c(0, "*n")
+//  c(0, "You may not want tab characters in your text.*n")
+//  c(0, "There are three options for the action for the editor to take*n")
+//  c(0, "When the tab key (or ^I) is pressed:*n")
+//  c(0, "  1  -  generate a carriage return if not at the beginning of a line,*n")
+//  c(0, "        followed by enough tabs or spaces to match the indentation of*n")
+//  c(0, "        the previous line. This is useful for entering the source of*n")
+//  c(0, "        structured programs.*n")
+//  c(0, "  2  -  generate enough spaces to reach the next tabstop*n")
+//  c(0, "  3  -  generate a tab character*n")
+//  c(0, "(The last effect can always be achieved ty typing ^P^I)*n")
+//  c(0, "At the moment option %n is selected*n", tab.action)
+//  c(0, "Tabstops %s shown by the 'ruler' line*n", (t.ruler -> "are", "can be"))
+//  c(0, "Wordwrap causes a carriage return and word split if you are near*n")
+//  c(0, "the right hand edge of the screen.*n")
+//  c(0, "At the moment wordwrap is %s - type W to switch it %s.*n",
+//    (t.wordwrap -> "ON", "OFF"), (t.wordwrap -> "OFF", "ON"))
+//  c(0, "Type 1, 2, or 3 to select a new option, or R to %s the ruler line*n",
+//      (t.ruler -> "hide", "display"))
+
+// New tab help in V2.0
+  c(0, "There are two possible uses for the tab (^I) key, depending on the type of text*n")
+  c(0, "being edited. Switch between the two states by typing ^OV*n")
+  c(0, "*n")
+  c(0, "VARI-TABS:*n")
+  c(0, "If the tab key is pressed in variable tab mode, the cursor will be advanced to*n")
+  c(0, "the next tabstop, or onto the first of the next line if there are no more.*n")
+  c(0, "The tabstops currently set are displayed as '!'s in the Ruler line.*n")
+  c(0, "The exact action depends on whether INSERT MODE is on (^V).*n")
+  c(0, "*n")
+  c(0, "PROGRAM INDENTATION:*n")
+  c(0, "If the tab key is pressed in program indent mode, a newline will be inserted*n")
+  c(0, "and the cursor will advance by the same indentation as the line above.*n")
+  c(0, "This is very useful when editing the source of programs written in a*n")
+  c(0, "structured language.*n")
+  c(0, "*n")
+  c(0, "At the moment the editor is in %s mode.*n",
+    (t.varitabs -> "VARI-TABS", "PROGRAM INDENTATION"))
+  c(0, "*n")
+  c(0, "Note that neither of these puts literal 'tab' characters into your text,*n")
+  c(0, "only spaces.*n")
+  c(0, "   press ^QI   for a VARI-TAB, regardless of current mode.*n")
+  c(0, "   press ^KI   ('blocK'-structured tab) for a PROGAM INDENTATION tab,*n")
+  c(0, "                              regardless of current mode.*n")
+
+  c(0, "-----------------------------------------------------------(press any key)-------*n")
+  sys.keywait(120) // in case he knows what he's doing, reduce screen crap
+  message("TABS:*n"); c := sys.rdch()
+
+
+// left over from pre-V2.0 - leave for compatibility
+  IF c = '1' THEN t.varitabs := no
+  IF c = '2' | c = '3' THEN t.varitabs := yes
+//  if c = '1' | c = '2' | c = '3' then tab.action := c - '0'
+  IF c = 'R' | c = 'r' | c = (ctl&'R') THEN t.ruler := ~t.ruler
+  IF c = 'W' | c = 'w' | c = (ctl&'W') THEN t.wordwrap := ~t.wordwrap
+  cmd.finish(); freevec(v) $)
+
+AND help.find() BE $(
+  LET v = getvec(100)
+  LET c = cmd.simple
+  cmd.init(v)
+  c(0, "To find a string in the text, type ^QF, then the string that you wish to find,*n")
+  c(0, "then two carriage returns. This will find the next occurence of the string*n")
+  c(0, "after the cursor. The second carriage return means 'default options'.*n")
+  c(0, "  In the find string the following characters have special meanings:*n")
+  c(0, "    ^A    Matches any character*n")
+  c(0, "    ^S    Matches any non-alphanumeric character*n")
+  c(0, "    ^N    Matches a newline in the text*n")
+  c(0, "    ^Oc   for a given character c, matches any character EXCEPT c*n")
+  c(0, "To place these or any other control characters in the find string,*n")
+  c(0, "precede it with ^P - otherwise it is a command to the editor.*n")
+  c(0, "To any question, use ^H to restore the previous entry.*n")
+  c(0, "  ^QA (find And replace) will also prompt for a replacement string.*n")
+  c(0, "The find string will be located and the editor will ask if you want the*n")
+  c(0, "replacement to occur.*n")
+  c(0, "  Both commands also prompt for options - try using the command for details.*n")
+  c(0, "  ^L will repeat the previous find or replace operation.*n")
+  c(0, "  ^QV will move the cursor to its position before the last find or replace.*n")
+  c(0, "    This can be useful if you mistype the find string.*n")
+  c(0, "  ^U will interrupt a search at any time.*n")
+  c(0, "-----------------------------------------------------------(press any key)-------*n")
+  message("*'FIND*'  and  *'FIND AND REPLACE*':*n"); sys.rdch(); cmd.finish(); freevec(v) $)
+
+AND help.markers() BE $(
+  LET v = getvec(100)
+  LET c = cmd.simple
+  cmd.init(v)
+  c(0, "There are 12 place markers, Which are useful for moving quickly to a position*n")
+  c(0, "in the text that has already been visited.*n")
+  c(0, "^Kn (for any digit n), ^KB and ^KK will drop the marker at the current*n")
+  c(0, "    cursor postion. If the marker is already set at that postion it will*n")
+  c(0, "    be hidden, but its position still remembered.*n")
+  c(0, "^Qn , ^QB and ^QK will move the cursor to the given marker,*n")
+  c(0, "    and make it visible if it was hidden.*n")
+  c(0, "^KH Hides the <B> and <K> markers, or reveals them if they were hidden.*n")
+  c(0, "*n")
+  c(0, "the <B> and <K> markers have special uses in doing BlocK operations -*n")
+  c(0, "try ^JK for more information on these.*n")
+  c(0, "*n")
+  c(0, "You are encouraged to experiment.*n")
+  c(0, "------------------------------------------------------------(press any key)--------*n")
+  message("PLACE  MARKERS,  <0> ... <9>, <B> and <K>:*n"); sys.rdch(); cmd.finish(); freevec(v) $)
+
+AND help.ruler() BE $(
+  LET v = getvec(100)
+  LET c = cmd.simple
+  cmd.init(v)
+  c(0, "The ruler line displays the currently set tabstops and the left and right*n")
+  c(0, "margin settings, and whether 'PROGRAM INDENT' tab mode is on%s.*n",
+    (t.varitabs -> "", " (as it is now)"))
+  c(0, "   >  in the left hand margin - PROGRAM INDENT tab mode is ON*n")
+  c(0, "   L  the Left margin*n")
+  c(0, "   R  the Right margin*n")
+  c(0, "   -  characters between L and R*n")
+  c(0, "   !  active tabstops (ie between L and R)*n")
+  c(0, "Tabstops are initially set every 8 characters.*n")
+  c(0, "Most commands concerned with tabs are on the ^O (Onscreen) menu,*n")
+  c(0, "examine this for commands to set and clear tabstops and margins.*n")
+  c(0, "Variable tabs (see ^JT) and column block operations (see ^JB) are very useful*n")
+  c(0, "for preparing text organised in columns or tables.*n")
+  c(0, "    ^OV   switch between VARI-TABS and PROGRAM INDENT modes.*n")
+  c(0, "*n")
+  c(0, "The right margin R affects where wordwrap (^OW) occurs on the line*n")
+  c(0, "and paragraph reform (^B). The left margin affects the RETURN key*n")
+  c(0, "and wordwrap and paragraph reform. The can be set via ^OR and ^OL*n")
+  c(0, "Their operation can be suspended via ^OX (margin release on/off).*n")
+  c(0, "------------------------------------------------------------(press any key)--------*n")
+  message("THE RULER LINE  L-------!-------!-------!-------!----R:*N")
+  sys.rdch(); cmd.finish(); freevec(v) $)
+
+

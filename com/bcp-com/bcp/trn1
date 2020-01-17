@@ -1,0 +1,101 @@
+SECTION "TRN1"
+
+GET "TRNHDR"
+MANIFEST $( indent.max = 40 $)
+
+LET compileae(x, v) BE
+$(1
+    dvec                        := v+3*TRN.SW.SPACE
+    dvece, dvecp                := 3, 3
+    dvec!0, dvec!1, dvec!2      := 0, 0, 0
+
+    globdecl, globdecls, globdeclt      := v, 0, TRN.SW.SPACE
+
+    casek, casel                := v+TRN.SW.SPACE, v+2*TRN.SW.SPACE
+    casep, caset, caseb         := 0, TRN.SW.SPACE, -1
+    In.mod                      := FALSE
+
+    indent                      := 0
+    endcaselabel, defaultlabel  := 0, 0
+    resultlabel, breaklabel, looplabel  := -1, -1, -1
+
+    comcount, currentbranch     := 0, x
+    ocount, paramnumber         := 0, 0
+    trnspace                    := (obuf+OBUF.word.offset) - dvec
+    IF trnspace < free.trnspace THEN free.trnspace := trnspace
+    UNLESS (stflags & stf.debug) = 0
+    $(  LET o = output();                               SELECTOUTPUT(LISTOUT)
+        TASKWRITEF("Trn space of %N words", trnspace);  SELECTOUTPUT(o)
+    $)
+    linecount                   := 0            // A silly value!
+
+    IF fileocode | slow DO findocode()
+    checkocode()
+    $(
+    $<TRIPOS    LET first = ((stflags & stf.nowarn)=0) -> -1, 1 $>TRIPOS
+        WHILE x\=0 & (h1!x=s.section | h1!x=s.needs)
+        $(  out1(h1!x)
+            outstring(h2!x+1)
+$<TRIPOS
+            IF h1!x = s.section
+            $(  IF first=0
+                $(  LET o = output()
+                    SELECTOUTPUT(LISTOUT)
+                    TASKWRITEF("WARNING: multiple SECTION names*N")
+                    SELECTOUTPUT(o)
+                $)
+                FIRST := FIRST+1
+            $)
+$>TRIPOS
+            x:=h3!x
+        $)
+    $)
+    ssp := savespacesize
+    out2(s.stack, ssp)          // What is SSP set to ???????
+    decllabels(x)
+    listnames(3)
+    trans(x)
+    out2(s.global, globdecls/2)
+    FOR i = 0 TO globdecls-2 BY 2 DO out2(globdecl!i, globdecl!(i+1))
+    endocode()
+    IF free.trnspace>0
+    $(  LET o = output();                               SELECTOUTPUT(LISTOUT)
+        TASKWRITEF("%N words out of %N of Trnspace free*N",
+                        free.trnspace, trnspace)
+                                                        SELECTOUTPUT(o)
+    $)
+$)1
+
+AND nextparam() = VALOF
+    $( paramnumber := paramnumber + 1
+       RESULTIS paramnumber  $)
+
+AND listnames(a) BE                                                     //PB====
+$(  IF ((STFLAGS & stf.decls) ~= 0 )                                    //PB====
+    $( LET O = OUTPUT()                                                 //PB====
+       SELECTOUTPUT(LISTOUT)                                            //PB====
+       FOR I = a TO dvece-3 BY 3                                        //PB====
+       $( IF indent > indent.max THEN writeN(indent/indent.max)         //PB====
+          FOR I = 1 TO indent REM indent.max DO WRCH(' ')               //PB====
+          WRITES(I=a -> "...", "   ")                                   //PB====
+          WRITEF("%X4 %X4 %S",                                          //PB====
+                (I!DVEC)!1, (I!DVEC)!2, (I!DVEC)+2 )                    //PB====
+          FOR J = ((I!DVEC)+2)%0 TO 20 DO WRCH(' ')                     //PB====
+          WRITEF( VALOF SWITCHON DVEC!(I+1) INTO                        //PB====
+                $( DEFAULT:     RESULTIS "%I5   "                       //PB====
+                   CASE s.number:       RESULTIS "Manifest"             //PB====
+                   CASE S.global:       RESULTIS "Global  "             //PB====
+                   CASE S.local:        RESULTIS "Local   "             //PB====
+                   CASE S.label:        RESULTIS "Label   "             //PB====
+                $) , DVEC!(I+1) )                                       //PB====
+          WRITEF("%I5*N", DVEC!(I+2))                                   //PB====
+          IF testflags(1)  $( WRITEF("****** BREAK*N"); BREAK $)        //PB====
+       $)                                                               //PB====
+       SELECTOUTPUT(O)                                                  //PB====
+   $)                                                                   //PB====
+$)                                                                      //PB====
+                                                                        //PB====
+AND indent.do(n) BE indent := indent+n                                  //PB====
+.
+
+

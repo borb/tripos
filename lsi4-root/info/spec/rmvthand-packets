@@ -1,0 +1,360 @@
+       RMVTHAND - The TRIPOS Virtual Terminal and Session Handler Task
+       ---------------------------------------------------------------
+
+                        Brian Knight - July 1983
+
+
+
+Packet Interfaces
+-----------------
+
+   The handler accepts the following packet types.  The manifest constants
+are defined in IOHDR, except for the TERMVEC ones, which are in TERMHDR.
+
+Public Interface
+----------------
+
+ACT.SC.MODE :                   Enter / leave single character input mode
+ACT.HOW.MUCH.INPUT :            How many input characters are waiting?
+ACT.SC.READ :                   Read a single character in SC input mode
+ACT.READ.BUFFER :               Read a buffer of characters in SC input mode
+ACT.SC.WRITE :                  Write a single character or a buffer of characters
+ACT.NON.REFLECT.MODE:           Switch off / on reflection in line mode
+ACT.SET.TERMVEC :               Set a new terminal info vector (and free old one)
+ACT.READ.TERMVEC :              Read the terminal info vector
+ACT.SET.CURRENTINPUTTASK :      Set the current input task
+ACT.RETURN.READ.PACKETS :       Return all outstanding read packets for a task
+
+Internal System Interface
+-------------------------
+
+ACT.FINDINPUT :                 [for FINDINPUT]
+ACT.FINDOUTPUT :                [for FINDOUTPUT]
+ACT.ENDINPUT :                  [for ENDREAD]
+ACT.ENDOUTPUT :                 [for ENDWRITE]
+ACT.READ :                      [for RDCH]
+ACT.WRITE :                     [for WRCH]
+ACT.CONNECT :                   [to establish terminal connection]
+ACT.DISCONNECT :                [to break terminal connection and release machine]
+ACT.START.RM.REFRESH :          [used by CLI.INIT]
+
+
+Public Interface
+----------------
+
+   The following packets may be sent explicitly to the terminal handler:
+
+--------------------------------------------------------------------------------
+ACT.SC.MODE :              Enter / leave single character input mode
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.SC.Mode
+        Arg1:           TRUE to enter single character input mode
+                        FALSE to enter line input mode
+
+Return: Res1:           TRUE
+        Res2:           0
+
+   The terminal handler is put into single character input mode or line input
+mode, according to ARG1.  The calling task becomes the currently selected
+input task.
+
+   All outstanding read packets for the task making the call are sent back
+with null results:-
+
+                           RES1        RES2
+        Act.SC.Read     endstreamch     0
+        Act.Read        buffer addr.    0
+        Act.Read.Buffer      0         -1
+
+--------------------------------------------------------------------------------
+ACT.HOW.MUCH.INPUT :       How many input characters are waiting?
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.How.Much.Input
+
+Return: Res1:           Number of input characters available
+        Res2:           0
+
+   The number returned indicates how many characters for the calling task
+are buffered in the terminal handler, and so may be read without causing the
+task to be held up.  It is allowed in both single character and line input
+modes.  Note that untimely typing of control-F in line mode could cause the
+promised characters to be deleted.
+
+--------------------------------------------------------------------------------
+ACT.SC.READ :              Read a single character in SC input mode
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.SC.Read
+
+Return: Res1:           Character   (single character input mode)
+                        EndStreamCh (line input mode)
+        Res2:           0
+
+   Returns one input character.  The packet will return immediately if the
+character has already been typed, otherwise will wait for it.
+
+--------------------------------------------------------------------------------
+ACT.READ.BUFFER :          Read a buffer of characters in SC input mode
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.Read.Buffer
+        Arg1:           Buffer address
+        Arg2:           Maximum number of characters to be read
+        Arg3:           Minimum number of characters to be read:
+                        must be 0 or 1, so is actually a flag saying whether
+                        or not to wait.
+
+Return: Res1:           Number of characters actually read
+                        The characters are in BUFFER%0 onwards.
+        Res2:           0 normally
+                        -1 if called in line input mode, or if stream
+                          ended (terminal gone away, or line mode set while
+                          this packet was outstanding).
+
+   If ARG3 is zero, then return will always be immediate, either with no
+characters or with all those typed ahead (subject to the specified maximum).
+   If ARG3 is 1, then return will be immediate only if characters have been
+typed already; otherwise the packet will wait for a character.
+
+--------------------------------------------------------------------------------
+ACT.SC.WRITE :             Write a single character or a buffer of characters
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.SC.Write
+        Arg1:           Either: a single character ( < 256 )
+                          Or:   the address ( >= 256 ) of a buffer
+        Arg2:           If ARG1 is a buffer address, then this gives the
+                          number of characters to be written (from BUFFER%0
+                          onwards); otherwise unused.
+
+Return: Res1:           TRUE
+        Res2:           0
+
+   The characters are sent to the terminal with their parity bits stripped
+(so that no spurious VTP control codes are sent).  They are sent as a VTP
+record with termination meaning "leave the cursor where it is", and byte stream
+transmission is forced.  No special action is taken on any control characters
+which may be sent.
+
+--------------------------------------------------------------------------------
+ACT.NON.REFLECT.MODE :             Switch off / on reflection in line mode
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.Non.reflect.Mode
+        Arg1:           TRUE to switch off reflection
+                        FALSE to switch on reflection
+
+Return: Res1:           TRUE
+        Res2:           0
+
+   The terminal handler is put into non-reflect input mode or reflecting
+mode, according to ARG1.  The call is sensible only if the handler is in
+line mode, otherwise the effect is undefined.
+
+--------------------------------------------------------------------------------
+ACT.SET.TERMVEC :          Set a new terminal info vector (and free the old one)
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.Set.Termvec (in TERMHDR)
+        Arg1:           New terminal info vector.
+                        This must be a valid argument to FREEVEC - i.e.
+                        zero or the result of a previous GETVEC.
+
+Return: Res1:           TRUE
+        Res2:           0
+
+   The previous terminal info vector is FREEVECed, and the supplied new one
+installed.  The vector should consist of a single vector obtained from GETVEC,
+so that the terminal handler will be able to release all space allocated to it.
+
+--------------------------------------------------------------------------------
+ACT.READ.TERMVEC :         Read the terminal info vector
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.Read.Termvec (in TERMHDR)
+
+Return: Res1:           The address of the terminal info vector, or zero
+                          if none installed.
+        Res2:           0
+
+   The terminal info vector holds such information as the type of the terminal,
+its width and depth.  Its format is described elsewhere, and manifest constants
+relating to its structure are held in the BCPL header TERMHDR.
+
+--------------------------------------------------------------------------------
+ACT.SET.CURRENTINPUTTASK : Set the current input task
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.Set.CurrentInputTask
+        Arg1:           Task Number
+        Arg2:           FALSE if output from all other tasks is to be held up
+                        TRUE if output from all tasks is allowed
+
+Return: Res1:           Previously set input task
+        Res2:           FALSE if that task was the only one allowed to output
+                        TRUE if output from all tasks was allowed
+
+   This function allows a program to select the task to which keyboard input
+is directed, and to determine whether or not this task is the only one allowed
+to produce terminal output.  It is equivalent to <control-S>nn or <control-T>nn
+typed at the keyboard.
+   The previous state is returned so that the calling program can restore it
+after it has finished with the terminal.
+   As the use of this facility is potentially confusing or dangerous to anyone
+who is typing when the input task is switched, programs which employ it should
+include a warning in their documentation.
+
+--------------------------------------------------------------------------------
+ACT.RETURN.READ.PACKETS :       Return all read packets for a task
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.Return.Read.Packets
+        Arg1:           Number of task whose packets are to be returned.
+                        0 means 'return packets belonging to sender task'
+
+Return: Res1:           TRUE
+        Res2:           0
+
+All outstanding read packets for the specified task are sent back
+with null results:-
+
+                           RES1        RES2
+        Act.SC.Read     endstreamch     0
+        Act.Read        buffer addr.    0
+        Act.Read.Buffer      0         -1
+
+The read packets are returned before this request packet is sent back.
+
+
+Internal Interface
+------------------
+
+
+--------------------------------------------------------------------------------
+ACT.FINDINPUT :            [Internal System Interface for FINDINPUT]
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.FindInput
+        Arg1:           Stream control block for new stream
+
+Return: Res1:           -1
+        Res2:           0
+
+   The FUNC1 and FUNC3 fields of the SCB are filled in with the addresses
+of routines to be called by REPLENISH and ENDSTREAM.
+
+--------------------------------------------------------------------------------
+ACT.FINDOUTPUT :           [Internal System Interface for FINDOUTPUT]
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.FindOutput
+        Arg1:           Stream control block for new stream
+
+Return: Res1:           -1
+        Res2:           0
+
+   The FUNC2 and FUNC3 fields of the SCB are filled in with the addresses
+of routines to be called by DEPLETE and ENDSTREAM.
+
+--------------------------------------------------------------------------------
+ACT.ENDINPUT :             [Internal System Interface for ENDREAD]
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.EndInput
+
+Return: Res1:           0
+        Res2:           0
+
+   Null operation (no action needed to close a stream).
+
+--------------------------------------------------------------------------------
+ACT.ENDOUTPUT :            [Internal System Interface for ENDWRITE]
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.EndOutput
+
+Return: Res1:           0
+        Res2:           0
+
+   Null operation (no action needed to close a stream).
+
+--------------------------------------------------------------------------------
+ACT.READ :                 [Internal System Interface for RDCH]
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.Read
+
+Return: Res1:           Pointer to buffer containing characters read
+        Res2:           Number of characters
+
+   The buffer returned is one obtained from free store for the purpose, but
+the pointer does NOT address the start of the GETVECed block.  In line input
+mode, the oldest buffered input line for the calling task is returned.
+In single character input mode, all buffered characters are returned.  In
+either mode, the packet is not returned until there is some input.
+
+--------------------------------------------------------------------------------
+ACT.WRITE :                [Internal System Interface for WRCH]
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.Write
+        Arg1:           Buffer containing output line
+        Arg2:           Number of characters in buffer
+
+Return: Res1:           TRUE
+        Res2:           0
+
+   The buffer is a GETVECed block which is freed by the terminal handler
+after its contents have been written.  If the last character in the buffer
+is '*n' or '*e', the line is marked as terminated when sent to the virtual
+terminal.
+
+--------------------------------------------------------------------------------
+ACT.CONNECT :              [Internal System Interface to establish
+                            terminal connection]
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.Connect
+        Arg1:           Stream ID of input (keyboard) byte stream
+        Arg2:           Stream ID of output (screen) byte stream
+        Arg3:           Input task to be selected
+
+Return: Res1:           0 (success)
+                        non-zero (failure)
+        Res2:           0
+
+--------------------------------------------------------------------------------
+ACT.DISCONNECT :           [Internal System Interface to break terminal
+                            connection and release machine]
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.Disconnect
+
+Return: Res1:           TRUE
+        Res2:           0
+
+--------------------------------------------------------------------------------
+ACT.START.RM.REFRESH :     [Internal System Interface used by CLI.INIT]
+
+Call:   Taskid:         ConsoleTask
+        Type:           Act.Start.RM.Refresh
+
+Return: Res1:           TRUE
+        Res2:           0
+
+    The RMVTHAND task does not start refreshing the Resource Manager's
+"dead man's handle" until either this packet or an Act.Connect is received.
+This packet is used when a system containing RMVTHAND is loaded by SSP such
+that no terminal is made available to it.
+
+--------------------------------------------------------------------------------
+Any unknown packet type : no action
+
+Return: Res1:           FALSE
+        Res2:           Error.ActionNotKnown
+
+--------------------------------------------------------------------------------
+
+

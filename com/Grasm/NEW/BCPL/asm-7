@@ -1,0 +1,635 @@
+
+
+
+
+
+
+
+SECTION "asm7"
+
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+
+
+
+
+
+//
+//                       Parsing  Procedure
+//
+
+
+
+LET parse(file) BE
+$(  /* this routine operates in conjunction with 'nextpass'
+       to set up the two instances of the input file 'in.first'
+       and 'in.second' and to alternate between them in order
+       to parse each section of the text twice.
+           The state of the parser at the beginning of each 'pass'
+       is saved in the global workspace 'state' and is used to
+       restore that state at the end of the first pass.
+    */
+    LET savewrch = wrch
+    LET pass.first = ?
+    LET pass.second = ?
+    LET max.mem = 0
+    LET endmissing = FALSE
+    LET end.was.missing = FALSE
+    syswrch := wrch
+    warnvec := TABLE 0,0,0,0,0
+    errcount := 0
+    linbufsize  := pw+1 - (15+(1+2*bytesperasmword)*binbufwidth+2)
+    linbuf      := simplegetvec(linbufsize/bytesperword+1)
+    deleteline()
+    item.start  := linbuf.top-1
+    lex.space   := simplegetvec(256/bytesperword-1)
+    lab.space   := simplegetvec(256/bytesperword-1)
+    binbuf      := simplegetvec(binbufsize+b.nextmod)
+    binbuf!b.top := b.nextmod
+    binbuf!b.nextmod := binbuf!b.top
+    macro.stack := null
+    filling.macro := 0
+    print.expansions := TRUE
+    expand.text := TRUE
+    entrypoint := #XFFFF
+    sectno:=1
+    deleteline()
+    lineno:=0
+    line.of.file:=0
+    file.id:=0
+    files := simplegetvec(max.files)
+    files!0 := 0
+    resetfiles(line.of.file)
+    pc := 0
+    mode := null
+    badlabs := 0
+    outpos := 1<<8
+    wrch := mywrch
+    def.count := 0
+    max.temp.used := 0
+    pagetitle := null
+    modulename := null
+    finishpass := FALSE
+    fatal := FALSE
+    ch := '*S'
+    pass := first
+    pass.first := findasmin(file)
+    pass.second := (pass.first=0->0,findasmin(file))
+    IF pass.first=0 | pass.second=0 THEN error(e.badfile, file)
+    selectinput(pass.first)
+    startparse()
+//*<SECT:
+    state := TABLE 0,0,0,0,0,0,0,0
+    state!in.lineno := line.of.file
+    state!in.errcount := errcount
+    state!in.first := pass.first
+    state!in.second := pass.second
+    state!in.list := list
+    state!in.memlevel := memory!memsize
+/*SECT>*/
+    code.gen(cd.module, TRUE, "")
+    $(rpt
+        LET had.text=FALSE
+        had.text := had.text | parseline() REPEATUNTIL
+                item.type=i.end | finishpass | fatal
+        $(  LET mem.used = memsize - memory!memsize + max.temp.used
+            IF mem.used>max.mem THEN max.mem:=mem.used
+        $)
+        UNLESS fatal THEN
+        $(  end.was.missing:=endmissing
+            endmissing:=(pass=first & item.type=i.end & had.text)
+            IF item.type\=i.end | endmissing THEN nextpass()
+        $)
+    $)rpt REPEATUNTIL fatal | item.type=i.end & \endmissing
+    wrch := savewrch
+    pass := second      // nextpass might have left it as 'first'
+    code.gen(cd.eof,entrypoint)
+    endparse()
+    $(  LET save.out=output()
+        selectoutput(out)
+        IF end.was.missing THEN
+        $(  writes("END directive missing*N")
+            errcount := errcount+1
+        $)
+        writef("Maximum workspace used is %N words*N",max.mem)
+        selectoutput(save.out)
+    $)
+    selectinput(pass.first)
+    endread()
+    selectinput(pass.second)
+    endread()
+$)
+
+
+AND startparse() BE RETURN      // for redefinition
+
+AND endparse() BE RETURN        // for redefinition
+
+
+AND nextpass() BE
+$(  endparse()
+    WHILE end.macro.var() DO rch()     // unstack any "open" macros
+    TEST pass=first THEN
+    $(  code.gen(cd.clear)    // clear CODE.GEN's buffers
+        pass:=second
+        IF mode=null THEN mode:=absolute
+        code.gen(cd.module, mode=absolute, modulename)
+        code.gen(cd.code,  name,  ((bytesperasmword & #XF) << 12) |
+                 ((bytesperasmword * wordsperaddress & #XF) << 8) |
+                 (msbytefirst -> #X01, #X00))
+        $(  LET stamp=VEC 15
+            code.gen(cd.prag, get.time(stamp, 15), "DAT-A")
+        $)
+        $(  LET saveout=output()
+            selectoutput(out)
+            wrch('*N')
+            selectoutput(saveout)
+        $)
+//*<SECT:
+        errcount:=state!in.errcount
+        list:=state!in.list
+        line.of.file := state!in.lineno
+/*/
+        errcount:=0
+/*SECT>*/
+        file.id := 0
+        restartpage:=throws
+        state!in.first:=input()
+        selectinput(state!in.second)
+    $) ELSE
+    $(  gen.defs()  // clears internal buffers in CODE
+//*<SECT:
+        pass:=first
+        state!in.errcount:=errcount
+        code.gen(cd.module, TRUE, "")     // to inform CODE.GEN of new module
+        state!in.second:=input()
+        state!in.list:=list
+        state!in.lineno := line.of.file
+/*SECT>*/
+        IF list>0 | allsyms | badlabs>0 THEN
+        $(  printlabs()
+            printfiles()
+        $)
+        deletelabs()
+//*<SECT:
+        pagetitle:=null
+        modulename:=null
+        sectno:=sectno+1
+        selectinput(state!in.first)
+        memory!memsize := state!in.memlevel   // reset memory to previous limit
+        memory!0 := 1                         // reset tempvec
+        max.temp.used := 0
+/*SECT>*/
+    $)
+    resetfiles(line.of.file)
+    print.expansions := TRUE
+    expand.text := TRUE
+    mode:=null
+    pc:=0
+    ch:='*n'
+    lineno := 0
+    finishpass:=FALSE
+    def.count:=0
+//*<SECT:
+    startparse()
+/*SECT>*/
+$)
+
+
+
+AND parseline() = VALOF
+$(  LET savlev=errorlevel
+    LET savlab=errorlabel
+    LET mt.line=FALSE
+    LET lab = lab.space
+    LET mnem = ?
+    LET found.mnem = ?
+    errorlevel:=level()
+    errorlabel:=xit
+    mnem := read.to.mnem(@mt.line, @found.mnem, @lab, TRUE)
+//  writef("Parseline: mnem = *"%S*" mt.line=%C found.mnem=%C lab=*"%S*"*N",
+//         (mnem=null -> "<none>", mnem!c.str), (mt.line->'T','F'),
+//         (found.mnem->'T','F'), (lab=0 -> "<none>", lab))
+    IF found.mnem THEN
+    TEST mnem=null THEN
+    $(  // illegal mnemonic
+//      writef("Parseline: calling error (#X%X8) lab=%X8 lev=%X8*N",
+//             error, errorlabel, errorlevel)
+        error(e.badcode)
+    $) ELSE
+    $(  FOR i=1 TO (mnem+c.opstr)!0 DO putword((mnem+c.opstr)!i)
+//      writef("About to execute '%S'*N", item.info)
+        dontknow := FALSE
+        (mnem!c.fn) (lab, (mnem+c.opstr)!1)
+        IF comntcheck THEN
+        UNLESS item.type=i.comnt | item.type=i.stop | item.type=i.end
+        THEN error(e.nocomnt, comntch)
+    $)
+    IF warning THEN error(0)
+    endline(TRUE)
+xit:
+//*<TRIPOS:
+    IF testflags(1) THEN
+    $(  writef("****** BREAK: in %S on %S pass of section %N*N", name,
+                (pass=first -> "first", "second"), sectno)
+        fatal := TRUE
+    $)
+    finishpass := finishpass | fatal
+/*TRIPOS>*/
+    errorlevel:=savlev
+    errorlabel:=savlab
+//  writef("Parseline: end of %S pass line FATAL=%C FINISHPASS=%C MT.LINE=%C*N",
+//         (pass=second -> "second","first"), (fatal->'T','F'),
+//         (finishpass -> 'T','F'), (mt.line -> 'T','F'))
+    RESULTIS \mt.line
+$)
+
+
+
+
+
+AND read.to.mnem(lv.mt.line, lv.found.mnem, lv.lab, active.read) = VALOF
+$(  LET mnem = null
+    startpc := pc
+    warning := FALSE
+    dontknow := FALSE
+    newlyne()
+    getitem()
+    !lv.found.mnem := FALSE
+    !lv.mt.line := (item.type=i.stop | item.type=i.end | item.type=i.comnt)
+//  writef("Find.mnem: %Sactive read on line %N starting with item %N*N",
+//         (active.read -> "","non-"), lineno, item.type)
+    UNLESS !lv.mt.line THEN
+    $(  TEST scan(i.space) THEN !lv.lab := null ELSE
+        TEST item.type=i.iden THEN
+        $(  // Copy the identifier string into label buffer.
+            // A word copy is done in order to preserve the
+            // 0s padding the string to word size, as these are
+            // required by symbol table routines.  A word copy
+            // should also be faster!  16.07.81 - NJO
+            FOR i=0 TO item.info%0 / bytesperword DO (!lv.lab)!i := item.info!i
+            getitem()
+            scan(i.endlab)
+        $)
+        ELSE error(e.nolab)
+        !lv.mt.line:=(!lv.lab=null &
+                 (item.type=i.stop | item.type=i.end | item.type=i.comnt))
+        TEST item.type=i.comnt | item.type=i.stop | item.type=i.end THEN
+            IF active.read THEN get.and.declare(!lv.lab)
+        ELSE
+        $(  LET no.expand = scan(i.pling)
+            TEST item.type\=i.iden THEN
+            $(  UNLESS !lv.lab=null & active.read THEN get.and.declare(!lv.lab)
+                error(e.badcode)
+            $) ELSE
+            $(  LET macro = ?
+                UNLESS no.expand THEN
+                macro := looktype(type.macro, item.info)
+//              writef("           found symbol *"%S*" (%Sa macro)*N",item.info,
+//                     (iden.valid -> "","not "))
+                !lv.found.mnem := TRUE
+                TEST \no.expand & iden.valid THEN
+                $(  LET static.mnem = TABLE 0,0,0,0
+                    mnem := static.mnem
+                    mnem!c.opstr := 0               // don't put down any code
+                    mnem!(c.opstr+1) := macro       // pass macro to CALL proc
+                    mnem!c.fn := callmacroproc
+                    mnem!c.str := item.type
+                $) ELSE mnem := getcode(item.info)
+            $)
+        $)
+    $)
+    RESULTIS mnem
+$)
+
+
+
+
+AND get.and.declare(lab) BE
+$(  // This is the standard procedure called by Mnemonic Procedures which want
+    // any label on their line to be treated in the default way (i.e. have the
+    // current program counter assigned to it).
+    UNLESS lab=null THEN
+    $(  IF mode=null THEN mode:=absolute
+        IF pass=first THEN
+            // DEF label if 'def.count' hasn't run out yet
+            putlab(lab, pc, (mode=absolute->type.lab, type.rellab) |
+                            (def.count>0->flag.def,0))
+        UNLESS def.count=0 THEN def.count:=def.count-1
+    $)
+    getitem()
+$)
+
+
+
+AND newsection() BE RETURN            // for redefinition
+
+
+
+
+
+
+//
+//                     Expression   Analysis
+//
+
+
+
+
+
+LET is.expression() = VALOF
+TEST item.type=i.here
+THEn RESULTIS TRUE
+ELSE SWITCHON item.type INTO
+     $(  CASE i.iden:
+         CASE i.number:
+         CASE i.sstring:
+         CASE i.minus:
+         CASE i.plus:
+         CASE i.not:
+           RESULTIS TRUE
+         DEFAULT:
+           RESULTIS item.type=i.elbkt | item.type=i.strlbkt
+     $)
+
+
+
+AND expression() = VALOF
+$(  LET spec=VEC spec.size
+    label.expression(spec)
+    UNLESS spec!1=0 THEN warn(e.badrel)
+    RESULTIS spec!0
+$)
+
+
+
+AND pcrel.expression() = VALOF
+$(  LET spec=VEC spec.size
+    label.expression(spec)
+    IF mode=null THEN mode:=absolute
+    UNLESS mode=absolute THEN spec!1:=spec!1-1
+    UNLESS spec!1=0 THEN warn(e.badrel)
+    RESULTIS spec!0-pc
+$)
+
+
+
+AND label.expression(ansvec) = VALOF
+$(  /*     This procedure parses an expression consisting of the operators
+       |, &, <<,>>, +,-, *,/  with that relative precedence.  The components
+       of the expression are parsed by 'term' (q.v.) and may consist of
+       relative, absolute or external items.
+           An expression including an external item may not contain any
+       other item, nor a monadic -.  Expressions including relative items
+       may not contain relative sub expressions in any operators other
+       than + and - and must be formatted in such a way that the resulting
+       expression has either an equal number of +ve and -ve relative sub
+       expressions, in which case the resulting expression is absolute, or
+       one more +ve relative sub expression than -ve, in which case the
+       resulting expression is itself relative.
+           A vector 'spec' is returned with the following values in the
+       following offsets:
+
+                offset 0:  the absolute or relative value of the expression
+                           or, if the expression was an external, the address
+                           from which this symbol was last referenced.
+                offset 1:  the number of times that a relative offset must be
+                           added to offset 0 at load time to get an absolute
+                           value.  Only 0 (absolute) and 1 (relative) are
+                           valid except if the expression was external in which
+                           case this offset is large and non zero.
+                offset 2:  zero unless the expression was external, in which
+                           case it will be the address of the external symbols
+                           value field, in which is maintained the assembly time
+                           address of the last reference.
+    */
+    ande(ansvec)
+    WHILE scan(i.or) DO
+    $(  LET a=VEC 2
+        ansvec!0 := ansvec!0 | ande(a)
+        UNLESS ansvec!1=0 & a!1=0 THEN warn(e.badrel)
+        bracketed:=FALSE
+    $)
+    RESULTIS ansvec
+$)
+
+
+AND ande(ansvec) = VALOF
+$(  shifte(ansvec)
+    WHILE scan(i.and) DO
+    $(  LET s=VEC 2
+        ansvec!0 := ansvec!0 & shifte(s)
+        UNLESS ansvec!1=0 & s!1=0 THEN warn(e.badrel)
+        bracketed:=FALSE
+    $)
+    RESULTIS ansvec!0
+$)
+
+
+AND shifte(ansvec) = VALOF
+$(  LET not.val = scan(i.not)
+    adde(ansvec)
+    WHILE item.type=i.shr | item.type=i.shl DO
+       $(  LET s=item.type
+           LET a=VEC 2
+           getitem()
+           TEST s=i.shr
+           THEN ansvec!0:=ansvec!0 >> adde(a)
+           ELSE ansvec!0:=ansvec!0 << adde(a)
+           UNLESS ansvec!1=0 & a!1=0 THEN warn(e.badrel)
+           bracketed:=FALSE
+       $)
+    IF not.val THEN ansvec!0:=\ansvec!0
+    RESULTIS ansvec!0
+$)
+
+
+AND adde(ansvec) = VALOF
+$(  product(ansvec)
+    $(rpt
+        LET s = +1
+        SWITCHON item.type INTO
+        $(  DEFAULT:      RESULTIS ansvec!0
+            CASE i.minus: s := -1
+            CASE i.plus :
+              $(  LET p=VEC 2
+                  getitem ()
+                  ansvec!0 := ansvec!0 + s * product (p)
+                  ansvec!1 := ansvec!1 + s * p!1
+                  IF ansvec!2 /* last external reference */ \= 0 | p!2 \= 0 THEN
+                  warn(e.badext)
+                  bracketed:=FALSE
+              $)
+              LOOP
+        $)
+    $)rpt REPEAT
+$)
+
+
+AND product(ansvec) = VALOF
+$(  term(ansvec)
+    WHILE item.type=i.div | item.type=i.mult DO
+       $(  LET s=item.type
+           LET t=VEC 2
+           getitem()
+           TEST s=i.div
+           THEN TEST term(t)=0
+                THEN warn(e.divzero)
+                ELSE ansvec!0:=ansvec!0/t!0
+           ELSE ansvec!0:=ansvec!0*term(t)
+           UNLESS ansvec!1=0 & t!1=0 THEN warn(e.badrel)
+           bracketed:=FALSE
+       $)
+    RESULTIS ansvec!0
+$)
+
+
+
+AND term(ansvec) = VALOF
+$(  /*      This procedure parses the elements of an expression.  They
+        may be preceeded by an arbitrary number of monadic sign symbols.
+        They may be any of the following:
+
+                a number: as defined by the lexical analyser 'getitem'
+                a single quoted string: returns the value of the ascii
+                        characters packed into a word.
+                the 'here' symbol i.here: returns the value of the
+                        program counter - a relative value in a relative
+                        section and an absolute one in an absolute one.
+                an external symbol: returns the address where it was last
+                        used.  Offset 1 of 'ansvec' is set high to guarantee
+                        that it will not indicate an absolute expression.
+                        Offset 2 is set to a pointer to the information field
+                        in the symbol's descriptor where the address where it
+                        was last used is kept.
+                a relative symbol: returns its relative address and sets
+                        offset 1 of 'ansvec' to +/- 1 (depending upon the
+                        number of monadic minus signs parsed).
+                an absolute symbol: returns the value of the symbol and sets
+                        offset 1 of 'ansvec' to 0.
+                a bracketed expression: see 'label.expression'
+    */
+    LET sign = +1
+    ansvec!0 := -1     // default value
+    ansvec!1 := 0      // relocation count
+    ansvec!2 := 0      // last reference of external symbol
+    bracketed:=FALSE
+    $(rpt
+        SWITCHON item.type INTO
+        $(  CASE i.minus:
+                 sign := -sign
+            CASE i.plus:
+                 getitem ()
+                 LOOP
+            CASE i.iden:
+                 $(  LET d=dontknow
+                     UNLESS getlab(item.info, ansvec)=null THEN
+                     $(  IF pass=second & (ansvec!1=type.none | \iden.valid)
+                         THEN warn(e.badlab)
+                         TEST (ansvec!1 /* type */ & type.mask) = type.def THEN
+                             TEST mode=relative THEN
+                             $(  ansvec!1:=1    // relocation count
+                                 ansvec!2:=0
+                             $) ELSE
+                             $(  mode:=absolute
+                                 ansvec!1:=0
+                                 ansvec!2:=0
+                             $)
+                         ELSE
+                         TEST (ansvec!1 /* type */ & flag.rel)\=0 THEN
+                         $(  ansvec!1:=1   // relocation count
+                             ansvec!2:=0
+                         $) ELSE
+                         TEST (type.mask&ansvec!1) /* type */ = type.ref THEN
+                         $(  ansvec!1 := 1000   // a big number
+                             IF sign=-1 THEN error(e.badext)
+                         $) ELSE
+                         $(  ansvec!1:=0
+                             ansvec!2:=0
+                         $)
+                     $)
+                     UNLESS iden.valid DO warn(e.badlab)
+                     getitem()
+                     dontknow:= dontknow | d
+                 $)
+                 ENDCASE
+            CASE i.number:
+                 ansvec!0:=item.info
+                 getitem()
+                 ENDCASE
+            CASE i.sstring:
+                 ansvec!0 := 0
+                 FOR i=1 TO item.info%0 DO
+                    ansvec!0:= (ansvec!0<<8) + cvtchar(item.info%i)
+                 getitem()
+                 ENDCASE
+            DEFAULT:
+                 TEST item.type=i.here THEN
+                 $(  ansvec!0 := pc
+                     TEST mode=relative THEN ansvec!1:=1 ELSE mode:=absolute
+                     getitem ()
+                 $) ELSE
+                 TEST scan(i.elbkt) THEN
+                 $(  label.expression(ansvec)
+                     checkandskip(i.erbkt,')')
+                     bracketed:=(sign=+1)
+                     // in case '-' sign in front of bracket
+                 $) ELSE
+                 TEST item.type=i.strlbkt | item.type=i.percent |
+                      item.type=i.pling THEN
+                 $(  LET str = strexp(null, 0)
+                     ansvec!0 := 0
+                     FOR i=1 TO item.info%0 DO
+                        ansvec!0 := (ansvec!0 << 8) + cvtchar(str%i)
+                     getitem()
+                 $) ELSE error(e.badnum)
+        $)
+        ansvec!0 := ansvec!0*sign
+        ansvec!1 := ansvec!1*sign
+        RESULTIS ansvec!0
+    $)rpt REPEAT
+$)
+
+
+
+AND is.type(ty) = VALOF
+$(  LET ans=FALSE
+    IF item.type=i.iden DO ans:=checktype(ty, item.info)
+    RESULTIS ans
+$)
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,273 @@
+SECTION "SerialLink"
+
+GET "libhdr"
+
+GLOBAL
+$(
+    unclaimed.pkts : ug+0
+    output.file : ug+1
+    monitor.output : ug+2
+    input.file : ug+3
+    monitor.input : ug+4
+    buffer : ug+5
+$)
+
+MANIFEST
+$(
+    pktQend = 0
+    pkts = 10 // number of input packets
+    dev.in = -5 // input device
+    dev.out = -6 // output device
+    ack.char = '+'
+    nack.char = '-'
+$)
+
+LET start(zero.or.packet) BE
+$(
+    LET pktvec = VEC pkts-1
+
+    unclaimed.pkts := pktQend
+    output.file := 0
+    input.file := 0
+    buffer := 0
+    FOR i = 0 TO pkts-1 DO pktvec!i := 0
+
+    IF zero.or.packet \= 0 THEN
+      $( qpkt(zero.or.packet)
+         initio()
+         selectinput(findinput("**"))
+         selectoutput(findoutput("**"))
+      $)
+
+    monitor.output := output()
+    monitor.input := input()
+
+    // Make and queue input packets
+
+    FOR i = 0 TO pkts-1 DO
+    $(  LET pkt = getvec(pkt.res2)
+        IF pkt=0 THEN GOTO exit
+        pktvec!i := pkt
+        pkt!pkt.link := notinuse
+        pkt!pkt.id := dev.in
+        qpkt(pkt)
+    $)
+
+    buffer := getvec (256/bytesperword)
+    IF buffer = 0 THEN GOTO exit
+
+    // Say hello
+
+    writes ("Serial link starting*N")
+
+    // Serve incoming requests
+
+    $(  LET request = in.byte()
+        SWITCHON request INTO
+        $(
+            CASE 0:     // null
+                        ENDCASE
+
+            CASE 1:     // create directory
+                        $(  LET obj = 0
+                            buffer%0 := in.byte()
+                            FOR i = 1 TO buffer%0 DO buffer%i := in.byte()
+                            obj := createdir(buffer)
+                            freeobj(obj)
+                            TEST obj~=0 THEN
+                            $(  writef("Directory %S created*N", buffer)
+                                out.char(ack.char, TRUE)
+                            $)
+                            ELSE
+                            $(  writef("Failed to create directory %S (%N)*N",
+                                        buffer, result2)
+                                out.char(nack.char, TRUE)
+                            $)
+                        $)
+                        ENDCASE
+
+            CASE 2:     // create file
+                        $(  buffer%0 := in.byte()
+                            FOR i = 1 TO buffer%0 DO buffer%i := in.byte()
+                            output.file := findoutput(buffer)
+                            TEST output.file ~= 0 THEN
+                            $(  writef ("Creating %S*N", buffer)
+                                out.char(ack.char, TRUE)
+                            $)
+                            ELSE
+                            $(  writef ("Failed to create file %S (%N)*N",
+                                        buffer, result2)
+                                out.char(nack.char, TRUE)
+                                ENDCASE
+                            $)
+
+                            $(  buffer%0 := in.byte()
+                                FOR i = 1 TO buffer%0 DO buffer%i := in.byte()
+                                selectoutput(output.file)
+                                FOR i = 1 TO buffer%0 DO wrch(buffer%i)
+                                selectoutput(monitor.output)
+                                out.char(ack.char, TRUE)
+                            $)  REPEATUNTIL buffer%0 = 0
+
+                            selectoutput(output.file)
+                            endwrite()
+                            output.file := 0
+                            selectoutput(monitor.output)
+                            writes ("File closed*N")
+                        $)
+                        ENDCASE
+
+            CASE 3:     // send file
+                        $(  buffer%0 := in.byte()
+                            FOR i = 1 TO buffer%0 DO buffer%i := in.byte()
+                            input.file := findinput(buffer)
+                            TEST input.file ~= 0 THEN
+                            $(  writef ("Sending %S*N", buffer)
+                                out.char(ack.char, TRUE)
+                            $)
+                            ELSE
+                            $(  writef ("Failed to open file %S (%N)*N",
+                                        buffer, result2)
+                                out.char(nack.char, TRUE)
+                                ENDCASE
+                            $)
+
+                            selectinput(input.file)
+
+                            $(  LET count = 0
+                                $(  LET ch = rdch()
+                                    IF ch = endstreamch THEN BREAK
+                                    buffer%count := ch
+                                    count := count + 1
+                                $)  REPEATUNTIL count = 4
+
+                                $(  LET ch = in.char()
+                                    IF ch = ack.char THEN BREAK
+                                    IF ch = nack.char THEN GOTO terminate
+                                $)  REPEAT
+
+                                out.char('P'&#X1F, FALSE) // DLE
+                                out.char('e', FALSE)
+
+                                out.byte(count)
+                                FOR i = 0 TO count-1 DO out.byte(buffer%i)
+                                out.char('*C', FALSE)
+                                IF count = 0 THEN BREAK
+                            $)  REPEAT
+
+                            terminate:
+
+                            endread()
+                            input.file := 0
+                            selectinput(monitor.input)
+
+                            writes ("File closed*N")
+                        $)
+                        ENDCASE
+
+            DEFAULT:    writef ("Unknown request %N*N", request)
+
+        $)
+    $)  REPEATUNTIL testflags(1)
+
+    exit:
+
+    FOR i = 0 TO pkts-1 DO
+    $(  LET pkt = pktvec!i
+        IF pkt=0 THEN LOOP
+        dqpkt(dev.in, pkt)
+        freevec(pkt)
+    $)
+
+    freevec(buffer)
+
+    IF output.file ~= 0 THEN
+    $(  selectoutput(output.file)
+        endwrite()
+    $)
+
+    IF input.file ~= 0 THEN
+    $(  selectinput(input.file)
+        endread()
+    $)
+
+    selectinput(monitor.input)
+    selectoutput(monitor.output)
+$)
+
+AND in.byte() = VALOF
+$(  LET ms = in.nibble() << 4
+    RESULTIS ms | in.nibble()
+$)
+
+AND in.nibble() = VALOF
+$(  LET char = in.char()
+    IF '0' <= char <= '?' THEN RESULTIS char & 15
+$)  REPEAT
+
+AND in.char() = VALOF
+$(  LET pkt = pktwait(dev.in, 0) // any pkt from input device
+    LET ch = pkt!pkt.res1 & 127
+    qpkt(pkt) // bounce it back for a refill
+    RESULTIS ch
+$)
+
+AND out.char(ch, term) BE
+$(  sendpkt(notinuse, dev.out, 0, 0, 0, ch)
+    IF term THEN sendpkt(notinuse, dev.out, 0, 0, 0, '*C') // force it out
+$)
+
+AND out.byte(b) BE
+$(  sendpkt(notinuse, dev.out, 0, 0, 0, '0'+(b>>4))
+    sendpkt(notinuse, dev.out, 0, 0, 0, '0'+(b & 15))
+$)
+
+
+// Replacement for pktwait
+// -----------------------
+//
+//      Wait till the specified packet comes in, saving other packets on a
+//      queue of unclaimed packets.
+//      0 passed as argument to either pkt or dest has a special meaning;
+//      accept any value in this field.
+//
+AND pktwait(dest, pkt) = VALOF
+$(
+    LET queue.scan.link = @unclaimed.pkts
+    LET queue.scan = unclaimed.pkts
+    LET returned.pkt = ?
+
+    // Look for it on the private queue of already processed pkts
+    WHILE queue.scan ~= pktQend DO
+    $(
+        IF ((queue.scan = pkt) | (pkt = 0)) &
+           ((queue.scan!pkt.id = dest) | (dest = 0))
+        THEN
+        $(
+            queue.scan.link!pkt.link := queue.scan!pkt.link
+            queue.scan!pkt.link := notinuse
+            RESULTIS queue.scan
+        $)
+        queue.scan.link := queue.scan
+        queue.scan := queue.scan!pkt.link
+    $)
+
+    // Process each packet sent to the task in turn, saving ones other than the
+    // required on on the private Q
+    $(
+        returned.pkt := taskwait()
+
+        TEST ((returned.pkt = pkt) | (pkt = 0)) &
+             ((returned.pkt!pkt.id = dest) | (dest = 0))
+        THEN RESULTIS returned.pkt
+        ELSE
+        $(
+            returned.pkt!pkt.link := pktQend
+            queue.scan.link!pkt.link := returned.pkt
+            queue.scan.link := returned.pkt
+        $)
+
+    $) REPEAT
+$)
+
+

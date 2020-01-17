@@ -1,0 +1,73 @@
+//******************************************************************************
+//*                                                                            *
+//*    CS-EXAMINE            By analogy with the CAP program of the same name, *
+//*                          this prints a list of the files in the CAP/CS     *
+//*                          spool queue.                                      *
+//*                                                                            *
+//******************************************************************************
+//*    I. D. Wilson          Last Modified   -   IDW   -   28/06/83            *
+//******************************************************************************
+
+
+SECTION "CS-EXAMINE"
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+
+
+MANIFEST
+$(
+    dibytesperword  =  bytesperword / 2
+$)
+
+
+
+LET start()  =  VALOF
+$(
+    LET segname  =  "sys:l.call-capcs"
+    LET seg      =  0
+
+    UNLESS  chaos.running()  DO
+    $(
+        writes( "CS-EXAMINE:  CAP is not running CHAOS*N" )
+        RESULTIS  20
+    $)
+
+    seg  :=  loadseg( segname )
+
+    IF  seg = 0  THEN
+    $(
+        writef( "CS-EXAMINE:  Cannot load *"%S*"*N", segname )
+        RESULTIS  20
+    $)
+
+    UNLESS  globin( seg )  DO
+    $(
+        writef( "CS-EXAMINE:  Cannot initialise *"%S*"*N", segname )
+        unloadseg( seg )
+        RESULTIS  20
+    $)
+
+    //  Having initialised the overlay segment, call it
+
+    start( "**", "**" )
+
+    unloadseg( seg )
+
+    RESULTIS  0
+$)
+
+
+
+AND chaos.running()  =  VALOF
+$(
+    LET txbuff  =  VEC 3            / dibytesperword
+    LET rxbuff  =  VEC max.ssp.size / dibytesperword
+    LET nsv     =  VEC 3
+
+    RESULTIS  ssp( "CHAOS.RUNNING", txbuff, 3, rxbuff, max.ssp.size, nsv )
+$)
+  
+

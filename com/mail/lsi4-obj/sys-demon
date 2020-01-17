@@ -1,0 +1,62 @@
+ absmin         #X0000;
+ absmax         #X00FF;
+ storemin       #X0100;
+ storemax       #XFFFB;
+ memorysize         64;
+ rootnode            8;
+ tcbsize            40;
+ mcaddrinc           1;
+
+info ( "LSI4",          | Machine Type
+       0,                       | Assignments list
+       (0,0,0,0,0,0,0,0),       | Loaded devices indirection table
+       (0,0,0,0,0,0,0,0),       | Loaded handlers
+       "MAIL-DEMON",           | Spare
+       (0,                      | Used to hold taskid of ring handler
+        0,                      | This machine's ring address
+        "unset",                | This machine's ring name
+        0,                      | UIDset list
+        0,                      | M/c which caused loading of this one (number)
+        "unset",                | M/c which caused loading of this one (string)
+        0,                      | Terminal number on above machine
+        "unset",                | reverse connection name
+        0                       | vector of load information from RM
+       ),
+       0,0,0,0,0                | Spare
+     );
+
+ seg    klib    :sys.obj.klib,:sys.obj.mlib;
+ seg    blib    :sys.obj.blib;
+*seg    msinit  MOBJ:dinit;
+ seg    ms      MOBJ:bsppair,
+                MOBJ:compres,
+                MOBJ:fs,
+                MOBJ:groups,
+                MOBJ:miscser,
+                MOBJ:msc,
+                MOBJ:report,
+                MOBJ:send,
+                MOBJ:sender,
+                MOBJ:trace,
+                MOBJ:ummd,
+                MOBJ:util;
+ seg    bsphand  :l.bsp-handler;
+ seg    ringhand :sys.type2.lsi4-obj.type2-rh;
+ seg    rmvthand MOBJ:vt,:sys.resman.LSI4-obj.rmvtclk;
+
+ driver ringtxdriv :sys.type2.lsi4-obj.t2-tx-driver;
+ driver ringrxdriv :sys.type2.lsi4-obj.t2-rx-driver;
+ dcb ringrxdcb sys:sys.type2.lsi4-obj.t2-rx-dcb;
+ dcb ringtxdcb sys:sys.type2.lsi4-obj.t2-tx-dcb;
+
+ tasktab 10;
+*task 1 stack 1250 priority 1000 segs klib,blib,ms,msinit;      || Actually 1230
+ task 3 stack  200 priority 4000 segs klib,blib,rmvthand;               || 100
+ task 5 stack  250 priority 5000 segs klib,blib,ringhand;
+ task 6 stack  100 priority 3400 segs klib,blib,bsphand;        ||  70
+
+ devtab 8;
+ dev -3 dcb ringtxdcb driver ringtxdriv;
+ dev -4 dcb ringrxdcb driver ringrxdriv;
+
+

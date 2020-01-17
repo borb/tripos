@@ -1,0 +1,459 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+ #######   ########  #######   ######      #####     ####     ######   ######## 
+ ########  ########  ########  #######    #######   ######   ########  ######## 
+ ##    ##     ##     ##    ##  ##    ##  ##        ##    ##  ##        ##       
+ #######      ##     ########  ##    ##  ##        ########  ##  ####  ######   
+ ##    ##     ##     #######   ##    ##  ##        ##    ##  ##    ##  ##       
+ ##    ##     ##     ##  ##    ##    ##  ##        ##    ##  ##    ##  ##       
+ ########  ########  ##   ##   #######    #######  ##    ##  ########  ######## 
+ #######   ########  ##    ##  ######      #####   ##    ##   ######   ######## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   14/09/83             *
+\*****************************************************************************/
+
+
+SECTION "BIRDCAGE"
+
+
+GET "LIBHDR"
+GET "bcpl.canonhdr"
+
+
+GLOBAL
+$(
+    vec.control  :  ug + 0
+    vec.shift    :  ug + 1
+    vec.blank    :  ug + 2
+    maxheight    :  ug + 3
+    maxwidth     :  ug + 4
+    hfactor      :  ug + 5
+    wfactor      :  ug + 6
+$)
+
+
+MANIFEST
+$(
+    boxheight    =  64
+    boxwidth     =  180
+    offset       =  180
+    hboxes       =  10
+    vboxes       =  3
+
+    hlength      =  boxwidth * hboxes  +  offset
+    vlength      =  boxheight * vboxes
+    border       =  20
+$)
+
+
+LET start()  BE
+$(
+//  Make a Birdcage for the BBC Micro.  The input file is in for format:
+//
+//      <type>  <number>  <text>
+//
+//  Where <type>    is  CONTROL, SHIFT or BLANK
+//        <number>  is  0 -> 9
+//        <text>    is  Quoted text to be put in relevant box  ("\" means "*N")
+
+    LET args        =  "FROM/A,TO/A"
+    LET argv        =  VEC 50
+    LET fromfile    =  0
+    LET tofile      =  0
+    LET fromstream  =  0
+    LET tostream    =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** Bad arguments for string *"%S*"*N", args )
+        
+        stop( 20 )
+    $)
+
+    fromfile    :=  argv!0
+    tofile      :=  argv!1
+
+    fromstream  :=  findinput( fromfile )
+    tostream    :=  findoutput( tofile )
+
+    IF  fromstream = 0  |  tostream = 0  THEN
+    $(
+        TEST  fromstream = 0
+            THEN  writef( "****** Cannot open FROM file *"%S*"*N", fromfile )
+            ELSE  endstream( fromstream )
+
+        TEST  tostream = 0
+            THEN  writef( "****** Cannot open TO file *"%S*"*N", tofile )
+            ELSE  endstream( tostream )
+
+        stop( 20 )
+    $)
+
+    //  We have opened the streams correctly, and so should attempt to read
+    //  the input for what it is worth.  The vectors hold pointers to the
+    //  strings for each entry.
+
+    vec.control  :=  gvec( 10 )
+    vec.shift    :=  gvec( 10 )
+    vec.blank    :=  gvec( 10 )
+
+    FOR  i = 0  TO  10  DO
+    $(
+        vec.control!i  :=  0
+        vec.shift!i    :=  0
+        vec.blank!i    :=  0
+    $)
+
+    UNLESS  readinput( fromstream )  DO
+    $(
+        //  Failed to read the input correctly.  Close down in a civilised 
+        //  manner.
+        
+        endstream( fromstream )
+        endstream( tostream )
+        
+        freevectors( vec.control )
+        freevectors( vec.shift )
+        freevectors( vec.blank )
+        
+        stop( 20 )
+    $)
+
+    endstream( fromstream )
+
+    //  Otherwise, the file has been read correctly, and hence we can get on
+    //  with printing the birdcage.  The variables "maxwidth" and "maxheight"
+    //  have been set to the maximum number of characters and lines in a 
+    //  box respectively.
+
+    hfactor  :=  ((boxheight / maxheight)  /  charheight)  -  1
+    wfactor  :=  ((boxwidth  / maxwidth)   /  charwidth)
+
+    IF  hfactor <= 0  |  wfactor <= 0  THEN
+    $(
+        IF  hfactor = 0  THEN
+            writef( "****** Too many lines for box:  %N*N", maxheight )
+            
+        IF  wfactor = 0  THEN  
+            writef( "****** Line too long for box:  %N*N", maxwidth )
+
+        stop( 20 )
+    $)
+
+    IF  hfactor > 5        THEN  hfactor  :=  5
+    IF  wfactor > hfactor  THEN  wfactor  :=  hfactor
+
+    //  Open the CANON plotting package, and draw the grid itself.
+
+    selectoutput( tostream )
+
+    canon.open( resolution.full )
+    canon.orientation( orientation.right )
+
+    canon.origin( 500-border, 500-border )
+    canon.moveto( 0, 0 )
+    canon.vline( vlength + border*2 )
+    canon.hline( hlength + border*2 )
+    canon.vline( -( vlength + border*2 ) )
+    canon.hline( -( hlength + border*2 ) )
+
+    canon.origin( 500, 500 )
+
+    //  Draw the horizontal lines
+
+    FOR  i = 0  TO  vboxes  DO
+    $(
+        canon.moveto( 0, i * boxheight )
+        canon.hline( hlength )
+    $)
+
+    //  Draw the vertical lines
+
+    FOR  i = 0  TO  hboxes  DO
+    $(
+        canon.moveto( i * boxwidth  +  offset, 0 )
+        canon.vline( vlength )
+    $)
+
+    canon.moveto( offset - 4, 0 )
+    canon.vline( vlength )
+
+    //  And insert the names of the rows.
+
+    canon.heightfactor( 6 )
+    canon.widthfactor( 3 )
+
+    canon.moveto( 0, (boxheight * 0)  +  (boxheight - charsize.height)/2 )
+    canon.writes( "CONTROL" )
+    
+    canon.moveto( 0, (boxheight * 1)  +  (boxheight - charsize.height)/2 )
+    canon.writes( "SHIFT" )
+
+    //  We are now ready to print the characters in the boxes.  We must do
+    //  each box in turn, moving each line of text into the centre of the
+    //  box.
+
+    canon.heightfactor( hfactor )
+    canon.widthfactor( wfactor )
+
+    FOR  i = 0  TO  9  DO  printbox( vec.control!i, boxwidth * i  +  offset, boxheight * 0 )
+    FOR  i = 0  TO  9  DO  printbox( vec.shift!i,   boxwidth * i  +  offset, boxheight * 1 )
+    FOR  i = 0  TO  9  DO  printbox( vec.blank!i,   boxwidth * i  +  offset, boxheight * 2 )
+
+    freevectors( vec.control )
+    freevectors( vec.shift )
+    freevectors( vec.blank )
+
+    canon.close()
+
+    endwrite()
+$)
+
+
+
+AND readinput( fromstream )  =  VALOF
+$(
+    LET args   =  "CONTROL/S,SHIFT/S,BLANK/S,NUMBER,TEXT"
+    LET argv   =  VEC 100
+    LET error  =  FALSE
+    LET sysin  =  input()
+    LET line   =  0
+
+    maxheight  :=  1
+    maxwidth   :=  1
+
+    selectinput( fromstream )
+
+    //  For each line of input, check the first character to see if it is
+    //  end of file.  If it is, then return.
+
+    $(  //  Repeat loop to read lines of input.
+    
+        LET ch      =  rdch()
+        LET number  =  0
+        LET vector  =  0
+        LET text    =  0
+
+        IF  ch = endstreamch  THEN  
+        $(
+            selectinput( sysin )
+            
+            RESULTIS  NOT error
+        $)
+        
+        line  :=  line + 1
+
+        IF  ch = '*N'  THEN  LOOP
+
+        IF  ch = '**'  THEN
+        $(
+            //  This is a comment line.  Skip until the end of line, and
+            //  loop.
+            
+            ch  :=  rdch()  REPEATUNTIL  ch = '*N'  |  ch = endstreamch
+            
+            LOOP
+        $)
+        
+        unrdch()
+        
+        UNLESS  rdargs( args, argv, 100 )  DO
+        $(
+            writef( "****** Line %N does not match *"%S*"*N", line, args )
+            
+            error  :=  TRUE
+            
+            LOOP
+        $)
+        
+        //  We have a line of input.  Make sure there is a CONTROL, SHIFT or
+        //  BLANK, and that the number quoted is valid.
+
+        TEST  argv!0  THEN  vector  :=  vec.control  ELSE
+        TEST  argv!1  THEN  vector  :=  vec.shift    ELSE
+        TEST  argv!2  THEN  vector  :=  vec.blank
+        
+        ELSE
+        $(
+            writef( "****** Line %N:  Must quote one of CONTROL/SHIFT/BLANK*N", line )
+            
+            error  :=  TRUE
+            
+            LOOP
+        $)
+
+        //  Count the three to make sure that there was only one.
+
+        IF  argv!0 & argv!1  |  argv!1 & argv!2  |  argv!0 & argv!2  THEN
+        $(
+            writef( "****** Line %N:  Only quote one of CONTROL/SHIFT/BLANK*N", line )
+            
+            error  :=  TRUE
+            
+            LOOP
+        $)
+
+        //  Now get hold of the number, and make sure that it is in the
+        //  range "0" -> "9".  If not, then this is an error.
+
+        number  :=  argv!3
+         
+        IF  number = 0  THEN
+        $(
+            writef( "****** Line %N:  Must quote NUMBER*N", line )
+             
+            error  :=  TRUE
+             
+            LOOP
+        $)
+
+        UNLESS  (number % 0  =  1)  &  ('0' <= number % 1 <= '9')  DO
+        $(
+            writef( "****** Line %N:  Invalid NUMBER *"%S*"*N", line, number )
+             
+            error  :=  TRUE
+             
+            LOOP
+        $)
+
+        number  :=  (number % 1)  -  '0'
+        text    :=  argv!4
+        
+        IF  text = 0  THEN  LOOP
+        
+        countheightwidth( text )
+
+        UNLESS  vector!number = 0  DO
+        $(
+            writef( "****** Line %N:  Key text redefined*N", line )
+            
+            error  :=  TRUE
+            
+            fvec( vector!number )
+        $)
+
+        vector!number  :=  copystring( text )
+    $)
+    REPEAT
+$)
+
+
+
+AND countheightwidth( text )  BE
+$(
+    LET max    =  text % 0
+    LET opos   =  1
+    LET pos    =  1
+    LET lines  =  1
+    LET width  =  0
+
+    UNTIL  pos > max  DO
+    $(
+        IF  text % pos  =  '\'  THEN
+        $(
+            LET w  =  pos - opos
+            
+            IF  w > width  THEN  width  :=  w
+            
+            lines  :=  lines + 1
+            opos   :=  pos + 1
+        $)
+        
+        pos  :=  pos + 1
+    $)
+
+    IF  (pos - opos)  >  width  THEN  width      :=  (pos - opos)
+    IF  lines > maxheight       THEN  maxheight  :=  lines
+    IF  width > maxwidth        THEN  maxwidth   :=  width
+$)
+
+
+
+AND copystring( string )  =  string = 0  ->  0,  VALOF
+$(
+    LET length  =  string % 0
+    LET vector  =  gvec( length / bytesperword )
+
+    FOR  i = 0  TO  length  DO  vector % i  :=  string % i
+
+    RESULTIS  vector
+$)
+
+
+
+AND freevectors( vector )  BE
+$(
+    FOR  i = 0  TO  9  DO  
+        UNLESS  vector!i = 0  DO
+            fvec( vector!i )
+
+    fvec( vector )
+$)
+
+
+
+AND printbox( string, x, y )  BE  TEST  string = 0  |  string % 0 = 0  THEN  RETURN  ELSE
+$(
+//  Print the string "string" in the box which starts at "x, y".  
+//  Count the number of lines, and centre each one.
+
+    LET v      =  gvec( maxheight )
+    LET work   =  gvec( 256 / bytesperword )
+    LET lines  =  1
+    LET pos    =  splitname( work, '\', string, 1 )
+    LET depth  =  0
+
+    FOR  i = 1  TO  maxheight  DO  v!i  :=  0
+
+    v!lines  :=  copystring( work )
+    
+    UNTIL  pos = 0  DO
+    $(
+        lines    :=  lines + 1
+        pos      :=  splitname( work, '\', string, pos )
+        v!lines  :=  copystring( work )
+    $)
+
+    //  We now have the string to be printed, and a count of the number of 
+    //  lines to be put in this box.  We split the box up between them, and
+    //  put the lines in the middle.
+
+    depth  :=  boxheight / lines
+
+    FOR  i = 1  TO  lines  DO
+    $(
+        LET string  =  v!i
+        LET length  =  string % 0
+        LET xoffset  =  ((boxwidth - (length * charsize.width)) / 2)
+        LET yoffset  =  ((i-1) * depth)  +  ((depth - charsize.height) / 2)
+
+        canon.moveto( x + xoffset, y + yoffset )
+        canon.writes( string )
+        fvec( string )
+    $)
+
+    fvec( work )
+    fvec( v )
+$)
+
+
+
+AND gvec( size )  =  VALOF
+$(
+    LET v  =  getvec( size )
+
+    IF  v = 0  THEN  abort( 103 )     //  error.getvecfailure
+
+    RESULTIS  v
+$)
+
+
+
+AND fvec( v )  BE  freevec( v )
+
+

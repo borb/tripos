@@ -1,0 +1,600 @@
+/*****************************************************************************\
+*                        Olivetti Research Laboratory                         *
+*******************************************************************************
+
+
+                     ##    ##    ####    ##    ##  ######## 
+                     ###  ###   ######   ##   ##   ######## 
+                     ########  ##    ##  ##  ##    ##       
+                     ## ## ##  ########  ####      ######   
+                     ##    ##  ##    ##  ## ##     ##       
+                     ##    ##  ##    ##  ##  ##    ##       
+                     ##    ##  ##    ##  ##   ##   ######## 
+                     ##    ##  ##    ##  ##    ##  ######## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   15/05/87             *
+\*****************************************************************************/
+
+
+
+SECTION "MAKE"
+
+
+
+GET "MAKEHDR"
+
+
+
+LET start()  BE
+$(
+//  TRIPOS implementation of the UNIX "make" program, with added enhancements
+//  to deal with building things out of multiple modules.
+
+    LET args    =  ",,,,,,,,,,,,,,,,,,,,-f/K,-n/S,-d/S,-i/S,-r/S,-p/S"
+    LET argv    =  VEC 100
+    
+    LET datev   =  VEC 15
+
+    LET m.file  =  0
+    LET count   =  0
+
+    errorlevel       :=  level()
+    errorlabel       :=  label
+
+    sysin            :=  input()
+    sysout           :=  output()
+    
+    defaultmakefile  :=  "Makefile"
+    defaultrulefile  :=  "SYS:Info.Make-Default-Rules"
+    
+    ch.all           :=  '?'
+    ch.assign        :=  '='
+    ch.comment       :=  '#'
+    ch.command       :=  ';'
+    ch.depend        :=  '~'
+    ch.destination   :=  '@'
+    ch.dbra          :=  '['
+    ch.dket          :=  ']'
+    ch.escape        :=  '\'
+    ch.fbra          :=  '['
+    ch.fket          :=  ']'
+    ch.macro         :=  '$'
+    ch.mbra          :=  '('
+    ch.mket          :=  ')'
+    ch.source        :=  '<'
+    ch.stem          :=  '**'
+    
+    //  The special character is used as an internal flag within the workings
+    //  of the MAKE program.  It should be any character which is normally
+    //  unprintable.
+
+    ch.special       :=  0
+    
+    //  Initialise the variables which will be required when the program
+    //  is executed.
+
+    filename         :=  NIL
+    nodelist         :=  NIL
+    freescbs         :=  NIL
+    freetagitems     :=  NIL
+    currentnode      :=  NIL
+    defaultnode      :=  NIL
+    
+    faillevel        :=  cli.initialfaillevel
+
+    initstore( 1000 )
+    
+    definetagtable()
+    definecommands()
+    
+    //  Read the arguments which the user had given us, and then get on with
+    //  executing the make sequence.
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+        error( "Bad arguments for *"%S*"", args )
+        
+    //  Look for the "nomake" and "debug" switches which we have been
+    //  given.
+    
+    m.file     :=  argv!a.makefile
+    nomake     :=  argv!a.nomake
+    debugging  :=  argv!a.debug
+    norules    :=  argv!a.norules
+    printing   :=  argv!a.print
+    
+    IF  argv!a.ignore  THEN  faillevel  :=  maxint
+    
+    //  If we haven't been given the name of a make file, we should use the
+    //  default one.
+
+    IF  m.file = 0  THEN  m.file  :=  defaultmakefile
+
+    //  We should read the default rules file, since we must fall back on
+    //  these rules whenever a new node is added.
+    
+    currentnode  :=  addnode( "[system directory]", copydir( currentdir ) )
+    defaultnode  :=  currentnode
+
+    //  Add the day, date and time as macro entries, so that the user can 
+    //  utilise them if he wants.  Note that stored macro items are held as
+    //  ROPEs rather than strings.
+    
+    datstring( datev )
+
+    addmacro( lookuptag( "DATE" ), makerope( datev+0 ) )
+    addmacro( lookuptag( "TIME" ), makerope( datev+5 ) )
+    addmacro( lookuptag( "DAY" ),  makerope( datev+10 ) )
+
+    //  Add the default compiler and assembler names.
+
+    addmacro( lookuptag( "CC" ),   makerope( "68kcc" ) )
+    addmacro( lookuptag( "AS" ),   makerope( "68kas" ) )
+    addmacro( lookuptag( "BCPL" ), makerope( "bcp" ) )
+
+    //  Scan the arguments we have been given to see whether they correspond
+    //  to parameter assignments.
+
+    FOR  i = a.firstarg  TO  a.lastarg  DO
+    $(
+        LET arg  =  argv!i
+        
+        UNLESS  arg = 0  DO
+
+            //  This may be an assignment, so we should handle this now, since
+            //  it affects all the files to be read later.
+    
+            IF  handleassign( arg )  THEN  
+            
+                //  This was an assignment, so we have now handled this 
+                //  parameter.
+                
+                argv!i  :=  0
+    $)
+    
+    //  Now parse the default rules file, unless we have explicitly been
+    //  asked not to do so.
+    
+    UNLESS  norules  DO  parsefile( defaultrulefile )
+    
+    //  Add the first node to the list, since anything imported is added to
+    //  this list.
+    
+    currentnode  :=  addnode( "[current directory]", copydir( currentdir ) )
+
+    //  Having got this far, we can actually parse the main input file we have
+    //  been given.
+
+    UNLESS  parsefile( m.file )  DO  error( "Errors in file *"%S*"", m.file )
+
+    //  Now attempt to make the objects we have been given.  We keep a count
+    //  of the number of arguments, so that we can make a default item if
+    //  necessary.
+    
+    FOR  i = a.firstarg  TO  a.lastarg  DO
+    $(
+        LET item  =  argv!i
+        
+        UNLESS  item = 0  DO
+        $(
+            LET tag  =  lookuptag( item )
+            
+            UNLESS  makeitem( tag, NIL )  DO  uptodate( tag )
+            
+            count  :=  count + 1
+        $)
+    $)
+    
+    //  If we haven't made anything yet, then we should make the default item,
+    //  sine otherwise, it is pointless!
+
+    IF  count = 0  THEN
+    $(
+        LET tag  =  lookuptag( "all" )
+        
+        UNLESS  makeitem( tag, NIL )  DO  uptodate( tag )
+    $)
+
+    //  We have finished here, so we should free all the store allocated, and
+    //  then return to the operating system.
+
+    uninitstore()
+
+    stop( return.ok )
+
+
+    //  Error recovery point.  If we come here, then we should close down
+    //  gracefully, and stop.
+
+label:
+
+    selectoutput( sysout )
+    
+    UNTIL  nodelist = NIL  DO
+    $(
+        //  Free the locks associated with the directories in the node
+        //  list.
+        
+        freeobj( nodelist!node.lock )
+        
+        nodelist  :=  nodelist!node.link
+    $)
+
+    uninitstore()
+
+    writes( "*NMAKE failed.*N" )
+
+    stop( return.severe )
+$)
+
+
+
+AND makerope( string )  =  VALOF
+$(
+//  Turn the string given into a rope format.
+
+    LET rope  =  rope.getrope()
+
+    rope.addstring( rope, string )
+
+    RESULTIS  rope
+$)
+
+
+
+AND uptodate( name )  BE  writef( "*"%S*" is up to date*N", name )
+
+
+
+AND error( format, arg1, arg2 )  BE
+$(
+//  Write out an error message, and then jump to the error recovery location.
+
+    errormessage( "Error", format, arg1, arg2 )
+
+    longjump( errorlevel, errorlabel )
+$)
+
+
+
+AND warning( format, arg1, arg2 )  BE
+
+//  Write out a warning message.
+
+    errormessage( "Warning", format, arg1, arg2 )
+
+
+
+AND panic( format, arg1, arg2 )  BE
+$(
+//  Throw out a panic message, and stop.
+
+    errormessage( "Fatal error", format, arg1, arg2 )
+
+    abort( 9999 )
+$)
+
+
+
+AND message( format, arg1, arg2 )  BE  errormessage( NIL, format, arg1, arg2 )
+
+
+
+AND errormessage( type, format, arg1, arg2 )  BE
+$(
+//  Write out an error message, giving the file and line number if possible.
+
+    LET o        =  output()
+    LET prefix   =  "****** "
+    LET prefixl  =  prefix % 0
+
+    selectoutput( sysout )
+
+    newline()
+
+    writes( prefix )
+
+    UNLESS  type = NIL  DO
+    $(
+        LET separator   =  ":  "
+        LET separatorl  =  separator % 0
+
+        writes( type )
+        writes( separator )
+
+        prefixl  :=  prefixl  +  type % 0  +  separatorl
+    $)
+
+    writef( format, arg1, arg2 )
+    newline()
+
+    UNLESS  filename = NIL  DO
+    $(
+        FOR  i = 1  TO  prefixl  DO  wrch( '*S' )
+
+        writef( "detected on line %N of file *"%S*"*N", linenumber, filename )
+    $)
+
+    UNLESS  currentnode = NIL  DO
+    $(
+        FOR  i = 1  TO  prefixl  DO  wrch( '*S' )
+        
+        writef( "while handling directory *"%S*"*N", currentnode!node.tag )
+    $)
+
+    selectoutput( o )
+$)
+
+
+
+//  ---------------------------
+//  The rope management package
+//  ---------------------------
+
+
+
+AND rope.getrope()  =  VALOF
+$(
+//  Allocate a new rope from the heap, and initialise its length to zero.
+
+    LET rope  =  getstore( r.size )  +  r.hdrsize
+
+    rope!r.link    :=  nullrope
+    rope!r.length  :=  0
+
+    RESULTIS  rope
+$)
+
+
+
+AND rope.getbyte( rope, offset )  =  VALOF
+$(
+//  Return the byte which is at a given offset within a rope.  We calculate
+//  which buffer element the character would be in, and then obtain it.  If
+//  the character is beyond the end of the rope, we return "endstreamch".
+
+    LET offset.buff  =  offset  /  r.buffsize.byte
+    LET offset.byte  =  offset REM r.buffsize.byte
+
+    FOR  i = 1  TO  offset.buff  DO
+    $(
+        //  Move on to the next item in the rope, and check for the end of
+        //  the rope.
+        
+        rope  :=  rope!r.link
+
+        IF  rope = nullrope  THEN  RESULTIS  endstreamch
+    $)
+
+    //  If we drop through here, then we have found the correct element in the
+    //  rope.  If the byte offset is greater than the string length, then we
+    //  return an error, otherwise the specified byte.
+    
+    RESULTIS  offset.byte > rope!r.length  ->  endstreamch,  rope % offset.byte
+$)
+        
+
+
+AND rope.putbyte( rope, offset, byte )  BE
+$(
+//  Analagous to "rope.getbyte", this routine adds a byte to a random position
+//  within a rope.  If the rope is not long enough, then it is extended.
+
+    LET offset.buff  =  offset  /  r.buffsize.byte
+    LET offset.byte  =  offset REM r.buffsize.byte
+
+    FOR  i = 1  TO  offset.buff  DO
+    $(
+        //  Move on to the next item in the rope, and check for the end of
+        //  the rope.  If we find the end, then we should extend the rope.
+        
+        IF  rope!r.link = nullrope  THEN
+        $(
+            //  The current rope is not at all long enough.  We should extend
+            //  it by adding a new one onto the chain.  
+            
+            rope!r.link    :=  rope.getrope()
+            rope!r.length  :=  r.buffsize.byte
+        $)
+            
+        rope  :=  rope!r.link
+    $)
+
+    //  When we drop through here, we are on the correct rope element, so fill
+    //  in the necessary byte.
+
+    rope % offset.byte  :=  byte
+
+    IF  offset.byte > rope!r.length  THEN  rope!r.length  :=  offset.byte
+$)
+
+
+
+AND rope.length( rope )  =  VALOF
+$(
+//  Given a rope, return the length of it in bytes.
+
+    LET length  =  0
+
+    UNTIL  rope = nullrope  DO
+    $(
+        length  :=  length + rope!r.length
+        rope    :=  rope!r.link
+    $)
+
+    RESULTIS  length
+$)
+
+
+
+AND rope.addbyte( rope, byte )  BE
+$(
+//  Add this byte to the end of the current rope.
+
+    UNTIL  rope!r.link = nullrope  DO  rope  :=  rope!r.link
+
+    rope.extend( rope, byte )
+$)
+
+
+
+AND rope.addstring( rope, string )  BE
+$(
+//  Add this string to the end of the current rope.
+
+    UNTIL  rope!r.link = nullrope  DO  rope  :=  rope!r.link
+
+    FOR  i = 1  TO  string % 0  DO  
+        rope  :=  rope.extend( rope, string % i )
+$)
+
+
+
+AND rope.addrope( rope, rope2 )  BE
+$(
+//  Add this rope to the end of the current rope.
+
+    UNTIL  rope!r.link = nullrope  DO  rope  :=  rope!r.link
+
+    UNTIL  rope2 = nullrope  DO
+    $(
+        //  Add all the bytes in this section of the rope, and then move on
+        //  to the next section.
+        
+        FOR  i = 0  TO  rope2!r.length - 1  DO
+            rope  :=  rope.extend( rope, rope2 % i )
+            
+        rope2  :=  rope2!r.link
+    $)
+$)
+
+
+
+AND rope.write( rope )  BE
+$(
+//  Write out the characters which are part of this rope.
+
+    UNTIL  rope = nullrope  DO
+    $(
+        //  Write out the characters in this section of the rope, and then move
+        //  to the next section.
+        
+        FOR  i = 0  TO  rope!r.length-1  DO  wrch( rope % i )
+            
+        rope  :=  rope!r.link
+    $)
+$)
+
+
+
+AND rope.extend( rope, byte )  =  VALOF
+$(
+//  Internal procedure to take a rope, and add a byte to the end of it.  If
+//  we hit the end of a rope section, then a new one is added.
+
+    LET length  =  rope!r.length
+
+    IF  length = r.buffsize.byte  THEN
+    $(
+        //  The current section is full, so we should move on to the next
+        //  section.
+        
+        LET rope2  =  rope.getrope()
+        
+        length       :=  rope2!r.length
+
+        rope!r.link  :=  rope2
+        rope         :=  rope2
+    $)
+
+    rope % length  :=  byte
+    rope!r.length  :=  length + 1
+
+    RESULTIS  rope
+$)
+
+
+
+//  ------------------------------
+//  The storage allocation package
+//  ------------------------------
+
+
+
+AND initstore( chunksize )  BE
+$(
+//  Initialise the storage package, defining the size of chunks which will
+//  be grabbed from the standard storage manager.
+
+    storage.chunksize  :=  chunksize
+    storage.root       :=  NIL
+    storage.high       :=  0
+    storage.low        :=  0
+$)
+
+
+
+AND getstore( upb )  =  VALOF
+$(
+//  Analagous to "getvec"  -  allocate a vector whose word upperbound
+//  is "upb" from the heap.  If there is not enough room in the current
+//  chunk, then allocate a new chunk.
+
+    LET size   =  upb + 1
+    LET chunk  =  0
+
+    IF  size > storage.chunksize  THEN  abort( error.getvecfailure )
+
+    IF  (storage.high - storage.low)  <  size  THEN
+    $(
+        //  Not enough room left in the current chunk, so allocate a
+        //  new chunk, and try again.
+
+        LET newchunk  =  getchunk( storage.chunksize )
+
+        storage.low   :=  newchunk
+        storage.high  :=  storage.low + storage.chunksize + 1
+    $)
+
+    chunk        :=  storage.low
+    storage.low  :=  storage.low + size
+
+    RESULTIS  chunk
+$)
+
+
+
+AND getchunk( size )  =  VALOF
+$(
+//  Get a chunk of the size given, and add it to the chain of chunks which
+//  have already been obtained.
+
+    LET newchunk  =  getvec( size + 1 )
+
+    IF  newchunk = 0  THEN  abort( error.getvecfailure )
+
+    newchunk!0    :=  storage.root
+    storage.root  :=  newchunk
+
+    RESULTIS  newchunk + 1
+$)
+
+
+
+AND uninitstore()  BE
+$(
+//  Free all the storage in use by the storage package.  The base of the
+//  storage chain is pointed to by "storage.root".
+
+    UNTIL  storage.root = NIL  DO
+    $(
+        LET next  =  storage.root!0
+
+        freevec( storage.root )
+
+        storage.root  :=  next
+    $)
+$)
+
+

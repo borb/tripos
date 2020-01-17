@@ -1,0 +1,33 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+/*      REPEAT COMMAND
+
+        Repeat a command line
+
+        The stream character pointer is backspaced to
+        the beginning of the line
+*/
+
+
+SECTION "REPEAT"
+
+GET "LIBHDR"
+
+
+GET "CLIHDR"
+
+
+GET "IOHDR"
+
+
+LET Start() BE
+$( UNLESS input()!scb.type<=0 DO
+   $( writes("REPEAT not allowed in C command*n")
+      stop(return.severe)
+   $)
+   UNLESS TestFlags(4) UNTIL NOT UnRdch() LOOP
+$)
+
+

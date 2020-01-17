@@ -1,0 +1,100 @@
+| ProcBank Mailserver
+
+ absmin         #X0000;
+|L absmax       #X00FF;
+|M
+ absmax         #X01FF;
+|L storemin     #X0200;
+|M
+ storemin       #X0200;
+|L storemax     #XFFFB;
+|M
+ storemax       #XFFFF;
+ memorysize          64;
+|L rootnode           8;
+|M
+ rootnode         #X100;
+ tcbsize             40;
+ mcaddrinc            4;
+
+info ( |L "LSI4",               | Machine Type
+|M
+        "68000",                 | Machine type
+       0,                       | Assignments list
+       (0,0,0,0,0,0,0,0),       | Loaded devices indirection table
+       (0,0,0,0,0,0,0,0),       | Loaded handlers
+       "MAIL-SERVER",           | Spare
+       (0,                      | Used to hold taskid of ring handler
+        0,                      | This machine's ring address
+        "unset",                | This machine's ring name
+        0,                      | UIDset list
+        0,                      | M/c which caused loading of this one (number)
+        "unset",                | M/c which caused loading of this one (string)
+        0,                      | Terminal number on above machine
+        "unset",                | reverse connection name
+        0                       | vector of load information from RM
+       ),
+       0,0,0,0,0                | Spare
+     );
+
+| seg    debug    :68000sys.obj.probank-debug;
+seg    debug    :pb.deb-m;
+|L seg klib     :sys.obj.klib,:sys.obj.mlib;
+|M
+ seg    klib     :68000sys.obj.klib,:68000sys.obj.mlib;
+| |L seg        blib     :sys.obj.blib;
+| |M seg    blib     :68000sys.obj.blib;
+ seg    blib     mobj:blib;
+*seg    msinit  MOBJ:msinit,MOBJ:logon,MOBJ:main-init;
+ seg    ms      MOBJ:bsppair,
+                MOBJ:command,
+                MOBJ:fs,
+                MOBJ:fsinput,
+                MOBJ:groups,
+                MOBJ:mail,
+                MOBJ:main,
+                MOBJ:miscser,
+                MOBJ:msc,
+                MOBJ:rdform,
+                MOBJ:readlin,
+                MOBJ:report,
+                MOBJ:send,
+                MOBJ:trace,
+                MOBJ:ummd,
+                MOBJ:util;
+ seg    bsphand  :l.bsp-handler;
+|L seg  ringhand :sys.obj.type2-rh;
+|M
+ seg    ringhand :68000sys.obj.rh68k;
+|L seg    rmvthand MOBJ:vt,:sys.resman.LSI4-obj.rmvtclk;
+|M
+seg    rmvthand MOBJ:vt,:sys.resman.68000-obj.rmvtclk;
+|L seg    rmvthand :sys.resman.LSI4-obj.rmvthand;
+|M seg    rmvthand :sys.resman.68000-obj.rmvthand;
+
+
+|L driver ringtxdriv sys:sys.lsi4-obj.t2-tx-driver;
+|L driver ringrxdriv sys:sys.lsi4-obj.t2-rx-driver;
+|L dcb ringrxdcb sys:sys.lsi4-obj.t2-rx-dcb;
+|L dcb ringtxdcb sys:sys.lsi4-obj.t2-tx-dcb;
+|M
+ driver ringdriv  :68000sys.obj.ringdriv;
+|M
+ dcb    ringdcb   :68000sys.obj.ringdcb;
+
+ tasktab 10;
+
+*task 1 stack 1500 priority 1000 segs klib,blib,ms,msinit;
+|M
+ task 2 stack 1000 priority 3000 segs klib,blib,debug;
+ task 3 stack  200 priority 4000 segs klib,blib,rmvthand;               || 100
+ task 5 stack  250 priority 5000 segs klib,blib,ringhand;
+ task 6 stack  100 priority 3400 segs klib,blib,bsphand;        ||  70
+
+ devtab 8;
+|M
+ dev   -2 dcb ringdcb     driver ringdriv;
+|L dev -3 dcb ringtxdcb driver ringtxdriv;
+|L dev -4 dcb ringrxdcb driver ringrxdriv;
+
+

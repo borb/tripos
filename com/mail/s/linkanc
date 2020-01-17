@@ -1,0 +1,22 @@
+.K sys,new/s,est/s,op/k,nolink/s,68000/s,demon/s
+.def sys M68K
+.def op replace
+
+FAILAT 30
+IF mctype=68000; assign XXYYXX: :68000sys
+IF mctype=LSI4;  assign XXYYXX: :sys
+FAILAT 10
+
+IF EQ nodemon <demon$nodemon>; SKIP server
+IF EQ link <nolink$link>; syslink Mobj:sys-demon Mobj:<new>mail-demon OPT fW16000
+XXYYXX:ancilla mobj:<new>mail-demon lsi4 name=<new>Mail-Demon <op>
+SKIP done
+
+LAB server
+IF EQ link <nolink$link>; syslink Mobj:system Mobj:<new>mail-system OPT fW18000
+XXYYXX:ancilla mobj:<new>mail-system name=<new><est>mailserver <sys> <op>
+
+LAB done
+assign XXYYXX:
+
+

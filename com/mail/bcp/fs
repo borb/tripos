@@ -1,0 +1,295 @@
+SECTION "FS"
+
+$$TRACE := ~$$COMMAND;
+
+GET "header"
+GET "bcp.basicfs"
+
+//==============================================================================
+
+LET retrieve.entry (directory, entry, result) BE
+$(
+    // Read a file server directory entry
+    // "Directory" and "result" should point to file descriptors.
+    // Entry should be the entry number to be loaded
+
+    LET tx.buff = VEC fslen/rwpw
+    LET rx.buff = VEC fslen/rwpw
+
+    // Set command arguments:
+    copy.uid(directory+uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff %% (bb.ssp.args+5) := 0        // Entry is only 16 bits
+    tx.buff %% (bb.ssp.args+6) := entry
+
+    fs.command(tx.buff, fslen, rx.buff, fslen, 1)
+
+    // Save result:
+    copy.uid(rx.buff, bb.ssp.arg2, result+uid, 0)
+$<TRACE IF trace THEN ptrace("Retrieve entry", directory, entry, result) $>TRACE
+$)
+
+$<COMMAND'
+//=============================================================================
+
+LET create.index (directory, entry, new.directory) BE
+$(
+    // Create a (very large) fileserver directory at "entry" in the directory
+    // "directory".
+    // "Directory" and "new.directory" should point to file descriptors.
+
+    LET tx.buff = VEC fslen/rwpw
+    LET rx.buff = VEC fslen/rwpw
+
+    // Set command arguments
+    copy.uid(directory + uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff %% (bb.ssp.args+5) := 0         // Entry is only 16 bits !!!
+    tx.buff %% (bb.ssp.args+6) := entry
+    tx.buff %% (bb.ssp.args+7) := 1         // Thus size = 2**16 is adequate
+    tx.buff %% (bb.ssp.args+8) := 0
+
+    fs.command(tx.buff, fslen, rx.buff, fslen, 0)
+
+    // Save result PUID:
+    copy.uid(rx.buff, bb.ssp.arg2, new.directory + uid, 0)
+$<TRACE IF trace THEN ptrace("create index", directory, entry, new.directory)
+$>TRACE
+$)
+
+//=============================================================================
+
+LET retain.in.index (directory, entry, retainee) BE
+$(
+    // Retain a fileserver PUID in an entry in the given directory.
+    // "Directory" and "retainee" should point to file descriptors.
+
+    LET tx.buff = VEC fslen/rwpw
+    LET rx.buff = VEC fslen/rwpw
+
+    // Set command arguments.
+    copy.uid(directory + uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff %% (bb.ssp.args+5) := 0             // entry is only 16 bits
+    tx.buff %% (bb.ssp.args+6) := entry
+    copy.uid(retainee +  uid, 0, tx.buff, (bb.ssp.args+7))
+
+    fs.command(tx.buff, fslen, rx.buff, fslen, 2)
+$<TRACE IF trace THEN ptrace("Retain", directory, entry, retainee) $>TRACE
+$)
+
+//=============================================================================
+
+LET create.file (directory, entry, new.file, special) BE
+$(
+    // Create a normal file server file of arbitrarily large size, initialized
+    // to -1.
+    // "Directory" and "new.file" point to file descriptors.
+    // "Special" is TRUE iff the file should be a special file.
+
+    LET tx.buff = VEC fslen/rwpw
+    LET rx.buff = VEC fslen/rwpw
+
+    // Set command arguments
+    copy.uid(directory + uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff %% (bb.ssp.args+5) := 0      // Entry is only 16 bits
+    tx.buff %% (bb.ssp.args+6) := entry
+    tx.buff %% (bb.ssp.args+7) := 0       // Size = 30000
+    tx.buff %% (bb.ssp.args+8) := 30000
+    tx.buff %% (bb.ssp.args+9) := -1        // Initialize to -1
+    tx.buff %% (bb.ssp.args+10) := special     // File type
+
+    fs.command(tx.buff, fslen, rx.buff, fslen, 6)
+
+    // Save the resulting PUID
+    copy.uid(rx.buff, bb.ssp.arg2, new.file + uid, 0)
+
+    // Initialize file descriptor:
+    new.file!start.of.block     := 0
+    new.file!next.write         := 0
+    new.file!next.read          := 0
+
+$<TRACE IF trace THEN ptrace("Create file", directory, entry, new.file) $>TRACE
+$)
+
+//=============================================================================
+
+LET change.file.size (file, size) BE
+$(
+    LET tx.buff = VEC fslen/rwpw
+    LET rx.buff = VEC fslen/rwpw
+
+    copy.uid(file + uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff %% (bb.ssp.args+5) := 0
+    tx.buff %% (bb.ssp.args+6) := size
+
+    fs.command(tx.buff, fslen, rx.buff, fslen, 10)
+
+$<TRACE IF trace THEN ptrace("Changed file size", file, size, -1) $>TRACE
+$)
+
+//=============================================================================
+
+LET delete (directory, entry) BE
+$(
+    // Delete a file server directory entry
+    // "Directory" should point to a file descriptor
+
+    LET tx.buff = VEC fslen/rwpw
+    LET rx.buff = VEC fslen/rwpw
+
+    // Set command arguments:
+    copy.uid(directory + uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff %% (bb.ssp.args+5) := 0                // entry is only 16 bits long
+    tx.buff %% (bb.ssp.args+6) := entry
+
+    fs.command(tx.buff, fslen, rx.buff, fslen, 3)
+$<TRACE IF trace THEN ptrace("Delete", directory, entry, -1) $>TRACE
+$)
+
+//=============================================================================
+$>COMMAND'
+
+LET flush.cache (file) BE
+$(
+    // This routine carries out a full file server write to the file described
+    // at "file".  The entire cache is written out.
+
+    LET tx.buff = VEC fslen/rwpw
+    LET rx.buff = VEC fslen/rwpw
+    LET reply.pkt = TABLE notinuse, 0, act.rx.bb, 0, 0, 0, 0, 0, 0, long.timeout
+
+    // Construct the arguments for the initial file server command:
+    copy.uid(file + uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff %% (bb.ssp.args+5) := 0
+    tx.buff %% (bb.ssp.args+6) := file ! start.of.block
+    tx.buff %% (bb.ssp.args+7) := 0
+    tx.buff %% (bb.ssp.args+8) := file!cache.size
+
+    // Be prepared to repeat write up to 100 times
+    FOR i = 1 TO 100 BY 1 DO
+    $(
+        // Send initial command (fs.command does any necessary retries)
+        fs.command(tx.buff, fslen, rx.buff, fslen, 22)
+
+        // Queue a second receive (for the final reply)
+        queue.ring.receive(reply.pkt, rx.buff, fslen,
+                                        tx.buff %% bb.ssp.replyport, fs.station)
+
+        // Send data blocks
+        sendpkt(notinuse, rhtaskid, act.tx, 0, 0, file!cache.address,
+                       file!cache.size, fs.station,
+                        rx.buff %% bb.ssp.replyport)
+
+        // Wait for second reply:
+        pktwait(rhtaskid, reply.pkt)
+
+        // Release the port grabbed by fs.command
+        sendpkt(notinuse, rhtaskid, act.releaseport, ?, ?, tx.buff %% bb.ssp.replyport)
+
+        // Examine second reply code:
+        IF reply.pkt!pkt.res1 = 0 THEN LOOP       // No reply at all
+        fs.rc := rx.buff %% bb.ssp.rc
+        IF (fs.rc & #xf000) = 0 THEN GOTO flush.cache.success
+        UNLESS (fs.rc & #xf000) = #xf000 THEN BREAK     // Unrepeatable failure
+
+    $)
+
+    // Failure handling:
+    LONGJUMP(ms.fs.fail.level, ms.fs.fail.link)
+
+flush.cache.success:
+$<TRACE IF trace THEN trace.file(file, "Cache flush") $>TRACE
+    // Return normally on successful writes
+$)
+
+$<COMMAND'
+//=============================================================================
+
+LET write.byte.to.file (file, byte) BE
+$(
+    // Put the value "byte" into the end of the file described at "file".  Do
+    // this in the cache and only flush the current cache if it is full.
+
+    IF file!next.write >= file!cache.size * bprw THEN
+    $(
+        flush.cache(file)
+        file!start.of.block:=file!start.of.block + file!next.write/bprw
+        file!next.write := 0
+    $)
+
+    (file!cache.address) % (file!next.write) := byte
+    file!next.write := file!next.write+1
+$)
+
+//=============================================================================
+
+LET bytes.to.file (file, array, length) BE
+$(
+    // Write "length" bytes from the vector "array" to the cache of the file
+    // described at "file".  The cache is only flushed if necessary.
+
+    IF file!next.write + length > file!cache.size*bprw THEN $(
+        flush.cache(file)
+        file!start.of.block := file!start.of.block + file!next.write/bprw
+        file!next.write := 0
+    $)
+
+    FOR i=0 TO length-1 DO (file!cache.address)%(file!next.write+i) := array%i
+    file!next.write := file!next.write + length
+$)
+
+//=============================================================================
+
+LET write.string.to.file (file, string) BE
+$(
+    // Very similar to "bytes.to.file" except it writes a string to a file's
+    // cache.
+
+    IF file!next.write + string%0 > file!cache.size*bprw THEN $(
+        flush.cache(file)
+        file!start.of.block := file!start.of.block + file!next.write/bprw
+        file!next.write := 0
+    $)
+
+    FOR i=1 TO string%0 DO (file!cache.address)%(file!next.write+i-1) :=string%i
+    file!next.write := file!next.write + string%0
+$)
+
+//=============================================================================
+
+LET bytes.from.file (file, array, length) BE
+$(
+    // Read the next "length" bytes from the file described at the vector
+    // "array".  The cache is only read if this block is not all in store.
+
+    IF file!next.read + length > file!cache.size*bprw THEN $(
+        read.cache(file, file!start.of.block + file!next.read/bprw)
+        file!next.read := 0
+    $)
+
+    FOR i=0 TO length-1 DO array%i := (file!cache.address)%(file!next.read+i)
+    file!next.read := file!next.read + length
+$)
+
+//=============================================================================
+
+LET rewind.file (file) BE
+$(
+    // Prepare the cached file described at "file" for reading.
+
+$<TRACE IF trace THEN trace.file(file, "Rewind") $>TRACE
+
+    // Flush the cache if the first block is not in store and this is the
+    // first rewind since a write:
+    UNLESS file!start.of.block=0 | file!next.write=0 THEN
+                                                            flush.cache(file)
+
+    // Read the first block into the cache if necessary:
+    UNLESS file!start.of.block=0 THEN read.cache(file, 0)
+
+    file!next.write := 0
+    file!next.read := 0
+$)
+
+//=============================================================================
+$>COMMAND'
+
+

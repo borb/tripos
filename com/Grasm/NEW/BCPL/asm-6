@@ -1,0 +1,403 @@
+
+
+
+
+
+
+
+
+SECTION "asm6"
+
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+
+
+
+
+
+//
+//                    L E X I C A L    A N A L Y S E R
+//
+
+
+
+
+
+
+/*     These Globals kept for documentation purposes - copy in ASMHDR
+GLOBAL $(
+// item.type : lexanal+0        //  contains an 'i' number (see below)
+// item.info : lexanal+1        //  additional information
+// item.start: lexanal+2        //  character position of lexical symb
+// getitem   :       ?+3        //  getitem() sets up item.info & item.type
+// scan      :       ?+4        //  scan(item) scans item if item=item.type
+// expression:       ?+5        //  no:=expression() sets dontknow parses exprn
+// bracketed : lexanal+3        //  TRUE if last expression parsed was bracketed
+// lex.space : lexanal+4        //  memory for lexical analyser's strings
+$)
+*/
+
+
+
+
+
+
+
+// The following procedure is used whenever the value of a character is placed
+// in the output hex.  It can be redefined by the user of the general assembler
+// to generate something other than ASCII which is the default translation.
+
+
+
+//*<ASCII// if on ascii machine no need to translate characters:
+LET cvtchar (ch) = ch
+/*/      // now code for translation if not on ascii machine:
+LET cvtchar(ch) = VALOF
+SWITCHON ch INTO
+$(  CASE 0   : RESULTIS 0          // '*0'
+    CASE '*T': RESULTIS #X09
+    CASE '*N':
+    CASE 10  : RESULTIS #X0A       // '*L'
+    CASE 12  : RESULTIS #X0C       // '*P'
+    CASE 13  : RESULTIS #X0D       // '*C'
+    CASE 27  : RESULTIS #X1B       // '*E'
+    CASE '*S': RESULTIS #X20
+    CASE '!': RESULTIS #X21
+    CASE '"': RESULTIS #X22
+    CASE '#': RESULTIS #X23
+    CASE '$': RESULTIS #X24
+    CASE '%': RESULTIS #X25
+    CASE '&': RESULTIS #X26
+    CASE '*'': RESULTIS #X27
+    CASE '(': RESULTIS #X28
+    CASE ')': RESULTIS #X29
+    CASE '**': RESULTIS #X2A
+    CASE '+': RESULTIS #X2B
+    CASE ',': RESULTIS #X2C
+    CASE '-': RESULTIS #X2D
+    CASE '.': RESULTIS #X2E
+    CASE '/': RESULTIS #X2F
+    CASE '0': RESULTIS #X30
+    CASE '1': RESULTIS #X31
+    CASE '2': RESULTIS #X32
+    CASE '3': RESULTIS #X33
+    CASE '4': RESULTIS #X34
+    CASE '5': RESULTIS #X35
+    CASE '6': RESULTIS #X36
+    CASE '7': RESULTIS #X37
+    CASE '8': RESULTIS #X38
+    CASE '9': RESULTIS #X39
+    CASE ':': RESULTIS #X3A
+    CASE ';': RESULTIS #X3B
+    CASE '<': RESULTIS #X3C
+    CASE '=': RESULTIS #X3D
+    CASE '>': RESULTIS #X3E
+    CASE '?': RESULTIS #X3F
+    CASE '@': RESULTIS #X40
+    CASE 'A': RESULTIS #X41
+    CASE 'B': RESULTIS #X42
+    CASE 'C': RESULTIS #X43
+    CASE 'D': RESULTIS #X44
+    CASE 'E': RESULTIS #X45
+    CASE 'F': RESULTIS #X46
+    CASE 'G': RESULTIS #X47
+    CASE 'H': RESULTIS #X48
+    CASE 'I': RESULTIS #X49
+    CASE 'J': RESULTIS #X4A
+    CASE 'K': RESULTIS #X4B
+    CASE 'L': RESULTIS #X4C
+    CASE 'M': RESULTIS #X4D
+    CASE 'N': RESULTIS #X4E
+    CASE 'O': RESULTIS #X4F
+    CASE 'P': RESULTIS #X50
+    CASE 'Q': RESULTIS #X51
+    CASE 'R': RESULTIS #X52
+    CASE 'S': RESULTIS #X53
+    CASE 'T': RESULTIS #X54
+    CASE 'U': RESULTIS #X55
+    CASE 'V': RESULTIS #X56
+    CASE 'W': RESULTIS #X57
+    CASE 'X': RESULTIS #X58
+    CASE 'Y': RESULTIS #X59
+    CASE 'Z': RESULTIS #X5A
+    CASE '[': RESULTIS #X5B
+    CASE '\': RESULTIS #X5C
+    CASE ']': RESULTIS #X5D
+    CASE '^': RESULTIS #X5E
+    CASE '_': RESULTIS #X5F
+    CASE '`': RESULTIS #X60
+    CASE 'a': RESULTIS #X61
+    CASE 'b': RESULTIS #X62
+    CASE 'c': RESULTIS #X63
+    CASE 'd': RESULTIS #X64
+    CASE 'e': RESULTIS #X65
+    CASE 'f': RESULTIS #X66
+    CASE 'g': RESULTIS #X67
+    CASE 'h': RESULTIS #X68
+    CASE 'i': RESULTIS #X69
+    CASE 'j': RESULTIS #X6A
+    CASE 'k': RESULTIS #X6B
+    CASE 'l': RESULTIS #X6C
+    CASE 'm': RESULTIS #X6D
+    CASE 'n': RESULTIS #X6E
+    CASE 'o': RESULTIS #X6F
+    CASE 'p': RESULTIS #X70
+    CASE 'q': RESULTIS #X71
+    CASE 'r': RESULTIS #X72
+    CASE 's': RESULTIS #X73
+    CASE 't': RESULTIS #X74
+    CASE 'u': RESULTIS #X75
+    CASE 'v': RESULTIS #X76
+    CASE 'w': RESULTIS #X77
+    CASE 'x': RESULTIS #X78
+    CASE 'y': RESULTIS #X79
+    CASE 'z': RESULTIS #X7A
+    CASE '{': RESULTIS #X7B
+    CASE '|': RESULTIS #X7C
+    CASE '}': RESULTIS #X7D
+    CASE '~': RESULTIS #X7E
+    DEFAULT: RESULTIS ch
+$)
+/**/
+
+
+MANIFEST
+$(  uletter = 10-'A'
+    lletter = 10-'a'
+$)
+
+
+
+LET getitem() = VALOF
+$(  LET item.found = ?
+    LET first.item.pos = -1
+
+    // This procedure is the lexical analyser through which all input is taken.
+    // Information about the lexical item just read is kept in:
+    //      item.type         -  lexical item identifcation ('i.' constants)
+    //      item.start        -  column at which item started
+    //      item.info         -  extra information about item (e.g. value)
+    // A work area called 'lex.space' is used to hold identifiers and strings
+    // and a pointer to it is returned in 'item.info' when the item is either
+    // of these types.   20.01.81
+
+    // If an identifier is returned, the string is padded with zeroes up to
+    // a whole word boundary.  This is required by some symbol table
+    // manipulation routines.  16.07.81
+
+    // The lexical item I.DUFFSYMBOL is now explicitly ignored and never
+    // returned from this procedure - this enables it to be used to terminate
+    // symbols with a non significant symbol.  04.02.82
+
+    $(rpt
+        LET p = 10
+        item.type:=i.bad
+        item.info:=null
+        item.start:=linbuf.top-1
+        item.found := TRUE
+        ch := capitalch (ch)
+        TEST 'A'<=ch<='Z' THEN
+        $(  LET macro=?
+            dicposn := 0
+            p := 0
+            $(rpt1
+                IF p<255 DO p := p+1
+                lex.space%p := ch
+                rch()
+                ch := capitalch (ch)
+            $)rpt1 REPEATWHILE 'A'<=ch<='Z' | ch=sepch | '0'<=ch<='9'
+            lex.space%0 := p
+            p := p + 1
+            UNTIL p REM bytesperword = 0 DO    // Now pad the string with 0s
+            $(  lex.space%p := 0             // up to word boundary as
+                p := p + 1                     // required by symb tab routines
+            $)
+            item.type := i.iden
+            item.info := lex.space
+            macro := looktype(type.text, item.info)
+            IF iden.valid & expand.text THEN
+            $(  IF print.expansions THEN
+                $(  IF first.item.pos<0 THEN first.item.pos := linbuf.top
+                    // delete name in listing:
+                    linbuf.top := item.start
+                $)
+                call.macro(macro.var(1, 1), macro, macro%0+1, endstreamch)
+                item.found := FALSE
+            $)
+        $) ELSE
+        TEST ch=comntch THEN
+        $(  // 'comntch' is a variable set by the user of the general assembler:
+            // so it is checked first to override other definitions of that
+            // character.
+            item.type := i.comnt
+            item.info := ch
+        $) ELSE
+        $(  LET no.rch=FALSE
+            // this is TRUE unless a final 'rch' is needed to get the next char
+            SWITCHON ch INTO
+             // single character items first
+             $(  CASE '*S':   item.type:=i.space            ; ENDCASE
+                 CASE ',' :   item.type:=i.comma            ; ENDCASE
+                 CASE '[' :   item.type:=i.lsqb             ; ENDCASE
+                 CASE ']' :   item.type:=i.rsqb             ; ENDCASE
+                 CASE '(' :   item.type:=i.lbkt             ; ENDCASE
+                 CASE ')' :   item.type:=i.rbkt             ; ENDCASE
+                 CASE '+' :   item.type:=i.plus             ; ENDCASE
+                 CASE '-' :   item.type:=i.minus            ; ENDCASE
+                 CASE '**':   item.type:=i.mult             ; ENDCASE
+                 CASE '/' :   item.type:=i.div              ; ENDCASE
+                 CASE '@' :   item.type:=i.immed            ; ENDCASE
+                 CASE '=' :   item.type:=i.equals           ; ENDCASE
+                 CASE ';' :   item.type:=i.semi             ; ENDCASE
+                 CASE ':' :   item.type:=i.colon            ; ENDCASE
+                 CASE '&' :   item.type:=i.and              ; ENDCASE
+                 CASE '|' :   item.type:=i.or               ; ENDCASE
+                 CASE '$' :   item.type:=i.dollar           ; ENDCASE
+                 CASE '%':    item.type:=i.percent          ; ENDCASE
+                 CASE '\':
+                 CASE '~':    item.type:=i.not              ; ENDCASE
+                 CASE '^':    item.type:=i.cap              ; ENDCASE
+                 CASE '_':    item.type:=i.ul               ; ENDCASE
+                 CASE '!':    item.type:=i.pling            ; ENDCASE
+                 CASE '*N':   item.type:=i.stop;no.rch:=TRUE; ENDCASE
+                 CASE endstreamch: item.type:=i.end
+                                   no.rch:=TRUE
+                                   ENDCASE
+                 CASE '>' :
+                 CASE '<' :
+                   item.type := (ch='>' -> i.gt, i.lt)
+                   item.info := ch
+                   rch()
+                   IF ch=item.info THEN
+                   $(  item.type:=(ch='>'->i.shr,i.shl)
+                       rch()
+                   $)
+                   no.rch:=TRUE
+                   ENDCASE
+                 CASE '"' :
+                 CASE '*'':
+                   $(  LET p = 0
+                       LET del = ch
+                       item.type := (ch='"'->i.string, i.sstring)
+                       item.info := lex.space
+                       rch()
+                       UNTIL ch=del DO
+                       $(  LET c = ?
+                           IF ch='*N' | ch=endstreamch THEN
+                           error(e.expected, del)
+                           c := ch
+                           IF c='**' DO
+                           $(  rch()
+                               c:=VALOF
+                               SWITCHON capitalch(ch) INTO
+                               $(  CASE '0': RESULTIS 0
+                                   CASE 'T': RESULTIS '*T'
+                                   CASE 'L': RESULTIS 10
+                                   CASE 'P': RESULTIS '*P'
+                                   CASE 'N': RESULTIS '*N'
+                                   CASE 'C': RESULTIS 13
+                                   CASE 'E': RESULTIS 27
+                                   CASE 'S': RESULTIS '*S'
+                                   CASE '*N':
+                                     endline(TRUE)
+                                     newlyne()
+                                     rch() REPEATUNTIL ch\='*S'
+                                     UNLESS ch=c DO error(e.expected,c)
+                                     rch()
+                                     LOOP
+                                   DEFAULT: RESULTIS ch
+                               $)
+                           $)
+                           IF p=255 DO error (e.fullstring)
+                           p:=p+1
+                           lex.space%p := c
+                           rch()
+                       $)
+                       lex.space%0:=p
+                   $)
+                   ENDCASE
+                 CASE '#':
+                   rch ()
+                   TEST '0'<=ch<='7' THEN p:=8 ELSE
+                   $(  SWITCHON capitalch(ch) INTO
+                        $(  CASE 'B':  p:=2 ; ENDCASE
+                            CASE 'O':  p:=8 ; ENDCASE
+                            CASE 'D':  p:=10; ENDCASE
+                            CASE 'X':  p:=16; ENDCASE
+                            DEFAULT :  error(e.badbase,ch)
+                        $)
+                        rch()
+                   $)
+                  CASE '0': CASE '1': CASE '2': CASE '3': CASE '4':
+                  CASE '5': CASE '6': CASE '7': CASE '8': CASE '9':
+                   $(  LET valid = false
+                       no.rch:=TRUE
+                       item.type := i.number
+                       item.info := 0
+                       $(rpt1
+                           LET d = ('0'<=ch<='9') -> ch-'0',
+                           ('A'<=ch<='F') -> ch+uletter,
+                           ('a'<=ch<='f') -> ch+lletter, 999
+                           IF d=999
+                           DO TEST valid
+                              THEN ENDCASE
+                              ELSE BREAK
+                           UNLESS d<p BREAK
+                           item.info:=item.info*p + d
+                           rch()
+                           valid := true
+                       $)rpt1 REPEAT
+                       error(e.badbase,ch)
+                   $)
+                 DEFAULT: error(e.badsym)
+             $)
+             UNLESS no.rch THEN rch()
+        $)
+        IF item.found & first.item.pos>=0 THEN position.ch(first.item.pos)
+        WHILE ch='*S' DO rch()
+    $)rpt REPEATUNTIL item.found
+    // REPEAT is also for macro expansion part of code (at the top)
+    RESULTIS item.type
+$)
+
+
+AND scan(item) = VALOF
+TEST item=item.type
+THEN $(  getitem();  RESULTIS TRUE  $)
+ELSE RESULTIS FALSE
+
+
+LET checkandskip (item, errparm) BE
+TEST item.type=item
+THEN getitem ()
+ELSE error (e.expected, errparm)
+
+
+
+
+

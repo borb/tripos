@@ -1,0 +1,72 @@
+LET find.puid.in.user.map(user.puid, message.index, message.directory) = VALOF
+$(
+    // This routine does an SSP to the Z80 mail server to find the PUID of the
+    // current users's Message Directory.  The message index file descriptor is
+    // not set up and the parameter is only present for compatibility with the
+    // privilged routine of the same name that runs in mail systems and
+    // accessses the mail database directly.
+    // The result is greater than zero on success.
+    // Result = -1 implies things are OK but the user has no Message Directory.
+    // Result = -2 indicates that the SSP to the Mail Server is failing.
+
+    LET uidset          = rootnode!rtn.info!rtninfo.ring!ri.uidset
+    LET txbuff          = VEC 12
+    LET rxbuff          = VEC 10
+    LET nsvec           = VEC 4
+    LET rc              = ?
+    LET r2              = #XA003
+
+    UNLESS 0 < mail.station <= #XFF
+    $(  UNLESS lookup.name("MAIL",nsvec)
+        $(  writes("*NMailserver name lookup fails*N"); RESULTIS -2 $)
+
+        mail.port        := nsvec!2
+        mail.station := nsvec!0
+    $)
+
+    // Get the TUID and PUID of the user (the PUID parameter to this routine is
+    // never actually used).
+    // Allow looking at other messages ... ?????
+    // IF message.directory = 0 THEN uidset := User.puid - uidset.puid
+
+    copy.uid (uidset +
+        (Message.directory=0 -> uidset.puid, uidset.tuid),
+                                   0, txbuff,bb.ssp.args+1)
+    copy.uid (uidset + uidset.puid,0, txbuff,bb.ssp.args+5)
+
+    // Try the SSP a maximum of 5 times:
+    FOR i=0 TO 5
+    $(
+        break.test()
+        rc := ssp((i < 2) -> "mail.find", 0, txbuff, 12, rxbuff, 10,
+                        0, Message.directory=0 -> 1, ssp.enquire.request,
+                                                        mail.station, mail.port,
+                        tickspersecond*3, -2)
+//$( LET r2=result2; WRITEF("RC%X8: R2=%X8: ", rc, r2); FOR I = 0 TO bb.ssp.args+3 DO WRITEF("%X4 ", rxbuff %% i); NEWLINE() $)
+
+        IF rc
+        $(
+            UNLESS Message.directory=0
+            DO copy.uid (rxbuff,bb.ssp.args+1, message.directory+uid,0)
+            RESULTIS Message.directory=0 -> rxbuff%%bb.ssp.args=0->1,-1, 1
+        $)
+
+        // Check for mail server return codes:
+        IF RESULT2 = #XA003                 THEN LOOP
+        IF RESULT2 = action.already.done.rc THEN BREAK
+        r2      := RESULT2
+        IF r2 = user.not.in.system.rc THEN RESULTIS Message.directory=0 -> 1, -1
+        IF r2 = no.new.mail.rc  & message.directory = 0 THEN RESULTIS -1
+    $)
+
+    // If this point is reached then the SSP is persistently failing.
+    writef(
+        "*NCannot contact Z80 mail server (RC %X4) - mail enquiry abandoned*N",
+        r2)
+    fault(r2)
+    RESULTIS -2
+$)
+
+//=============================================================================
+
+

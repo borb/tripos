@@ -1,0 +1,100 @@
+
+                                                                             DISCED
+
+               Form:           DISCED "TYPE"
+
+               Purpose:        To examine and patch disc blocks.
+
+               Author:         BJK MFR
+
+               Specification:
+                  Commands available:
+               B n         Set logical block number base to n
+               C n         Print n characters from current offset
+               D n         Select disc drive n
+               G [n]       Get block n from disc (default: current
+                           block number)
+               F [t]       Set disc type
+                           [t] = F -> floppy disc
+                                 K -> Cartridge disc ( cf. dk0: )
+                                 P -> Big Disc Pack  ( cf. dp0: )
+                           If [t] is not given then unit, drive,
+                           etc. are reset to standard values.
+               H name      Calculate hash value of name
+               I           Print block information
+               K           Check block checksum (& correct if wrong)
+               L [lwb upb] Locate words which match Value under Mask
+                           (lwb & upb restrict the search)
+               M n         Set Mask (for L & N commands) to n
+               N [lwb upb] Locate words which do not match Value
+                           under Mask
+               P n         Put block in store to block n on disc
+                           (default: current block number)
+               R           Print block number of Root Block
+               Q           Quit (do not write to disc)
+               S char      Set printing Style:
+                           char = C -> characters
+                                  S -> string
+                                  O -> octal
+                                  X -> hex
+                                  D -> decimal
+               T lwb upb   Type range of offsets in block
+               U n         Set Unit (i.e. device) number to n
+                           This is the absolute value of the
+                           TRIPOS device number.
+
+
+               V n         Set Value for L & N commands
+               W           Windup (=PQ)
+               X           Invert write protect state
+               Y n         Set cYlinder base to n
+               Z           Zero all words of buffer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+               number      Set current word offset in block
+               =           Print values set in program
+               / [n]       Print word at current offset
+                           [or update value to n]
+               'chars'     Put chars at current offset
+               "chars"     Put string at current offset
+                   Numbers can start with # or #X to indicate octal or hex.
+               Strings can include BCPL string escapes (*N etc.).
+                   The current block is that from the last G or P command.  It is
+               the offset from the logical block number base.
+               By default the disc type chosen by the command is for a floppy disc.
+               However this may be specified explicitely in the command line by the
+               letters f, k, or p as for the 'F' command.
+
+               Example:        DISCED
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                          11.6.1981
+
+
+

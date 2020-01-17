@@ -1,0 +1,1068 @@
+/*******************************************************************************
+**              (C) Copyright  Tripos Research Group 1982                     **
+**             University of Cambridge Computer Laboratory                    **
+********************************************************************************
+
+      ########  #      #    ####    ##    ##  ########  ##    ##  ########
+      ########  ##    ##   ######   ###  ###  ########  ###   ##  ########
+      ##         ##  ##   ##    ##  ########     ##     ####  ##  ##
+      ######       ##     ########  ## ## ##     ##     ## ## ##  ######
+      ##          #  #    ##    ##  ##    ##     ##     ##  ####  ##
+      ##         ##  ##   ##    ##  ##    ##     ##     ##  ####  ##
+      ########  ##    ##  ##    ##  ##    ##  ########  ##   ###  ########
+      ########  #      #  ##    ##  ##    ##  ########  ##    ##  ########
+
+********************************************************************************
+**      Author : mike richardson                                     1982     **
+*******************************************************************************/
+
+
+//  Modified on 19 Jul 84 by IDW:  Clean up
+//      PATTERN added to the EX source code, and globals added for SSPLIB,
+//      OBJINFO, RINGMAP etc, to remove the necessity of 3 copies of each
+//      of them.  Also made to be reentrant, so PRELOAD: works properly.
+//
+//  Modified on 16 Oct 84 by IDW:  SYNFIND changed to call of the ring map
+//      service, since this now no longer takes a month of Sundays!
+//
+//  Modified on 29 Oct 84 by NJO:  Stack sizes increased (more!) to avoid 
+//      crashes on LSI4 machines.
+//
+//  Modified on 23 Apr 85 by IDW:  Bug fixed in call to SSP
+//
+//  Modified on 24 Apr 86 by PB:   BINARY switch added
+//
+//  Modified on  6 Mar 87 by IDW:  Disctype FH5 added
+
+
+        GET "LIBHDR"
+        GET "MANHDR"
+        GET "FILEHDR"
+        GET "RINGHDR"
+
+
+  GLOBAL $( error.level : ug + 0        // error exit level
+            error.label : ug + 1        // error exit label
+            res         : ug + 2
+            res2        : ug + 3
+            datseg      : ug + 4        // dat-to-strings segment
+            datprt      : ug + 5        // date already printed
+            full        : ug + 6        // full information required
+            dates       : ug + 7        // full dates required
+            nodates     : ug + 8        // no dates at all
+            keys        : ug + 9        // PUID or what-not
+            exnext.error: ug + 10       // exnext failed on entry
+            ch.pos      : ug + 11       // character output position
+            b.wrch      : ug + 12       // BLIB wrch routine
+            t.name      : ug + 13       // name tab position
+            t.type      : ug + 14
+            t.size      : ug + 15
+            t.prot      : ug + 16
+            t.date      : ug + 17
+            t.keys      : ug + 18
+            since       : ug + 19       // since file date
+            upto        : ug + 20       // upto file date
+            tofile      : ug + 21       // output stream
+            pattern     : ug + 22       // pattern for matching
+            compat      : ug + 23       // compiled pattern
+            htype       : ug + 24       // file handler type
+            objname     : ug + 25       // name of examined object
+            argname     : ug + 26       // supplied object name
+            dslot       : ug + 27       // FILESERVER: directory slot
+            exall       : ug + 28       // examine all option
+            failure     : ug + 29       // examine failed
+            nfile       : ug + 30       // number of files found
+            ndir        : ug + 31       // number of directories found
+            filespace   : ug + 32       // actual used file space
+            estspace    : ug + 33       // estimated fileserver space
+            namelist    : ug + 34       // back linked list of names
+            fullnames   : ug + 35       // full object names needed
+            who         : ug + 36       // name of creator requested
+            t.who       : ug + 37       // who tab position
+            forwhom     : ug + 38       // examine for some people
+            raw         : ug + 39       // is this raw format output
+
+            coexam      : ug + 40       // examine coroutine code
+            examine     : ug + 41       // examine an object
+            error       : ug + 42       // error routine
+            writeobj    : ug + 43       // write object information
+            exnext      : ug + 44       // interface to examine next
+            local.wrch  : ug + 45       // version of wrch tracking position
+            tabto       : ug + 46       // tab to some column
+            dat.after   : ug + 47       // compare dates
+            add.32      : ug + 48       // thirtytwo bit arithmetic
+            writeavec   : ug + 49       // write out access vector
+            getpack     : ug + 50       // find out pack and fileserver
+
+            last.puid   : ug + 51       // holds the last puid
+            last.name   : ug + 52       // holds the last name
+         $)
+
+
+GLOBAL
+$(
+    //  Globals for PATTERN
+
+    match               :  ug + 100
+    cmplpat             :  ug + 101
+    patterninit         :  ug + 102
+    work                :  ug + 103
+    wp                  :  ug + 104
+    succflag            :  ug + 105
+    pat                 :  ug + 106
+    aux                 :  ug + 107
+    ch                  :  ug + 108
+    patp                :  ug + 109
+    patlen              :  ug + 110
+    errflag             :  ug + 111
+
+    //  Globals for BCPL.OBJINFO
+    
+    objinfo.ex          :  ug + 112
+    objinfo.lock        :  ug + 113
+    objinfo.obj         :  ug + 114
+    
+    //  Globals for BCPL.SSPLIB
+    
+    write.machine.name  :  ug + 115
+    lookup.name         :  ug + 116
+    global.lookup       :  ug + 117
+    general.lookup      :  ug + 118
+    ssp                 :  ug + 119
+
+    //  Globals for BCPL.RINGMAP
+
+    ringmap             :  ug + 120
+$)
+
+
+
+MANIFEST
+$(  objinfo.key         = 1     // puid or some unique identifying key
+    objinfo.size        = 2     // size in device dependant units
+    objinfo.access      = 3     // access permitted to object
+    objinfo.type        = 4     // type of object
+    objinfo.date        = 6     // creation or last update date
+    objinfo.infov       = 7     // fill in information vector
+
+    error.NotAvailable  = 851   // information is not available
+
+    maxlen              = 121   // max chars in name string
+    ringwordsperword    = bytesperword / bytesperringword
+
+    short.timeout       = tickspersecond*5
+    long.timeout        = tickspersecond*25
+
+    resultsize          = 64
+    coexam.stacksize    = 700
+
+    bytesperpuid        = 8
+    wordsperpuid        = bytesperpuid/bytesperword
+$)
+
+
+.
+SECTION "EX"
+GET     ""
+
+/*******************************************************************************
+*                                                                              *
+*  nex version of EXAMINE using the OBJINFO interface to extract information   *
+*                                                                              *
+*******************************************************************************/
+
+LET start () BE
+$(
+    MANIFEST $( a.obj   = 0             // object to be examined
+                a.quick = 1             // quick option - don't read headers
+                a.dates = 2             // dates required and no days
+                a.nodat = 3             // no dates at all
+                a.keys  = 4             // object keys to be listed
+                a.since = 5             // objects since a given date
+                a.upto  = 6             // objects up to a certain date
+                a.to    = 7             // output to a file
+                a.pat   = 8             // search pattern
+                a.s     = 9             // search string
+                a.slot  = 10            // slot numbers required
+                a.all   = 11            // examine all directories
+                a.who   = 12            // name of creator
+                a.for   = 13            // examine for some people
+                a.raw   = 14            // produce a raw format output
+             $)
+
+    LET argv    = VEC 50
+    LET dpat    = VEC 50
+    LET dcpat   = VEC 50
+    LET args    = "object=dir,quick=q/s,dates/s,nodates/s,keys/s,*
+                  *since/k,upto/k,to/k,p=pat/k,s/k,slots/s,all/s,who/s,for/k,*
+                  *raw/s"
+    LET objlock = 0
+    LET hinfov  = VEC discinfo.upB
+    
+    LET s       = VEC 2
+    LET u       = VEC 2
+    LET f       = VEC 1
+    LET e       = VEC 1
+
+    LET l.p     = VEC 3
+    LET l.n     = VEC resultsize/bytesperword
+    
+    FOR  i = 0  TO  2  DO
+    $(
+        s!i  :=  0
+        u!i  :=  maxint
+    $)
+
+    FOR  i = 0  TO  1  DO
+    $(
+        f!i  :=  0
+        e!i  :=  0
+    $)
+
+    since       := s
+    upto        := u
+    last.puid   := l.p
+    last.name   := l.n
+    res, res2   := 0, 0
+    b.wrch      := wrch
+    tofile      := 0
+    pattern     := dpat
+    compat      := dcpat
+    failure     := FALSE
+    error.label := local.errlab
+    error.level := level ()
+    datprt      := FALSE
+    ndir, nfile := 0, 0
+    filespace   := f
+    estspace    := e
+    datseg      := 0
+
+    FOR i = 0  TO  3  DO  last.puid!i  :=  0
+
+    patterninit()
+
+    IF rdargs(args,argv,50)=0 THEN error("Bad args for *"%S*"*N", args)
+
+    full        := argv!a.quick  = 0
+    dates       := argv!a.dates \= 0
+    nodates     := argv!a.nodat \= 0
+    keys        := argv!a.keys  \= 0
+    dslot       := argv!a.slot  \= 0
+    exall       := argv!a.all   \= 0
+    who         := argv!a.who   \= 0
+    raw         := argv!a.raw   \= 0
+
+    wrch        := local.wrch
+    ch.pos      := 0
+    argname     := argv!a.obj
+    objname     := argname = 0 -> "Current Directory", argname
+    namelist    := 0
+    fullnames   := exall & ( [argv!a.to \= 0] | raw )
+    forwhom     := argv!a.for
+
+    /**/
+    who         := full
+    /**/
+
+    IF raw THEN
+    $(  who     := FALSE
+        nodates := TRUE
+    $)
+
+    datseg      := [ nodates | NOT full ] -> 0 , loadseg("sys:l.dat-to-strings")
+
+    UNLESS [ nodates | NOT full ] DO
+    IF [datseg=0] | NOT globin(datseg) THEN
+    $( writes   ("Dat-to-Strings not available - no dates*N")
+       unloadseg(datseg)
+       datseg := 0
+    $)
+
+    IF who & [ NOT full ] THEN
+    $( writes ( "*"who*" not avilailable with *"quick*": ignored*N" )
+       who := FALSE
+    $)
+
+    IF [ forwhom \= 0 ] & [ NOT full ] THEN
+    $( writes ( "*"for*" not avilailable with *"quick*": ignored*N" )
+       forwhom := 0
+    $)
+
+    TEST argv!a.obj=0
+         THEN TEST currentdir=0 THEN objlock := locateobj(":")
+                                ELSE objlock := copydir  (currentdir)
+         ELSE objlock := locateobj(argv!a.obj)
+
+    IF argv!a.since = 0 THEN since := 0
+    IF argv!a.upto  = 0 THEN upto  := 0
+
+    IF since \= 0 UNLESS callseg("sys:l.string-to-dat",since,argv!a.since) \= 0
+                      DO writes ("*"Since*" not processed - does not compute*N")
+    IF upto  \= 0 UNLESS callseg("sys:l.string-to-dat",upto ,argv!a.upto ) \= 0
+                      DO writes ("*"Upto*"  not processed - does not compute*N")
+
+    UNLESS [argv!a.pat \= 0] | [argv!a.s \= 0] DO pattern := 0
+
+    TEST argv!a.to = 0
+         THEN tofile := 0
+         ELSE $( tofile := findoutput(argv!a.to)
+                 TEST tofile = 0
+                      THEN $( writef("Unable to open *"%S*"*N", argv!a.to)
+                              stop  (20)
+                           $)
+                      ELSE selectoutput(tofile)
+              $)
+
+    IF objlock=0 THEN
+       error(argv!a.obj=0 -> "Unable to copy current directory lock*N",
+                             "Unable to locate *"%S*"*N", argv!a.obj)
+
+    UNLESS sendpkt (notinuse,objlock!lock.task,action.discinfo,?,?,hinfov) DO
+             error ("Unable to determine handler type - discinfo failed*N")
+
+    htype  :=  hinfov!discinfo.type
+
+    IF dslot THEN 
+        UNLESS [ htype = disctype.FS ] | [ htype = disctype.FM ] DO
+        $( writes("Slot option only available on Fileserver*N")
+           dslot := FALSE
+        $)
+
+    UNLESS pattern=0 DO
+    $( // Construct the pattern. The form is "#?(<s>)#?/(<p>)" so that the
+       // filenames printed are those which have <s> as a substring or match
+       // the pattern <p>. Defaults for <s> and <p> are "!" which will never
+       // match, except when neither is specified in which case <s> and <p>
+       // are set to "%" so that all filenames are listed.
+       // Pattern cannot overflow, as its vector is the same size as the
+       // rdargs vector.
+
+       LET concat(str,add) BE $( LET ptr = str%0
+                                 FOR c = 1 TO add%0 DO $( ptr     := ptr+1
+                                                          str%ptr := add%c
+                                                       $)
+                                 str%0 := ptr
+                              $)
+       LET p = argv!a.pat
+       LET s = argv!a.s   =0 -> (p=0 -> "%", "!"), argv!a.s
+
+       IF p=0 THEN p := "!"
+
+       pattern%0 := 0
+       concat (pattern, "#?("  )
+       concat (pattern, s      )
+       concat (pattern, ")#?/(")
+       concat (pattern, p      )
+       concat (pattern, ")"    )
+
+       UNLESS cmplpat(pattern,dcpat) DO error("Bad pattern for examine")
+    $)
+
+    $( LET fadj = fullnames -> 50, 0
+
+       t.name   := 2
+       t.type   := 33 + fadj
+       t.size   := 25 + fadj
+       t.date   := 38 + fadj
+       t.prot   := ( argv!a.quick -> 38,  57 ) + fadj
+       t.keys   := ( argv!a.quick -> 59, -38 ) + fadj
+       t.who    := 74 + fadj
+    $)
+
+    coexam (objlock,argname)
+
+    local.errlab :
+
+    IF NOT failure & full & exall & NOT raw THEN
+    $( writef("%N file%S, %N director%S*N",nfile,nfile=1 -> "","s",
+                                            ndir, ndir=1 -> "y","ies")
+       IF [htype=disctype.FS] | [htype=disctype.FM] THEN
+       $( LET writek(v) BE $( LET nk = [v!0 << 6] | [v!1 >> 10]
+                              writef("%I5K bytes*N",nk)
+                           $)
+          writef("File space used            : ")
+          writek(filespace)
+          writef("Estimated fileserver space : ")
+          writek( estspace)
+       $)
+    $)
+
+    unloadseg (datseg)
+    endstream (tofile)
+    result2   := res2
+    wrch      := b.wrch
+    stop      (res)
+$)
+
+/*******************************************************************************
+*                                                                              *
+* coexam : run the examine routine in a coroutine                              *
+*                                                                              *
+*******************************************************************************/
+
+AND coexam (objlock,name) BE
+$(
+    LET exco       = createco (examine, coexam.stacksize)
+    LET s.objname  = objname
+    LET s.argname  = argname
+    LET linkel     = VEC 3
+
+    linkel!0    := namelist
+    linkel!1    := (raw & (namelist = 0)) -> 0, name
+    linkel!2    := 0
+    linkel!3    := 0
+    objname     := name
+    argname     := name
+    namelist    := linkel
+
+    IF exall & NOT raw THEN newline ()
+    TEST exco = 0 THEN writes("Unable to create coroutine*N")
+                  ELSE callco(exco,objlock)
+    IF exall & NOT failure & NOT raw THEN newline ()
+    deleteco(exco)
+    freeobj (objlock)
+
+    objname     := s.objname
+    argname     := s.argname
+
+    UNLESS name=0 DO namelist := linkel!0
+
+    IF failure THEN longjump(error.level,error.label)
+$)
+
+/*******************************************************************************
+*                                                                              *
+* examine : examine an object be it a file or a directory                      *
+*                                                                              *
+*******************************************************************************/
+
+AND examine (objlock) BE
+$(
+    LET infovec  = VEC [dirent.size+file.header.size-1]
+    LET objtype  = 0
+    LET access   = 0
+    LET hdrl     = FALSE
+    LET s.errlab = error.label
+    LET s.errlev = error.level
+    LET key      = VEC 3
+    LET entfound = FALSE
+
+    error.label := local.errlab
+    error.level := level ()
+
+    UNLESS objinfo.lock(objinfo.infov,objlock,infovec) DO
+                  error("Unable to examine *"%S*"*N", objname)
+
+    TEST objinfo.ex(objinfo.key,objlock,infovec,key)
+         THEN $( LET chain = namelist!0
+                 FOR i = 0 TO 1 DO namelist![2+i] := key!i
+                 UNTIL chain=0 DO
+                       TEST [chain!2=key!0] & [chain!3=key!1]
+                       THEN $( writes("******LOOP: EXAMINED BEFORE*******N")
+                               RETURN
+                            $)
+                       ELSE chain := chain!0
+              $)
+         ELSE namelist!2,namelist!3 := #XFFFF, #XFFFF
+
+    UNLESS objinfo.ex(objinfo.type,objlock,infovec,@objtype) DO
+                error("Failed to find type of *"%S*"*N", objname)
+
+    // if the object is a file then just output about this object: otherwise
+    // we have to run through the directory entry by entry
+
+    IF objtype=type.file THEN
+    $( exnext.error := FALSE
+       writeobj(argname=0 -> "Current File", argname,objlock,infovec,FALSE)
+       GOTO exit.label
+    $)
+
+    UNLESS [argname=0] | fullnames DO
+        $( LET writel(l,dot) BE UNLESS l=0 DO
+            $( writel(l!0,TRUE)
+               UNLESS l!1=0 DO writef("%S%S",l!1,[l!1%[l!1%0]\=':']&dot->".","")
+            $)
+           writes("Directory *"")
+           writel(namelist,FALSE)
+           writes("*" ")
+           UNLESS [datseg=0] | datprt DO $( LET dat  = VEC 2
+                                            LET dats = VEC 15
+                                            datstamp(dat)
+                                            start   (dat,dats)
+                                            writef  (" on %S %S", dats+10,dats)
+                                         $)
+           hdrl   := TRUE
+        $)
+
+    datprt := TRUE
+
+    IF [htype = disctype.FM | htype = disctype.FH5]  &  [NOT fullnames] THEN
+    $( LET avec = VEC 4
+       IF objinfo.ex(objinfo.access,objlock,infovec,avec) THEN
+       $( LET access = avec!0
+          UNLESS ch.pos = 0 DO wrch(':')
+          writes(" your access is /")
+          writeavec(access,type.dir)
+          hdrl := TRUE
+       $)
+    $)
+
+    IF hdrl THEN newline()
+
+    $( LET this.type =  0
+
+       exnext.error  := FALSE
+
+       UNLESS exnext(objlock,infovec) DO TEST result2 = error.NoMoreEntries
+                                         THEN BREAK
+                                         ELSE $( writes("****** Next entry: ")
+                                                 fault (result2)
+                                                 exnext.error := TRUE
+                                              $)
+
+       entfound  := TRUE
+       this.type := writeobj(infovec+dirent.name,objlock,infovec,TRUE)
+
+       IF testflags(1) THEN $( writes("******BREAK*N")
+                               failure := TRUE
+                               BREAK
+                            $)
+
+       IF [this.type=type.dir] & exall THEN
+       $( LET nextlock = sendpkt(notinuse,objlock!lock.task,action.locateobject,
+                                                ?,?,objlock,infovec+dirent.name)
+          TEST nextlock=0
+               THEN writef("Unable to locate *"%S*"*N",infovec+dirent.name)
+               ELSE coexam(nextlock,infovec+dirent.name)
+       $)
+
+    $) REPEAT
+
+    UNLESS entfound | raw DO writes ("No entries in this directory*N")
+
+    local.errlab :
+    exit.label   : error.level := s.errlev
+                   error.label := s.errlab
+                   RETURN
+$)
+
+.
+SECTION "EX-2"
+GET     ""
+
+/*******************************************************************************
+*                                                                              *
+* error : report an error and exit                                             *
+*                                                                              *
+*******************************************************************************/
+
+LET error(format,a,b,c) BE $( res, res2 := 20, result2
+                              failure   := TRUE
+                              writef  (format,a,b,c)
+                              longjump(error.level,error.label)
+                           $)
+
+/*******************************************************************************
+*                                                                              *
+* writeobj : write out the information about an object other than its name     *
+*                                                                              *
+*******************************************************************************/
+
+AND writeobj (entname,objlock,infovec,dent) = VALOF
+$(
+   LET objtype  = 0
+   LET access   = 0
+   LET size     = VEC 1
+   LET dat      = VEC 2
+   LET keyvec   = VEC 3
+   LET result   = VEC resultsize/bytesperword
+   LET dat.err  = FALSE
+   LET dat.no   = [datseg=0] | nodates | [NOT full] | exnext.error
+   LET unit     = [htype = disctype.FS   |
+                   htype = disctype.FM   |
+                   htype = disctype.FH5  |
+                   htype = disctype.core ] -> "byte", "block"
+   LET type.set = objinfo.ex(objinfo.type,objlock,infovec,@objtype)
+   LET no.size  = FALSE
+   LET creator  = 0
+
+   UNLESS pattern=0 DO UNLESS match(pattern,compat,entname) DO RESULTIS objtype
+   UNLESS dat.no DO dat.err := NOT objinfo.ex(objinfo.date,objlock,infovec,dat)
+
+   UNLESS dat.err DO
+          UNLESS [(since=0) | dat.after (dat,since) ] &
+                 [(upto =0) | dat.after (upto,dat) ]  DO RESULTIS objtype
+
+    IF  who | [ forwhom \= 0 ]  THEN
+    $( 
+        LET fpuid  =  infovec + dirent.size + file.writers.puid
+
+        LET uid    =  VEC 3
+        LET puid   =  VEC wordsperpuid * 2
+
+        LET zeros  =  TRUE
+        LET match  =  TRUE
+
+        FOR  i = 0  TO  3  DO
+        $(
+            LET word  =  fpuid!i
+            
+            UNLESS  word = 0  DO  zeros  :=  FALSE
+            
+            put2bytes( uid, i, word )
+        $)
+
+        TEST  zeros  THEN  creator  :=  ""
+        ELSE
+        $(
+            //  We actually have a PUID here, so we should perform a map
+            //  to turn this into a user ID.
+
+            puid % 0  :=  bytesperpuid * 2
+
+            FOR  i = 0  TO  bytesperpuid-1  DO
+            $(
+                LET offset  =  i * 2
+                LET byte    =  uid % i
+                LET hb      =  (byte >> 4)  &  #X0F
+                LET lb      =  (byte     )  &  #X0F
+
+                puid % (offset + 1)  :=  hexchar( hb )
+                puid % (offset + 2)  :=  hexchar( lb )
+            $)
+
+            FOR i = 0  TO  3  DO
+                UNLESS  last.puid!i = fpuid!i  DO
+                    match := FALSE
+
+            TEST  match  THEN  creator  :=  last.name
+            ELSE 
+            
+            TEST  ringmap( puid, "PUID", "PNAME", result, resultsize )
+            THEN
+            $(  
+                creator  :=  result
+
+                FOR  i = 0  TO  3            DO  last.puid!i    :=  fpuid!i
+                FOR  i = 0  TO  creator % 0  DO  last.name % i  :=  creator % i
+            $)
+            ELSE creator  :=  "??"
+
+            UNLESS  forwhom = 0  DO
+               IF findarg( forwhom, creator )  =  -1  THEN  
+                   RESULTIS objtype
+        $)
+    $)
+
+   IF dslot THEN writef("[%I2] ",objlock!lock.lastex)
+
+   UNLESS  raw  DO  tabto( t.name )
+
+   IF fullnames THEN
+   $( LET writel(l,dot) BE UNLESS l=0 DO
+       $( writel(l!0)
+          UNLESS l!1=0 DO writef("%S%S",l!1,[l!1%[l!1%0]\=':']->".","")
+       $)
+       writel(namelist)
+   $)
+   writef("%S ",entname)
+
+   TEST type.set
+        THEN TEST raw
+             THEN TEST objtype=type.dir
+                  THEN writef("dir")
+                  ELSE TEST NOT exnext.error  &
+                              objinfo.ex(objinfo.size,objlock,infovec,size)
+                       THEN TEST size!0 = 0
+                            THEN WRITEF("%X4", size!1)
+                            ELSE WRITEF("%X4%X4", size!0, size!1)
+                       ELSE writef("-1")
+             ELSE TEST objtype=type.dir
+                  THEN $( tabto (t.type)
+                          writes("dir")
+                          ndir := ndir + 1
+                       $)
+                  ELSE $( tabto (t.size)
+                          TEST full  &  NOT exnext.error  &
+                               objinfo.ex(objinfo.size,objlock,infovec,size)
+                               THEN TEST [size!0=0] & [0<=size!1<10000]
+                                    THEN writef("%I4  %S%C ",
+                                                size!1,unit,size!1=1->' ','s')
+                                    ELSE writef("%I4K %Ss ",
+                                                [size!0<<6]+[size!1>>10],unit)
+                               ELSE $( IF full & exnext.error THEN
+                                                      writes("**** error ****")
+                                       no.size := TRUE
+                                    $)
+                          nfile := nfile + 1
+                       $)
+        ELSE writes("++++++++++")
+
+   TEST raw
+   THEN WRITEF(" %X4:%X4:%X4", dat!0, dat!1, dat!2)
+   ELSE tabto(t.date)
+   UNLESS dat.no DO
+          TEST dat.err
+               THEN writes("+++++++++ +++++++++")
+               ELSE $( LET datstr = VEC 15
+                       LET today  = rootnode!rtn.days
+                       LET crday  = dat!0
+                       start (dat,datstr)
+                       TEST dates
+                            THEN writef("%T9 %T9", datstr, datstr+5)
+                            ELSE writef("%T9 %T9", crday=today+1 -> "Tomorrow ",
+                                                   crday=today   -> "Today    ",
+                                                   crday=today-1 -> "Yesterday",
+                                                   crday>today-8 ->  datstr+10 ,
+                                                   datstr,
+                                                   datstr+5  )
+                    $)
+
+   UNLESS  raw  DO  tabto(t.prot)
+
+   IF [NOT raw]  &  [htype = disctype.FM  | 
+                     htype = disctype.FS  |
+                     htype = disctype.FH5 ]  THEN
+   $( LET avec = VEC 4
+      IF objinfo.ex(objinfo.access,objlock,infovec,avec) THEN
+      TEST [htype = disctype.FM | htype = disctype.FH5]
+           THEN TEST dent THEN FOR i = 0 TO 3 DO
+                                $( LET bits = avec![i+1]
+                                   wrch('/')
+                                   writeavec(bits,objtype)
+                                $)
+                              ELSE $( wrch('/')
+                                      writeavec(avec!0,objtype)
+                                   $)
+           ELSE IF dent THEN
+                $( LET bits = avec!1
+                   writef ("%C%C%C",[bits&access.R]=0 -> ' ','R',
+                                    [bits&access.W]=0 -> ' ','W',
+                                    [bits&access.D]=0 -> ' ','D')
+                $)
+   $)
+
+   IF who THEN $( tabto ( t.who ) ; writes ( creator ) $)
+
+   IF keys THEN
+   $( tabto   (t.keys)
+      FOR i = 0 TO 3 DO keyvec!i := 0
+      TEST objinfo.ex(objinfo.key,objlock,infovec,keyvec)
+      THEN $( writes("[")
+              TEST [(htype=disctype.FS)|(htype=disctype.FM)]
+              THEN $( LET fsname = VEC 32/bytesperword
+                      LET pack   = ?
+                      FOR i = 0 TO 3 DO writef("%X4%S",keyvec!i,i=3->"]", " ")
+                      pack := getpack(keyvec,fsname)
+                      TEST pack=-1 THEN writes(" ++++")
+                                   ELSE writef(" %I2/%S",pack,fsname)
+                   $)
+              ELSE writef("%U0]",keyvec!0)
+           $)
+      ELSE writes("[++++]")
+   $)
+
+   newline()
+
+   UNLESS exnext.error DO
+          TEST [objtype=type.dir] & exall &
+               [ (htype=disctype.FS) | (htype=disctype.FM) ] & [ NOT no.size ]
+               THEN    add.32 ( estspace,[TABLE 0,4096])
+               ELSE $( add.32 ( estspace,[TABLE 0,1024])
+                       add.32 ( estspace,size)
+                       add.32 (filespace,size)
+                    $)
+
+   RESULTIS objtype
+$)
+
+
+AND hexchar( value )  =  "0123456789ABCDEF" % (value + 1)
+
+/*******************************************************************************
+*                                                                              *
+* exnext : examine the next entry in the directory                             *
+*                                                                              *
+*******************************************************************************/
+
+AND exnext (objlock,infovec) =
+    sendpkt(notinuse, objlock!lock.task, action.examinenext,
+                                                       ?, ?,
+                                                    objlock, infovec, full )
+
+/*******************************************************************************
+*                                                                              *
+* local.wrch : local version of wrch keeping track of output position          *
+* tabto      : move to a specified column for output of the next item          *
+*                                                                              *
+*******************************************************************************/
+
+AND local.wrch (ch) BE $( TEST ch='*N' THEN ch.pos := 0
+                                       ELSE ch.pos := ch.pos + 1
+                          b.wrch (ch)
+                       $)
+
+AND tabto ( pos ) BE $( IF pos < 0 THEN newline ()
+                        pos := ABS pos
+                        FOR i = ch.pos TO pos - 1 DO wrch('*S')
+                     $)
+
+/*******************************************************************************
+*                                                                              *
+* dat.after : compare two dates                                                *
+*                                                                              *
+*******************************************************************************/
+
+AND dat.after (dat1,dat2) = VALOF
+
+    TEST [dat1!0 > dat2!0 ]
+         THEN RESULTIS TRUE
+         ELSE TEST [dat1!0 < dat2!0]
+                   THEN RESULTIS FALSE
+                   ELSE TEST [dat1!1 > dat2!1]
+                             THEN RESULTIS TRUE
+                             ELSE TEST [dat1!1 = dat2!1]
+                                       THEN RESULTIS FALSE
+                                       ELSE RESULTIS [dat1!2 >= dat2!2]
+
+/*******************************************************************************
+*                                                                              *
+* add.32 : do a 32 bit addition                                                *
+*                                                                              *
+*******************************************************************************/
+
+AND add.32(a, b) BE
+$(
+    // a := a + b  where a and b are 32 bit numbers held 16 bits per word
+    // in 2-word vectors: routine by courtesay of Brian Knight
+
+    LET a0              = a!0 + b!0
+    LET a1              = a!1
+    LET b1              = b!1
+    LET aa1             = [a1 + b1] & #XFFFF
+    LET overflow        = [(([a1 | b1] & NOT aa1) | [a1 & b1]) & #X8000] \= 0
+
+    IF overflow THEN a0 := a0 + 1
+    a!0 := a0
+    a!1 := aa1
+$)
+
+/*******************************************************************************
+*                                                                              *
+* writeavec : write out an access vector                                       *
+*                                                                              *
+*******************************************************************************/
+
+AND writeavec(bits,objtype) BE
+$(
+   writef("%S%S%S",[bits&matrix.D]=0 -> "","D",
+                   [bits&matrix.A]=0 -> "","A",
+                   [objtype=type.dir]|[bits&matrix.U]=0 -> "","U" )
+   TEST objtype=type.file
+        THEN writef (      "%S%S%S",[bits&matrix.R]=0 -> "","R",
+                                    [bits&matrix.W]=0 -> "","W",
+                                    [bits&matrix.E]=0 -> "","E")
+        ELSE writef ("%S%S%S%S%S%S",[bits&matrix.C]=0 -> "","C",
+                                    [bits&matrix.F]=0 -> "","F",
+                                    [bits&matrix.V]=0 -> "","V",
+                                    [bits&matrix.X]=0 -> "","X",
+                                    [bits&matrix.Y]=0 -> "","Y",
+                                    [bits&matrix.Z]=0 -> "","Z")
+$)
+
+/*******************************************************************************
+*                                                                              *
+* getpack : find out the pack number and which fileserver                      *
+*                                                                              *
+*******************************************************************************/
+
+AND getpack ( puid, fsname ) = VALOF
+$(
+    MANIFEST $( bb.ssp.arg6 = bb.ssp.arg5 + 1 $)
+
+    LET txbuff  = VEC bb.ssp.arg4 + 1
+    LET rxbuff  = VEC bb.ssp.arg5 + 32 + 1
+
+    FOR i = 0 TO 3 DO put2bytes ( txbuff, bb.ssp.arg1 + i, puid ! i )
+
+    TEST ssp ( "PUID.LOCATE", txbuff, bb.ssp.arg4 + 1,
+                              rxbuff, bb.ssp.arg5 + 1 + 32, 0 )
+         THEN $( FOR c = 0 TO byteget ( rxbuff, bb.ssp.arg6*2 ) DO
+                              fsname % c := byteget ( rxbuff, bb.ssp.arg6*2+c )
+                 RESULTIS get2bytes ( rxbuff, bb.ssp.arg5 )
+              $)
+         ELSE RESULTIS -1
+$)
+
+
+.
+SECTION "EX-3"
+
+
+
+GET ""
+GET "BCPL.OBJINFO"
+GET "BCPL.SSPLIB"
+GET "BCPL.RINGMAP"
+
+
+
+//  Section added by IDW to make EX reentrant.  The code in this section
+//  would normally be in the header files "PATTERN".
+
+
+
+//  ******  PATTERN  ******
+
+
+
+LET patterninit()  BE
+$(
+//  Initialise the globals associated with the pattern compiler.
+
+    work      :=  0
+    wp        :=  0
+    succflag  :=  FALSE
+    pat       :=  0
+    aux       :=  0
+    ch        :=  0
+    patp      :=  0
+    patlen    :=  0
+    errflag   :=  FALSE
+$)
+
+
+// The Interpreter
+
+AND match(pat, aux, str) = VALOF
+$(1 LET w = VEC 128
+    LET s = 0
+    work, wp, succflag := w, 0, FALSE
+    put(1)
+    UNLESS aux%0=0 DO put(aux%0)
+
+$(2 // FIRST COMPLETE THE CLOSURE
+    LET n = 1
+    UNTIL n>wp DO
+    $( LET p = work!n
+       LET k, q = pat%p, aux%p
+       SWITCHON k INTO
+       $( CASE '#': put(p+1)
+          CASE '%': put(q)
+          DEFAULT:  ENDCASE
+          CASE '(':
+          CASE '/': put(p+1)
+                    UNLESS q=0 DO put(q)
+       $)
+       n := n+1
+    $)
+
+    IF s>=str%0 RESULTIS succflag
+    IF wp=0 RESULTIS FALSE
+    s := s+1
+    ch := str%s
+
+    // NOW DEAL WITH MATCH ITEMS
+    n := wp
+    wp, succflag := 0, FALSE
+
+    FOR i = 1 TO n DO
+    $( LET p = work!i
+       LET k = pat%p
+       SWITCHON k INTO
+       $( CASE '#':
+          CASE '/':
+          CASE '%':
+          CASE '(': LOOP
+
+          CASE '*'':IF ch=pat%[p+1] DO put(aux%p)
+                    LOOP
+          DEFAULT:  // A MATCH ITEM
+                   UNLESS compch(ch, k)=0 LOOP
+             CASE '?': // SUCCESSFUL MATCH
+                       put(aux%p)
+                       LOOP
+       $)
+    $)
+$)2 REPEAT
+$)1
+
+AND put(n) BE TEST n=0
+    THEN succflag := TRUE
+    ELSE $( FOR i = 1 TO wp IF work!i=n RETURN
+            wp := wp+1
+            work!wp := n
+         $)
+
+// The Compiler
+
+LET rch() BE TEST patp>=patlen
+    THEN ch := endstreamch
+    ELSE $( patp := patp+1
+            ch := pat%patp
+         $)
+
+AND nextitem() BE
+    $( IF ch='*'' DO rch()
+       rch()
+    $)
+
+AND prim() = VALOF
+$(1 LET a, op = patp, ch
+    nextitem()
+    SWITCHON op INTO
+    $( CASE endstreamch:
+       CASE ')':
+       CASE '/': errflag := TRUE
+       DEFAULT:  RESULTIS a
+
+       CASE '#': setexits(prim(), a)
+                 RESULTIS a
+
+       CASE '(': a := exp(a)
+                 UNLESS ch=')' DO errflag := TRUE
+                 nextitem()
+                 RESULTIS a
+    $)
+$)1
+
+AND exp(altp) = VALOF
+$(1 LET exits = 0
+
+$(2 LET a = prim()
+    TEST ch='/' \/ ch=')' \/ ch=endstreamch
+    THEN $( exits := join(exits,a)
+            UNLESS ch='/' RESULTIS exits
+            aux%altp := patp
+            altp := patp
+            nextitem()
+         $)
+    ELSE setexits(a,patp)
+$)2 REPEAT
+$)1
+
+
+AND setexits(list,val) BE UNTIL list=0 DO
+$( LET a = aux%list
+   aux%list := val
+   list := a  $)
+
+AND join(a,b) = VALOF
+$( LET t = a
+   IF a=0 RESULTIS b
+   UNTIL aux%a=0 DO a := aux%a
+   aux%a := b
+   RESULTIS t
+$)
+
+AND cmplpat(pattern, cmplpattern) = VALOF
+$(1 pat, aux := pattern, cmplpattern
+    patp, patlen := 0, pat%0
+    errflag := FALSE
+    FOR i = 0 TO patlen DO aux%i := 0
+    rch()
+    setexits(exp(0),0)
+    RESULTIS NOT errflag
+$)1
+
+

@@ -1,0 +1,99 @@
+SECTION "LCG8"
+
+GET "LCGHDR"
+
+LET cgswitch(v, m) BE
+  // Compile code for SWITCHON
+  // N: number of cases
+  // D: default label
+  $( LET n = (m+1)/2
+     LET d = rdl()
+     casek, casel := v-1, v+n-1
+     // Vectors CASEK and CASEL will be accessed using
+     // offsets 1 to N
+
+     // Sort case constants into arithmetic order
+     FOR i = 1 TO n DO
+       $( LET k = rdn()
+          LET l = rdl()
+          LET j = i
+          WHILE j > 1 DO
+            $( IF k > casek ! (j - 1) THEN
+                 BREAK
+               casek ! j := casek ! (j - 1)
+               casel ! j := casel ! (j - 1)
+               j := j - 1
+            $)
+          casek ! j, casel ! j := k, l
+       $)
+
+     cgpendingop()
+     store(0, ssp-2)
+
+     // Comparison is probably not right yet!!!!!!!!
+     TEST 4*n-10>casek!n/2-casek!1/2 THEN
+       lswitch(1, n, d)
+      ELSE
+       $( swreg := movetoaq(arg1)
+          bswitch(1, n, d)
+          stack(ssp - 1)
+          genjmp(d)
+          forgetreg(swreg)
+       $)
+  $)
+
+AND bswitch(p, q, d) BE
+  // Binary chop instance
+  TEST q > p THEN
+    $( LET m = nextparam()
+       LET t = (p + q)/2
+       incode := yes
+       loadt(k.numb, casek ! t)
+       chkrefs(4)
+       cgdyadic(0, yes)
+       stack(ssp - 1)
+       gens(f.jmp, 0, m.rel + #X82) // JMP $+3
+       genjmp(m)
+       incode := yes
+       genjmp(casel ! t)
+       bswitch(p, t - 1, d)
+       genjmp(d)
+       cglab(m, 0)
+       bswitch(t + 1, q, d)
+    $)
+   ELSE
+    IF p = q THEN
+      $( incode := yes
+         loadt(k.numb, casek ! q)
+         pendingop := s.eq
+         cgbranch(s.jt, casel ! p)
+         loadt(k.reg, swreg)
+      $)
+
+
+AND lswitch(p, q, d) BE
+  $( LET l = nextparam()
+     LET b = ?
+     swreg := movetoaq(arg1)
+     loadt(k.numb, casek ! p)
+     pendingop := s.ls
+     cgbranch(s.jt, d)
+     loadt(k.reg, swreg)
+     loadt(k.numb, casek ! q)
+     pendingop := s.gr
+     cgbranch(s.jt, d)
+     loadt(k.reg, swreg)
+     movetor(arg1, r.y)
+     stack(ssp - 1)
+     gene(f.jmpe, 0, m.y+m.i+m.rel, eref(k.lab,l)-casek!p)
+     b := getdatablk(l, s.iteml)
+     FOR k = casek ! p TO casek ! q DO
+       TEST casek ! p = k THEN
+         $( putdatablkitem(b, casel ! p)
+            p := p+1
+         $)
+        ELSE
+         putdatablkitem(b, d)
+  $)
+
+

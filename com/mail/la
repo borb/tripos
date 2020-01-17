@@ -1,0 +1,11 @@
+.K sys,op/k,nolink/s,68000/s
+.def op replace
+
+IF EQ link <nolink$link>; syslink Mobj:system mobj:mail-system OPT fW18000
+spool t:spool
+IF mctype=LSI4;      :sys.ancilla mobj:mail-system name=testmail <sys$LSI4> <op>
+IF MCTYPE=68000;:68000sys.ancilla mobj:mail-system name=testmail <sys$M68K> <op>
+spool
+type t:spool
+
+

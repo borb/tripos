@@ -1,0 +1,123 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+       #######   ##    ##  ########  ##    ##  ########   ######
+       ########  ##    ##  ########  ###   ##  ########  ########
+       ##    ##  ##    ##     ##     ####  ##  ##        ##    ##
+       ########  ########     ##     ## ## ##  ######    ##    ##
+       #######   ##    ##     ##     ##  ####  ##        ##    ##
+       ##  ##    ##    ##     ##     ##  ####  ##        ##    ##
+       ##   ##   ##    ##  ########  ##   ###  ##        ########
+       ##    ##  ##    ##  ########  ##    ##  ##         ######
+
+************************************************************************
+**    Author:   Brian Knight                            May 1979      **
+***********************************************************************/
+
+
+// Command to give information about the Ring Handler task.
+//
+// Lists: reserved ports
+//        reception requests outstanding
+//        counts of unwanted and bad blocks received
+//
+// Keyword "KILL" causes the ring handler to die.
+
+SECTION "RHINFO"
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "SYS:RING.BCPL.SSPLIB"
+
+
+
+LET start() BE
+    $(
+    LET rhtaskid      = rootnode ! rtn.info ! rtninfo.ring ! ri.rhtaskid
+    LET tcb           = ?
+    LET gv            = ?
+    LET port.list     = ?
+    LET receive.queue = ?
+    LET ARGV          = VEC 20
+
+    IF rdargs("kill/s", argv, 20) = 0
+    THEN $( WRITES("Bad args*n"); stop(20) $)
+
+    IF rhtaskid = 0
+    THEN $( writes("Ring handler not loaded*N")
+            stop(20)
+         $)
+
+    tcb := rootnode ! rtn.tasktab ! rhtaskid
+    gv  := tcb ! tcb.gbase
+
+    IF ARGV!0 \= 0
+    THEN
+      $( // Kill ring handler
+      setflags(rhtaskid, 4)
+      IF NOT gv!173 THEN writes("Ring handler is not breakable*n")
+      FINISH
+      $)
+
+    writef("Ring handler is task %n*n", rhtaskid)
+
+    IF gv!160 \= 0 THEN writef("%u5 blocks with bad checksum received*N", gv!160)
+    IF gv!161 \= 0
+    THEN
+      $(
+      writef("%u5 unwanted blocks received: last from ", gv!161)
+      write.machine.name(gv!171)
+      newline()
+      $)
+    IF gv!162 \= 0 THEN writef("%u5 receive timeouts*N", gv!162)
+    IF gv!163 \= 0 THEN writef("%u5 bad header packets received*N", gv!163)
+    IF gv!172 \= 0 THEN writef("%u5 retries on unselected*N", gv!172)
+
+    // List reserved port numbers
+    writes("Reception ports reserved: ")
+    port.list := gv ! (ug+4)
+
+    TEST port.list = 0
+    THEN writes("none")
+    ELSE UNTIL port.list = 0
+         DO $( writef("%N ", port.list!1); port.list := !port.list $)
+    newline()
+
+    // List reception requests
+    // This is somewhat dangerous, as the queue can change
+    // while we're looking at it.  Therefore, give up on
+    // a silly station number.
+
+    writes("Outstanding reception requests: ")
+    receive.queue := gv!(ug+2)
+
+    TEST receive.queue = 0
+    THEN writes("none")
+    ELSE
+      UNTIL receive.queue = 0
+      DO $(
+         LET mc.id = receive.queue ! rhpkt.station
+
+         // Is station number sensible?
+
+         UNLESS 1 <= mc.id <= 255 THEN BREAK // No
+
+         writes("*N  From ")
+         TEST mc.id = 255
+         THEN writes("anywhere")
+         ELSE write.machine.name(mc.id)
+         writef(" on port %N (size %n, from task %N",
+                receive.queue ! rhpkt.port,
+                receive.queue ! rhpkt.size,
+                receive.queue ! pkt.id)
+
+         writef("; lifetime %N secs", pkt.res2!receive.queue / tickspersecond)
+         wrch(')')
+         receive.queue := !receive.queue
+         $)
+    newline()
+    $)
+
+

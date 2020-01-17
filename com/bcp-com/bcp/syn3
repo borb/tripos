@@ -1,0 +1,87 @@
+SECTION "SYN3"
+
+GET "SYNHDR"
+
+LET readnumb(radix) BE
+    $( LET d = value(ch)
+       decval := d
+       IF d>=radix DO synreport(33)
+
+       $( rch()
+          d := value(ch)
+          IF d>=radix RETURN
+          decval := radix*decval + d  $) REPEAT
+    $)
+
+
+AND value(ch) = VALOF
+    $( LET c = capitalch(ch)
+       RESULTIS '0'<=c<='9' -> c-'0',
+                'A'<=c<='F' -> c-'A'+10,
+                100
+    $)
+
+AND rdstrch() = VALOF
+$( LET k = ch
+
+   rch()
+
+   IF k='*N' DO synreport(34)
+
+   IF k='**' THEN
+   $( LET sch=ch
+      IF ch='*N' | ch='*S' | ch='*T' DO
+      $( rch() REPEATWHILE ch='*N' | ch='*S' | ch='*T'
+         UNLESS ch='**' DO synreport(34)
+         rch()
+         IF ch='"' RESULTIS -1
+         LOOP
+      $)
+
+      k := -1
+      ch := capitalch(ch)
+
+      // Assumes Ascii
+      IF ch='"' DO k := '"'
+      IF ch='*'' DO k := '*''
+      IF ch='**' DO k := '**'
+      IF ch='B' DO k := #10
+      IF ch='T' DO k := #11
+      IF ch='N' | ch='L' DO k := #12
+      IF ch='V' DO k := #13
+      IF ch='P' DO k := #14
+      IF ch='C' DO k := #15
+      IF ch='E' DO k := #33
+      IF ch='S' DO k := #40
+      TEST ch='X' | '0'<=ch<='9' | ch='#'
+        THEN $( LET r, n = 8, 3
+                LET lch=ch
+                IF ch='#' DO rch()
+                IF lch='X' DO
+                $( r, n := 16, 2
+                   rch()
+                $)
+                k := readoctalorhex(r, n)
+                IF k>255 DO synreport(34)
+                RESULTIS k  // don't translate *Xnn or *nnn
+             $)
+        ELSE rch()
+  IF k<0 THEN $( rch(); synreport(35, sch) $)
+  $)
+
+  RESULTIS /* ((CGFLAGS & cgf.TRANSCHARS) ~= 0) -> charcode!k, */ k
+$) REPEAT
+
+
+AND readoctalorhex(radix,digits) = VALOF
+$( LET answer = 0
+   FOR j = 1 TO digits DO
+      $( LET valch = value(ch)
+         IF valch>=radix DO synreport(34)
+         answer:=answer*radix + valch
+         rch()
+      $)
+   RESULTIS answer
+$)
+
+

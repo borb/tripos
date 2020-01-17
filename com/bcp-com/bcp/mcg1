@@ -1,0 +1,188 @@
+SECTION "MCG1"
+
+GET "CG68HDR"
+
+MANIFEST $( OBUF.byte.offset = 10000*BYTESPERWORD $)            //??????????????
+
+$<RESIDENT'
+LET start(workbase, worktop) = VALOF
+$>RESIDENT'
+$<RESIDENT
+LET cgstart(workbase, worktop) = VALOF
+$>RESIDENT
+  $( err.p, err.l := level(), stop.label
+
+     SELECTOUTPUT(SYSOUT)
+     UNLESS quiet | (STFLAGS & stf.nowarn) ~= 0 taskwritef(SLOW ->
+                "68000 CG (April 1985), Workspace %N, Slow*N",
+                "68000 CG (April 1985), Workspace %N, %N of OCODE*N",
+                worktop-workbase, (OBUF.byte.offset-OBUFP)/BYTESPERWORD)
+
+     switchspace, tempfile := 0,0
+//   progsize := 0
+//   maxused := 0
+//   profcounting := FALSE
+
+     IF SLOW
+     $( UNLESS OCODE=0  $( ENDSTREAM(OCODE) $)
+        OCODE := findinput(ocodefile)
+        IF CODE=0 cgerror(-20, "Can't open '%S' - %N", ocodefile, RESULT2)
+        selectinput(OCODE)
+     $)
+
+     IF workbase=0  |  (worktop>>1) <= (workbase>>1) <= 0
+     THEN cgerror(-20, "invalid workspace")
+
+//debug     debugout := verstream
+//debug   traceloc, debug := cg.a, cg.b
+
+     OBUFP := OBUF.byte.offset
+     rdn := slow -> numeric -> Nsrdn., srdn., rdn.
+
+     op := rdn()                                // Quick check for 0 on entry
+
+     cgsects(workbase, worktop)
+
+     collapse(0)
+
+stop.label:
+     UNLESS (CGFLAGS & cgf.cgonly)=0
+     $( UNLESS SLOW CGERROR(0, "CGonly set, but NOT slow!!!")
+        LASTSECT := TRUE
+     $)
+     RESULTIS switchspace=0 -> 1,0
+  $)
+
+
+AND collapse(n) BE
+$(
+//     IF ocodestream \= 0 THEN $( endread(); ocodestream := 0 $)
+//     IF workspace \= 0 THEN freevec(workspace)
+     UNLESS switchspace = 0 THEN freevec(switchspace)
+     switchspace := n
+     longjump(err.p, err.l)
+$)
+
+AND cgsects(workvec, worktop) BE UNTIL op <= 0 DO
+$(1 LET p        = workvec
+    LET got.sect = FALSE
+
+    tempv       := p;           p := p+3*100 // room for 100 SS items
+    tempt       := p-3                           // highest legal value for ARG1
+    procstk, procstkp := p, 0;  p := p+20
+                                        // for the slave info about R0 to R7
+    slave       := p;           p := p+ 8
+
+    dp          := worktop
+    labv        := p
+    paramnumber := (dp-p)/10+10;p       := p+paramnumber
+
+    FOR lp = labv TO p-1 DO !lp         := -1
+    stv         := p
+    stvp        := 0
+
+    IF (stv-dp) > 0 cgerror(-20, "Insufficient workspace (%N,%N) (%N,%N)",
+                                WORKVEC, worktop, workvec>>1, worktop>>1)
+    initdatalists()
+    initftables()
+    initslave()
+    freelist    := 0
+    maxgn       := 0
+    maxlab      := 0
+    maxssp      := 0
+    procbase    := 0
+    datalabel   := 0
+    incode      := FALSE
+    countflag   := FALSE
+    initstack(3)
+    code2(0)
+
+    TEST op=s.section
+    $(   cgname(s.section,rdn(),(CGFLAGS & cgf.sectnaming) ~= 0);
+         op := rdn(); got.sect := TRUE
+    $)
+    ELSE cgname(s.section,0,    (CGFLAGS & cgf.sectnaming) ~= 0)
+
+    scan()
+
+    op := rdn()
+
+    stv!0 := stvp/BYTESPERWORD   //  size of section in words
+    outputsection(op=0, got.sect) // & (LASTSECT | (CGFLAGS & cgf.cgonly)~= 0))
+
+    $(  LET used = ((stv + stvp/BYTESPERWORD) - workvec)  +  (worktop - dp)
+        IF used > maxused THEN maxused := used
+    $)
+$)1
+
+AND Nsrdn.() = VALOF
+// Read in OCODE operator or argument
+// Argument may be of form Ln
+$(  LET a, sign = 0, '+'
+    LET ch = 0
+    ch := rdch() REPEATWHILE ch='*S' \/ ch='*N' \/ ch='L'
+    IF ch=endstreamch RESULTIS 0
+    IF ch='-' DO $( sign := '-'; ch := rdch() $)
+    WHILE '0'<=ch<='9' DO $( a := 10*a+ch-'0'; ch := rdch() $)
+
+    RESULTIS sign='-' -> -a, a
+$)
+
+AND Srdn.() = VALOF
+$( LET B = RDCH();
+   RESULTIS B=ENDSTREAMCH -> 0, B<128 -> B, (Srdn.()<<7) + B - 128
+$)
+
+AND rdn.() = VALOF
+$( LET B = OBUF%OBUFP
+   OBUFP := OBUFP - 1
+   RESULTIS B<128 -> B, (Rdn.()<<7) + B - 128
+$)
+
+// read in an OCODE label
+AND rdl() = VALOF
+$( LET l = rdn()
+   IF maxlab<l $( maxlab := l; checkparam() $)
+   RESULTIS l
+$)
+
+// read in a global number
+AND rdgn() = VALOF
+$( LET g = rdn()
+   IF maxgn<g DO maxgn := g
+   RESULTIS g
+$)
+
+
+// generate next label parameter
+AND nextparam() = VALOF
+$( paramnumber := paramnumber-1
+   checkparam()
+   RESULTIS paramnumber
+$)
+
+
+AND checkparam() BE
+IF maxlab>=paramnumber cgerror(-20, "TOO MANY LABELS - INCREASE WORKSPACE")
+
+
+AND cgerror(rc, s, a,b,c,d) BE UNLESS rc=0 & (stflags & stf.nowarn)~=0
+$( LET o = output()
+   LET fatal = rc<0 | rc=20
+   SELECTOUTPUT(SYSOUT)
+   taskwritef(  rc=0  -> "Cg WARNING: ",
+                fatal -> "CG HARD ERROR: ", "Cg soft error: ");
+   WRITEF(s, a,b,c,d); newline()
+   selectoutput(o)
+   IF fatal $( REPORTCOUNT := REPORTMAX; COLLAPSE(ABS rc) $)
+   UNLESS rc=0 REPORTCOUNT +:= 1
+$)
+
+//debug AND bug(n) BE
+//debug $( writef("COMPILER BUG %N*N", n)
+//debug    dboutput(4)
+//debug // backtrace()
+//debug    writes("Continuing ...*N")
+//debug $)
+
+

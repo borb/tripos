@@ -1,0 +1,652 @@
+//****************************************************************************
+//*                                                                          *
+//*        M68KASM  -  Assembler for the MC68000 family  -  Section 11       *
+//*                                                                          *
+//*                      Symbol Handling and Line I/O                        *
+//*                                                                          *
+//****************************************************************************
+//*     I. D. Wilson    -    Last Modified    -    IDW    -    19/11/86      *
+//****************************************************************************
+
+
+
+SECTION "M11"
+
+
+
+GET "LIBHDR"
+GET "M68KHDR"
+
+
+
+LET findsymbol()  =  VALOF
+$(
+//  Read a tag symbol from the input file, and return a boolean saying whether
+//  there is an entry for the symbol in the symbol table.
+
+    readtagsymbol( 254 )
+
+    UNLESS  tagsize.given = ts.none  DO  complain( 80 )
+
+    RESULTIS  existstag( tagv, tagtable2 )
+$)
+
+
+
+AND readtag()  BE
+$(
+//  Read a tag.  This is always guaranteed to be a "type 2" symbol, which we
+//  can look up immediately.
+
+    readtagsymbol( 0 )
+
+    lookup( tagv, tagtable2 )
+$)
+
+
+
+AND readlabel()  BE
+
+//  Read a label.  This should be a "type 2" symbol, but we don't actually
+//  want to look it up yet.
+
+    readtagsymbol( 0 )
+
+
+
+AND readopcode()  BE
+$(
+//  Read an opcode.  This is always a "type 1" symbol, and can therefore
+//  be looked up immediately.  The only valid alternative to an opcode symbol
+//  is "end of line".
+
+    TEST  ch = '*N'  THEN  symb  :=  s.none
+    ELSE
+    $(
+        readtagsymbol( 2 )
+
+        lookup( tagv, tagtable1 )
+    $)
+$)
+
+
+
+AND readtagsymbol( errorcode )  BE
+$(
+//  Reads the tag, whose first character is in "ch".  We strip any suffix if
+//  one has been given, but that is all at this stage.
+
+    LET length    =  0
+    LET dotfound  =  FALSE
+
+    WHILE  symbolchar( ch, TRUE )  DO
+    $(
+        //  Loop to read the individual characters of the tag.  We keep on
+        //  looking until we hit an invalid character, or the symbol gets
+        //  too long.
+
+        TEST  length = tagchars  THEN
+        $(
+            warning( 90 )
+
+            //  The symbol is too long for us, so we will just take the
+            //  first "tagchars" characters of it.  Ignore the rest of the
+            //  tag.
+
+            WHILE  symbolchar( ch, TRUE )  DO  rch()
+
+            BREAK
+        $)
+        ELSE
+        $(
+            //  Take only the first "tagchars" characters of the
+            //  symbol name.
+
+            IF  ch = '.'  THEN  dotfound  :=  TRUE
+
+            length         :=  length + 1
+            tagv % length  :=  uppercase( ch )
+
+            rch()
+        $)
+    $)
+
+    //  We should check at this point to make sure that the first character is
+    //  valid.  If not, the length will be zero.
+
+    IF  length = 0  THEN  complain( errorcode )
+
+    tagv % 0  :=  length
+
+    IF  ch = '\'  THEN
+    $(
+        TEST  inmacro
+            THEN  UNTIL  ch = '*S'  |  ch = '*N'  DO  rch()
+            ELSE  complain( 117 )
+
+        tagsize.given  :=  ts.none
+
+        RETURN
+    $)
+
+    //  This symbol could be followed by a ".", and then by a length
+    //  specifier.  If so, we check for a suffix on the name we have read
+    //  in, and strip the suffix.
+
+    TEST  NOT dotfound               THEN  tagsize.given  :=  ts.none      ELSE
+    TEST  checksuffix( tagv, ".L" )  THEN  tagsize.given  :=  ts.long      ELSE
+    TEST  checksuffix( tagv, ".W" )  THEN  tagsize.given  :=  ts.word      ELSE
+    TEST  checksuffix( tagv, ".B" )  THEN  tagsize.given  :=  ts.byte      ELSE
+    TEST  checksuffix( tagv, ".S" )  THEN  tagsize.given  :=  ts.short     ELSE
+    TEST  checksuffix( tagv, ".D" )  THEN  tagsize.given  :=  ts.double    ELSE
+    TEST  checksuffix( tagv, ".X" )  THEN  tagsize.given  :=  ts.extended  ELSE
+    TEST  checksuffix( tagv, ".P" )  THEN  tagsize.given  :=  ts.packed    ELSE
+
+        //  No suffix given, so set the "tagsize.given" flag.
+
+        tagsize.given  :=  ts.none
+$)
+
+
+
+AND checksuffix( string, suffix )  =  VALOF
+$(
+//  Check to see if the string given has suffix "suffix", and if so, strip
+//  it.  Return a boolean to say what we have done.
+
+    LET strl  =  string % 0
+    LET sufl  =  suffix % 0
+
+    TEST  strl > sufl  THEN
+    $(
+        //  It is possible that this is a correct suffix, and so we should do
+        //  the check.  We search backwards...
+
+        FOR  i = 0  TO  sufl-1  DO
+        $(
+            LET strch  =  uppercase( string % (strl - i) )
+            LET sufch  =  uppercase( suffix % (sufl - i) )
+
+            UNLESS  strch = sufch  DO  RESULTIS  FALSE
+        $)
+
+        //  If we drop through here, then the suffix matches, and so we should
+        //  strip it.
+
+        string % 0  :=  strl - sufl
+
+        RESULTIS  TRUE
+    $)
+    ELSE  RESULTIS  FALSE
+$)
+
+
+
+AND uppercase( ch )   =   'a' <= ch <= 'z'  ->  ch - 'a' + 'A',  ch
+
+
+
+AND symbolchar( char, digits )  =  uppercasechar( char )         |
+                                   lowercasechar( char )         |
+                                   (digits & digitchar( char ))  |
+                                   ch = '_'  |  ch = '.'
+
+
+
+AND macrochar( char )  =  uppercasechar( char )  |  digitchar( char )
+
+
+
+$<EBCDIC
+AND uppercasechar( char )  =  VALOF
+$(
+//  See whether the character is an uppercase alphabetic character.
+//  We cannot do this the simple minded way, because "\" is part of
+//  the A-Z character set.
+
+    SWITCHON  char  INTO
+    $(
+        CASE 'A' :  CASE 'B' :  CASE 'C' :  CASE 'D' :
+        CASE 'E' :  CASE 'F' :  CASE 'G' :  CASE 'H' :
+        CASE 'I' :  CASE 'J' :  CASE 'K' :  CASE 'L' :
+        CASE 'M' :  CASE 'N' :  CASE 'O' :  CASE 'P' :
+        CASE 'Q' :  CASE 'R' :  CASE 'S' :  CASE 'T' :
+        CASE 'U' :  CASE 'V' :  CASE 'W' :  CASE 'X' :
+        CASE 'Y' :  CASE 'Z' :
+
+                    RESULTIS  TRUE
+
+
+        DEFAULT  :  RESULTIS  FALSE
+    $)
+$)
+
+
+
+AND lowercasechar( char )  =  VALOF
+$(
+//  See whether the character is a lowercase alphabetic character.
+
+    SWITCHON  char  INTO
+    $(
+        CASE 'a' :  CASE 'b' :  CASE 'c' :  CASE 'd' :
+        CASE 'e' :  CASE 'f' :  CASE 'g' :  CASE 'h' :
+        CASE 'i' :  CASE 'j' :  CASE 'k' :  CASE 'l' :
+        CASE 'm' :  CASE 'n' :  CASE 'o' :  CASE 'p' :
+        CASE 'q' :  CASE 'r' :  CASE 's' :  CASE 't' :
+        CASE 'u' :  CASE 'v' :  CASE 'w' :  CASE 'x' :
+        CASE 'y' :  CASE 'z' :
+
+                    RESULTIS  TRUE
+
+
+        DEFAULT  :  RESULTIS  FALSE
+    $)
+$)
+$>EBCDIC
+
+
+
+$<EBCDIC'
+AND uppercasechar( char )  =  'A' <= char <= 'Z'
+AND lowercasechar( char )  =  'a' <= char <= 'z'
+$>EBCDIC'
+
+
+
+AND digitchar( char )  =  '0' <= char <= '9'
+
+
+
+AND hashfunction( string )  =  VALOF
+$(
+//  Return the hashing value for the string given.
+
+    LET length   =  string % 0
+    LET hashval  =  0
+
+    FOR  i = length  TO  (length < 10)  ->  0, (length-10)  BY  -1  DO
+         hashval  :=  (hashval << 1)  +  string % i
+
+    RESULTIS  ABS (hashval)  REM  tagtablesize
+$)
+
+
+
+AND compare( string1, string2 )  =  VALOF
+$(
+//  Compare 2 strings, and return a boolean if they are equal.
+
+    LET length1  =  string1 % 0
+    LET length2  =  string2 % 0
+
+    UNLESS  length1 = length2  DO  RESULTIS  FALSE
+
+    FOR  i = 1  TO  length1  DO
+        UNLESS  string1 % i  =  string2 % i  DO
+            RESULTIS  FALSE
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND existstag( tagvector, tagtable )  =  VALOF
+$(
+//  Scan the tag table for the tag given.  We return a boolean, saying whether
+//  the entry in the symbol table exists or not.
+
+    LET hashval  =  hashfunction( tagvector )
+    LET entry    =  tagtable!hashval
+
+    UNTIL  entry = 0  DO
+    $(
+        IF  compare( tagvector, entry+st.name )  THEN  RESULTIS  TRUE
+
+        entry  :=  entry!st.link
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND lookup( tagvector, tagtable )  BE
+$(
+//  Looks up the tag (packed in tagvector) in the symbol table.  If no entry
+//  exists, then a new one is created, with type "s.new" and value 0.
+//  Returns with "symbtype" pointing to the entry in the table.
+
+    LET hashval  =  hashfunction( tagvector )
+    LET noxref   =  tagtable = tagtable1
+
+    symbtype  :=  tagtable!hashval
+
+    UNTIL  symbtype = 0  DO
+    $(
+        IF  compare( tagvector, symbtype+st.name )  THEN  BREAK
+
+        symbtype  :=  symbtype!st.link
+    $)
+
+    IF  symbtype = 0  THEN
+    $(
+        //  This is a new entry, and we must create it.
+
+        LET length  =  tagvector % 0
+
+        symbtype                :=  getstore( st.size + length/bytesperword )
+        symbtype!st.link        :=  tagtable!hashval
+        tagtable!hashval        :=  symbtype
+
+        FOR  i = 0  TO  length  DO  (symbtype + st.name) % i  :=  tagvector % i
+
+        symbtype!st.type        :=  s.new
+        symbtype!st.flags       :=  0
+        symbtype!st.value.high  :=  0
+        symbtype!st.value.low   :=  0
+        symbtype!st.definition  :=  (systemwords | noxref)  ->  0, cr.undefined
+        symbtype!st.references  :=  0
+    $)
+
+    symb    :=  symbtype!st.type  &  mask.type
+    regnum  :=  symbtype!st.value
+
+    IF  pass2  THEN
+    $(
+        IF  xref  THEN
+            UNLESS  symbtype!st.definition = 0  DO
+                addref( symbtype, linenumber )
+
+        IF  symb = s.new                           THEN  undefined  :=  TRUE
+        IF  (symbtype!st.flags & stb.muldef) \= 0  THEN  complain( 92 )
+    $)
+$)
+
+
+
+AND addref( p, ln )  BE
+$(
+    LET t  =  p + st.references
+
+    IF  symbtype!st.file = currentfile  &
+        symbtype!st.definition = ln     THEN  RETURN
+
+    UNTIL  !t = 0  DO
+    $(
+        t  :=  !t + r.link
+
+        IF  t!r.line = ln  &  t!r.file = currentfile  THEN
+
+            //  We have already added a reference for this item on this line
+            //  in this file.  No more to be done.
+
+            RETURN
+    $)
+
+    !t  :=  heap3( 0, ln, currentfile )
+$)
+
+
+
+AND heap3( a, b, c )  =  VALOF
+$(
+    LET s  =  getstore( 2 )
+
+    s!0  :=  a
+    s!1  :=  b
+    s!2  :=  c
+
+    RESULTIS  s
+$)
+
+
+
+AND heap2( a, b )  =  VALOF
+$(
+    LET s  =  getstore( 1 )
+
+    s!0  :=  a
+    s!1  :=  b
+
+    RESULTIS  s
+$)
+
+
+
+AND skiprest()  BE  charpos  :=  maxint   //  Force a Pseudo SKIPREC
+
+
+
+AND skiplayout()  BE
+$(
+//  Skip layout characters, and a user comment (if one has been given).
+
+    WHILE  ch = '*S'  DO  rch()
+
+    IF  ch = '!'  THEN
+
+        //  Comment symbol, so skip everything until end of line.
+
+        UNTIL  ch = '*N'  DO  rch()
+$)
+
+
+
+AND rch()  BE
+$(
+    IF  charpos > length  THEN  nextline()
+
+    ch       :=  ended  ->  endstreamch,  (inputbuff % charpos)
+    charpos  :=  charpos + 1
+$)
+
+
+
+AND nextline()  BE
+$(
+    charpos  :=  0
+    ended    :=  readline()
+$)
+
+
+
+AND readline()  =  VALOF
+$(
+//  Read the next input line from the source file.  On an IBM machine, we use
+//  record I/O, and then copy the result in order to expand tabs.  On other
+//  machines, we use character I/O, and expand tabs on the fly.
+
+$<RECORDIO
+    LET tempbuff    =  VEC  maxllen/bytesperword
+    LET templength  =  0
+
+    length      :=  readrec( tempbuff )
+    linenumber  :=  linenumber + 1
+
+    IF  length = endstreamch  THEN  RESULTIS  TRUE
+
+    IF  length < 0  THEN
+    $(
+        //  We did not read the whole record.  Skip the rest of the
+        //  record.
+
+        skiprec()
+
+        length  :=  ABS length
+    $)
+
+    //  Having read the record, we should now copy it to the main
+    //  buffer, expanding tabs as we go.
+
+    FOR  i = 0  TO  length-1  DO
+    $(
+        LET char  =  getfrombuffer( tempbuff, i )
+
+        TEST  char = '*T'  THEN
+        $(
+            LET nlength  =  (templength + tabspace)  &  tabmask
+
+            UNTIL  templength = nlength  DO
+            $(
+                putinbuffer( inputbuff, templength, '*S' )
+
+                templength  :=  templength + 1
+            $)
+        $)
+        ELSE
+        $(
+            //  Simple character.  Add it to the buffer, and then go
+            //  back for more.
+
+            putinbuffer( inputbuff, templength, char )
+
+            templength  :=  templength + 1
+        $)
+    $)
+
+    length  :=  templength
+$>RECORDIO
+
+$<RECORDIO'
+    LET char  =  rdch()
+
+    length      :=  0
+    linenumber  :=  linenumber + 1
+
+    IF  char = endstreamch  THEN  RESULTIS  TRUE
+
+    UNTIL  char = '*N'  |  char = endstreamch  DO
+    $(
+        TEST  char = '*T'  THEN
+        $(
+            //  Tab character, so expand it into spaces now, so as to
+            //  avoid copying later on.
+
+            LET nlength  =  (length + tabspace)  &  tabmask
+
+            UNTIL  length = nlength  DO
+            $(
+                putinbuffer( inputbuff, length, '*S' )
+
+                length  :=  length + 1
+            $)
+        $)
+        ELSE
+        $(
+            //  Simple character.  Add it to the buffer, and then go
+            //  back for more.
+
+            putinbuffer( inputbuff, length, char )
+
+            length  :=  length + 1
+        $)
+
+        char  :=  rdch()
+    $)
+$>RECORDIO'
+
+    //  Check to see whether the line has been truncated, and if it has,
+    //  put out a warning message.
+
+    UNLESS  length < maxllen  DO
+    $(
+        length  :=  maxllen
+
+        warning( 173 )
+    $)
+
+    //  Strip trailing spaces, in case this hasn't been done by the
+    //  run time system.
+
+    FOR  i = length-1  TO  0  BY  -1  DO
+         TEST  inputbuff % i  =  '*S'
+             THEN  length  :=  length - 1
+             ELSE  BREAK
+
+    inputbuff % length  :=  '*N'
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND getfrombuffer( buffer, offset )  =
+
+//  Read the "offset" character from the given buffer.  We check to see
+//  whether we are within the range 0 -> maxllen-1, and if not, return a dummy
+//  character.
+
+    offset < maxllen  ->  buffer % offset,  '*S'
+
+
+
+AND putinbuffer( buffer, offset, char )  BE
+
+//  Store the character "ch" at position "offset" in the buffer given.
+//  We check to make sure that we are within range of 0 -> maxllen-1.
+
+    IF  offset < maxllen  THEN
+        buffer % offset  :=  char
+
+
+
+AND declare( tagtable, words )  BE
+$(
+//  Take words, separated by '/' from the string "words" and creates symbol
+//  table entries for them.  A null word marks the end of "words".
+
+    LET i       =  1
+    LET length  =  0
+
+    $(  // Main Decoding Loop
+
+        LET ch  =  words % i
+
+        TEST  ch = '/'  THEN
+        $(
+            //  We have read a complete word.
+            //  If it is a null word, then we are at the end of the string
+
+            LET t  =  0
+
+            IF  length = 0  THEN  RETURN
+
+            tagv % 0  :=  length
+
+            lookup( tagv, tagtable )
+
+            //  When we return from lookup, "symb" should point to the entry
+            //  we have just created.  Update the "type" and "value" fields of
+            //  the entry.  Data for  the updating comes from "datavector",
+            //  pointed to by "dataptr".
+
+            symbtype!st.template    :=  dataptr!0
+
+            symbtype!st.type        :=  (dataptr!1)  +
+                                        (dataptr!2 << shift.masktype)
+
+            symbtype!st.flags       :=  stb.setnow
+
+            symbtype!st.value.high  :=  dataptr!3
+            symbtype!st.value.low   :=  dataptr!4
+
+            dataptr                 :=  dataptr + 5
+
+            length  :=  0
+        $)
+        ELSE
+        $(
+            //  Read the next character, trusting that no word
+            //  is longer than "tagchars" characters
+
+            length         :=  length + 1
+            tagv % length  :=  ch
+        $)
+
+        i  :=  i + 1
+    $)
+    REPEAT
+$)
+
+

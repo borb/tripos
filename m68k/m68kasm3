@@ -1,0 +1,1145 @@
+//******************************************************************************
+//*   Assembler for the Motorola MC68000 Microprocessor:  Section 3            *
+//******************************************************************************
+
+
+
+SECTION "M68KASM3"
+
+
+
+GET "LIBHDR"
+
+GET "M68KHDR"
+
+
+
+LET readsymb()  BE
+$(
+//  Read a Basic Symbol in, and set SYMB and SYMBTYPE
+
+    SWITCHON  ch  INTO
+    $(
+        CASE '*S' :
+        CASE '*T' :
+        CASE '*N' : symb  :=  s.none
+                    ENDCASE
+
+
+        CASE '('  : rch()    ;    symb      :=  s.bra
+                    ENDCASE
+
+
+        CASE ')'  : rch()    ;    symb      :=  s.ket
+                    ENDCASE
+
+        CASE '#'  : rch()    ;    symb      :=  s.literal
+                    ENDCASE
+
+
+        CASE ','  : rch()    ;    symb      :=  s.comma
+                    ENDCASE
+
+        CASE ':'  : rch()    ;    symb      :=  s.colon
+                    ENDCASE
+
+
+        CASE '+'  : rch()    ;    symb      :=  s.plus
+                    ENDCASE
+
+
+        CASE '-'  : rch()    ;    symb      :=  s.minus
+                    ENDCASE
+
+
+        CASE '**' : rch()    ;    symb      :=  s.times
+                    ENDCASE
+
+
+        CASE '/'  : rch()    ;    symb      :=  s.over
+                    ENDCASE
+
+
+        CASE '&'  : rch()    ;    symb      :=  s.logand
+                    ENDCASE
+
+
+        CASE '!'  : rch()    ;    symb      :=  s.logor
+                    ENDCASE
+
+
+        CASE '<'  : rch()
+
+                    TEST  ch = '<'  THEN
+                    $(
+                        rch()
+                        symb  :=  s.lshift
+                    $)
+                    ELSE  complain( 56 )
+
+                    ENDCASE
+
+
+        CASE '>'  : rch()
+
+                    TEST  ch = '>'  THEN
+                    $(
+                        rch()
+                        symb  :=  s.rshift
+                    $)
+                    ELSE  complain( 56 )
+
+                    ENDCASE
+
+
+        CASE '0'  :  CASE '1'  :  CASE '2'  : CASE '3'  :
+        CASE '4'  :  CASE '5'  :  CASE '6'  : CASE '7'  :
+        CASE '8'  :  CASE '9'  :
+
+                    number   :=  readnumber( 10 )
+                    symb     :=  s.number
+
+                    ENDCASE
+
+
+        CASE '$'  : rch()
+                    number   :=  readnumber( 16 )
+                    symb     :=  s.number
+
+                    ENDCASE
+
+
+        CASE '@'  : rch()
+                    number   :=  readnumber( 8 )
+                    symb     :=  s.number
+
+                    ENDCASE
+
+
+        CASE '%'  : rch()
+                    number   :=  readnumber( 2 )
+                    symb     :=  s.number
+
+                    ENDCASE
+
+
+        CASE '\'  : UNLESS  inmacro  DO  complain( 117 )
+                    UNTIL  ch = '*S'  |  ch = '*T'  |  ch = '*N'  DO  rch()
+
+                    symb  :=  s.none
+
+                    ENDCASE
+
+
+        CASE '.'  :
+        CASE '_'  :
+
+        CASE 'A'  :  CASE 'B'  : CASE 'C'  : CASE 'D'  :
+        CASE 'E'  :  CASE 'F'  : CASE 'G'  : CASE 'H'  :
+        CASE 'I'  :  CASE 'J'  : CASE 'K'  : CASE 'L'  :
+        CASE 'M'  :  CASE 'N'  : CASE 'O'  : CASE 'P'  :
+        CASE 'Q'  :  CASE 'R'  : CASE 'S'  : CASE 'T'  :
+        CASE 'U'  :  CASE 'V'  : CASE 'W'  : CASE 'X'  :
+        CASE 'Y'  :  CASE 'Z'  :
+
+
+        CASE 'a'  :  CASE 'b'  : CASE 'c'  : CASE 'd'  :
+        CASE 'e'  :  CASE 'f'  : CASE 'g'  : CASE 'h'  :
+        CASE 'i'  :  CASE 'j'  : CASE 'k'  : CASE 'l'  :
+        CASE 'm'  :  CASE 'n'  : CASE 'o'  : CASE 'p'  :
+        CASE 'q'  :  CASE 'r'  : CASE 's'  : CASE 't'  :
+        CASE 'u'  :  CASE 'v'  : CASE 'w'  : CASE 'x'  :
+        CASE 'y'  :  CASE 'z'  :
+
+                    readtag()
+                    ENDCASE
+
+
+        CASE '*'' : rch()
+
+                    symb    :=  s.number
+                    number  :=  0
+
+                    FOR  count = 1  TO  4  DO
+                    $(
+                        IF  ch = '*N'  THEN  complain( 57 )
+
+                        IF  ch = '*''  THEN
+                        $(
+                            rch()
+
+                            UNLESS  ch = '*''  DO
+
+                                //  This is an ascii literal which is
+                                //  shorter than the maximum length.
+                                      
+                                ENDCASE
+                        $)
+
+                        number  :=  (number << 8)  +  ascii.value( ch )
+
+                        rch()
+                    $)
+                          
+                    //  If we drop out of there, then we should check 
+                    //  that the terminating quote is present, and
+                    //  complain if not.
+
+                    TEST  ch = '*''  
+                        THEN  rch()
+                        ELSE  complain( 58 )
+
+                    ENDCASE
+
+
+        DEFAULT   : complain( 59 )
+    $)
+$)
+
+
+
+$<370
+AND ascii.value( char )  =  char ! (TABLE                              /* 370 */
+      0,     0,     0,     0,     0,   #11,     0,     0,              /* 370 */
+      0,     0,     0,   #13,   #14,   #15,     0,     0,              /* 370 */
+      0,     0,     0,     0,     0,   #12,     0,     0,              /* 370 */
+      0,     0,     0,     0,     0,     0,     0,     0,              /* 370 */
+      0,     0,     0,     0,     0,   #12,     0,     0,              /* 370 */
+      0,     0,     0,     0,     0,     0,     0,     0,              /* 370 */
+      0,     0,     0,     0,     0,     0,     0,     0,              /* 370 */
+      0,     0,     0,     0,     0,     0,     0,     0,              /* 370 */
+    #40,     0,  #133,  #135,     0,     0,     0,     0,              /* 370 */
+      0,     0,     0,   #56,   #74,   #50,   #53,  #174,              /* 370 */
+    #46,     0,     0,     0,     0,     0,     0,     0,              /* 370 */
+      0,     0,   #41,   #44,   #52,   #51,   #73,  #176,              /* 370 */
+    #55,   #57,  #134,     0,     0,  #136,  #137,     0,              /* 370 */
+      0,     0,     0,   #54,   #45,  #137,   #76,   #77,              /* 370 */
+      0,     0,     0,     0,     0,     0,     0,     0,              /* 370 */
+      0,  #140,   #72,   #43,  #100,   #47,   #75,   #42,              /* 370 */
+      0,  #141,  #142,  #143,  #144,  #145,  #146,  #147,              /* 370 */
+   #150,  #151,     0,     0,     0,     0,     0,     0,              /* 370 */
+      0,  #152,  #153,  #154,  #155,  #156,  #157,  #160,              /* 370 */
+   #161,  #162,     0,     0,     0,     0,     0,     0,              /* 370 */
+      0,     0,  #163,  #164,  #165,  #166,  #167,  #170,              /* 370 */
+   #171,  #172,     0,     0,     0,     0,     0,     0,              /* 370 */
+      0,     0,     0,     0,     0,     0,     0,     0,              /* 370 */
+      0,     0,     0,     0,     0,     0,     0,     0,              /* 370 */
+      0,  #101,  #102,  #103,  #104,  #105,  #106,  #107,              /* 370 */
+   #110,  #111,     0,     0,     0,     0,     0,     0,              /* 370 */
+      0,  #112,  #113,  #114,  #115,  #116,  #117,  #120,              /* 370 */
+   #121,  #122,     0,     0,     0,     0,     0,     0,              /* 370 */
+      0,     0,  #123,  #124,  #125,  #126,  #127,  #130,              /* 370 */
+   #131,  #132,     0,     0,     0,     0,     0,     0,              /* 370 */
+    #60,   #61,   #62,   #63,   #64,   #65,   #66,   #67,              /* 370 */
+    #70,   #71,     0,     0,     0,     0,     0,     0)              /* 370 */
+$>370
+
+
+
+$<CAP
+AND ascii.value( ch )  =  (ch & #X7F)                                  /* CAP */
+$>CAP
+
+
+
+$<68K
+AND ascii.value( ch )  =  (ch & #X7F)                                  /* 68K */
+$>68K
+
+
+
+AND readnumber( base )  =  VALOF
+$(
+//  Reads a number from the source, with given radix "base"
+
+    LET val  =  digitval( ch )
+    LET num  =  0
+
+    UNLESS  val < base  DO  complain( 60 )
+
+    WHILE  val < base  DO
+    $(
+        num  :=  num * base  +  val
+
+        rch()
+
+        val  :=  digitval( ch )
+    $)
+
+    RESULTIS  num
+$)
+
+
+
+
+AND digitval( char )  =     '0'  <=  char  <=  '9'   ->  char - '0',
+                            'A'  <=  char  <=  'F'   ->  char - 'A' + 10,
+                            'a'  <=  char  <=  'f'   ->  char - 'a' + 10,
+                                                         100
+
+
+
+
+AND effective.address()  =  VALOF
+$(
+//  An effective address is of the form:
+//
+//    <expression>          or
+//    <expression>(R)       or
+//    <expression>(Ar,R)    or
+//    <expression>(PC)      or
+//    <expression>(PC,R)    or
+//    #<expression>
+
+    LET result  =  0
+
+    bracount  :=  0
+
+    SWITCHON  symb  INTO
+    $(
+        CASE s.none     : complain( 61 )
+
+
+        CASE s.literal  : readsymb()
+                          RESULTIS  block2( ea.literal, expression() )
+
+
+        DEFAULT         : // Assume that all others are starts to
+                          // expressions
+
+                          result  :=  expression()
+
+                          TEST  symb = s.bra  THEN
+                          $(
+                              LET rtype1  =  0
+                              LET rtype2  =  0
+                              LET rnum1   =  0
+                              LET rnum2   =  0
+                              LET rsize1  =  0
+                              LET rsize2  =  0
+
+                              //  We are now decoding either:
+                              //     1)  e(R)    or
+                              //     2)  e(PC)   or
+                              //     3)  e(Ar,R) or
+                              //     4)  e(PC,R)
+
+                              readsymb()
+
+                              UNLESS  symb = s.Ar | symb = s.Dr | symb = s.PC  DO
+                                  complain( 62 )
+
+                              rtype1  :=  symb
+                              rnum1   :=  regnum
+                              rsize1  :=  tagsize.given
+
+                              readsymb()
+
+                              TEST  symb = s.ket  THEN
+                              $(
+                                  //  This is an  e(R) type addressing
+                                  //  mode.  More, we cannot say yet.
+
+                                  readsymb()
+
+                                  RESULTIS  block3( ea.R.disp, result,
+                                               block3( rtype1, rnum1, rsize1 ) )
+                              $)
+                              ELSE
+
+                              TEST  symb = s.comma  THEN
+                              $(
+                                  //  This is an "e(X,R)" type addressing
+                                  //  mode.  "rtype1" must be Ar or PC, and the
+                                  //  expression MUST be absolute, although
+                                  //  we will not be able to verify this, until
+                                  //  it is evaluated.
+
+                                  UNLESS  rtype1 = s.Ar | rtype1 = s.PC  DO  
+                                      complain( 63 )
+
+                                  readsymb()
+
+                                  UNLESS  symb = s.Ar | symb = s.Dr  DO  complain( 64 )
+
+                                  rtype2  :=  symb
+                                  rnum2   :=  regnum
+                                  rsize2  :=  tagsize.given
+
+                                  readsymb()
+                                  checkfor( s.ket, 66 )
+
+                                  RESULTIS  block3( ea.R.index, result,
+                                              block2(
+                                                block3( rtype1, rnum1, rsize1 ),
+                                                block3( rtype2, rnum2, rsize2 ) ) )
+                              $)
+                              ELSE   complain( 65 )
+                          $)
+                          ELSE  RESULTIS block2( ea.exp, result )
+    $)
+$)
+
+
+
+
+AND expression()  =  VALOF
+$(
+    LET f  =  factor()
+
+    WHILE  (symb = s.plus  |  symb = s.minus)  DO
+    $(
+        LET op  =  symb
+
+        readsymb()
+
+        f  :=  block2( s.opapply, block3( op, f, factor() ) )
+    $)
+
+    RESULTIS  f
+$)
+
+
+
+AND factor()  =  VALOF
+$(
+    LET t  =  term()
+
+    WHILE  (symb = s.times  |  symb = s.over)  DO
+    $(
+        LET op  =  symb
+
+        readsymb()
+
+        t  :=  block2( s.opapply, block3( op, t, term() ) )
+    $)
+
+    RESULTIS  t
+$)
+
+
+
+AND term()  =  VALOF
+$(
+    LET s  =  secondary()
+
+    WHILE  (symb = s.logand  |  symb = s.logor)  DO
+    $(
+        LET op  =  symb
+
+        readsymb()
+
+        s  :=  block2( s.opapply, block3( op, s, secondary() ) )
+    $)
+
+    RESULTIS  s
+$)
+
+
+
+AND secondary()  =  VALOF
+$(
+    LET p  =  primary()
+
+    WHILE  (symb = s.lshift  |  symb = s.rshift)  DO
+    $(
+        LET op  =  symb
+
+        readsymb()
+
+        p  :=  block2( s.opapply, block3( op, p, primary() ) )
+    $)
+
+    RESULTIS  p
+$)
+
+
+
+AND primary()  =  VALOF
+$(
+    LET result  =  0
+
+    SWITCHON  symb  INTO
+    $(
+        CASE s.Dr        :
+        CASE s.Ar        : // At this point, ch holds the terminating character
+
+                           IF  (symbtype!st.flags & stb.setnow) = 0  THEN
+                               complain( 148 )
+
+                           result  :=  block3( symb, regnum, tagsize.given )
+
+                           IF  ch = '-'  |  ch = '/'  THEN  UNLESS  in.movem  DO
+
+                               //  It is likely that this is a MOVEM
+                               //  type of register list.  If it is, then
+                               //  it is illegal here.
+
+                               complain( 67 )
+
+                           checktagsize()
+
+                           readsymb()
+                           RESULTIS  result
+
+
+        CASE s.SR       :
+        CASE s.CCR      :
+        CASE s.USP      : 
+        CASE s.PC       : checktagsize()
+
+        CASE s.star     : result  :=  block1( symb )
+                          readsymb()
+                          RESULTIS  result
+
+
+        CASE s.ext      : IF  (symbtype!st.flags & stb.setnow) = 0  THEN
+                              complain( 174 )
+
+        CASE s.rel      :
+        CASE s.abs16    :
+        CASE s.abs32    :
+        CASE s.new      : IF  pass2 & undefined  THEN  complain( 97 )
+                          checktagsize()
+
+                          result  :=  block2( symb, symbtype )
+                          readsymb()
+                          RESULTIS  result
+
+
+        CASE s.number   : result  :=  block2( s.number, number )
+                          readsymb()
+                          RESULTIS  result
+
+
+        CASE s.minus    : //  This could be   -<expression>
+                          //  or              -(Ar)
+                          //  or even         -(<expression>)
+
+                          readsymb()
+
+                          IF  symb = s.bra  THEN   // More work to do
+                          $(
+                              readsymb()
+
+                              IF  symb = s.Ar  THEN
+                              $(
+                                  IF  bracount > 0  THEN  complain( 68 )
+
+                                  result  :=  block2( s.Ar.predecr,
+                                                block3( symb, regnum, tagsize.given ) )
+                                  readsymb()
+                                  checkfor( s.ket, 65 )
+
+                                  RESULTIS  result
+                              $)
+
+                              result  :=  expression()
+                              checkfor( s.ket, 69 )
+
+                              RESULTIS  block2( s.monminus, result )
+                          $)
+
+                          RESULTIS  block2( s.monminus, primary() )
+
+
+        CASE s.bra      : //  This could be  (<expression>)
+                          //  or             (Ar)
+                          //  or             (Ar)+
+
+                          readsymb()
+                          
+                          IF  symb = s.Ar  THEN
+                          $(
+                              IF  bracount > 0  THEN   complain( 68 )
+
+                              result  :=  block3( symb, regnum, tagsize.given )
+                              readsymb()
+                              checkfor( s.ket, 65 )
+
+                              TEST  symb = s.plus  THEN
+                              $(
+                                  readsymb()
+
+                                  RESULTIS  block2( s.ar.postincr, result )
+                              $)
+                              ELSE  RESULTIS  block2( s.ar.indirect, result )
+                          $)
+                          
+                          IF  symb = s.Dr  THEN  complain( 68 )
+
+                          bracount  :=  bracount + 1
+                          result    :=  expression()
+                          bracount  :=  bracount - 1
+
+                          checkfor( s.ket, 69 )
+
+                          RESULTIS  result
+
+        CASE s.literal  : complain( 139 )
+
+        CASE s.plus     :
+        CASE s.over     :
+        CASE s.logand   :
+        CASE s.logor    :
+        CASE s.lshift   :
+        CASE s.rshift   : complain( 140 )
+
+        CASE s.none     : complain( 141 )
+        CASE s.ket      : complain( 142 )
+        CASE s.comma    : complain( 143 )
+        CASE s.colon    : complain( 144 )
+        CASE s.instr    : complain( 135 )
+        CASE s.dir      : complain( 136 )
+        CASE s.macro    : complain( 137 )
+        CASE s.reg      : complain( 185 )
+
+        DEFAULT         : complain( 70 )
+    $)
+$)
+
+
+
+AND evaluate( ptr )  BE  UNLESS  ptr = 0  DO
+$(
+//  Will eventually evaluate the expression pointed to by pointer, and
+//  set up the operand effective address: op.ea
+//  The result is a boolean, corresponding to whether the evaluation
+//  has detected an error.
+
+    LET ptr0  =  ptr!p.ptr0
+    LET ptr1  =  ptr!p.ptr1
+
+    forwardref  :=  no
+    op.ea       :=  0
+
+    SWITCHON  ptr0  INTO
+    $(
+        //  The possible types of effective address are:
+        //
+        //      #<expression>                 ea.literal
+        //      <expression>                  ea.exp
+        //      <expression>(X)               ea.R.disp
+        //      <expression>(X,R)             ea.R.index
+
+
+        CASE ea.literal   :  exptype  :=  datatype( evalabsexp( ptr1 ) )
+                             exp      :=  value
+
+                             UNLESS  externalref  DO
+                             $(
+                                 IF  1 <= exp <= 8     THEN  op.ea  :=  op.ea | am.imm3
+                                 IF  wordsized( exp )  THEN  op.ea  :=  op.ea | am.imm16
+                             $)
+
+                             op.ea  :=  op.ea | am.imm32
+
+                             SWITCHON  instr.size  INTO
+                             $(
+                                 CASE ts.byte :  UNLESS  bytesized( exp )  DO
+                                                     warning( 176 )
+                                                 ENDCASE
+
+                                 CASE ts.none :
+                                 CASE ts.word :  UNLESS  wordsized( exp )  DO
+                                                     warning( 175 )
+                                                 ENDCASE
+
+                                 CASE ts.long :  ENDCASE
+                                 
+                                 
+                                 DEFAULT      :  complain( 0 )
+                             $)
+                                                    
+                             ENDCASE
+
+
+        CASE ea.exp        : // This could be absolute, or relocatable,
+                             // and, if on the first pass, contain variables
+                             // which are undefined.
+
+                             exptype  :=  datatype( evalexp( ptr1 ) )
+
+                             exp    :=   value
+                             op.ea  :=   VALOF
+
+                             SWITCHON  (absolute( exptype ) & forwardref)  ->  forwardreftype,
+                                        exptype  INTO
+                             $(
+                                 CASE s.rel          : RESULTIS am.PC.disp
+                                 CASE s.abs16        : RESULTIS abs16addr( exp )
+                                 CASE s.abs32        : RESULTIS am.abs32
+                                 CASE s.Ar           : RESULTIS am.Ar
+                                 CASE s.Dr           : RESULTIS am.Dr
+                                 CASE s.Ar.predecr   : RESULTIS am.Ar.pd
+                                 CASE s.Ar.postincr  : RESULTIS am.Ar.pi
+                                 CASE s.Ar.indirect  : RESULTIS am.Ar.ind
+                                 CASE s.SR           :
+                                 CASE s.CCR          :
+                                 CASE s.USP          : RESULTIS am.special
+
+                                 DEFAULT             : complain( 70 )
+                             $)
+                             ENDCASE
+
+
+        CASE ea.R.disp    :  //  This could be one of the two forms:
+                             //
+                             //      <expression>(Ar)
+                             //      <expression>'(Ar)
+                             //      <expression>'(Dr)
+                             //
+                             //      <expression>(PC)
+                             //      <expression>'(PC)
+                             //
+                             //  The first of which requires the <expression> to
+                             //  be absolute and the Address register to be
+                             //  unsized.  The others allow the <expression> to
+                             //  be relocatable, and the register to be sized
+                             //  (either word or long word sized).
+                             
+                             exptype  :=  datatype( evalexp( ptr1 ) )
+                                 
+                             IF  externalref  THEN  complain( 162 )
+                                 
+                             registers  :=  ptr!p.ptr2
+                             
+                             IF  registers!p.ptr0 = s.PC  THEN
+                             $(
+                                 //  This is the e(PC) form of the instruction.
+                                 //  The expression is evaluated relative to
+                                 //  the current PC.
+                                 
+                                 TEST  forwardref & pass1  THEN
+                                 $(
+                                     //  Can't calculate the offset yet, but no
+                                     //  matter, since we can do it next time.
+                                     
+                                     exptype  :=  locmode
+                                     exp      :=  location
+                                 $)
+                                 ELSE
+
+                                     //  All is OK.
+                                     
+                                     exp  :=  value
+                                     
+                                 //  We can now return with the PC relative
+                                 //  addressing mode.
+                                 
+                                 op.ea  :=  am.PC.disp
+                                 
+                                 ENDCASE
+                             $)
+
+                             //  Otherwise, this is a normal type of addressing
+                             //  mode, and we should handle it as before.
+
+                             exp      :=  value
+                             op.ea    :=  VALOF
+
+                                 SWITCHON  exptype  INTO
+                                 $(
+                                     //  The expression can be relocatable,
+                                     //  in which case, it is the PC+index
+                                     //  addressing mode.  It can also be
+                                     //  of type "abs16", in which case it
+                                     //  is the Ar+disp addressing mode.
+                                     //  If it is "new", then we can do nothing
+                                     //  until the next pass (if there is one).
+
+                                     CASE s.rel     : RESULTIS  am.PC.index
+
+                                     CASE s.abs16   :
+                                     CASE s.abs32   : RESULTIS  am.Ar.disp
+
+                                     DEFAULT        : complain( 70 )
+                                 $)
+
+                             ENDCASE
+
+
+        CASE ea.R.index   :  //  This must be of the form:
+                             //
+                             //      <expression>(X,R)
+                             //
+                             //  This may be PC indexed mode or Ar indexed
+                             //  mode.  More work has to be done to find out
+                             //  which it is.
+
+                             exptype  :=  datatype( evalexp( ptr1 ) )
+
+                             IF  externalref  THEN  complain( 162 )
+                             
+                             //  We must decide whether X is an address 
+                             //  register, or the special value PC.
+                             
+                             registers  :=  ptr!p.ptr2
+                             
+                             IF  registers!p.ptr0!p.ptr0 = s.PC  THEN
+                             $(
+                                 //  Aha!  This is easier than we thought.  
+                                 //  This is actually the PC index mode.
+                                 
+                                 registers  :=  registers!p.ptr1
+                                 
+                                 TEST  forwardref & pass1  THEN
+                                 $(
+                                     //  Can't calculate the offset yet, but no
+                                     //  matter, since we can do it next time.
+                                     
+                                     exptype  :=  locmode
+                                     exp      :=  location
+                                 $)
+                                 ELSE
+
+                                     //  All is OK.
+                                     
+                                     exp  :=  value
+                                     
+                                 //  We can now return with the PC indexed
+                                 //  addressing mode.
+                                 
+                                 op.ea  :=  am.PC.index
+                                 
+                                 ENDCASE
+                             $)
+                             
+                             //  Otherwise, this is one of the boring modes
+                             //  which we are used to handling.
+
+                             IF  exptype = s.rel  THEN  complain( 71 )
+
+                             exp    :=  value
+                             op.ea  :=  am.Ar.index
+
+                             ENDCASE
+
+
+        DEFAULT           :  complain( 0 )
+    $)
+$)
+
+
+
+AND abs16addr( addr )  =  (forwardref  &  pass1)  ->  am.abs16,  VALOF
+$(
+//  Calculate the data type of the (supposedly) 16 bit address given to us.
+//  Unfortunately, this address is only allowed to be 15 bits, and if larger,
+//  must NOT be a forward reference.
+
+    TEST  (addr & #X7FFF) = addr  THEN  RESULTIS  am.abs16
+    ELSE
+    $(
+        //  More than a 15 bit address, and so we must check for backward or
+        //  forward reference.  Backward reference is ok, but forward reference
+        //  must be flagged as an error.
+        
+        IF  forwardref  THEN  complain( 73 )
+
+        //  Otherwise, all is ok, and we can return the addressing mode as 
+        //  being long absolute.
+        
+        RESULTIS  am.abs32
+    $)
+$)
+
+
+
+AND evalabsexp( ptr )  =  ptr = 0  ->  0,  VALOF
+$(
+//  Evaluate the expression pointed to by "ptr", and return its data type.
+//  This must be an absolute expression.
+
+    LET type  =  datatype( evalexp( ptr ) )
+
+    TEST  absolute( type )  THEN  RESULTIS  type
+    ELSE
+    $(
+        //  Not an absolute symbol, so complain about it.
+        
+        SWITCHON  type  INTO
+        $(
+            CASE s.Ar          :
+            CASE s.Dr          :  complain( 145 )
+            
+            CASE s.rel         :  complain( 71 )
+
+            CASE s.Ar.indirect :  
+            CASE s.Ar.postincr :
+            CASE s.Ar.predecr  :  complain( 146 )
+            
+            CASE s.SR          :
+            CASE s.CCR         :
+            CASE s.USP         :
+            CASE s.PC          :  complain( 147 )
+            
+            DEFAULT            :  complain( 70 )
+        $)
+    $)
+$)
+
+
+
+AND evalexp( ptr )  =  ptr = 0  ->  0,  VALOF
+$(
+//  Evaluate the general expression, pointed to by "ptr".
+
+    LET ptr0  =  ptr!p.ptr0
+    LET ptr1  =  ptr!p.ptr1
+    LET ptr2  =  ptr!p.ptr2
+    LET fref  =  0
+
+    SWITCHON  ptr0  INTO
+    $(
+        CASE s.Dr           :
+        CASE s.Ar           : value  :=  checkregister( ptr )
+                              RESULTIS ptr0
+
+        CASE s.Ar.indirect  :
+        CASE s.Ar.postincr  :
+        CASE s.Ar.predecr   : value  :=  checkregister( ptr1 )
+                              RESULTIS ptr0
+
+        CASE s.SR           :
+        CASE s.CCR          :
+        CASE s.USP          :
+        CASE s.PC           : value  :=  ptr0
+                              RESULTIS  ptr0
+
+
+        CASE s.new          : forwardref :=  yes
+                              value      :=  1
+                              RESULTIS   forwardreftype
+
+
+        CASE s.abs16        :
+        CASE s.abs32        :
+        CASE s.rel          : fref        :=  (ptr1!st.flags & stb.setnow) = 0
+                              forwardref  :=  forwardref | fref
+
+                              IF  (ptr1!st.flags & stb.set) \= 0  &  fref  THEN
+
+                                  //  Illegal forward reference to a symbol
+                                  //  defined by "SET"
+
+                                  complain( 106 )
+
+                              value  :=  ptr1!st.value
+                              RESULTIS  ptr0
+
+
+        CASE s.star         : value  :=  location
+                              RESULTIS  relocatable( locmode )  ->  locmode,
+                                        wordsized( value )      ->  s.abs16,
+                                                                    s.abs32
+
+        CASE s.number       : value  :=  ptr1
+                              RESULTIS  wordsized( value )  ->  s.abs16,
+                                                                s.abs32
+
+        CASE s.monminus     : exptype  :=  evalexp( ptr1 )
+
+                              IF  externalref  THEN  complain( 163 )
+
+                              value  :=  VALOF
+                                  SWITCHON  exptype  INTO
+                                  $(
+                                      CASE s.rel   : complain( 74 )
+
+                                      CASE s.abs16 :
+                                      CASE s.abs32 : RESULTIS -value
+
+                                      DEFAULT      : complain( 70 )
+                                  $)
+
+                              RESULTIS  wordsized( value )  ->  s.abs16,
+                                                                s.abs32
+
+
+        CASE s.opapply      : //  Apply a dyadic operator.  Only certain
+                              //  operations are allowed on operands of
+                              //  specific data types.
+
+                              // External symbols can have a limited
+                              // amount of arithmetic done on them.
+                              $(
+                                  LET type1   =  0
+                                  LET type2   =  0
+                                  LET value1  =  0
+                                  LET value2  =  0
+                                  LET ext1    =  0
+                                  LET ext2    =  0
+                                  LET ext     =  externalref
+                                  LET result  =  0
+
+                                  externalref  :=  no
+                                  type1        :=  evalexp( ptr1!p.ptr1 )
+                                  value1       :=  value
+                                  ext1         :=  externalref
+
+                                  externalref  :=  no
+                                  type2        :=  evalexp( ptr1!p.ptr2 )
+                                  value2       :=  value
+                                  ext2         :=  externalref
+
+                                  //  External symbols are allowed in
+                                  //  expressions, provided that:
+                                  //
+                                  //    a)  Only one per expression
+                                  //    b)  E+absexp  or  absexp+E
+                                  //    c)  E-absexp
+
+                                  IF  ext1  |  ext2  THEN
+                                  $(
+                                      LET op  =  ptr1!p.ptr0
+
+                                      //  This needs checking further.  It is
+                                      //  illegal if "ext" is set, or both "ext1"
+                                      //  and "ext2" are set.
+
+                                      IF  ext  |  (ext1 & ext2)  THEN
+                                          complain( 163 )
+
+                                      //  Ok - only one of them is set, so
+                                      //  check the operator/operand pair
+
+                                      TEST  ext1  THEN
+                                            UNLESS  (op = s.plus | op = s.minus)  &
+                                                    (absolute( type2 ))  DO
+                                                        complain( 163 )
+
+                                      ELSE  UNLESS  (op = s.plus)    &
+                                                    (absolute( type1 ))  DO
+                                                        complain( 163 )
+                                  $)
+
+
+                                  value  :=  VALOF
+                                      SWITCHON  ptr1!p.ptr0  INTO
+                                      $(
+                                          CASE s.plus   : RESULTIS value1  + value2
+                                          CASE s.minus  : RESULTIS value1  - value2
+                                          CASE s.times  : RESULTIS value1  * value2
+                                          CASE s.over   : RESULTIS value1  / value2
+                                          CASE s.logand : RESULTIS value1  & value2
+                                          CASE s.logor  : RESULTIS value1  | value2
+                                          CASE s.lshift : RESULTIS value1 << value2
+                                          CASE s.rshift : RESULTIS value1 >> value2
+
+                                          DEFAULT       : complain( 0 )
+                                      $)
+
+                                  externalref  :=  ext | ext1 | ext2
+
+                                  result  :=  finaltype( type1, type2, ptr1!p.ptr0, value )
+
+                                  RESULTIS  externalref  ->  s.abs32, result
+                              $)
+
+
+        CASE s.ext          : externalref  :=  yes
+                              externalsymb :=  ptr1
+                              value        :=  0
+                              RESULTIS  s.abs32
+
+
+        DEFAULT             : complain( 0 )
+    $)
+$)
+
+
+
+AND datatype( type )  =  (pass1  &  forwardref  &  type = s.rel)  ->
+                          s.abs16,  type
+
+
+
+AND sizevalue( sizebit )  =  VALOF
+$(
+    SWITCHON  sizebit  INTO
+    $(
+        CASE size.b  :  RESULTIS ts.byte
+        CASE size.w  :  RESULTIS ts.word
+        CASE size.l  :  RESULTIS ts.long
+
+        DEFAULT      :  RESULTIS ts.none
+    $)
+$)
+
+
+
+
+AND finaltype( type1, type2, op, value )  =  VALOF
+$(
+//  The operator table is as follows:   A represents an Absolute symbol
+//                                      R represents a  Relocatable symbol
+//                                      x represents an error
+//
+//
+
+
+//========================================================================//
+//                                                                        //
+//                              OPERANDS                                  //
+//                                                                        //
+//                  |          |          |          |                    //
+//      Operator    |    AA    |    RR    |    AR    |    RA              //
+//   ---------------+----------+----------+----------+----------          //
+//                  |          |          |          |                    //
+//         +        |     A    |     x    |     R    |     R              //
+//         -        |     A    |     A    |     x    |     R              //
+//         *        |     A    |     x    |     x    |     x              //
+//         /        |     A    |     x    |     x    |     x              //
+//         &        |     A    |     x    |     x    |     x              //
+//         !        |     A    |     x    |     x    |     x              //
+//         >>       |     A    |     x    |     x    |     x              //
+//         <<       |     A    |     x    |     x    |     x              //
+//                                                                        //
+//========================================================================//
+
+
+
+    LET abs1  =  absolute( type1 )
+    LET abs2  =  absolute( type2 )
+    LET rel1  =  relocatable( type1 )
+    LET rel2  =  relocatable( type2 )
+
+    LET AA    =  abs1 & abs2
+    LET RR    =  rel1 & rel2
+    LET AR    =  abs1 & rel2
+    LET RA    =  rel1 & abs2
+
+    LET ws    =  wordsized( value )
+
+
+    SWITCHON  op  INTO
+    $(
+        CASE  s.times      :
+        CASE  s.over       :
+        CASE  s.logand     :
+        CASE  s.logor      :
+        CASE  s.lshift     :
+        CASE  s.rshift     : TEST  AA  THEN  RESULTIS  ws  ->  s.abs16, s.abs32
+                                       ELSE  complain( 75 )
+
+
+        CASE s.plus        : TEST  AA  THEN  RESULTIS  ws  ->  s.abs16, s.abs32  ELSE
+                             TEST  AR  THEN  RESULTIS  s.rel                     ELSE
+                             TEST  RA  THEN  RESULTIS  s.rel                     ELSE
+                                             complain( 76 )
+
+
+        CASE s.minus       : TEST  AA  THEN  RESULTIS  ws  ->  s.abs16, s.abs32  ELSE
+                             TEST  RR  THEN  RESULTIS  ws  ->  s.abs16, s.abs32  ELSE
+                             TEST  RA  THEN  RESULTIS  s.rel                     ELSE
+                             TEST  AR  THEN  TEST  pass1 THEN  RESULTIS s.abs16
+                                             ELSE  complain( 76 )
+                                       ELSE  complain( 76 )
+
+
+        DEFAULT            : complain( 0 )
+    $)
+$)
+
+

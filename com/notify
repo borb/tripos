@@ -1,0 +1,133 @@
+//******************************************************************************
+//*                                                                            *
+//*    NOTIFY     -    Grubby form of WTO which sends a message to a machine   *
+//*                    without requiring the WTO-xxxxx name to be in the       *
+//*                    Name Server.                                            *
+//*                                                                            *
+//******************************************************************************
+//*    I. D. Wilson    Last Modified   -   IDW   -   11/02/82                  *
+//******************************************************************************
+
+
+SECTION "NOTIFY"
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+
+
+MANIFEST
+$(
+    args              =  bb.ssp.args * bytesperringword
+    maxmessagelength  =  127
+    maxnamelength     =  32
+    port              =  10
+    rxlength          =  3
+    function          =  1016
+    ringwordsperword  =  bytesperword / bytesperringword
+$)
+
+
+LET start()  BE
+$(
+//  This program takes arguments in the form:
+//
+//      NOTIFY  machine  message
+//
+//  Which causes the output:
+//
+//      ***FROM xxxx - message
+
+    LET nsvec    =  VEC 3
+    LET name     =  VEC maxnamelength/bytesperword
+    LET message  =  VEC maxmessagelength/bytesperword
+    LET rxbuff   =  VEC rxlength/ringwordsperword
+    LET lengthn  =  0
+    LET lengthm  =  args
+    LET machine  =  0
+    LET termch   =  ';'
+    LET ch       =  rdch()
+
+    //  First, read the name of the machine we want to notify from the
+    //  command line, and look it up in the name server.
+
+    WHILE  ch = '*S'  |  ch = '*T'  DO  ch  :=  rdch()
+
+    IF  ch = '*N'  |  ch = '*E'  THEN
+    $(
+        writes( "NOTIFY:  Expecting arguments  <machine> <message>.*N" )
+        stop( 8 )
+    $)
+
+    UNTIL  ch = endstreamch  |  ch = '*S'  |  ch = '*T'  |  ch = '*N'  |  ch = '*E'  |  ch = ';'  DO
+    $(
+        IF  lengthn = maxnamelength  THEN
+        $(
+            writef( "NOTIFY:  Machine name >%N characters.*N", maxnamelength )
+            stop( 8 )
+        $)
+
+        lengthn         :=  lengthn + 1
+        name % lengthn  :=  ch
+        ch              :=  rdch()
+    $)
+
+    name % 0  :=  lengthn
+
+    //  Ok, we have read in the name, so we can call the name look up service
+    //  to find out what its ring address is.
+
+    UNLESS  lookup.name( name, nsvec )  DO
+    $(
+        writef( "NOTIFY:  Illegal machine name *"%S*":  ", name )
+        fault( result2 )
+        stop( 8 )
+    $)
+
+    //  The name was in the name server, so pick out the machine id from the
+    //  NSvec, and read the message to be sent into the message buffer.
+
+    machine  :=  nsvec!nsv.machine.id
+
+    WHILE ch = '*S'  |  ch = '*T'  DO  ch  :=  rdch()
+
+    IF  ch = '"'  |  ch = '*''  THEN
+    $(
+        termch  :=  ch
+        ch      :=  rdch()
+    $)
+
+    UNTIL  ch = endstreamch  |  ch = termch  |  ch = '*N'  |  ch = '*E'  DO
+    $(
+        IF  lengthm = maxmessagelength  THEN
+        $(
+            writef( "NOTIFY:  Message >%N characters.*N",
+                     maxmessagelength-args )
+            stop( 8 )
+        $)
+
+        lengthm            :=  lengthm + 1
+        message % lengthm  :=  ch
+        ch                 :=  rdch()
+    $)
+
+    message % args  :=  lengthm-args
+
+    //  We are now ready to send the message to the remote machine.
+    //  Call SSP to initiate the notify...
+
+    UNLESS  ssp( 0, message,  lengthm/bytesperringword+1, rxbuff, rxlength,
+                 ?, function, machine, port )  DO
+    $(
+        //  The SSP failed, so write out a message to that effect.
+
+        writef( "NOTIFY:  SSP to *"%S*" failed:  ", name )
+        fault( result2 )
+        stop( 8 )
+    $)
+
+    //  And that's your lot folks!!
+$)
+
+

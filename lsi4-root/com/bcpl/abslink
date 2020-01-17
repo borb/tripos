@@ -1,0 +1,1104 @@
+|| (C) Copyright 1980 Tripos Research Group
+||     University of Cambridge
+||     Computer Laboratory
+
+GET "LIBHDR"
+
+MANIFEST
+$(
+errmax=10
+
+s.word=1
+s.tag=2
+s.number=3
+s.semicolon=4
+s.comma=5
+s.equals=6
+s.bra=7
+s.ket=8
+s.string=9
+
+n.hi=1
+n.lo=2
+n.type=3
+n.def=4
+n.set=5
+n.val=6
+n.chars=7
+
+v.word=1
+v.numb=2
+v.string=3
+v.vec=4
+
+w.undef=0
+w.seg=1
+w.name=2
+w.struct=3
+w.tag=4
+
+d.addrinc=10
+d.absmin=11
+d.absmax=12
+d.relmin=13
+d.relmax=14
+d.root=15
+d.seg=16
+d.initseg=17
+d.name=18
+d.struct=19
+
+t.hunk=1000
+t.reloc=1001
+t.end=1002
+t.abshunk=1003
+t.absreloc=1004
+
+secword=12345
+$)
+
+GLOBAL
+$(
+readdecls:150
+readnumb:151
+readroot:152
+readseg:153
+readname:154
+readstruct:155
+readvalue:156
+nextsymb:157
+rch:158
+checkfor:159
+synerror:160
+
+lookupword:167
+decldirs:168
+makestring:169
+loadall:170
+loadvalue:171
+loadsegment:172
+loadfile:173
+allocvec:174
+writerelvec:175
+writeabsvec:176
+newvec:177
+discardvec:178
+testbreak:179
+error:180
+writetomap:181
+readword:182
+xreadwords:184
+writeword:185
+xwritewords:186
+mcwritehex:187
+mcwriteoct:188
+savewriteu:189
+
+comstream:200
+verstream:201
+mapstream:202
+instream:203
+outstream:204
+exhausted:205
+workv:206
+workp:207
+worksize:208
+absmin:209
+absmax:210
+relmin:211
+relmax:212
+relptr:213
+reltop:214
+addrinc:215
+seglist:216
+segliste:217
+initseglist:218
+initsegliste:219
+namelist:220
+nameliste:221
+rootlist:222
+rootliste:223
+rec.p:224
+rec.l:225
+symtype:226
+symval:227
+wordv:228
+ch:229
+chbuf:230
+chcount:231
+errcount:232
+node:233
+datenode:234
+wordtree:235
+reflist:236
+refliste:237
+absvec:238
+lastsect:239
+fullmap:240
+$)
+
+.
+
+SECTION "ABSL1"
+
+GET "COM.BCPL.ABSLINK"
+
+LET start() BE
+ $( LET v = VEC 63
+    comstream := 0
+    verstream := output()
+    mapstream := 0
+    instream := 0
+    outstream := 0
+    workv := 0
+//  savewriteu := writeu
+    writes("TRIPOS absolute linker*N")
+    IF rdargs("FROM/A,TO/A,MAP/K,OPT/K", v, 63)=0 DO
+       error("Bad args")
+    comstream := findinput(v!0)
+    IF comstream=0 DO
+       error("Can't open %S", v!0)
+    UNLESS v!2=0 DO
+    $( mapstream := findoutput(v!2)
+       IF mapstream=0 DO
+          error("Can't open %S", v!2)
+    $)
+    outstream := findoutput(v!1)
+    IF outstream=0 DO
+       error("Can't open %S", v!1)
+    fullmap := FALSE
+    worksize := 5000
+    UNLESS v!3=0 DO
+    $( LET opts = v!3
+       LET optn = opts%0
+       LET i = 1
+       WHILE i<=optn DO
+       $( LET c = opts%i
+          i := i+1
+          SWITCHON capitalch(c) INTO
+          $( CASE 'F':
+                fullmap := TRUE
+                LOOP
+
+             CASE 'W':
+                worksize := 0
+                WHILE i<=optn & '0'<=opts%i<='9' DO
+                $( worksize := worksize*10+opts%i-'0'
+                   i := i+1 $)
+                LOOP
+
+             CASE 'O':
+//              writeu := mcwriteoct
+                LOOP
+
+             CASE 'X':
+//              writeu := mcwritehex
+                LOOP
+          $)
+       $)
+    $)
+    workv := getvec(worksize)
+    IF workv=0 DO
+       error("Can't get workspace")
+    workp := workv+worksize
+    writetomap("Link map of file %S*N", v!1)
+    errcount := 0
+    chbuf := v
+    wordtree := 0
+    readdecls()
+    IF errcount>0 DO error("Syntax error(s)")
+    loadall()
+//  writeu := savewriteu
+    writef("Resident code %U6 to %U6 (%U6 words)*N",
+            reltop, relmax-1, relmax-reltop)
+    UNLESS mapstream=0 DO
+    $( selectoutput(mapstream)
+       endwrite()
+    $)
+    freevec(workv)
+ $)
+
+
+AND readdecls() BE
+ $( decldirs()
+    wordv := newvec(255/bytesperword)
+    addrinc := mcaddrinc
+    absmin := #X0000
+    absmax := #X00FF
+    relmin := #X0100
+    relmax := #XFFFF
+    seglist := 0
+    segliste := @seglist
+    initseglist := 0
+    initsegliste := @initseglist
+    rootlist := 0
+    rootliste := @rootlist
+    namelist := 0
+    nameliste := @namelist
+    selectinput(comstream)
+    exhausted := FALSE
+    FOR i = 0 TO 63 DO chbuf!i := -1
+    chcount := 0
+    rch()
+
+    rec.p, rec.l := level(), reclab
+
+    $( nextsymb()
+       UNLESS symtype=s.semicolon DO
+       $( checkfor(s.word)
+          lookupword()
+          SWITCHON node!n.type INTO
+          $( DEFAULT:
+                synerror("Invalid directive %S", wordv)
+
+             CASE d.addrinc:
+                addrinc := readnumb()
+                ENDCASE
+
+             CASE d.absmin:
+                absmin := readnumb()
+                ENDCASE
+
+             CASE d.absmax:
+                absmax := readnumb()
+                ENDCASE
+
+             CASE d.relmin:
+                relmin := readnumb()
+                ENDCASE
+
+             CASE d.relmax:
+                relmax := readnumb()
+                ENDCASE
+
+             CASE d.root:
+                readroot()
+                ENDCASE
+
+             CASE d.seg:
+                !segliste := readseg()
+                segliste := !segliste
+                ENDCASE
+
+             CASE d.initseg:
+                !initsegliste := readseg()
+                initsegliste := !initsegliste
+                ENDCASE
+
+             CASE d.name:
+                readname()
+                ENDCASE
+
+             CASE d.struct:
+                readstruct()
+                ENDCASE
+          $)
+          checkfor(s.semicolon)
+       $)
+reclab:
+    $) REPEATUNTIL exhausted
+
+    endread()
+    comstream := 0
+ $)
+
+
+AND readnumb() = VALOF
+ $( LET val = 0
+    nextsymb()
+    checkfor(s.number)
+    val := symval
+    nextsymb()
+    RESULTIS val
+ $)
+
+
+AND readroot() BE
+ $( LET blk = newvec(3)
+    LET ptr = blk+3
+    LET len = 0
+    nextsymb()
+    checkfor(s.number)
+    blk!0 := 0
+    blk!1 := symval
+
+    $( LET nxt = newvec(1)
+       nextsymb()
+       nxt!1 := readvalue()
+       len := len+1
+       !ptr := nxt
+       ptr := nxt
+       IF symtype=s.semicolon BREAK
+       checkfor(s.comma)
+    $) REPEAT
+
+    !ptr := 0
+    blk!2 := len
+    !rootliste := blk
+    rootliste := blk
+ $)
+
+
+AND readseg() = VALOF
+ $( LET blk = 0
+    LET ptr = 0
+    nextsymb()
+    checkfor(s.word)
+    lookupword()
+    UNLESS node!n.type=w.undef DO
+      synerror("Segment %S already declared", wordv)
+    node!n.type := w.seg
+    blk := node
+    ptr := node+n.def
+
+    $( LET nxt = newvec(1)
+       nextsymb()
+       UNLESS symtype=s.word | symtype=s.string DO
+          synerror("Word or string expected")
+       nxt!1 := makestring(wordv)
+       !ptr := nxt
+       ptr := nxt
+       nextsymb()
+       IF symtype=s.semicolon BREAK
+       checkfor(s.comma)
+    $) REPEAT
+
+    !ptr := 0
+    RESULTIS blk
+ $)
+
+
+AND readname() BE
+ $( LET blk = 0
+    nextsymb()
+    checkfor(s.word)
+    lookupword()
+    blk := node
+    TEST blk!n.type=w.undef THEN
+    $( blk!n.type := w.name
+       !nameliste := blk
+       nameliste := blk
+    $)
+    ELSE
+       UNLESS blk!n.type=w.name DO
+          synerror("Name %S already declared", wordv)
+    nextsymb()
+    IF symtype=s.equals DO
+    $( LET def = blk!n.def
+       UNLESS def=0 DO
+          synerror("Name %S already defined", wordv)
+       nextsymb()
+       def := readvalue()
+       IF def!0=v.word DO
+          synerror("Invalid name definition")
+       blk!n.def := def
+    $)
+    IF symtype=s.semicolon BREAK
+    checkfor(s.comma)
+ $) REPEAT
+
+
+AND readstruct() BE
+ $( LET ptr = 0
+    nextsymb()
+    checkfor(s.word)
+    lookupword()
+    UNLESS node!n.type=w.undef DO
+       synerror("Structure %S already declared", wordv)
+    node!n.type := w.struct
+    ptr := node+n.def
+    nextsymb()
+    checkfor(s.bra)
+
+    $( LET nxt = newvec(2)
+       nxt!1 := 0
+       nxt!2 := 0
+       nextsymb()
+       IF symtype=s.tag DO
+       $( nxt!1 := makestring(wordv)
+          nextsymb()
+       $)
+       UNLESS nxt!1\=0 &
+              (symtype=s.comma | symtype=s.ket) DO
+          nxt!2 := readvalue()
+       !ptr := nxt
+       ptr := nxt
+       IF symtype=s.ket BREAK
+       checkfor(s.comma)
+    $) REPEAT
+
+    !ptr := 0
+    nextsymb()
+    IF symtype=s.semicolon BREAK
+    checkfor(s.comma)
+ $) REPEAT
+
+
+AND readvalue() = VALOF
+ $( SWITCHON symtype INTO
+    $( CASE s.number:
+       CASE s.string:
+       $( LET blk = newvec(1)
+          blk!0 := v.numb
+          blk!1 := symtype=s.number ->
+             symval, makestring(wordv)
+          nextsymb()
+          RESULTIS blk
+       $)
+
+       CASE s.bra:
+       $( LET blk = newvec(2)
+          LET len = 0
+          LET ptr = blk+2
+          blk!0 := v.vec
+          $( LET nxt = newvec(1)
+             nextsymb()
+             nxt!1 := readvalue()
+             len := len+1
+             !ptr := nxt
+             ptr := !ptr
+             IF symtype=s.ket BREAK
+             checkfor(s.comma)
+          $) REPEAT
+          nextsymb()
+          !ptr := 0
+          blk!1 := len
+          RESULTIS blk
+       $)
+
+       CASE s.word:
+          lookupword()
+          SWITCHON node!n.type INTO
+          $( CASE w.undef:
+                synerror("Word %S not declared", wordv)
+
+             CASE w.seg:
+             CASE w.name:
+             $( LET blk = newvec(1)
+                blk!0 := v.word
+                blk!1 := node
+                nextsymb()
+                RESULTIS blk
+             $)
+
+             CASE w.struct:
+             $( LET blk = newvec(2)
+                LET len = 0
+                LET ptr = blk+2
+                LET pos = node!n.def
+                LET nxt = 0
+                blk!0 := v.vec
+                nextsymb()
+                checkfor(s.bra)
+                $( nextsymb()
+                   checkfor(s.tag)
+                   $( IF pos=0 DO
+                         synerror("Tag %S not recognised",
+                                  wordv)
+                      IF compstring(wordv, pos!1)=0 BREAK
+                      IF pos!2=0 DO
+                         synerror("Tag %S omitted", wordv)
+                      nxt := newvec(1)
+                      nxt!1 := pos!2
+                      !ptr := nxt
+                      ptr := nxt
+                      len := len+1
+                      pos := !pos
+                   $) REPEAT
+                   nextsymb()
+                   nxt := newvec(1)
+                   nxt!1 := readvalue()
+                   !ptr := nxt
+                   ptr := nxt
+                   len := len+1
+                   pos := !pos
+                   IF symtype=s.ket BREAK
+                   checkfor(s.comma)
+                $) REPEAT
+                UNTIL pos=0 DO
+                $( IF pos!2=0 DO
+                      synerror("Tag %S omitted", pos!1)
+                   nxt := newvec(1)
+                   nxt!1 := pos!2
+                   !ptr := nxt
+                   ptr := nxt
+                   len := len+1
+                   pos := !pos
+                $)
+                nextsymb()
+                !ptr := 0
+                blk!1 := len
+                RESULTIS blk
+             $)
+          $)
+          ENDCASE
+    $)
+    synerror("Value expected")
+ $)
+
+
+AND nextsymb() BE
+ $( LET i = 0
+    LET rad = 10
+    LET neg = FALSE
+    LET dig() = '0'<=ch<='9' -> ch-'0',
+                'A'<=ch<='F' -> ch-'A'+10,
+                'a'<=ch<='z' -> ch-'a'+10, 100
+    testbreak()
+l:  SWITCHON ch INTO
+    $( CASE '*S': CASE '*T': CASE '*N':
+          rch()
+          GOTO l
+
+       CASE '|':
+          rch() REPEATUNTIL ch='*N' | ch=endstreamch
+          GOTO l
+
+       CASE endstreamch:
+          exhausted := TRUE
+       CASE ';':
+          symtype := s.semicolon
+          ENDCASE
+
+       CASE ',':
+          symtype := s.comma
+          ENDCASE
+
+       CASE '=':
+          symtype := s.equals
+          ENDCASE
+
+       CASE '(':
+          symtype := s.bra
+          ENDCASE
+
+       CASE ')':
+          symtype := s.ket
+          ENDCASE
+
+       CASE '*"':
+          symtype := s.string
+          $( rch()
+             IF ch='*N' DO
+                synerror("String contains newline")
+             IF ch='*"' BREAK
+             IF ch='**' DO
+             $( rch()
+                IF ch='E' DO ch := '*E'
+                IF ch='N' DO ch := '*N'
+             $)
+             i := i+1
+             IF i>255 DO synerror("String too long")
+             wordv%i := ch
+          $) REPEAT
+          wordv%0 := i
+          ENDCASE
+
+       CASE '-':
+          neg := TRUE
+          rch()
+          UNLESS ch='#' GOTO d
+       CASE '#':
+          rad := 8
+          rch()
+          IF capitalch(ch)='X' DO
+          $( rad := 16
+             rch()
+          $)
+
+   d:  DEFAULT:
+          IF dig()<rad DO
+          $( symtype, symval := s.number, 0
+             $( symval := symval*rad+dig()
+                rch()
+             $) REPEATWHILE dig()<rad
+             IF neg DO symval := -symval
+             RETURN
+          $)
+          IF rad>10 | neg DO synerror("Bad number")
+          symtype := ch='$' -> s.tag, s.word
+          $( i := i+1
+             IF i>255 DO synerror("Word too long")
+             wordv%i := ch
+             rch()
+          $) REPEATUNTIL ch=endstreamch |
+                   ch='*S' | ch='*T' | ch='*N' |
+                   ch=';' | ch=',' | ch='|' | ch='=' |
+                   ch='(' | ch=')' | ch='"'
+          wordv%0 := i
+          RETURN
+    $)
+    rch()
+ $)
+
+
+AND rch() BE
+ $( ch := rdch()
+    chcount := chcount+1
+    chbuf!(chcount&63) := ch
+ $)
+
+
+
+
+AND checkfor(s) BE
+    UNLESS s=symtype DO
+       synerror("%S expected",
+           s=s.semicolon -> "';'",
+           s=s.comma -> "','",
+           s=s.number -> "Number",
+           s=s.word -> "Word",
+           s=s.tag -> "Tag", "?" )
+
+
+AND synerror(f, a) BE
+ $( writes("Error - ")
+    writef(f, a)
+    writes("*NNear ... ")
+    FOR i = -63 TO 0 DO
+    $( LET c = chbuf!(chcount+i & 63)
+       IF c>=0 DO wrch(c)
+    $)
+    newline()
+    testbreak()
+    errcount := errcount+1
+    IF errcount>=errmax DO error("Too many errors")
+    UNTIL symtype=s.semicolon DO nextsymb()
+    longjump(rec.p, rec.l)
+ $)
+
+.
+
+SECTION "ABSL2"
+
+GET "COM.BCPL.ABSLINK"
+
+LET lookupword() BE
+ $( LET ptr = @wordtree
+
+    $( node := !ptr
+       TEST node=0 THEN
+       $( LET size = n.chars+wordv%0/bytesperword
+          node := newvec(size)
+          FOR i = 0 TO n.chars-1 DO
+             node!i := 0
+          FOR i = 0 TO size-n.chars DO
+             node!(n.chars+i) := wordv!i
+          node!n.type := w.undef
+          node!n.set := FALSE
+          !ptr := node
+          BREAK
+       $)
+       ELSE
+       $( LET res = compstring(wordv, node+n.chars)
+          IF res=0 BREAK
+          ptr := node + (res>0 -> n.hi, n.lo)
+       $)
+    $) REPEAT
+
+    IF node=datenode DO
+    $( !nameliste := node
+       nameliste := node
+       datenode := 0
+    $)
+ $)
+
+
+AND decldirs() BE
+ $( LET decl(s, d) BE
+    $( wordv := s
+       lookupword()
+       node!n.type := d
+    $)
+    LET v = VEC 14
+    LET blk = newvec(1)
+    decl("MCADDRINC", d.addrinc)
+    decl("ABSMIN", d.absmin)
+    decl("ABSMAX", d.absmax)
+    decl("RELMIN", d.relmin)
+    decl("RELMAX", d.relmax)
+    decl("ROOT", d.root)
+    decl("SEG", d.seg)
+    decl("INITSEG", d.initseg)
+    decl("NAME", d.name)
+    decl("STRUCT", d.struct)
+    IF datstring(v)=0 DO v := "??-???-??"
+    decl("DATE", w.name)
+    blk!0 := v.string
+    blk!1 := makestring(v)
+    node!n.def := blk
+    datenode := node
+ $)
+
+
+AND makestring(s) = VALOF
+ $( LET size = s%0/bytesperword
+    LET v = newvec(size)
+    FOR i = 0 TO size DO v!i := s!i
+    RESULTIS v
+ $)
+
+
+AND loadall() BE
+ $( LET ptr = 0
+    absvec := newvec(absmax-absmin)
+    FOR i = 0 TO absmax-absmin DO absvec!i := 0
+    UNLESS ((relmax+1-relmin)&1)=0 DO
+       error("Invalid RELMAX-RELMIN")
+    relptr := relmax-1
+    rewrite(relptr, 0)
+    writetomap("Segments*N")
+    ptr := seglist
+    UNTIL ptr=0 DO
+    $( loadsegment(ptr)
+       ptr := !ptr
+    $)
+    writetomap("*NNames*N")
+    reflist := 0
+    refliste := @reflist
+    ptr := namelist
+    UNTIL ptr=0 DO
+    $( LET val = loadvalue(ptr!n.def)
+       ptr!n.set := TRUE
+       ptr!n.val := val
+       writetomap("Name %T8 %U6", ptr+n.chars, val)
+       ptr := !ptr
+    $)
+    writetomap("*NRoots*N")
+    ptr := rootlist
+    UNTIL ptr=0 DO
+    $( LET len = ptr!2-1
+       LET buf = newvec(len)
+       LET loc = ptr!1
+       LET nxt = ptr!3
+       writetomap("Root %U6 - %U6", loc, loc+len)
+       FOR pos = 0 TO len DO
+       $( buf!pos := loadvalue(nxt!1, loc+pos)
+          nxt := !nxt
+       $)
+       writeabsvec(loc, buf, len)
+       discardvec(buf, len)
+       ptr := !ptr
+    $)
+    reltop := relptr
+    writetomap("*NInitialisation segments*N")
+    ptr := initseglist
+    UNTIL ptr=0 DO
+    $( loadsegment(ptr)
+       ptr := !ptr
+    $)
+    ptr := reflist
+    UNTIL ptr=0 DO
+    $( rewrite(ptr!2, ptr!1!n.val)
+       ptr := !ptr
+    $)
+    rewrite(relmin, relptr-relmin+1)
+    writetomap("*NAbs  store %U6 - %U6",
+           absmin, absmax)
+    writetomap("Free store %U6 - %U6 (%U6 words)",
+           relmin, reltop-1, reltop-relmin)
+    ptr := absmin
+    absmin := absmax+1
+    writeabsvec(ptr, absvec, absmax-ptr)
+    writeword(t.end)
+    endstream(outstream)
+    outstream := 0
+ $)
+
+
+AND loadsegment(nod) BE
+ $( LET val = 0
+    LET ptr = nod!n.def
+    lastsect := 0
+    UNTIL ptr=0 DO
+    $( LET seg = loadfile(ptr!1)
+       IF val=0 DO val := seg
+       ptr := !ptr
+    $)
+    nod!n.set := TRUE
+    nod!n.val := val
+ $)
+
+
+AND loadfile(file) = VALOF
+ $( LET first, tail = lastsect, lastsect
+    LET relvec, reloc = 0, 0
+    LET base, size = 0, 0
+    LET lasthunk = t.end
+    LET segtop = relptr-1
+    instream := findinput(file)
+    IF instream=0 DO
+       error("Can't open %S", file)
+    IF fullmap DO
+       writetomap("File %S", file)
+    exhausted := FALSE
+
+    $( LET type = readword()
+       IF exhausted BREAK
+       SWITCHON type INTO
+       $( CASE t.reloc:
+             UNLESS lasthunk=t.hunk GOTO err
+          $( LET n = readword()
+             LET v = 0
+             IF n<0 | reloc=0 GOTO err
+             v := newvec(n)
+             xreadwords(v+1,n)
+             FOR i = 1 TO n DO
+             $( LET a = v!i+1
+                UNLESS 0<a<=size GOTO err
+                relvec!a := relvec!a+reloc
+             $)
+             discardvec(v, n)
+             LOOP
+          $)
+
+          CASE t.absreloc:
+             UNLESS lasthunk=t.abshunk GOTO err
+          $( LET n = readword()
+             LET v = 0
+             IF n<0 | reloc=0 GOTO err
+             v := newvec(n)
+             xreadwords(v+1, n)
+             FOR i = 1 TO n DO
+             $( LET a = v!i-base
+                UNLESS 0<=a<=size GOTO err
+                relvec!a := relvec!a+reloc
+             $)
+             discardvec(v, n)
+             LOOP
+          $)
+
+          CASE t.hunk: CASE t.abshunk: CASE t.end:
+             IF lasthunk=t.hunk DO
+             $( IF fullmap DO
+                   TEST relvec!2=secword &
+                        (relvec+3)%0=17 THEN
+                      writetomap("Section %S %U6 - %U6",
+                         relvec+3, base+1, base+size)
+                   ELSE
+                      writetomap("Hunk %U6 - %U6",
+                         base, base+size)
+                writerelvec(base, relvec, size)
+                discardvec(relvec, size)
+             $)
+             IF lasthunk=t.abshunk DO
+             $( IF fullmap DO
+                   writetomap("Abshunk %U6 - %U6",
+                         base, base+size)
+                writeabsvec(base, relvec, size)
+                discardvec(relvec, size)
+             $)
+             lasthunk := type
+             IF type=t.end DO
+             $( reloc := 0
+                LOOP
+             $)
+             IF type=t.hunk DO
+             $( size := readword()
+                IF size<0 GOTO err
+                base := allocvec(size)
+                reloc := (base+1)*addrinc
+                UNLESS lastsect=0 DO
+                   rewrite(lastsect, base)
+                IF first=tail DO first := base
+                lastsect := base
+                relvec := newvec(size)
+                relvec!0 := 0
+                xreadwords(relvec+1,size)
+                LOOP
+             $)
+             IF type=t.abshunk DO
+             $( base := readword()
+                size := readword()-1
+                IF size-1<0 GOTO err
+                relvec := newvec(size)
+                xreadwords(relvec,size+1)
+                LOOP
+             $)
+
+          DEFAULT:
+             GOTO err
+       $)
+    $) REPEAT
+    UNLESS lasthunk=t.end GOTO err
+    endstream(instream)
+    instream := 0
+    UNLESS fullmap | segtop=relptr-1 DO
+       writetomap("File %S %U6 - %U6",
+          file, lastsect, segtop)
+    RESULTIS first
+
+err:error("Format error in object file %S", file)
+ $)
+
+
+AND loadvalue(blk, loc) = VALOF
+    SWITCHON blk!0 INTO
+    $( CASE v.word:
+       $( LET nod = blk!1
+          TEST nod!n.set THEN
+             RESULTIS nod!n.val
+          ELSE
+          $( LET ref = newvec(2)
+             ref!0 := 0
+             ref!1 := nod
+             ref!2 := loc
+             !refliste := ref
+             refliste := ref
+             RESULTIS 0
+          $)
+       $)
+
+       CASE v.numb:
+          RESULTIS blk!1
+
+       CASE v.string:
+       $( LET buf = blk!1
+          LET len = buf%0/bytesperword
+          LET loc = allocvec(len)
+          writerelvec(loc, buf, len)
+          RESULTIS loc
+       $)
+
+       CASE v.vec:
+       $( LET len = blk!1-1
+          LET buf = newvec(len)
+          LET loc = allocvec(len)
+          LET nxt = blk!2
+          FOR pos = 0 TO len DO
+          $( buf!pos := loadvalue(nxt!1, loc+pos)
+             nxt := !nxt
+          $)
+          writerelvec(loc, buf, len)
+          discardvec(buf, len)
+          RESULTIS loc
+       $)
+    $)
+
+
+AND allocvec(size) = VALOF
+ $( LET blksize = (size+1 | 1)+1
+    relptr := relptr-blksize
+    RESULTIS relptr+1
+ $)
+
+
+AND writerelvec(base, buf, size) BE
+ $( LET v = VEC 3
+    v!0 := t.abshunk
+    v!1 := base-1
+    v!2 := size+2
+    v!3 := (size+1 | 1)+1
+    testbreak()
+    xwritewords(v, 4)
+    xwritewords(buf, size+1)
+ $)
+
+
+AND writeabsvec(base, buf, size) BE
+ $( LET v = VEC 2
+    IF base-absmax<=0 & base+size-absmin>=0 DO
+    $( LET f = FALSE
+       FOR i = 0 TO size DO
+       $( LET absloc = base+i
+          TEST absloc-absmin>=0 & absloc-absmax<=0 THEN
+             UNLESS buf!i=0 DO
+                absvec!(absloc-absmin) := buf!i
+          ELSE
+             f := TRUE
+       $)
+       UNLESS f RETURN
+    $)
+    v!0 := t.abshunk
+    v!1 := base
+    v!2 := size+1
+    testbreak()
+    xwritewords(v, 3)
+    xwritewords(buf, size+1)
+ $)
+
+
+AND rewrite(loc, val) BE
+    writeabsvec(loc, @val, 0)
+
+
+AND newvec(size) = VALOF
+ $( workp := workp-size-1
+    IF workp-workv<0 DO error("Run out of workspace")
+    RESULTIS workp
+ $)
+
+
+AND discardvec(v, size) BE
+    IF workp=v DO workp := workp+size+1
+
+
+AND testbreak() BE
+    IF testflags(1) DO error("****BREAK")
+
+
+AND error(f, a, b) BE
+ $( writef(f, a, b)
+    writes(" - linking aborted*N")
+    UNLESS instream=0 DO endstream(instream)
+    UNLESS outstream=0 DO endstream(outstream)
+    UNLESS comstream=0 DO
+    $( selectinput(comstream)
+       endread()
+    $)
+    UNLESS mapstream=0 DO
+    $( selectoutput(mapstream)
+       endwrite()
+    $)
+    UNLESS workv=0 DO freevec(workv)
+    stop(20)
+ $)
+
+
+AND writetomap(f, a, b, c) BE
+    UNLESS mapstream=0 DO
+    $( LET o = output()
+       selectoutput(mapstream)
+       writef(f, a, b, c)
+       newline()
+       selectoutput(o)
+    $)
+
+
+AND readword() = VALOF
+ $( LET w = 0
+    IF xreadwords(@w, 1)=0 DO
+       exhausted := TRUE
+    RESULTIS w
+ $)
+
+
+AND xreadwords(v, n) = VALOF
+ $( LET i = input()
+    selectinput(instream)
+    n := readwords(v, n)
+    selectinput(i)
+    RESULTIS n
+ $)
+
+
+AND writeword(w) BE
+    xwritewords(@w, 1)
+
+
+AND xwritewords(v, n) BE
+ $( LET o = output()
+    selectoutput(outstream)
+    writewords(v, n)
+    selectoutput(o)
+ $)
+
+
+AND mcwriteoct(n, d) BE
+    writeoct(n*addrinc, d)
+
+
+AND mcwritehex(n, d) BE
+    writehex(n*addrinc, d)
+
+

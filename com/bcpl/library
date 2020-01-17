@@ -1,0 +1,253 @@
+SECTION "LIBRARY"
+
+GET "LIBHDR"
+
+
+GLOBAL $( resident.table : 126 $)
+
+MANIFEST $( yes      =  TRUE
+            no       = FALSE
+            secword  = 12345
+         $)
+
+
+// TRIPOS library command.  It loads a binary file,
+//  and adds the segment to the end of the BLIB
+//  library chain. (!!)
+// It will also cancel a loaded section, and will
+//  create and maintain a resident hunk table, for
+//  use with the RESIDENT library facility of the
+//  linkage editor.
+
+LET start() BE
+// LIBRARY [[FROM] file] [OVERRIDE] [CANCEL secname] [TABLE NEW|ADD|DELETE]
+
+  $( LET cancelname = 0
+     LET cancelvec  = VEC 3
+     LET blibe      = (tcb.seglist ! tcb) + 2
+     LET blib       = !blibe
+     LET segment    = 0
+     LET tablekey   = 0
+
+     LET argv       = VEC 100
+
+     // fix up for 68000 : possibly set resident.table to zero (aaargh)
+     IF [resident.table >> 16] \= 0 THEN resident.table := 0
+
+     IF rdargs("from,override/s,cancel/k,table/k", argv, 100) = 0 THEN
+       $( writes("Invalid parameters*N")
+          stop(20)
+       $)
+
+     // Check value of TABLE parameter.
+
+     IF argv!3 \= 0 THEN
+       $( tablekey := findarg("NEW,ADD,DELETE", argv!3)
+          IF tablekey < 0 THEN
+            $( writes("Invalid TABLE parameter*N")
+               stop(20)
+            $)
+       $)
+
+     // If necessary, remember CANCEL value.
+
+     IF argv!2 \= 0 THEN
+       $( cancelname := cancelvec
+          copy.section.name(argv!2, cancelname)
+       $)
+
+     // Deal with FROM parameter
+
+     IF argv!0 \= 0 THEN
+       $( LET secname = VEC 3
+
+          segment    := loadseg(argv!0)
+
+          IF segment = 0 THEN
+            $( writef("Load of *"%S*" failed with code %N*N",
+                 argv!0, result2)
+               stop(20)
+            $)
+
+          // See if segment is already loaded
+
+          IF extract.section.name(segment+1, secname) & argv!1 = 0 &
+             [cancelname = 0 | compstring(secname, cancelname) \= 0] &
+             find.section(blib, secname) \= 0 THEN
+            $( writef("Library %S already loaded*N", secname)
+               unloadseg(segment)
+               tablekey := -1
+               segment  := 0
+               returncode:=5
+            $)
+
+          // Now that the library has been loaded, initialise
+          //  its globals.  (In case the original library is
+          //  about to be cancelled)!.
+
+          IF globin(segment) = 0 THEN
+            writes("Warning: global initialisation ended*
+                   * in error*N")
+
+          // Now add to the end of the chain
+
+          !findptr(blibe, 0) := segment
+       $)
+
+
+     // Deal with CANCEL parameter
+
+     IF cancelname \= 0 THEN
+       $( LET sec  = find.section(blib, cancelname)
+
+          TEST sec = 0 THEN
+            $( writef("Failed to find section *"%S*"*N",cancelname)
+               returncode := 10
+            $)
+           ELSE
+            // Delete the section
+            // If the section is in the resident table, then
+            // also delete all the other entries in the table,
+            // as well as the table itself.
+            $( LET secp  = findptr(blibe, sec)
+               LET found = no
+
+               // See if the section is in the table.
+
+               IF resident.table \= 0 THEN
+                 FOR j = 1 TO resident.table!0 DO
+                   IF sec = resident.table ! j THEN
+                     $( found := yes
+                        BREAK
+                     $)
+
+               TEST found THEN
+                 $( FOR j = 1 TO resident.table!0 DO
+                      $( LET secp = findptr(blibe,resident.table!j)
+                         LET sec  = !secp
+                         !secp   := !sec
+                         freevec(sec)
+                      $)
+                    freevec(resident.table)
+                    resident.table := 0
+                    writes("Resident table deleted*N")
+                 $)
+                ELSE
+                 $( !secp := !sec
+                    freevec(sec)
+                 $)
+            $)
+
+       $)
+
+
+     // Deal with TABLE parameter.
+
+     IF argv!3 \= 0 THEN
+       // Meanings of values are:
+       //  NEW      create new table from loaded segment.
+       //  ADD      add new segments to old table.
+       //  DELETE   delete the table completely.
+       $( LET count = 0
+          LET seg   = segment
+          LET ot    = resident.table
+
+          // Find the number of hunks in the new segment
+
+          UNTIL seg = 0 DO
+            $( count := count + 1
+               seg   := ! seg
+            $)
+
+          SWITCHON tablekey INTO
+
+            $( CASE 0:  // NEW
+                 IF count \= 0 THEN
+                   $( resident.table := get.table(count)
+                      FOR j = 1 TO count DO
+                        $( resident.table ! j :=  segment
+                           segment            := !segment
+                        $)
+                   $)
+                 freevec(ot)
+                 ENDCASE
+
+               CASE 1: // ADD
+                 IF count \= 0 THEN
+                   $( LET oc = ot = 0 -> 0, ot ! 0
+                      resident.table := get.table(count + oc)
+                      FOR j = 1 TO oc DO resident.table!j := ot!j
+                      FOR j = 1 TO count DO
+                        $( resident.table ! (oc+j) :=  segment
+                           segment                 := !segment
+                        $)
+                      freevec(ot)
+                   $)
+                 ENDCASE
+
+               CASE 2: // DELETE
+                 freevec(ot)
+                 resident.table := 0
+                 ENDCASE
+
+            $)
+
+       $)
+
+  $)
+
+
+
+AND findptr(lv.chain, hunk) = VALOF
+  $( UNTIL !lv.chain = hunk | !lv.chain = 0 DO
+       lv.chain := !lv.chain
+     RESULTIS lv.chain
+  $)
+
+
+
+AND copy.section.name(name, v) BE
+  $( FOR j = 1 TO 7 DO
+       v%j := (j > name%0 -> ' ', name%j)
+     v%0 := 7
+  $)
+
+
+
+AND extract.section.name(hunk, v) = VALOF
+  // Returns true if there is a valid section name.
+  $( LET size = hunk!0
+     IF size >= 11 & hunk!1 = secword & (hunk+2)%0 = 17 THEN
+       $( copy.section.name(hunk+2, v)
+          RESULTIS yes
+       $)
+     RESULTIS no
+  $)
+
+
+
+AND find.section(list, name) = VALOF
+  $( UNTIL list = 0 DO
+       $( LET v = VEC 3
+          IF extract.section.name(list+1, v) &
+             compstring(v, "**************") \= 0 &
+             compstring(v, name)              = 0 THEN
+            BREAK
+          list := !list
+       $)
+     RESULTIS list
+  $)
+
+
+
+AND get.table(count) = VALOF
+  $( LET t = getvec(count)
+     IF t = 0 THEN
+       $( writef("Insufficient store for new table*N")
+          stop(20)
+       $)
+     t ! 0 := count
+     RESULTIS t
+  $)
+
+

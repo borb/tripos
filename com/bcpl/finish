@@ -1,0 +1,43 @@
+/***********************************************************************
+**             (C) Copyright 1980  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+       ########  ########  ##    ##  ########   ######   ##    ##
+       ########  ########  ###   ##  ########  ########  ##    ##
+       ##           ##     ####  ##     ##     ##        ##    ##
+       ######       ##     ## ## ##     ##     #######   ########
+       ##           ##     ##  ####     ##           ##  ##    ##
+       ##           ##     ##  ####     ##           ##  ##    ##
+       ##        ########  ##   ###  ########  ########  ##    ##
+       ##        ########  ##    ##  ########   ######   ##    ##
+
+************************************************************************
+**    Author:   Brian Knight                      September 1980      **
+***********************************************************************/
+
+
+
+// Special version for Processor Bank machines
+
+SECTION "FINISH"
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "IOHDR"
+GET "RINGHDR"
+
+MANIFEST
+    $(
+    act.disconnect      = 801
+    $)
+
+LET start() BE
+    $(
+
+    writef("****** Returning %s to free pool*n",
+             rootnode!rtn.info ! rtninfo.ring ! ri.myname)
+    sendpkt(notinuse, consoletask, act.disconnect, ?, ?, TRUE /* free mc */)
+    $)
+
+

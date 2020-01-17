@@ -1,0 +1,268 @@
+//******************************************************************************
+//*   Assembler for the Motorola MC68000 Microprocessor:  Section 6            *
+//******************************************************************************
+
+
+
+SECTION "M68KASM6"
+
+
+
+GET "LIBHDR"
+
+GET "M68KHDR"
+
+
+
+LET declsyswords()  BE
+$(
+    datavector  :=  TABLE
+
+/* Instr        Template    Type         Mask        Source       Destination  */
+/* =====        ========    ====         ====        ======       ===========  */
+
+/* ABCD    */    #XC100,   ins.2op.b,      0,           0,              1,
+/* ADD     */    #XD000,   ins.2op.bwl,    0,           0,              3,
+/* ADDA    */    #XD0C0,   ins.2op.wl,     0,           0,             13,
+/* ADDI    */    #X0600,   ins.2op.bwl,    2,      am.imm,    am.data.alt,
+/* ADDQ    */    #X5000,   ins.2op.bwl,    5,     am.imm3,         am.alt,
+/* ADDX    */    #XD100,   ins.2op.bwl,    0,           0,              1,
+/* AND     */    #XC000,   ins.2op.bwl,    0,           0,              2,
+/* ANDI    */    #X0200,   ins.2op.bwl,    0,           0,             12,
+/* ASL     */    #XE000,   ins.2op.bwl,    0,       #B001,              5,
+/* ASR     */    #XE000,   ins.2op.bwl,    0,       #B000,              5,
+/* BCC     */    #X6000,   ins.1op.l,      0,      #B0100,              4,
+/* BCS     */    #X6000,   ins.1op.l,      0,      #B0101,              4,
+/* BEQ     */    #X6000,   ins.1op.l,      0,      #B0111,              4,
+/* BGE     */    #X6000,   ins.1op.l,      0,      #B1100,              4,
+/* BGT     */    #X6000,   ins.1op.l,      0,      #B1110,              4,
+/* BHI     */    #X6000,   ins.1op.l,      0,      #B0010,              4,
+/* BHS     */    #X6000,   ins.1op.l,      0,      #B0100,              4,
+/* BLE     */    #X6000,   ins.1op.l,      0,      #B1111,              4,
+/* BLO     */    #X6000,   ins.1op.l,      0,      #B0101,              4,
+/* BLS     */    #X6000,   ins.1op.l,      0,      #B0011,              4,
+/* BLT     */    #X6000,   ins.1op.l,      0,      #B1101,              4,
+/* BMI     */    #X6000,   ins.1op.l,      0,      #B1011,              4,
+/* BNE     */    #X6000,   ins.1op.l,      0,      #B0110,              4,
+/* BPL     */    #X6000,   ins.1op.l,      0,      #B1010,              4,
+/* BVC     */    #X6000,   ins.1op.l,      0,      #B1000,              4,
+/* BVS     */    #X6000,   ins.1op.l,      0,      #B1001,              4,
+/* BCHG    */    #X0000,   ins.2op,        0,        #B01,              6,
+/* BCLR    */    #X0000,   ins.2op,        0,        #B10,              6,
+/* BRA     */    #X6000,   ins.1op.l,      0,      #B0000,              4,
+/* BSET    */    #X0000,   ins.2op,        0,        #B11,              6,
+/* BSR     */    #X6000,   ins.1op.l,      0,      #B0001,              4,
+/* BTST    */    #X0000,   ins.2op,        0,        #B00,              6,
+/* CHK     */    #X4180,   ins.2op.w,      7,     am.data,          am.Dr,
+/* CLR     */    #X4200,   ins.1op.bwl,    2,           0,    am.data.alt,
+/* CMP     */    #XB000,   ins.2op.bwl,    1,      am.all,          am.Dr,
+/* CMPA    */    #XB0C0,   ins.2op.bwl,    0,           0,             13,
+/* CMPI    */    #X0C00,   ins.2op.bwl,    2,      am.imm,    am.data.alt,
+/* CMPM    */    #XB108,   ins.2op.bwl,    0,           0,             14,
+/* DBCC    */    #X50C8,   ins.2op,        0,      #B0100,              4,
+/* DBCS    */    #X50C8,   ins.2op,        0,      #B0101,              4,
+/* DBEQ    */    #X50C8,   ins.2op,        0,      #B0111,              4,
+/* DBF     */    #X50C8,   ins.2op,        0,      #B0001,              4,
+/* DBGE    */    #X50C8,   ins.2op,        0,      #B1100,              4,
+/* DBGT    */    #X50C8,   ins.2op,        0,      #B1110,              4,
+/* DBHI    */    #X50C8,   ins.2op,        0,      #B0010,              4,
+/* DBHS    */    #X50C8,   ins.2op,        0,      #B0100,              4,
+/* DBLE    */    #X50C8,   ins.2op,        0,      #B1111,              4,
+/* DBLO    */    #X50C8,   ins.2op,        0,      #B0101,              4,
+/* DBLS    */    #X50C8,   ins.2op,        0,      #B0011,              4,
+/* DBLT    */    #X50C8,   ins.2op,        0,      #B1101,              4,
+/* DBMI    */    #X50C8,   ins.2op,        0,      #B1011,              4,
+/* DBNE    */    #X50C8,   ins.2op,        0,      #B0110,              4,
+/* DBPL    */    #X50C8,   ins.2op,        0,      #B1010,              4,
+/* DBT     */    #X50C8,   ins.2op,        0,      #B0000,              4,
+/* DBVC    */    #X50C8,   ins.2op,        0,      #B1000,              4,
+/* DBVS    */    #X50C8,   ins.2op,        0,      #B1001,              4,
+/* DBRA    */    #X50C8,   ins.2op,        0,      #B0001,              4,
+/* DIVS    */    #X81C0,   ins.2op.w,      7,     am.data,          am.Dr,
+/* DIVU    */    #X80C0,   ins.2op.w,      7,     am.data,          am.Dr,
+/* EOR     */    #XB100,   ins.2op.bwl,    0,           0,             15,
+/* EORI    */    #X0A00,   ins.2op.bwl,    0,           0,             12,
+/* EXG     */    #XC100,   ins.2op.l,      0,        #B11,              7,
+/* EXGD    */    #XC100,   ins.2op.l,      0,        #B01,              7,
+/* EXGA    */    #XC100,   ins.2op.l,      0,        #B10,              7,
+/* EXGM    */    #XC100,   ins.2op.l,      0,        #B11,              7,
+/* EXT     */    #X4880,   ins.1op.wl,    10,           0,          am.Dr,
+/* JMP     */    #X4EC0,   ins.1op.l,      0,           0,              9,
+/* JSR     */    #X4E80,   ins.1op.l,      0,           1,              9,
+/* LEA     */    #X41C0,   ins.2op.l,      7,    am.contr,          am.Ar,
+/* LINK    */    #X4E50,   ins.2op,        4,       am.Ar,       am.imm16,
+/* LSL     */    #XE008,   ins.2op.bwl,    0,       #B011,              5,
+/* LSR     */    #XE008,   ins.2op.bwl,    0,       #B010,              5,
+/* MOVE    */    #X0000,   ins.2op.bwl,    0,           0,              8,
+/* MOVEA   */    #X0040,   ins.2op.bwl,    0,           1,              8,
+/* MOVEM   */    #X4880,   ins.2op.wl,     0,           2,              8,
+/* MOVEP   */    #X0008,   ins.2op.wl,     0,           3,              8,
+/* MOVEQ   */    #X7000,   ins.2op.l,      0,           4,              8,
+/* MULS    */    #XC1C0,   ins.2op.w,      7,     am.data,          am.Dr,
+/* MULU    */    #XC0C0,   ins.2op.w,      7,     am.data,          am.Dr,
+/* NBCD    */    #X4800,   ins.1op.b,      9,           0,    am.data.alt,
+/* NEG     */    #X4400,   ins.1op.bwl,    2,           0,    am.data.alt,
+/* NEGX    */    #X4000,   ins.1op.bwl,    2,           0,    am.data.alt,
+/* NOP     */    #X4E71,   ins.zop,       15,           0,              0,
+/* NOT     */    #X4600,   ins.1op.bwl,    2,           0,    am.data.alt,
+/* OR      */    #X8000,   ins.2op.bwl,    0,           0,              2,
+/* ORI     */    #X0000,   ins.2op.bwl,    0,           0,             12,
+/* PEA     */    #X4840,   ins.1op.l,      9,           0,       am.contr,
+/* RESET   */    #X4E70,   ins.zop,       15,           0,              0,
+/* ROL     */    #XE018,   ins.2op.bwl,    0,       #B101,              5,
+/* ROR     */    #XE018,   ins.2op.bwl,    0,       #B100,              5,
+/* ROXL    */    #XE010,   ins.2op.bwl,    0,       #B111,              5,
+/* ROXR    */    #XE010,   ins.2op.bwl,    0,       #B110,              5,
+/* RTE     */    #X4E73,   ins.zop,       15,           0,              0,
+/* RTR     */    #X4E77,   ins.zop,       15,           0,              0,
+/* RTS     */    #X4E75,   ins.zop,       15,           0,              0,
+/* SBCD    */    #X8100,   ins.2op.b,      0,           0,              1,
+/* SCC     */    #X50C0,   ins.1op.b,      6,      #B0100,    am.data.alt,
+/* SCS     */    #X50C0,   ins.1op.b,      6,      #B0101,    am.data.alt,
+/* SEQ     */    #X50C0,   ins.1op.b,      6,      #B0111,    am.data.alt,
+/* SF      */    #X50C0,   ins.1op.b,      6,      #B0001,    am.data.alt,
+/* SGE     */    #X50C0,   ins.1op.b,      6,      #B1100,    am.data.alt,
+/* SGT     */    #X50C0,   ins.1op.b,      6,      #B1110,    am.data.alt,
+/* SHI     */    #X50C0,   ins.1op.b,      6,      #B0010,    am.data.alt,
+/* SHS     */    #X50C0,   ins.1op.b,      6,      #B0100,    am.data.alt,
+/* SLE     */    #X50C0,   ins.1op.b,      6,      #B1111,    am.data.alt,
+/* SLO     */    #X50C0,   ins.1op.b,      6,      #B0101,    am.data.alt,
+/* SLS     */    #X50C0,   ins.1op.b,      6,      #B0011,    am.data.alt,
+/* SLT     */    #X50C0,   ins.1op.b,      6,      #B1101,    am.data.alt,
+/* SMI     */    #X50C0,   ins.1op.b,      6,      #B1011,    am.data.alt,
+/* SNE     */    #X50C0,   ins.1op.b,      6,      #B0110,    am.data.alt,
+/* SPL     */    #X50C0,   ins.1op.b,      6,      #B1010,    am.data.alt,
+/* ST      */    #X50C0,   ins.1op.b,      6,      #B0000,    am.data.alt,
+/* SVC     */    #X50C0,   ins.1op.b,      6,      #B1000,    am.data.alt,
+/* SVS     */    #X50C0,   ins.1op.b,      6,      #B1001,    am.data.alt,
+/* STOP    */    #X4E72,   ins.1op,       15,           0,       am.imm16,
+/* SUB     */    #X9000,   ins.2op.bwl,    0,           0,              3,
+/* SUBA    */    #X90C0,   ins.2op.wl,     0,           0,             13,
+/* SUBI    */    #X0400,   ins.2op.bwl,    2,      am.imm,    am.data.alt,
+/* SUBQ    */    #X5100,   ins.2op.bwl,    5,     am.imm3,         am.alt,
+/* SUBX    */    #X9100,   ins.2op.bwl,    0,           0,              1,
+/* SWAP    */    #X4840,   ins.1op.w,      4,           0,          am.Dr,
+/* TAS     */    #X4AC0,   ins.1op.b,      9,           0,    am.data.alt,
+/* TRAP    */    #X4E40,   ins.1op,        0,           0,             11,
+/* TRAPV   */    #X4E76,   ins.zop,       15,           0,              0,
+/* TST     */    #X4A00,   ins.1op.bwl,    2,           0,    am.data.alt,
+/* UNLK    */    #X4E58,   ins.1op,        4,           0,          am.Ar,
+
+
+      /*  End of the instructions, now deal with the Directives  */
+      /*  =====================================================  */
+
+/* EQU     */         0,   s.dir,          0,           0,          d.equ,
+/* EQUR    */         0,   s.dir,          0,           0,         d.equr,
+/* SET     */         0,   s.dir,          0,           0,          d.set,
+/* ORG     */         0,   s.dir,          0,           0,          d.org,
+/* RORG    */         0,   s.dir,          0,           0,         d.rorg,
+/* DC      */         0,   s.dir,          0,           0,           d.dc,
+/* DS      */         0,   s.dir,          0,           0,           d.ds,
+/* PAGE    */         0,   s.dir,          0,           0,         d.page,
+/* LIST    */         0,   s.dir,          0,           0,         d.list,
+/* NOLIST  */         0,   s.dir,          0,           0,       d.nolist,
+/* NOL     */         0,   s.dir,          0,           0,       d.nolist,
+/* SPC     */         0,   s.dir,          0,           0,          d.spc,
+/* NOPAGE  */         0,   s.dir,          0,           0,       d.nopage,
+/* LLEN    */         0,   s.dir,          0,           0,         d.llen,
+/* PLEN    */         0,   s.dir,          0,           0,         d.plen,
+/* TTL     */         0,   s.dir,          0,           0,          d.ttl,
+/* NOOBJ   */         0,   s.dir,          0,           0,        d.noobj,
+/* IFEQ    */         0,   s.dir,          0,           0,         d.ifeq,
+/* IFNE    */         0,   s.dir,          0,           0,         d.ifne,
+/* IFLT    */         0,   s.dir,          0,           0,         d.iflt,
+/* IFLE    */         0,   s.dir,          0,           0,         d.ifle,
+/* IFGT    */         0,   s.dir,          0,           0,         d.ifgt,
+/* IFGE    */         0,   s.dir,          0,           0,         d.ifge,
+/* ENDC    */         0,   s.dir,          0,           0,         d.endc,
+/* MACRO   */         0,   s.dir,          0,           0,        d.macro,
+/* ENDM    */         0,   s.dir,          0,           0,         d.endm,
+/* MEXIT   */         0,   s.dir,          0,           0,        d.mexit,
+//  /* SIZE    */     0,   s.dir,          0,           0,         d.size,
+/* GET     */         0,   s.dir,          0,           0,          d.get,
+/* INCLUDE */         0,   s.dir,          0,           0,          d.get,
+/* END     */         0,   s.dir,          0,           0,          d.end,
+/* FAIL    */         0,   s.dir,          0,           0,         d.fail,
+/* CNOP    */         0,   s.dir,          0,           0,         d.cnop,
+/* EXTRN   */         0,   s.dir,          0,           0,        d.extrn,
+/* XREF    */         0,   s.dir,          0,           0,        d.extrn,
+/* ENTRY   */         0,   s.dir,          0,           0,        d.entry,
+/* XDEF    */         0,   s.dir,          0,           0,        d.entry,
+/* REG     */         0,   s.dir,          0,           0,          d.reg,
+/* DCB     */         0,   s.dir,          0,           0,          d.dcb,
+
+
+    /*  Now the registers, and their Mnemonic Synonyms  */
+    /*  ==============================================  */
+
+/* D0      */         0,   s.Dr,           0,           0,              0,
+/* D1      */         0,   s.Dr,           0,           0,              1,
+/* D2      */         0,   s.Dr,           0,           0,              2,
+/* D3      */         0,   s.Dr,           0,           0,              3,
+/* D4      */         0,   s.Dr,           0,           0,              4,
+/* D5      */         0,   s.Dr,           0,           0,              5,
+/* D6      */         0,   s.Dr,           0,           0,              6,
+/* D7      */         0,   s.Dr,           0,           0,              7,
+
+/* A0      */         0,   s.Ar,           0,           0,              0,
+/* A1      */         0,   s.Ar,           0,           0,              1,
+/* A2      */         0,   s.Ar,           0,           0,              2,
+/* A3      */         0,   s.Ar,           0,           0,              3,
+/* A4      */         0,   s.Ar,           0,           0,              4,
+/* A5      */         0,   s.Ar,           0,           0,              5,
+/* A6      */         0,   s.Ar,           0,           0,              6,
+/* A7      */         0,   s.Ar,           0,           0,              7,
+
+/* SR      */         0,   s.SR,           0,           0,              0,
+/* CCR     */         0,   s.CCR,          0,           0,              0,
+/* SP      */         0,   s.Ar,           0,           0,              7,
+/* USP     */         0,   s.USP,          0,           0,              0,
+/* PC      */         0,   s.PC,           0,           0,              0
+
+
+    dataptr   :=   datavector
+
+
+    //  Now declare the Instruction Mnemonics.
+    //  ======================================
+
+    declare( tagtable1, "ABCD/ADD/ADDA/ADDI/ADDQ/ADDX/AND/ANDI/ASL/ASR/*
+                        *BCC/BCS/BEQ/BGE/BGT/BHI/BHS/BLE/BLO/BLS/BLT/BMI/*
+                        *BNE/BPL/BVC/BVS/BCHG/BCLR/BRA/BSET/BSR/BTST//" )
+
+    declare( tagtable1, "CHK/CLR/CMP/CMPA/CMPI/CMPM/DBCC/DBCS/DBEQ/DBF/DBGE/*
+                        *DBGT/DBHI/DBHS/DBLE/DBLO/DBLS/DBLT/DBMI/DBNE/DBPL/*
+                        *DBT/DBVC/DBVS/DBRA/DIVS/DIVU//" )
+
+    declare( tagtable1, "EOR/EORI/EXG/EXGD/EXGA/EXGM/EXT/JMP/JSR/LEA/LINK/*
+                        *LSL/LSR/MOVE/MOVEA/MOVEM/MOVEP/MOVEQ/MULS/MULU/NBCD/*
+                        *NEG/NEGX/NOP/NOT/OR/ORI//" )
+
+    declare( tagtable1, "PEA/RESET/ROL/ROR/ROXL/ROXR/RTE/RTR/RTS/SBCD/*
+                        *SCC/SCS/SEQ/SF/SGE/SGT/SHI/SHS/SLE/SLO/SLS/SLT/*
+                        *SMI/SNE/SPL/ST/SVC/SVS//" )
+
+    declare( tagtable1, "STOP/SUB/SUBA/SUBI/SUBQ/SUBX/SWAP/TAS/TRAP/TRAPV/*
+                        *TST/UNLK//" )
+
+
+    //  Now the directives:
+    //  ===================
+
+    declare( tagtable1, "EQU/EQUR/SET/ORG/RORG/DC/DS/PAGE/LIST/NOLIST/NOL/*
+                        *SPC/NOPAGE/LLEN/PLEN/TTL/NOOBJ/IFEQ/IFNE/IFLT/IFLE/*
+                        *IFGT/IFGE//" )
+
+    declare( tagtable1, "ENDC/MACRO/ENDM/MEXIT/GET/INCLUDE/END/FAIL/CNOP/*
+                        *EXTRN/XREF/ENTRY/XDEF/REG/DCB//" )
+
+
+    //  Register names  and synonyms:
+    //  =============================
+
+    declare( tagtable2, "D0/D1/D2/D3/D4/D5/D6/D7/A0/A1/A2/A3/A4/A5/A6/A7/*
+                        *SR/CCR/SP/USP/PC//" )
+$)
+
+

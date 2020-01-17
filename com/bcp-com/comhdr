@@ -1,0 +1,339 @@
+$$BCOMHDR       := TRUE;
+$$OPB           := TRUE;
+$$SLCT          := TRUE;
+$$TRIPOS        := $$68000TRIPOS | $$LSI4TRIPOS
+$$32BIT         := $$68000TRIPOS;
+$$16BIT         := ~$$32BIT;
+$$VALID         := $$PDPRSX | $$TRIPOS;
+                                                        // FORCE TERMINATION
+$<VALID' Invalid machine tag provided -- not supported yet! $>VALID'
+// Variables + functions used to interface front-end and code generator
+// Routines in ERR overlay may share global numbers with SYN TRN and CG
+// BUT NOT DATA GLOBALS!!!!!!!!!
+// (TRN actually oiverwrites the output routines, so CHECKOCODE is called)
+$<PDPRSX
+GLOBAL $(
+START           :1;     STOP            :2;     STACKBASE       :3;
+STACKTOP        :4;     GLOBALBASE      :5;     GLOBALTOP       :6;
+PROGBASE        :7;     PROGTOP         :8;     TERMINATOR      :9;
+FINDBLOCKIO     :10;    ENDBLOCKIO      :11;    READBLOCK       :12;
+WRITEBLOCK      :13;    STFLAGS /*****/ :14;    FINDINPUT       :15;
+FINDOUTPUT      :16;    ENDREAD         :17;    ENDWRITE        :18
+REWIND          :19;    ENDTOINPUT      :20;    SELECTINPUT     :21
+SELECTOUTPUT    :22;    SYSIN           :23;    SYSOUT          :24
+INPUT           :25;    OUTPUT          :26;    RDCH            :27
+WRCH            :28;    BINRDCH         :29;    BINWRCH         :30
+UNRDCH          :31;    READREC         :32;    WRITEREC        :33
+READSTRING      :34;    READNUMBER      :35;    READN           :36
+WRITED          :37;    WRITEOCT        :38;    WRITEHEX        :39
+WRITEN          :40;    WRITEO          :41;    WRITEH          :42
+WRITES          :43;    WRITEF          :44;    NEWLINE         :45
+NEWPAGE         :46;    RESULT2         :47;    WRITESTRING     :48
+LEVEL           :50;    LONGJUMP        :51;    APTOVEC         :52
+GETVEC          :53;    FREEVEC         :54;    PACKSTRING      :55
+UNPACKSTRING    :56;    EQUALSTRING     :57;    GETBYTE         :58
+PUTBYTE         :59;    DATE            :60;    TIMEOFDAY       :61
+TIME            :62;    ABORT           :63;    MAPSTORE        :64
+MAPGLOBALS      :65;    BACKTRACE       :66;    USERPOSTMORTEM  :67
+MULDIV          :68;    UNDEFINED       :69;    FINDTITLES      :70
+UNPACKTITLE     :71;    PACKTITLE       :72;    STARTIO         :73
+ENDIO           :74;    APPENDOUTPUT    :75;    SPOOLOUTPUT     :76
+FINDSCINPUT     :77;    FINDSTRINGINPUT :78;    DELETEINPUT     :79
+DELETEOUTPUT    :80;    FINDPARM        :81;    FINDCML         :82
+ATTACH          :83;    DETACH          :84;    OVERLAY         :85
+IOERROR         :86;    FINDSTREAM      :87;    AUTO.OVERLAY    :88
+DSERROR         :89;    FFLOAT          :90;    FFIX            :91
+ADDF            :92;    SUBF            :93;    MULF            :94
+DIVF            :95;    CMPF            :96;    SQRTF           :97
+HANDLE          :98;    TRAP            :99;    SYSTEM          :100
+GETFLAG         :101;   RETURNFLAG      :102;   GETLUN          :103
+RETURNLUN       :104;   ISTERMINAL      :106;   ASTEXIT         :107
+TORADIX50       :108;   FROMRADIX50     :109;// globals 110 -> 115 used by RTS.
+CREATECO        :116;   DELETECO        :117;   CALLCO          :118
+RESUMECO        :119;   COWAIT          :120;   FINDSCOUTPUT    :121
+CAPITALCH       :122;   LOAD            :123;   UNLOAD          :124
+LOADFILE        :125;   MAXVEC          :126;   FINDMCR         :127
+UPDSTACKTOP     :128;   //STREAMBLOCK   :129;   //DELAY         :130
+DEB.FILE        :134
+// globals 131 -> ??? used by DEBUG, mutter, mutter;
+TRACE.ENTRY     :135;   TRACE.EXIT      :136;   ASTEXIT.SH      :137
+SAVESPACESIZE   :138
+$)
+
+MANIFEST $(MAN
+UG              = 150;  BYTESPERWORD    = 2;    MAXINT          = 32767;
+BITSPERWORD     = 16;   ENDSTREAMCH     = -10;  TICKSPERSECOND  = 50
+
+UNP.SIZ = 34;   UNP.NML = 9;    UNP.DEV = 1;    UNP.UNT = 3;    UNP.UIC = 6;
+UNP.UIG = 7;    UNP.UIP = 11;   UNP.NAM = 15;   UNP.DOT = 24;   UNP.EXT = 25;
+UNP.TYP = 25;   UNP.SCL = 28;   UNP.VER = 29
+
+IE.PRI = -16;   IE.DFU = -24;   IE.CLO = -38;   IE.NBF = -39;   IE.ILU = -96;
+IE.IDU = -92;   IE.NLN = -37;   IE.BNM = -54;   IE.NSF = -26;   IE.WAC = -29;
+IE.FOP = -53;
+
+TF.RAL=#10;     TF.WAL=#10;     TF.RNE=#20;     TF.XCC = #1;    TF.ATT = #400;
+TF.CRLF = #1000;TF.TA = #2000;
+RA.RD = #1;     RA.WT = #16;    RA.UPD = #6
+ASTEXIT.UPB = 11
+OBUF.word.offest        = 0;    OBUF.byte.offest        = 0
+$)MAN
+$>PDPRSX
+
+$<TRIPOS
+GLOBAL $(
+start:1;                stop:2;
+/*Mul,div,rem on 68000s 3, 4, 5 */
+//free:6 -------------- free:7 -------------------------------------------------
+//FREE- gbytes:8 ------ pbytes:9 -----------------------------------------------
+result2:10;             /*--returncode:11;---*/ stackbase:12;
+tcb:13;                 taskid:14;              getbyte:15;
+putbyte:16;             level:17;               longjump:18;
+//FREE- muldiv:19; ---- aptovec:20; ----------- sardch:21 ----------------------
+//FREE- sawrch:22; ----
+/*createco:23; ........ deleteco:24; .......... callco:25; .....................
+..cowait:26; .......... resumeco:27;.........*/ globin:28;
+getvec:29;              freevec:30;
+//FREE- createdev:31; - deletedev:32; ------------------------------------------
+/*createtask:33; ...... deletetask:34; ........ changepri:35; ......... */
+setflags:36;            testflags:37;           abort:38;
+//FREE- hold:39; ------ release:40; --------------------------------------------
+/*taskwait:41; ........ qpkt:42; .............. dqpkt:43; ............. */
+//FREE- packstring:44;- unpackstring:45; ---------------------------------------
+/*endtask:46; .......*/ delay:47;               sendpkt:48;
+/*returnpkt:49;........ initio:50;...........*/ currentdir:51;
+cis:52;                 cos:53;                 rdch:54;
+binrdch:54;             unrdch:55;              wrch:56;
+binwrch:56;             readwords:57;           writewords:58;
+findinput:59;           findoutput:60;          selectinput:61;
+selectoutput:62;        endread:63;             endwrite:64;
+input:65;               output:66;              readn:67;
+newline:68;             writed:69;              writen:70;
+writehex:71;            writeoct:72;            writes:73;
+writef:74;              capitalch:75;           compch:76;
+compstring:77;          rdargs:78;              rditem:79;
+findarg:80;             loadseg:81;             unloadseg:82;
+callseg:83;             tidyup:84;              datstring:85;
+datstamp:86;
+//free:87 ------------- free:88 --------------- free:99 ------------------------
+deleteobj:90;   renameobj:91;
+//FREE- findupdate:92; ---------------------------------------------------------
+endstream:93;
+//FREE- get2bytes:94; - put2bytes:95; ------------------------------------------
+//free:96, 97, 98, 99 ----------------------------------------------------------
+pktwait:100;
+//free:101
+devicetask:102;         fault:104;              consoletask:105;
+//free:106 ---------------------------------------------------------------------
+splitname:107;          locateobj:108;          freeobj:109;
+//free- findobj:112;---
+//FREE- copydir:113; ---------- note:114;------ point:115; ---------------------
+//FREE:116, 117, 118, 119, 120, 121, 122 ---------------------------------------
+locatedir:123;
+//**********************************  Naughties  *******************************
+//**********************************  Naughties  *******************************
+$<LSI4TRIPOS
+SYSIN:6?;       SYSOUT:7?;      //##############################################
+DEB.FILE:87?;   TASKWRITEF:88;  PRCH:89;        //******************************
+VALID.POINTER:94;               VALIDPOINTER:94;                CLEAR.POINTER:95
+WRITE.LAST.SYMB:96;             SHOWALL:97;     //******************************
+LAST.SYMB.PNT:98;               REPEAT.AGAIN:99;//******************************
+SAVESPACESIZE:101;                              //******************************
+CGFLAG2:106;                                    //******************************
+TRN.SW.SPACE:112;                               //******************************
+// 103, 110, 111, 116, 117, 118, 119, 120, 121, 122 ****************************
+OVFILE:124;     createdir:125;  STFLAGS:126     //******************************
+$>LSI4TRIPOS
+$<68000TRIPOS
+SYSIN:103;      SYSOUT:110;     //##############################################
+DEB.FILE:111;   TASKWRITEF:88;  PRCH:89;        //******************************
+VALID.POINTER:119;              VALIDPOINTER:119;       CLEAR.POINTER:120 //****
+WRITE.LAST.SYMB:96;             SHOWALL:97;     //******************************
+LAST.SYMB.PNT:98;               REPEAT.AGAIN:99;//******************************
+SAVESPACESIZE:101;                              //******************************
+CGFLAG2:106;                                    //******************************
+TRN.SW.SPACE:112;                               //******************************
+OVFILE:121;     createdir:122;  STFLAGS:124     //******************************
+$>68000TRIPOS
+//******************************************************************************
+//******************************************************************************
+//**********************************  Naughties  *******************************
+//**********************************  Naughties  *******************************
+$) MANIFEST $(
+$<LSI4TRIPOS
+bytesperword=2; mcaddrinc=1; tcb.upb   =17; rootnode = 8
+$>LSI4TRIPOS
+$<68000TRIPOS
+bytesperword=4; mcaddrinc=4; tcb.upb   =40; rootnode = 256
+$>68000TRIPOS
+endstreamch=-1; notinuse=-1;    bitsperbyte=8;  ug=150; CO.SEND=2
+bitsperword=bitsperbyte*bytesperword;   minint=1 << (bitsperword-1)
+maxint=~minint;
+
+|| TCB offsets
+tcb.link   = 0; tcb.taskid = 1; tcb.pri   = 2;  tcb.wkq         = 3
+tcb.state  = 4; tcb.flags  = 5; tcb.stsiz = 6;  tcb.seglist     = 7
+tcb.gbase  = 8; tcb.sbase  = 9;
+
+RTN.MEMSIZE=10
+RTN.INFO   =11; INFO.mctype= 0; INFO.assignments=1; ass.dir=2; ass.name=5
+
+|| DCB offsets
+dcb.devid  = 1; dcb.wkq    = 2
+|| A%(-1) doesn't work - SO use (A-n)%(BYTESPERWORD*n +1)
+OBUF.word.offset        = 10000
+OBUF.byte.offset        = OBUF.word.offset * BYTESPERWORD
+$)
+$>TRIPOS
+
+MANIFEST $( GV = UG
+cgf.Codegen     = #X0001; cgf.Cgstarted = #X0002; cgf.WORDADDRESS       = #X0004
+cgf.TRANSCHARS  = #X0008; cgf.halfwordop= #X0010; cgf.Backvec           = #X0020
+cgf.Cgcodeing   = #X0040; cgf.Callcounting=#X0080;cgf.Sectnaming        = #X0100
+cgf.Procnames   = #X0200; cgf.Stkchking = #X0400; cgf.Cgonly            = #X0800
+cgf.Restricted  = #X1000; cgf.Cglisting = #X2000; cgf.Hexlist           = #X2000
+cgf.Multiple    = #X4000; cgf.OCODEINPUT= #X8000
+
+cgf2.opt        = #X4000;       // Don't kill cache after !x :=
+cgf2.mdr        = #X2000;       // Use Mul, Div and Rem as JSR n(R)
+cgf2.profcount  = #X1000;
+cgf2.library    = #X0800;       // Put a 23456 before each routine ...
+cgf2.longnames  = #X0400;       // Use long proc names ( len | chars | 0s | len
+cgf2.68020      = #X0200;       // Use 68020 op code
+
+stf.cond        = #X0001; stf.err       = #X0002;       stf.glob        = #X0004
+stf.noget       = #X0010; stf.untag     = #X0020;       stf.decls       = #X0040
+stf.reg         = #X0080; stf.byte      = #X0100;       stf.op          = #X0200
+stf.halfwordop  = #X0400;               // -> DONT use !, Actually use %%
+stf.nowarn      = #X0800;               // Dont warn ....
+stf.opt         = #X1000;               // TRN5 should NOT muck around
+stf.debug       = #X2000;
+stf.ext         = stf.cond | stf.err | stf.glob | stf.untag | stf.byte
+stf.def         = stf.ext |
+                $<PDPRSX        stf.reg | stf.op        $>PDPRSX
+                $<68000TRIPOS   stf.op          $>68000TRIPOS
+                $<LSI4TRIPOS    0               $>LSI4TRIPOS
+                // STF.OPT is NOT allowed !!!!
+$)
+GLOBAL $(
+        // Routines called from anywhere (so live in the root)
+        LOADOVERLAY             : GV+  0
+        CALLSYNREPORT           : GV+  1
+        TRANSREPORT             : GV+  2
+        CGREPORT                : GV+  3
+$<PROD' DEB                     : GV+  4        $>PROD'
+
+        // Variables used everywhere
+        Listfile                : GV+  5
+        Lastsect                : GV+  6        //<B>
+        Numeric                 : GV+  7        //<B>
+        Numericocode            : GV + 7        //=============================
+        Datevec                 : GV+  8
+        Obufp                   : GV+  9
+        Codefile                : GV+ 10
+        Quiet                   : GV+ 11        //<B>
+        Reportcount             : GV+ 12
+        Reportmax               : GV+ 13
+        Listout                 : GV+ 14
+        Sourcefile              : GV+ 15
+        Rst.p                   : GV+ 16        // Fatal.error
+        Rst.l                   : GV+ 17        // Fatal.error
+        rec.p                   : GV+ 18
+        Err.p                   : GV +18        //==============================
+        Err.l                   : GV+ 19
+        rec.l                   : GV +19        //==============================
+        Workspace               : GV+ 20
+        Heapsize                : GV+ 21        // CGX
+        Sectletter              : GV+ 22        // CGX
+        sourcestream            : GV+ 23
+
+        //                                              SYN
+        prsource                : GV+ 24        //<B>
+        //                                              SYN & TRN
+        //                                              TRN
+        //                                              TRN & CG
+        Slow                    : GV+ 25        //<B>
+        Fileocode               : GV+ 26        //<B>
+        Ocodefile               : GV+ 27
+        charcode                : GV+ 28
+
+        //                                              CG
+        CGFLAGS                 : GV+ 29
+
+        Globalsize              : GV+ 30                // CGX
+        Stacksiz                : GV+ 31
+        Codeout                 : GV+ 32
+        TREEP                   : GV+ 33        // MST1 uses it!
+        condvec                 : GV+ 34
+        linecount               : GV+ 35
+        Ocode                   : GV+ 36
+        Obuf                    : GV+ 37
+        condptr                 : GV+ 38
+        Cgident                 : GV+ 39
+        Cgtitle                 : GV+ 40
+        Progsize                : GV+ 41
+        Maxused                 : GV+ 42
+$<PDPRSX
+        Taskname                : GV+ 43
+        Closelist               : GV+ 44
+        Cgparms                 : GV+ 45
+        Overwedge               : GV+ 46
+        Fudgesize               : GV+ 47
+        Timevec                 : GV+ 48
+        Tracing                 : GV+ 49        //<B>
+        Optimise                : GV+ 50        //<B>
+        GVEC.PSECT              : GV+ 51        //<B>
+$>PDPRSX
+$<TRIPOS
+        OVBASE                  : GV +43
+$>TRIPOS
+$)
+
+MANIFEST
+$( After.permanent = GV+ 52 $<TRIPOS - 8 $>TRIPOS
+   SYNTRN=After.permanent+1;
+   TRNCG=SYNTRN +9                      // Allow for STHDR
+   OVG  =TRNCG  +3                      // Allow for TCHDR
+$<RESIDENT'
+   OGV  = OVG;  CG      = OVG;  SYN     = OVG;  TRN   = OVG +1; ERR     = OVG +3
+$>RESIDENT'
+$<RESIDENT
+   OGV  = OVG;  CG      = OGV;  SYN     = CG+150;TRN   = SYN+60;ERR     = TRN +70
+   BCOM = ERR+15
+$>RESIDENT
+$)
+
+$<BCOMHDR
+GLOBAL
+$(
+$<RESIDENT'
+        FINDPARMS               : 1             // ERR
+//      SMALLNUMBER             : After.permanent
+        OVSYNREPORT             : OVG+  0
+        OVTRANSREPORT           : OVG+  1
+$<PDPRSX BCPLOG                 : OVG+  2                               $>PDPRSX
+        FORMTREE                : 1             // SYN
+        COMPILEAE               : 1             // TRN
+        CHECKOCODE              : OVG
+        CGSTART                 : 1             // CGS
+        CGSECT                  : 1             // CG1
+        OUTPUTSECTION           : 1             // CG2
+$>RESIDENT'
+$<RESIDENT
+        FINDPARMS               : BCOM+ 0       // ERR
+        OVSYNREPORT             : BCOM+ 1
+        OVTRANSREPORT           : BCOM+ 2
+        FORMTREE                : BCOM+ 3       // SYN
+        COMPILEAE               : BCOM+ 4       // TRN
+        CHECKOCODE              : BCOM+ 5
+        CGSTART                 : BCOM+ 6       // CGS
+        CGSECT                  : BCOM+ 7       // CG1
+        OUTPUTSECTION           : BCOM+ 8       // CG2
+$>RESIDENT
+
+        SMALLNUMBER             : After.permanent       // Many - ERR-SYN-TRN
+$)
+$>BCOMHDR
+$$COMHDR := TRUE
+
+

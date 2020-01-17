@@ -1,0 +1,142 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+            ######   ########   ######   ##        ########  #######  
+           ########  ########  ########  ##        ########  ######## 
+           ##        ##        ##        ##           ##     ##    ## 
+           #######   ######    ##  ####  ##           ##     #######  
+                 ##  ##        ##    ##  ##           ##     ##    ## 
+                 ##  ##        ##    ##  ##           ##     ##    ## 
+           ########  ########  ########  ########  ########  ######## 
+            ######   ########   ######   ########  ########  #######  
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   28/06/84             *
+\*****************************************************************************/
+
+
+
+SECTION "SEGLIB"
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "bcpl.preloadhdr"
+
+
+LET loadseg( name )  =  VALOF
+$(
+    LET ptask  =  devicetask( "preload:" )
+    
+    IF  ptask = 0  THEN  RESULTIS  sys.loadseg( name )
+    
+    RESULTIS  sendpkt( notinuse, ptask, act.loadseg, 0, 0, currentdir, name )
+$)
+
+
+
+AND unloadseg( segment )  BE
+$(
+    LET r2     =  result2
+    LET ptask  =  devicetask( "preload:" )
+    
+    TEST  ptask = 0  THEN
+    $(
+        sys.unloadseg( segment )
+        
+        result2  :=  r2
+    $)
+    ELSE
+    $(
+        sendpkt( notinuse, ptask, act.unloadseg, 0, 0, segment )
+        
+        result2  :=  r2
+    $)
+$)
+
+
+
+//**************************************************************************
+//*              System versions of LOADSEG and UNLOADSEG                  *
+//**************************************************************************
+
+
+
+AND sys.loadseg (file) = VALOF
+$( LET dummy    = testflags(1) // Clear break flag so we don't fail if it was set earlier
+   LET list     = 0
+   LET liste    = @list
+   LET oldinput = input()
+   LET newinput = findinput(file)
+
+   IF newinput=0 RESULTIS 0
+   selectinput(newinput)
+
+   $( LET base  = 0
+      LET limit = -1
+
+      $( LET type = 0
+
+         IF readwords(@type, 1)=0 THEN
+            TEST [limit=-1] & [list\=0] THEN GOTO ok ELSE GOTO err121
+
+         IF testflags(1) THEN $( result2 := 190; GOTO err $)
+
+         SWITCHON type INTO
+         $( CASE t.hunk :
+            CASE t.reloc:
+            $( LET space = ?
+               LET n     = ?
+               readwords (@n, 1)
+               space := getvec (n)
+               IF space=0 GOTO err
+               readwords (space+1, n)
+
+               TEST type = t.hunk
+                    THEN $( space!0 := 0
+                            !liste  := space
+                            liste   := space
+                            limit   := n
+                            base    := space+1
+                         $)
+                    ELSE // t.reloc
+                         $( FOR i=1 TO n DO
+                            $( LET a = space!i
+                               LET b = a/mcaddrinc
+                               UNLESS 0<=b<=limit DO $( freevec (space)
+                                                        GOTO err121
+                                                     $)
+                               base!b := base!b+base*mcaddrinc
+                            $)
+                            freevec (space)
+                         $)
+               LOOP
+            $)
+
+            CASE t.end: BREAK
+         $)
+         GOTO err121
+
+      $) REPEAT
+   $) REPEAT
+
+err121: result2 := 121
+err   : unloadseg (list)
+        list    := 0
+ok    : endread ()
+        selectinput (oldinput)
+        RESULTIS list
+$)
+
+
+
+AND sys.unloadseg(seg) BE UNTIL seg=0 DO $( LET s = !seg
+                                            freevec (seg)
+                                            seg := s
+                                         $)
+
+

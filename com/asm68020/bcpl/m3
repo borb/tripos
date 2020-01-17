@@ -1,0 +1,1088 @@
+//****************************************************************************
+//*                                                                          *
+//*        M68KASM  -  Assembler for the MC68000 family  -  Section 3        *
+//*                                                                          *
+//*                       Special Instruction Handling                       *
+//*                                  Part 1                                  *
+//*                                                                          *
+//****************************************************************************
+//*     I. D. Wilson    -    Last Modified    -    IDW    -    18/11/86      *
+//****************************************************************************
+
+
+
+SECTION "M3"
+
+
+
+GET "LIBHDR"
+GET "M68KHDR"
+
+
+
+LET specialinstruction( inum )  BE
+$(
+//  Decode the type of the special instruction, and dispatch to the relevant
+//  routine to handle that instruction.
+
+    SWITCHON  inum  INTO
+    $(
+        CASE 1  :  instr1()     ;  ENDCASE
+        CASE 2  :  instr2()     ;  ENDCASE
+        CASE 3  :  instr3()     ;  ENDCASE
+        CASE 4  :  instr4()     ;  ENDCASE
+        CASE 5  :  instr5()     ;  ENDCASE
+        CASE 6  :  instr6()     ;  ENDCASE
+        CASE 7  :  instr7()     ;  ENDCASE
+        CASE 8  :  instr8()     ;  ENDCASE
+        CASE 9  :  instr9()     ;  ENDCASE
+//      CASE 10 :
+        CASE 11 :  instr11()    ;  ENDCASE
+        CASE 12 :  instr12()    ;  ENDCASE
+        CASE 13 :  instr13()    ;  ENDCASE
+        CASE 14 :  instr14()    ;  ENDCASE
+        CASE 15 :  instr15()    ;  ENDCASE
+        CASE 16 :  instr16()    ;  ENDCASE
+        CASE 17 :  instr17()    ;  ENDCASE
+        CASE 18 :  instr18()    ;  ENDCASE
+        CASE 19 :  instr19()    ;  ENDCASE
+        CASE 20 :  instr20()    ;  ENDCASE
+        CASE 21 :  instr21()    ;  ENDCASE
+        CASE 22 :  instr22()    ;  ENDCASE
+        CASE 23 :  instr23()    ;  ENDCASE
+        CASE 24 :  instr24()    ;  ENDCASE
+        CASE 25 :  instr25()    ;  ENDCASE
+        CASE 26 :  instr26()    ;  ENDCASE
+        CASE 27 :  instr27()    ;  ENDCASE
+        CASE 28 :  instr28()    ;  ENDCASE
+        CASE 29 :  instr29()    ;  ENDCASE
+        CASE 30 :  instr30()    ;  ENDCASE
+        CASE 31 :  instr31()    ;  ENDCASE
+        CASE 32 :  instr32()    ;  ENDCASE
+        CASE 33 :  instr33()    ;  ENDCASE
+        CASE 34 :  instr34()    ;  ENDCASE
+        CASE 35 :  instr35()    ;  ENDCASE
+        CASE 36 :  instr36()    ;  ENDCASE
+        CASE 37 :  instr37()    ;  ENDCASE
+        CASE 38 :  instr38()    ;  ENDCASE
+
+        DEFAULT :  complain( 0 )
+    $)
+
+    skiprest()
+$)
+
+
+
+AND instr1()  BE
+$(
+//  ABCD  ADDX  SBCD  SUBX
+//
+//  Possible operands are:
+//
+//      a)      Dy,Dx
+//      b)    -(Ay),-(Ax)
+//
+//  We must be careful about the default size, since it is different for the
+//  different instructions:
+//
+//      ABCD, SBCD              .B    (source.ea = 0)
+//      ADDX, SUBX              .W    (source.ea = 1)
+
+    LET r.m  =  0
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    r.m  :=  op.ea  =  am.Dr     ->  0,
+             op.ea  =  am.Ar.pd  ->  1,  complain( 8 )
+
+    IF  instr.size = ts.none  THEN
+        instr.size  :=  source.ea = 0  ->  ts.byte,
+                        source.ea = 1  ->  ts.word,  complain( 0 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    TEST  op.ea = op1.ea  THEN
+
+        codeword(  instr.mask                          |
+                   (exp << 9)                          |
+                   (sizefield( instr.size ) << 6)      |
+                   (r.m << 3)                          |
+                   (op1.exp)                           )
+
+    ELSE  complain( 9 )
+$)
+
+
+
+AND instr2()  BE
+$(
+//  AND  OR
+//
+//  Possible operand types:
+//
+//  <ea>,Dn                  <ea> = data.
+//  Dn,<ea>                  <ea> = mem  alt.
+
+    LET r.m  =  0
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    TEST  op.ea = am.Dr  THEN
+    $(
+        r.m  :=  0
+
+        TEST  (op1.ea & am.data) = 0
+            THEN  complain( 13 )
+            ELSE  swapoperands()
+    $)
+    ELSE
+
+    TEST  op1.ea \= am.Dr           THEN  complain( 14 )   ELSE
+    TEST  (op.ea & am.mem.alt) = 0  THEN  complain( 15 )
+
+    ELSE  r.m  :=  1
+
+    codeword(  instr.mask                                  |
+               (op1.exp  <<  9)                            |
+               (r.m      <<  8)                            |
+               (sizefield( instr.size )  <<  6)            |
+               (eafield() )                                )
+
+    genea()
+$)
+
+
+
+AND instr3()  BE
+$(
+//  ADD  SUB
+//
+//  Possible operands are:
+//
+//       a)    <ea>,Dr                    <ea> = all
+//       b)    Dr,<ea>                    <ea> = mem alt.
+
+    LET r.m  =  0
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    TEST  op.ea = am.Dr THEN
+    $(
+        r.m  :=  0
+
+        IF  (op1.ea & am.all) = 0  THEN  complain( 8 )
+
+        swapoperands()
+    $)
+    ELSE
+    $(
+        r.m  :=  1
+
+        TEST  op1.ea \= am.Dr  THEN  complain( 14 )
+        ELSE
+
+            IF  (op.ea & am.mem.alt) = 0  THEN  complain( 15 )
+    $)
+
+    codeword(  instr.mask                                    |
+               (op1.exp  <<  9)                              |
+               (r.m      <<  8)                              |
+               (sizefield( instr.size ) << 6)                |
+               (eafield())                                   )
+
+    genea()
+$)
+
+
+
+AND instr4()  BE
+$(
+//  Bcc  DBcc  BRA   BSR   DBRA
+//
+//  The condition codes required for this instruction is
+//  in fact held in "source.ea"
+
+    LET ofwd  =  forwardreftype
+    LET olev  =  recoverlevel
+    LET olab  =  recoverlabel
+
+    nextsymb()
+
+    IF  nargs = 2  THEN     // A DB.. type instruction
+    $(
+        checkinstrsize()
+
+        effective.address()
+        checkfor( s.comma, 10 )
+
+        IF  op.ea \= am.Dr  THEN  complain( 14 )
+
+        swapoperands()
+    $)
+
+    //  We must allow for the possibility of a forward
+    //  reference to a 32 bit value.  This is illegal in most
+    //  cases, but not here.
+
+    recoverlevel    :=  level()
+    recoverlabel    :=  label
+
+    forwardreftype  :=  s.abs32
+
+    effective.address()
+
+label:
+    recoverlevel    :=  olev
+    recoverlabel    :=  olab
+
+    forwardreftype  :=  ofwd
+
+    IF  error.found  THEN  longjump( recoverlevel, recoverlabel )
+
+    //  Having read the effective address, make sure that it
+    //  is compatible with the current program counter.
+
+    checkfor( s.none, 12 )
+
+    //  We cannot allow external references in Branch
+    //  instructions (as we require a displacement).
+
+    IF  externalref  THEN  complain( 152 )
+
+    TEST  op.ea = am.PC.disp  THEN
+        UNLESS  locmode = s.rel  DO
+            complain( 18 )
+
+    ELSE
+
+    TEST  (op.ea = am.abs16  |  op.ea = am.abs32)  THEN
+        IF  pass2  THEN
+            UNLESS  locmode = s.abs  DO
+                complain( 17 )
+
+    ELSE  complain( 16 )
+
+    //  We can perform an optimisation here, if the reference is
+    //  backward, and we are assembling a Bcc instruction, and
+    //  the user has not asked for a LONG branch explicitly.
+
+    IF  nargs = 1  &  instr.size = ts.none  THEN
+    $(
+        LET offset   =  exp - (location + 2)
+        LET inrange  =  -128 <= offset <= +127
+
+        IF  inrange  &  offset \= 0  &  NOT forwardref  THEN
+            instr.size  :=  ts.short
+    $)
+
+    TEST  instr.size = ts.short  |  instr.size = ts.byte  THEN
+    $(
+        LET offset  =  exp - (location + 2)
+
+        codeword(  instr.mask           |
+                   (source.ea  <<  8)   |
+                   (offset  &  #XFF)    )
+
+        IF  pass2  THEN
+        $(
+            //  Check that the numeric values involved are not out of
+            //  range.
+
+            IF  offset = 0   THEN  complain( 19 )
+            IF  offset = -1  THEN  complain( 208 )
+
+            UNLESS  (-128 <= offset <= +127)  DO  complain( 20 )
+        $)
+    $)
+    ELSE
+
+    TEST  instr.size = ts.word  |  instr.size = ts.none  THEN
+    $(
+        //  Word branch - the offset must be within a 16 bit displacement
+        //  of the current location.
+
+        LET offset  =  exp - (location + 2)
+
+        IF  pass2  &  NOT (-32768 <= offset <= +32767)  THEN  complain( 21 )
+
+        codeword(  instr.mask                       |
+                   (source.ea  <<  8)               |
+                   (nargs = 2  ->  op1.exp, #B000)  )
+
+        codeword(  offset  &  #XFFFF                )
+    $)
+    ELSE
+
+    TEST  instr.size = ts.long  THEN
+    $(
+        //  Long branch.  This is a 32 bit displacement, so everywhere is in
+        //  range.
+
+        LET offset  =  exp - (location + 2)
+
+        codeword(  instr.mask                       |
+                   (source.ea  <<  8)               |
+                   (nargs = 2  ->  op1.exp, #B000)  |
+                   (#XFF)                           )
+
+        codeword(  offset >> 16                     )
+        codeword(  offset  &  #XFFFF                )
+    $)
+
+    ELSE  complain( 6 )
+$)
+
+
+
+AND instr5()  BE
+$(
+//  ASL  ASR  LSL  LSR   ROL  ROR  ROXL  ROXR
+//
+//  The identifier for the particular instruction is held in "source.ea"
+//
+//  The possible addressing modes are:
+//
+//     a)    Dr,Dr
+//     b) #imm3,Dr
+//     c)    <ea>                  mem alt.
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+
+    TEST  op.ea = am.Dr  |  (op.ea & am.imm3) \= 0  THEN
+    $(
+        LET r    =  exp & #B111
+        LET i.r  =  op.ea = am.Dr  ->  1, 0
+        LET dr   =  source.ea & 1
+
+        checkfor( s.comma, 10 )
+
+        swapoperands()
+
+        effective.address()
+        checkfor( s.none, 12 )
+
+        TEST  op.ea = am.Dr  THEN
+              codeword(  instr.mask                           |
+                         (r  <<  9)                           |
+                         (dr <<  8)                           |
+                         (sizefield( instr.size )  << 6)      |
+                         (i.r << 5)                           |
+                         (exp)                                )
+
+        ELSE  complain( 22 )
+    $)
+    ELSE
+
+    TEST  (op.ea & am.mem.alt) \= 0  THEN
+    $(
+        LET mask  =  source.ea!(TABLE   #XE0C0, #XE0C0,
+                                        #XE2C0, #XE2C0,
+                                        #XE6C0, #XE6C0,
+                                        #XE4C0, #XE4C0)
+
+        LET dr    =  source.ea & 1
+
+        checkfor( s.none, 12 )
+
+        codeword(  mask                                      |
+                   (dr  <<  8)                               |
+                   (eafield() )                              )
+
+        genea()
+    $)
+    ELSE  complain( 8 )
+$)
+
+
+
+AND instr6()  BE
+$(
+//  BCHG  BCLR  BSET  BTST
+//
+//  Possible operands are:
+//
+//     a)     Dr,<ea>                          data alt.
+//     b)   #imm,<ea>                          data alt.
+//                                             (data if BTST)
+
+    LET btst  =  source.ea = #B00
+    LET mode  =  btst  ->  am.data,  am.data.alt
+    LET code  =  btst  ->  33,       23
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    //  Check the destination mode first of all.
+
+    IF  (op.ea  &  mode)  =  0  THEN  complain( code )
+
+    //  Having done that, we can check the source mode to define what
+    //  kind of instruction this is.
+
+    TEST  op1.ea = am.Dr  THEN
+
+        //  Dynamic bit offset, with the value held in an address register.
+
+        codeword(  #X0100                                 |
+                   (op1.exp  <<  9)                       |
+                   (source.ea << 6)                       |
+                   (eafield() )                           )
+
+    ELSE
+
+    TEST  (op1.ea & am.imm16) \= 0  THEN
+    $(
+        //  Static bit offset, with the value held in an immediate operand.
+
+        codeword(  #X0800                                 |
+                   (source.ea  <<  6)                     |
+                   (eafield() )                           )
+
+        codeword( op1.exp & #XFF )
+    $)
+
+    //  All other source operand types are illegal.
+
+    ELSE  complain( 8 )
+
+    //  Having dealt with the opcode, throw out the effective address of
+    //  the destination operand.
+
+    genea()
+$)
+
+
+
+AND instr7()  BE
+$(
+//  EXG  EXGA  EXGM  EXGD
+//
+//  Possible operands are <register>,<register>,
+//  but various restrictions are placed depending on
+//  then mnemonic used.
+
+    LET regs    =  0
+    LET opmode  =  0
+
+    checkinstrsize()
+
+    UNLESS  (source.ea & #B01) = 0  DO  regs := regs | am.Dr
+    UNLESS  (source.ea & #B10) = 0  DO  regs := regs | am.Ar
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    IF  (op.ea & regs) = 0  THEN  complain( 24 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    IF  (op.ea & regs) = 0  THEN  complain( 24 )
+
+    opmode   :=  op.ea  =  op1.ea  ->  (op.ea = am.Dr -> #B01000,
+                                                         #B01001),
+                                                         #B10001
+
+    UNLESS  op.ea = op1.ea  DO
+        IF  op1.ea = am.Ar  THEN
+            swapoperands()
+
+    codeword(  instr.mask                                |
+               (op1.exp  <<  9)                          |
+               (opmode   <<  3)                          |
+               (exp)                                     )
+$)
+
+
+
+AND instr8()  BE
+$(
+//  All the MOVE instructions.   These require MUCH more
+//  decoding...
+//  The values of "source.ea" represent:
+//
+//       0   -   MOVE
+//       1   -   MOVEA
+//       2   -   MOVEM
+//       3   -   MOVEP
+//       4   -   MOVEQ
+//       5   -   MOVEC
+//       6   -   MOVES
+
+    checkinstrsize()
+
+    SWITCHON  source.ea  INTO
+    $(
+        CASE  0 :  genmove()    ; ENDCASE
+        CASE  1 :  genmovea()   ; ENDCASE
+        CASE  2 :  genmovem()   ; ENDCASE
+        CASE  3 :  genmovep()   ; ENDCASE
+        CASE  4 :  genmoveq()   ; ENDCASE
+        CASE  5 :  genmovec()   ; ENDCASE
+        CASE  6 :  genmoves()   ; ENDCASE
+
+        DEFAULT :  complain( 0 )
+    $)
+$)
+
+
+
+AND instr9()  BE
+$(
+//  JMP  JSR
+//
+//  These are perfectly innocuous instructions, but Motorola
+//  in their infinite wisdom have decided that they should
+//  have ".S" and ".L" addressing modes, just like BRA.
+
+    LET ofwd  =  forwardreftype
+    LET olev  =  recoverlevel
+    LET olab  =  recoverlabel
+
+    nextsymb()
+
+    recoverlevel    :=  level()
+    recoverlabel    :=  label
+
+    IF  instr.size = ts.long  THEN  forwardreftype  :=  s.abs32
+
+    effective.address()
+
+label:
+    recoverlevel    :=  olev
+    recoverlabel    :=  olab
+
+    IF  instr.size = ts.long  THEN  forwardreftype  :=  ofwd
+
+    IF  error.found  THEN  longjump( recoverlevel, recoverlabel )
+
+    checkfor( s.none, 12 )
+
+    IF  (op.ea & am.contr) = 0  THEN  complain( 180 )
+
+    //  Ok.  We have something which is approximately the
+    //  right shape.  We should now look at the instruction
+    //  size to make sure that everything matches.
+
+    TEST  instr.size = ts.none  THEN
+    $(
+        //  No size given, so this is the same instruction as
+        //  before.
+
+        codeword(  instr.mask     |
+                   eafield()      )
+
+        genea()
+    $)
+    ELSE
+    $(
+        //  More tricky.  This instruction has a specific size,
+        //  and so we should check that all is well.
+
+        LET size  =  0
+
+        UNLESS  op.ea = am.abs16    |
+                op.ea = am.abs32    |
+                op.ea = am.PC.disp  DO  complain( 181 )
+
+        TEST  instr.size = ts.short  THEN
+        $(
+            //  Short addressing mode.  This is OK, providing
+            //  that we have not got a 32 bit absolute argument!
+
+            IF  op.ea = am.abs32  THEN  complain( 182 )
+
+            size   :=  bytesize( ts.word )
+            op.ea  :=  am.abs16
+        $)
+        ELSE
+
+        TEST  instr.size = ts.long  THEN
+        $(
+            //  Long addressing mode.  Everything can be fitted
+            //  into this.
+
+            size   :=  bytesize( ts.long )
+            op.ea  :=  am.abs32
+        $)
+
+        ELSE  complain( 6 )
+
+        IF  pass1 & forwardref  THEN  relocate( 0, size )
+
+        codeword(  instr.mask     |
+                   eafield()      )
+
+        genea()
+    $)
+$)
+
+
+
+AND instr11()  BE
+$(
+//  TRAP
+//
+//  Operand type:    #imm  (4 bit)
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    TEST  (op.ea & am.imm) = 0     THEN  complain( 25 )   ELSE
+    TEST  NOT (0 <= exp <= 15)     THEN  complain( 26 )
+
+    ELSE  codeword( instr.mask  |  exp )
+$)
+
+
+
+AND instr12()  BE
+$(
+//  ANDI   EORI   ORI
+//
+//  These are special, because the destination operand
+//  may be the CCR or SR.  A ".B" size is implied
+//  for the CCR and a ".W" is implied for the SR.
+//  ".L" sizes are flagged as errors.
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    IF  (op.ea & am.imm) = 0  THEN  complain( 27 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    TEST  op.ea = am.special  THEN
+    $(
+        LET size  =  exp = s.SR   ->  ts.word,
+                     exp = s.CCR  ->  ts.byte,
+                                      complain( 9 )
+
+        UNLESS  instr.size = ts.none  DO
+            UNLESS  instr.size = size  DO
+                complain( 28 )
+
+        codeword(  instr.mask                            |
+                   (sizefield( size )  <<  6)            |
+                   (#B111100)                            )
+
+        codeword(  op1.exp )
+    $)
+    ELSE
+
+    TEST  (op.ea & am.data.alt) = 0  THEN  complain( 23 )
+
+    ELSE
+    $(
+        codeword(  instr.mask                          |
+                   (sizefield( instr.size )  <<  6)    |
+                   (eafield() )                        )
+
+        IF  instr.size = ts.long  THEN
+            codeword( op1.exp >> 16 )
+
+        TEST  instr.size = ts.byte
+              THEN  codeword( op1.exp & #XFF )
+              ELSE  codeword( op1.exp & #XFFFF )
+
+        genea()
+    $)
+$)
+
+
+
+AND instr13()  BE
+$(
+//  ADDA, SUBA, CMPA
+//
+//  Must check, as BYTE mode is not allowed, and this
+//  Is banked on on the bit pattern.
+
+    LET sz  =  0
+
+    checkinstrsize()
+
+    sz  :=  instr.size = ts.word  ->  0,
+            instr.size = ts.none  ->  0,
+            instr.size = ts.long  ->  1,
+            instr.size = ts.byte  ->  complain( 29 ),
+                                      complain( 6 )
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    TEST  (op.ea & am.all) = 0  THEN  complain( 8 )
+    ELSE
+    $(
+        swapoperands()
+
+        effective.address()
+        checkfor( s.none, 12 )
+
+        TEST  op.ea \= am.Ar  THEN  complain( 30 )
+        ELSE
+        $(
+            swapoperands()
+            codeword(  instr.mask                       |
+                       (op1.exp  <<  9)                 |
+                       (sz       <<  8)                 |
+                       (eafield() )                     )
+
+            genea()
+        $)
+    $)
+$)
+
+
+
+AND instr14()  BE
+$(
+//  CMPM
+//
+//  A silly instruction if ever there was one!
+//  The operand types are:
+//
+//    (Ay)+,(Ax)+
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    IF  op.ea  \=  am.Ar.pi  THEN   complain( 31 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    IF  op.ea  \=  am.Ar.pi  THEN  complain( 32 )
+
+    codeword(  instr.mask                                 |
+               (exp  <<  9)                               |
+               (sizefield( instr.size )  <<  6)           |
+               (op1.exp)                                  )
+$)
+
+
+
+AND instr15()  BE
+$(
+//  EOR
+//
+//  Operands are:   Dr,<ea>
+//  where <ea> is data alterable.
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    IF  op.ea \= am.Dr  THEN  complain( 14 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    IF  (op.ea & am.data.alt) = 0  THEN  complain( 23 )
+
+    codeword( instr.mask                     |
+              (op1.exp << 9)                 |
+              (sizefield( instr.size ) << 6) |
+              (eafield())                    )
+
+    genea()
+$)
+
+
+
+AND instr16()  BE
+$(
+//  DIVS, DIVSL, DIVU, DIVUL, MULS, MULU
+//
+//  Non-special for the 68000, but for the 68020, there
+//  is the optional possibility of a pair of registers
+//  for the second argument.
+
+    LET r1  =  -1
+    LET r2  =  -1
+
+    LET sz  =  0
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    IF  (op.ea & am.data) = 0  THEN  complain( 13 )
+
+    //  Now, the tricky bit. The second operand should be a
+    //  data register, or a pair of data registers.
+
+    swapoperands()
+    effective.address()
+
+    UNLESS  op.ea = am.Dr  DO  complain( 22 )
+
+    r1  :=  exp
+
+    //  Now, look to see if there is a second data register
+    //  there, and if so, read it.
+
+    IF  symb = s.colon  THEN
+    $(
+        nextsymb()
+        effective.address()
+
+        UNLESS  op.ea = am.Dr  DO  complain( 22 )
+
+        r2  :=  exp
+    $)
+
+    checkfor( s.none, 12 )
+
+    swapoperands()
+
+    //  If the instruction size is not set, then set it
+    //  since we can work out what it should be.
+
+    IF  instr.size = ts.none  THEN
+        instr.size  :=  source.ea = 1  ->  ts.long,  /* DIVSL */
+                        source.ea = 3  ->  ts.long,  /* DIVUL */
+                                           ts.word
+
+    TEST  instr.size = ts.word  THEN
+    $(
+        //  Word operation, which can be done in a general
+        //  way.
+
+        LET opcode  =  source.ea = 0  ->  #X81C0,  /* DIVS */
+                       source.ea = 2  ->  #X80C0,  /* DIVU */
+                       source.ea = 4  ->  #XC1C0,  /* MULS */
+                       source.ea = 5  ->  #XC0C0,  /* MULU */
+                                          complain( 0 )
+
+        //  Word operations cannot have a register pair.
+
+        UNLESS  r2 = -1  DO  complain( 196 )
+
+        codeword( opcode         |
+                  (r1 << 9)      |
+                  (eafield())    )
+
+        genea()
+    $)
+    ELSE
+    $(
+        LET opcode  =  source.ea = 0  ->  #X4C40,  /* DIVS  */
+                       source.ea = 1  ->  #X4C40,  /* DIVSL */
+                       source.ea = 2  ->  #X4C40,  /* DIVU  */
+                       source.ea = 3  ->  #X4C40,  /* DIVUL */
+                       source.ea = 4  ->  #X4C00,  /* MULS  */
+                       source.ea = 5  ->  #X4C00,  /* MULU  */
+                                          complain( 0 )
+
+        LET extra   =  source.ea = 0  ->  #X0800,  /* DIVS  */
+                       source.ea = 1  ->  #X0800,  /* DIVSL */
+                       source.ea = 2  ->  #X0000,  /* DIVU  */
+                       source.ea = 3  ->  #X0000,  /* DIVUL */
+                       source.ea = 4  ->  #X0800,  /* MULS  */
+                       source.ea = 5  ->  #X0000,  /* MULU  */
+                                          complain( 0 )
+
+        TEST  source.ea = 1  |  source.ea = 3  THEN
+        $(
+            //  DIVSL and DIVUL must have a register pair.
+
+            IF  r2 = -1  THEN  complain( 197 )
+
+            sz  :=  0
+        $)
+        ELSE
+
+            //  The others have the "size" field set
+            //  depending on whether 1 or 2 registers were
+            //  specified.
+
+            sz  :=  r2 = -1  ->  0,  1
+
+        //  Now, if the second register is not set, we must
+        //  give it a reasonable value.
+
+        IF  r2 = -1  THEN  r2  :=  r1
+
+        //  Having done that, we are ready to perform the dreaded deed!
+
+        codeword( opcode         |
+                  (eafield())    )
+
+        codeword( extra          |
+                  (r2 << 12)     |
+                  (sz << 10)     |
+                  (r1)           )
+
+        genea()
+    $)
+$)
+
+
+
+AND instr17()  BE
+$(
+//  LINK  An,#displacement
+//
+//  This instruction was easy for the 68000, but an extra
+//  feature of the 68020 is a 32 bit displacement.  This
+//  has a different binary encoding for the same opcode.
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    UNLESS  op.ea = am.Ar  DO  complain( 36 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    IF  (op.ea & am.imm) = 0  THEN  complain( 50 )
+
+    TEST  instr.size = ts.long  THEN
+    $(
+        //  Long form of the instruction.
+
+        codeword( #X4808     |
+                  (op1.exp)  )
+
+        codeword( exp >> 16 )
+        codeword( exp & #XFFFF )
+    $)
+    ELSE
+    $(
+        //  Short form of the instruction.  Make sure that the
+        //  value is in range.
+
+        IF  pass2  &  NOT wordsized( exp )  THEN
+            warning( 175 )
+
+        codeword( #X4E50     |
+                  (op1.exp)  )
+
+        codeword( exp )
+    $)
+$)
+
+
+
+AND instr18()  BE
+$(
+//  PACK, UNPACK
+//
+//  Possible operands are:
+//
+//     a)    -(Ax),-(Ay),#adjustment
+//     b)    Dx,Dy,#adjustment
+
+    LET rx  =  0
+    LET ry  =  0
+    LET rm  =  0
+    LET am  =  0
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    TEST  op.ea = am.Ar.pd  THEN  rm  :=  1  ELSE
+    TEST  op.ea = am.Dr     THEN  rm  :=  0  ELSE
+
+        complain( 8 )
+
+    rx  :=  exp
+    am  :=  op.ea
+
+    effective.address()
+    checkfor( s.comma, 11 )
+
+    UNLESS  op.ea = am  DO  complain( 9 )
+
+    ry  :=  exp
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    IF  (op.ea & am.imm) = 0  THEN  complain( 198 )
+
+    IF  pass2  &  NOT wordsized( exp )  THEN  warning( 175 )
+
+    //  There - that wasn't so complicated after all, was it?  We can now
+    //  just compile the code for the instruction.  Not that anyone will ever
+    //  use it, of course!
+
+    codeword( instr.mask     |
+              (ry  <<  9)    |
+              (rm  <<  3)    |
+              (rx)           )
+
+    codeword( exp )
+$)
+
+

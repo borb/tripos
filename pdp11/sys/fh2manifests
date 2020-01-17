@@ -1,0 +1,96 @@
+// Manifests for File Handler Version 2
+
+MANIFEST
+$( // File header block offsets
+   B.File.Type          = 0
+   B.File.HeaderKey     = 1
+   B.File.HighestSeq    = 2
+   B.File.DataSize      = 3
+   B.File.FirstDataKey  = 4
+   B.File.CheckSum      = 5
+   B.File.DataBase      = 6
+
+   // Data block offsets:
+   B.Data.Type          = 0
+   B.Data.FileHeaderKey = 1
+   B.Data.Seq           = 2
+   B.Data.DataSize      = 3
+   B.Data.NextDataKey   = 4
+   B.Data.Checksum      = 5
+   B.Data.DataBase      = 6
+
+   // Directory offsets (implemented with file block structure)
+   B.Dir.HashTableBase  = B.File.DataBase
+
+   // Block types (primary)
+   T.Deleted            = #B00001
+   T.Short              = #B00010
+   T.Long               = #B00100
+   T.Data               = #B01000
+   T.List               = #B10000
+
+   // Block types (secondary)
+   ST.File              = -3
+   ST.Root              = 1
+   ST.UserDirectory     = 2
+$)
+
+
+// Control block offsets:
+MANIFEST
+$( // Cache blocks:
+   // Entries in the cache extend from -2 to 'Size.Block'-1
+   // The disc block proper starts at offset 0
+   Size.CachePrefix     = 3
+   Cache.AfterKey       = -3
+   Cache.Status         = -2
+   Cache.Key            = -1
+   // Cache status states:
+   Available            = 0
+   Read                 = #B01
+   Write                = #B10
+   // Cache access type requests:
+// Available            (as above)
+   UntilFree            = 1
+   NoNeedToWait         = 2
+
+
+   // File control block:
+   Fcb.Link             = 0
+   Fcb.Lock             = 1
+   Fcb.DataKey          = 2
+   Fcb.Off              = 3
+   Fcb.Len              = 4
+   Fcb.Seq              = 5
+   Fcb.XPtr             = 6
+   Fcb.XVec             = 7
+
+   // Disc key locks:
+   Lock.Link            = 0
+   Lock.Key             = 1
+   Lock.Access          = 2
+   Lock.Task            = 3
+
+   Exclusive.Lock       = -1
+   Shared.Lock          = -2
+
+   // Bitmap:
+   Size.MapPrefix       = 4
+   Map.Size             = -4
+   Map.LastAllocated    = -3
+   Map.N.FreeBlocks     = -2
+   Map.CheckSum         = -1
+
+   // Packets:
+   Pkt.Id               = 1
+   Pkt.CoPtr            = Pkt.Arg6+1
+
+   // Other:
+   BufSize              = 50
+   AnyKey               = 0
+   TopBitSet            = 1 << [BitsPerWord-1]
+$)
+
+
+
+

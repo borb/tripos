@@ -1,0 +1,397 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+                     ######    ########  #######            
+                     #######   ########  ########           
+                     ##    ##     ##     ##    ##           
+                     ##    ##     ##     ########     ##    
+                     ##    ##     ##     #######      ##    
+                     ##    ##     ##     ##  ##             
+                     #######   ########  ##   ##      ##    
+                     ######    ########  ##    ##     ##    
+
+      ##    ##    ####    ##    ##  ######    ##        ########  #######  
+      ##    ##   ######   ###   ##  #######   ##        ########  ######## 
+      ##    ##  ##    ##  ####  ##  ##    ##  ##        ##        ##    ## 
+      ########  ########  ## ## ##  ##    ##  ##        ######    ######## 
+      ##    ##  ##    ##  ##  ####  ##    ##  ##        ##        #######  
+      ##    ##  ##    ##  ##  ####  ##    ##  ##        ##        ##  ##   
+      ##    ##  ##    ##  ##   ###  #######   ########  ########  ##   ##  
+      ##    ##  ##    ##  ##    ##  ######    ########  ########  ##    ## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   28/03/85             *
+\*****************************************************************************/
+
+
+
+SECTION "DIR:"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+
+
+
+GLOBAL
+$(
+    lockcount      :  ug + 0
+    lockvec        :  ug + 1
+    pktlist        :  ug + 2
+$)
+
+
+
+LET start( initpkt )  BE
+$(
+//  Main routine of the DIR: device.  This device is never mounted explicitly,
+//  but is called from the ASSIGN command when a series of concatenated
+//  directories have been given.  The parameters in the startup packet are:
+//
+//      string    -    list of directories
+//      number    -    number of names in directory list
+//      dir       -    copy of the current directory lock
+//
+//  The result is a lock on success, or zero on failure.
+
+    LET dirnames  =  initpkt!pkt.arg1
+    LET dircount  =  initpkt!pkt.arg2
+    LET dirlock   =  initpkt!pkt.arg3
+    
+    LET dirbuff   =  VEC 256/bytesperword
+    LET pos       =  1
+
+    LET failed    =  FALSE
+    LET failrc    =  0
+    
+    pktlist     :=  0
+    currentdir  :=  dirlock
+    
+    lockvec     :=  getvec( dircount )
+
+    IF  lockvec = 0  THEN
+    $(
+        //  Failed to allocate store for the vector of directory locks, and
+        //  so we should return with an error.
+        
+        returnpkt( 0, error.getvecfailure )
+        
+        GOTO  closedown
+    $)
+
+    //  Given that we have been able to get the store for the list of
+    //  directory locks, we should actually get those locks.
+
+    lockvec!0  :=  dircount
+    
+    FOR  i = 1  TO  dircount  DO
+    $(
+        //  Get each directory name in turn, and then attempt to get a lock
+        //  on it.  If we fail, then record the circumstances of the
+        //  failure.
+        
+        LET lock  =  0
+        
+        pos   :=  splitname( dirbuff, '+', dirnames, pos )
+        lock  :=  locateobj( dirbuff )
+        
+        IF  lock = 0  THEN
+        $(
+            //  Oh dear - we have failed to allocate the lock, and so we should
+            //  remember the code for failure.
+            
+            failed  :=  TRUE
+            failrc  :=  result2
+        $)
+        
+        lockvec!i  :=  lock
+    $)
+
+    //  When we drop out of that loop, we must check that we have not failed.
+    //  If we have, then something horrible has happened, and we should
+    //  stop immediately.
+    
+    IF  failed  THEN
+    $(
+        returnpkt( initpkt, 0, failrc )
+        
+        GOTO  cleanup
+    $)
+
+    //  When we get here, we have obtained locks on all the directories, and
+    //  so we can contruct a lock of our own, and return it as the result.
+
+    returnpkt( initpkt, newlock() )
+
+    //  Having returned our lock as the result, we should sit and wait for
+    //  requests to come in.
+    
+    lockcount  :=  1
+    
+    UNTIL  lockcount = 0  DO
+    $(
+        //  Loop to wait for requests from the outside world, and handle
+        //  them when they come in.  The requests we are prepared to
+        //  handle are:
+        //
+        //      act.findinput
+        //      action.locateobject
+        //      action.copydir
+        //      action.freelock
+        //
+        //  All others are rejected.
+        
+        LET pkt   =  nextpkt()
+        LET type  =  pkt!pkt.type
+        
+        SWITCHON  type  INTO
+        $(
+            CASE act.findinput       :  do.findinput( pkt )     ;  ENDCASE
+            CASE action.locateobject :  do.locateobject( pkt )  ;  ENDCASE
+            CASE action.copydir      :  do.copydir( pkt )       ;  ENDCASE
+            CASE action.freelock     :  do.freelock( pkt )      ;  ENDCASE
+            
+            DEFAULT                  :  returnpkt( pkt, 0, error.actionnotknown )
+        $)
+    $)
+
+    //  When we drop out of that loop, there is nothing more to be done but
+    //  to tidy up and finish.
+
+cleanup:
+
+    FOR  i = 1  TO  lockvec!0  DO
+        UNLESS  lockvec!i = 0  DO
+            freeobj( lockvec!i )
+
+    freevec( lockvec )
+
+closedown:
+
+    freeobj( currentdir )
+
+    endtask( tcb!tcb.seglist!3 )
+$)
+
+
+
+AND do.findinput( pkt )  BE
+$(
+//  Attempt to do a "findinput" on each of the directories in turn, and return
+//  when we succeed, or reach the end of the list.
+
+    LET scb   =  pkt!pkt.arg1
+    LET name  =  pkt!pkt.arg3
+
+    IF  simpleassignment( name )  THEN
+    $(
+        //  We have been given a name which is just "xxxx:", meaning that
+        //  the data part is null.  We should therefore treat this as
+        //  an error, since it applies to the concatenation as a whole.
+        
+        returnpkt( pkt, 0, error.actionnotknown )
+        
+        RETURN
+    $)
+    
+    FOR  i = 1  TO  lockvec!0  DO
+    $(
+        LET lock  =  lockvec!i
+        LET task  =  lock!lock.task
+        
+        LET rc    =  sendpkt( notinuse, task, act.findinput, 0, 0, scb, lock, name )
+        
+        //  Unless rc is zero, we have succeeded, and so we should return
+        //  this as a result, and return to the main part of the program.
+        
+        UNLESS  rc = 0  DO
+        $(
+            IF  scb!scb.type = taskid  THEN  scb!scb.type  :=  task
+
+            returnpkt( pkt, rc, result2 )
+            
+            RETURN
+        $)
+    $)
+
+    //  If we drop through here, then we have failed to find the object,
+    //  and so we should return.
+    
+    returnpkt( pkt, 0, result2 )
+$)
+
+
+
+AND do.locateobject( pkt )  BE
+$(
+//  Attempt to do a "locateobj" on each of the directories in turn, and return
+//  when we succeed, or reach the end of the list.
+
+    LET name  =  pkt!pkt.arg2
+
+    IF  simpleassignment( name )  THEN
+    $(
+        //  We have been given a name which is just "xxxx:", meaning that
+        //  the data part is null.  This is an error.
+        
+        returnpkt( pkt, 0, error.actionnotknown )
+        
+        RETURN
+    $)
+    
+    FOR  i = 1  TO  lockvec!0  DO
+    $(
+        LET lock  =  lockvec!i
+        LET task  =  lock!lock.task
+        
+        LET rc    =  sendpkt( notinuse, task, action.locateobject, 0, 0, lock, name )
+        
+        //  Unless rc is zero, we have succeeded, and so we should return
+        //  this as a result, and return to the main part of the program.
+        
+        UNLESS  rc = 0  DO
+        $(
+            returnpkt( pkt, rc, result2 )
+            
+            RETURN
+        $)
+    $)
+
+    //  If we drop through here, then we have failed to find the object,
+    //  and so we should return.
+    
+    returnpkt( pkt, 0, result2 )
+$)
+
+
+
+AND do.copydir( pkt )  BE
+$(
+//  We have been asked to make a copy of the lock argument.  Since we only
+//  have one sort of lock, we can just return a new version of it.
+
+    lockcount  :=  lockcount + 1
+    
+    returnpkt( pkt, newlock() )
+$)
+
+
+
+AND do.freelock( pkt )  BE
+$(
+//  We have been asked to free the lock associated with the given packet.
+//  All we do is free the storage, and decrement the lock count.
+
+    freevec( pkt!pkt.arg1 )
+    
+    lockcount  :=  lockcount - 1
+
+    returnpkt( pkt )
+$)
+
+    
+
+AND newlock()  =  VALOF
+$(
+//  Return a pointer to a lock of our own creation.
+
+    LET lock  =  getvec( lock.task )
+
+    IF  lock = 0  THEN  abort( error.getvecfailure )
+
+    lock!lock.key     :=  0
+    lock!lock.access  :=  shared.lock
+    lock!lock.task    :=  taskid
+
+    RESULTIS  lock
+$)
+
+
+
+AND simpleassignment( name )  =  VALOF
+$(
+//  Return a boolean value, saying whether this name is just a simple
+//  assignment or not.  Treat null string the same as an assignment, although
+//  this should never happen.
+
+    LET length  =  name % 0
+
+    RESULTIS  length > 0  ->  (name % length  =  ':'),  TRUE
+$)
+
+    
+    
+AND pktwait( id, pkt )  =  VALOF
+$(
+//  Wait for the packet "pkt", which should be arriving from task "id".
+//  Any other packets which arrive in the meantime are queued onto "pktlist",
+//  and dequeued when requested.
+
+    LET p  =  lookinpktqueue( pkt )
+
+    UNLESS  p = 0  DO  RESULTIS  p
+
+    //  If it was not in the packet queue, then we must wait until the
+    //  packet arrives.
+
+    $(  //  Loop to wait for packets
+
+        p  :=  taskwait()
+
+        IF  p = pkt  THEN  RESULTIS  p
+
+        //  Oh, boring!  This was STILL not the one wanted, so queue it,
+        //  and wait some more.
+
+        addtopktqueue( p )
+    $)
+    REPEAT  //  Until the correct packet arrives.
+$)
+
+
+
+AND lookinpktqueue( pkt )  =  VALOF
+$(
+    LET ptr  =  @pktlist
+
+    UNTIL  !ptr = 0  DO
+    $(
+        IF  !ptr = pkt  THEN
+        $(
+            //  This is our packet.  Dequeue it, and send it back again.
+
+            LET packet  =  !ptr
+
+            !ptr     :=  !packet
+            !packet  :=  notinuse
+
+            RESULTIS  packet
+        $)
+
+        //  Otherwise, we carry on down the chain, looking as we go
+
+        ptr  :=  !ptr
+    $)
+
+    RESULTIS  0
+$)
+
+
+
+AND addtopktqueue( pkt )  BE
+$(
+    !pkt     :=  pktlist
+    pktlist  :=  pkt
+$)
+
+
+
+AND nextpkt()  =  pktlist = 0  ->  taskwait(),  lookinpktqueue( pktlist )
+
+

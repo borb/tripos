@@ -1,0 +1,137 @@
+SECTION "DQ"
+
+GET "libhdr"
+GET "bcpl.string-to-number"
+
+// Utility for driving Scanoptik DQ-11/23 Diagnostic Memory
+
+MANIFEST
+$(
+    io.base     = #160060 >> 1
+    io.trace    = io.base+0
+    io.hold     = io.base+1
+    io.csr      = io.base+2
+        io.csr.holdmode         = #X0100
+        io.csr.datatrace        = #X0080
+        io.csr.a17trig          = #X0040
+        io.csr.a16trig          = #X0020
+        io.csr.wrtrig           = #X0010
+        io.csr.a1617trace       = #X0008
+        io.csr.halt             = #X0004
+        io.csr.int              = #X0002
+        io.csr.dmatrace         = #X0001
+    io.trig     = io.base+3
+
+    io.memory   = #161000 >> 1
+$)
+
+
+LET start() BE
+$(  MANIFEST $( argv.upb = 63 $)
+    LET argv = VEC argv.upb
+
+    LET rdargs.string = "display=d/s,hold/s,trace/s,setup/s,data/s,a16/s,a17/s,*
+                        *write/s,a1617/s,halt/s,int/s,dma/s,trig/k"
+
+    LET arg.display, arg.hold, arg.trace, arg.setup, arg.data, arg.a16, arg.a17,
+        arg.write, arg.a1617, arg.halt, arg.int, arg.dma, arg.trig =
+                ?,?,?,?,?,?,?,?,?,?,?,?,?
+
+    IF rdargs(rdargs.string, argv, argv.upb) = 0 THEN
+    $(  writef("bad arguments for rdargs string '%S'*N", rdargs.string)
+        stop(16)
+    $)
+
+    arg.display := argv!0
+    arg.hold    := argv!1
+    arg.trace   := argv!2
+    arg.setup   := argv!3
+    arg.data    := argv!4
+    arg.a16     := argv!5
+    arg.a17     := argv!6
+    arg.write   := argv!7
+    arg.a1617   := argv!8
+    arg.halt    := argv!9
+    arg.int     := argv!10
+    arg.dma     := argv!11
+    arg.trig    := argv!12
+
+    IF arg.display+arg.hold+arg.trace+arg.setup ~= TRUE THEN
+    $(  writes("exactly one of DISPLAY, HOLD, TRACE and SETUP must be given*N")
+        stop(16)
+    $)
+
+    IF arg.display THEN
+    $(  LET csr = !io.csr
+        TEST (csr & io.csr.holdmode) = 0 THEN writef("Tracing active*N")
+        ELSE
+        $(  LET data.present = (csr & io.csr.datatrace) ~= 0
+            LET a1617.present = (csr & io.csr.a1617trace) ~= 0
+            LET entry.length = ?
+            LET ptr, end = ?, ?
+
+            SWITCHON csr & (io.csr.datatrace | io.csr.a1617trace) INTO
+            $(  CASE 0:
+                        ptr := 255; end := 1; entry.length := 1; ENDCASE
+                CASE io.csr.datatrace:
+                        ptr := 254; end := 0; entry.length := 2; ENDCASE
+                CASE io.csr.a1617trace:
+                        ptr := 253; end := 1; entry.length := 2; ENDCASE
+                CASE io.csr.datatrace | io.csr.a1617trace:
+                        ptr := 252; end := 0; entry.length := 3; ENDCASE
+            $)
+
+            $(  LET address1 = data.present     -> io.memory!(ptr+1),
+                                                   io.memory!ptr
+                LET address2 = ~a1617.present   -> 0,
+                               data.present     -> io.memory!(ptr+2),
+                                                   io.memory!(ptr+1)
+
+                LET topdigit = (address2 & #B110) | (address1 >> 15)
+
+                writef("%O1%O5 %C", topdigit, address1 & #77777,
+                                    ((address2 & #B1000) ~= 0 -> 'w', ' '))
+
+                IF data.present & (ptr ~= 0) THEN writef(" %O6", io.memory!ptr)
+
+                newline()
+
+                ptr := ptr - entry.length
+
+            $)  REPEATUNTIL ptr < end
+        $)
+    $)
+
+    IF arg.hold THEN !io.hold := 0
+
+    IF arg.trace THEN !io.trace := 0
+
+    IF arg.setup THEN
+    $(  LET csrbits = 0
+        LET trig.val = ?
+
+        IF arg.data     THEN csrbits := csrbits | io.csr.datatrace
+        IF arg.a17      THEN csrbits := csrbits | io.csr.a17trig
+        IF arg.a16      THEN csrbits := csrbits | io.csr.a16trig
+        IF arg.write    THEN csrbits := csrbits | io.csr.wrtrig
+        IF arg.a1617    THEN csrbits := csrbits | io.csr.a1617trace
+        IF arg.halt     THEN csrbits := csrbits | io.csr.halt
+        IF arg.int      THEN csrbits := csrbits | io.csr.int
+        IF arg.dma      THEN csrbits := csrbits | io.csr.dmatrace
+
+        IF arg.halt & arg.int THEN
+        $(  writes("HALT and INT are mutually exclusive*N")
+            stop(16)
+        $)
+
+        IF arg.trig ~= 0 THEN IF NOT string.to.number(arg.trig) THEN
+        $(  writef("TRIG argument '%S' is not a valid number*N", arg.trig)
+            stop(16)
+        $)
+
+        IF arg.trig ~= 0 THEN !io.trig := result2
+        !io.csr := csrbits
+    $)
+$)
+
+

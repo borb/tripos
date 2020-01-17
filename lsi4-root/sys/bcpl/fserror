@@ -1,0 +1,86 @@
+SECTION "ringerror"
+
+GET "libhdr"
+GET "clihdr"
+GET "ringhdr"
+GET "BCPL.ringhdr"
+GET "BCPL.ring"
+GET "BCPL.ringssp"
+
+
+
+
+
+//  This section is 'callseg'd with the following parameters:
+//
+//         level := callseg("SYS:L.FSERROR", rc, vect, n)
+//
+//  where:
+//       rc             The return code to be interpreted
+//       vect           A vector in which to place the returned string
+//       n              The size of the vector in words
+//       level          How confidently the return code is known:
+//                          0   -  RC is a known global return code
+//                          2   -  RC is zero
+//                          5   -  RC interpreter not called
+//
+// A return string is always given.  It is suitable for printing out with:
+//
+//                 writef(vect, rc)
+
+
+
+
+
+
+LET start(rc, vect, n) = VALOF
+$(  LET co=createco(fsfaultco, 300)
+    LET level = (rc=0 -> 2, 5)
+    LET argvec=VEC 3
+    argvec!0 := rc
+    argvec!1 := vect
+    argvec!2 := n
+    argvec!3 := @level
+    TEST co=0 THEN fsfaultco(argvec) ELSE
+    $(  callco(co, argvec)
+        deleteco(co)
+    $)
+    RESULTIS level
+$)
+
+
+
+
+AND fsfaultco(vect) BE
+$(  LET default.string="fileserver error %X4 occured"
+    LET s = vect!1
+    LET s.len = vect!2*bytesperword-1
+    LET ok = FALSE
+    IF dr.initialise()=0 THEN
+    $(  LET fs = VEC sv.upb
+        IF dr.lookup("FILESERVE", fs)~=0 THEN
+        $(  LET data = VEC 5
+            LET results = VEC 54
+            data!0 := 5
+            results!0 := 54
+            fs!sv.func := 14    // fileserver EXPLAIN function code
+            data!5:=vect!0      // return code
+            IF dr.ssp(fs, data, results, 0, 2)=0 THEN
+            IF dr.result2=0 THEN
+            $(  LET string = results+5
+                LET len = dr.byteget(string, 0)
+                s%0 := (len > s.len -> s.len, len)
+                FOR i=1 TO s%0 DO s%i := dr.byteget(string, i)
+                ok := TRUE
+                !vect!3 := 0   // level
+            $)
+        $)
+    $)
+    UNLESS ok THEN
+    $(  s%0 := (default.string%0 > s.len -> s.len, default.string%0)
+        FOR i=1 TO s%0 DO s%i := default.string%i
+    $)
+    dr.terminate()
+$)
+
+

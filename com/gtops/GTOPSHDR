@@ -1,0 +1,252 @@
+/*************************************************
+*         GCODE-to-PostScript Converter          *
+**************************************************
+*                                                *
+*  Copyright (c) 1986                            *
+*    University of Cambridge Computing Service   *
+*                                                *
+* Philip Hazel, April 1986.                      *
+*************************************************/
+
+/* This program converts GCODE as produced by GCAL into
+PostScript. All output is buffered in store, so that
+pages can be output in arbitrary order. An 'a4' style is
+assumed in the PostScript interpreter. Various options
+exist to control the form of the output. All errors are
+fatal. */
+
+
+$<TRIPOS
+GET "CLIHDR"                 // for the standard RCs
+$>TRIPOS
+
+// ***** Compiler Switches *****
+
+$$STDSTORE     := ~ $$TRIPOS // simple getvec
+$$FLAGGED.BREAK:= ~ $$TRIPOS // BREAK sets a flag
+                             // (or kills it dead!)
+$$SPLITSTRINGS := TRUE       // allows ps strings to be
+                             // split across lines
+
+
+/*************************************************
+*             Heading Definitions                *
+*************************************************/
+
+MANIFEST $(
+
+// Parameters
+
+version     = 36
+maxpage     = 1023
+pagemapsize = (maxpage+1)/bitsperword
+wordsize    = 20    // words
+starnumber  = maxpage
+tstacksize  = 400   // words (1 per char)
+pblocksize  = 2048  // bytes
+pslinelen   = 77    // max chars per line
+onepoint    = 1000  // fixed-point resolution
+gstringsize = 100   // for apc & dcs string reading
+datesize    = 40/bytesperword
+
+// Top of page control block
+
+pflags      = 0
+ plandscape = SLCT 1:0:0
+ pformat    = SLCT 8:24:0
+  pf.A4     = 0
+  pf.A5     = 1
+  pf.A6     = 2
+  pf.A4toA5 = 3
+  pf.A4toA6 = 4
+  pf.A5toA6 = 5
+  pf.unset  = 255
+
+plength     = 1
+pcont       = 2
+pheadsize   = 3*bytesperword
+
+// Output page styles
+
+pstyle.unset = 0
+pstyle.A4    = 1
+pstyle.A5    = 2
+pstyle.A6    = 3
+
+// Flags
+
+isopt    = TRUE; star = TRUE; allstring = TRUE
+save     = TRUE; on   = 1;    off = 0
+continue = TRUE; copy = TRUE; force = TRUE
+invert   = TRUE
+
+// Character types
+
+ch.rest   = 0
+ch.letter = 1
+ch.digit  = 2
+
+// Page control block
+
+page.link  = 0    // must be zero
+page.start = 1
+page.end   = 2
+pagecbsize = 3
+
+// Gcode encodings
+
+Gcode.Flag.Char = '*B'
+Gcode.null      = 'P'
+Gcode.formfeed  = 'F'
+Gcode.dcs       = 'D'
+Gcode.newline   = 'N'
+Gcode.bs        = 'B'
+Gcode.apc       = 'A'
+Gcode.bft       = '='
+Gcode.fdl       = '*"'
+Gcode.vsi       = '!'
+Gcode.ssu       = '#'
+Gcode.rpr       = '>'
+Gcode.lpr       = '<'
+Gcode.dpr       = '$'
+Gcode.upr       = '%'
+Gcode.sgr       = '_'
+Gcode.fnt       = '\'
+Gcode.chr       = '/'
+Gcode.gdpr      = ')'
+Gcode.gupr      = '('
+
+// System-specific manifests
+
+$<PANOS
+rc.warning = -40
+rc.serious = -80
+$>PANOS
+
+$<MVS
+rc.warning = 4
+rc.serious = 8
+$>MVS
+
+$<ARM
+rc.warning = 4
+rc.serious = 8
+$>ARM
+
+$<VAXUNIX
+rc.warning = 1
+rc.serious = 1
+$>VAXUNIX
+
+$<TRIPOS
+rc.warning = return.soft   // From CLIHDR
+rc.serious = return.severe
+$>TRIPOS
+
+$<VAXUNIX
+fg = firstfreeglobal
+BITSPERBYTE = BITSPERWORD / BYTESPERWORD
+$>VAXUNIX
+
+// Where system specific error messages & globals start
+
+moan.local = 20
+sys.global = fg + 80
+$)
+
+// ****** Globals ******
+
+GLOBAL $(
+eof:             fg+0
+main.input:      fg+1
+head.input:      fg+2
+tail.input:      fg+3
+main.output:     fg+4
+error.output:    fg+5
+verbose:         fg+6
+logo:            fg+7
+returncode:      fg+8
+pageformat:      fg+9
+reverse:         fg+10
+landscape:       fg+11
+pamphlet:        fg+12
+copies:          fg+13
+pages:           fg+14  // page option data
+pagemap:         fg+15  // map of required pages
+lastwantedpage:  fg+16  // last page needed
+lastpage:        fg+17  // last page actually read
+pageindex:       fg+18  // index to stored pages
+ch:              fg+19  // next Gcode char
+str:             fg+20  // arg string base
+sptr:            fg+21  // arg string ptr
+send:            fg+22  // arg string end
+word:            fg+23  // arg word
+iterm:           fg+24  // arg item terminator
+inputpagecount:  fg+25  // Gcode pages converted
+outputpagecount: fg+26  // actual pages output
+bits:            fg+27  // table of bits in byte
+chartable:       fg+28
+uctable:         fg+29
+tstack:          fg+30
+tptr:            fg+31
+pschcount:       fg+32
+glinecount:      fg+33
+pblock:          fg+34  // current page data block
+pptr:            fg+35  // byte pointer in same
+phead:           fg+36  // start of current page data
+pagezerohead:    fg+37  // ditto, page zero
+spacing:         fg+38  // word spacing value
+underlining:     fg+39
+xmove:           fg+40  // relative positioner
+ymove:           fg+41
+crneeded:        fg+42
+nldepth:         fg+43  // newline depth
+setnldepth:      fg+44  // value set
+lastchar:        fg+45  // last char 'written'
+A4needed:        fg+46  // A4 needed from header
+A5onA4needed:    fg+47  // etc.
+A6onA4needed:    fg+48
+extendfontneeded:fg+49
+currentdate:     fg+50  // date [and time] string
+instring:        fg+51  // writing a string
+logicalpage:     fg+52  // sub-page on real page
+lastpagestyle:   fg+53
+maxsubpage:      fg+54
+optinputstyle:   fg+55  // input style forced in opt
+pamphletform:    fg+56  // A4, A5 or A6
+escape.pressed:  fg+57  // for non-MVS systems
+libstring:       fg+58  // ditto
+
+
+// Procedures
+
+AnalyzeStringArg:  fg+60
+AnalyzePagesArg:   fg+61
+initialcomment:    fg+62
+readpages:         fg+63
+outputpages:       fg+64
+finalcomment:      fg+65
+getstore:          fg+66
+moan:              fg+67
+writelogo:         fg+68
+syswrch:           fg+69
+sysrdch:           fg+70
+grdch:             fg+71
+null:              fg+72
+isword:            fg+73
+openget:           fg+74
+interupted:        fg+75
+
+/*************************************************
+* If you add any globals, check sys.global is OK *
+*************************************************/
+
+$<TRIPOS
+getvec.chain:      sys.global + 0
+sys.initialized:   sys.global + 1
+$>TRIPOS
+$)
+
+// End of GTOPSHDR
+
+

@@ -1,0 +1,754 @@
+SECTION "asm2"
+
+
+
+
+/*<RSX
+NEEDS "TITLE"
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+
+//
+//                       DICTIONARY
+//
+
+
+
+
+/*     This module is responsible for all accesses to the dictionary -- which
+    is a hash table.   To modules using these procedures the dictionary seems to
+    hold a set of triples associating the name of a symbol with its type
+    and a value (which must fit into one word).
+       'findentry' is the only procedure to lookup a symbol name,  but other
+    routines scan the whole hash table to:
+             write out the symbol table - 'printlabs'
+             delete all the symbols - 'deletelabs'
+             generate a loader symbol table - 'gen.defs'
+       Users of the general assembler are allowed to invent their own types
+    and must redefine the relevent procedures in order that the above procedures
+    take account of their existence.
+       All symbols are inserted using 'putlab', and there are several procedures
+    for retrieving and investigating the symbols subsequently.  These procedures
+    set various descriptive flags:
+              'dontknow'  -- TRUE if the value sought is a forward reference
+              'iden.valid'-- TRUE if the symbol exists here on this pass
+       26.02.80
+
+       The symbol table is in fact a hash table.  Words in the table are
+    anchors of chains of elements of a given hash value, linked through
+    the field 't.link'.  The hash table is obtained on the first call of
+    the 'findentry' routine.  Space is got by a call of 'simplegetvec'.
+       NOTE that the hashing routines rely on strings being padded up to
+    a full word size with 0 bytes, i.e. 'standard' BCPL strings.
+       (Hashing code added by Nick Ody).
+       16.07.81
+*/
+
+
+
+
+STATIC
+$( hash.table      = 0
+   hash.table.size = 100
+$)
+
+
+
+
+MANIFEST
+$(  t.type   = 0
+    t.link   = 1
+    t.val    = 2
+    t.info   = 3
+    tentrysize = t.info+1
+    t.str    = tentrysize
+/*  // types:  (for reference)
+    type.none   = 0
+    type.const  = 1
+    type.var    = 2
+    type.lab    = 3
+    type.ref    = 4
+    type.text   = 5
+    type.macro  = 6
+    type.       = type.macro+1
+    type.mask   = byte1
+    flag.double = bit8
+    flag.rel    = bit9
+    flag.def    = bit10
+    flag.fwd    = bit11
+    flag.needs  = bit12
+    flag.weak   = bit13
+    flag.temp   = bit14
+    type.wref   = type.ref | flag.def
+    type.def    = type.none | flag.def
+    type.rellab = type.lab | flag.rel
+    type.relvar = type.var | flag.rel
+    type.relconst = type.const | flag.rel
+*/
+$)
+
+
+
+
+
+
+LET findentry (string) = VALOF
+$(  /*    This procedure is the only one responsible for returning a pointer
+       to the place in the symbol table from which the symbol's record should be
+       referred. (i.e. a pointer to a pointer).  Apart from the procedures
+       which traverse the symbol table it is the only one to access it.
+          Since the interface encourages multiple calls on this procedure
+       with the same arguments (comparing its type with several others in
+       different modules for example) the last reference to the symbol table
+       is cached in 'dicposn'.
+          The reference to 'lex.space' is because, in a higher module, all
+       strings are held in this piece of store - I deny responsibility for it!
+       'dicposn' is initialised to 0 before a new string is read into
+       'lex.space'
+          01.05.80
+          The 'string' passed in should be padded to a full word with 0s;
+       this is relied on by several routines.
+          16.07.81
+    */
+    IF dicposn\=0 & string=lex.space THEN
+RESULTIS dicposn
+
+    IF hash.table = 0 THEN    // First call - obtain space for table
+    $(  hash.table.size := (memsize - memory ! 0) / 12
+       // Remaining memory DIV 12 makes table about half full
+       // Round size up to a prime
+try.next.size:
+       FOR i = 2 TO hash.table.size - 1 DO
+       $(  IF hash.table.size REM i = 0 THEN
+           $(  hash.table.size := hash.table.size + 1
+               // Wasn't prime - try again
+               GOTO try.next.size
+           $)
+       $)
+       hash.table := simplegetvec(hash.table.size)
+
+       FOR i = 0 TO hash.table.size DO hash.table ! i := null
+    $)
+
+    dicposn := hash.chain.anchor(string) - t.link
+    WHILE t.link ! dicposn \= null DO    // Now search the hash list for a match
+    $(  LET dic.string = t.str + t.link ! dicposn
+
+        FOR i = 0 TO string % 0 / bytesperword DO
+        $(  IF string ! i \= dic.string ! i THEN
+                GOTO next.string         // Match failed - go round again
+        $)
+
+    BREAK                                // OK - exit from loop
+
+next.string:
+
+        dicposn := t.link ! dicposn
+    $)
+    dicposn := dicposn + t.link
+    RESULTIS dicposn
+$)
+
+
+
+
+
+AND hash.chain.anchor(string) = VALOF
+//   Returns the address (in the hash table) of the anchor of
+// the hash chain corresponding to the given string.
+//
+//   The hashing algorithm takes the exclusive-or of all the
+// words of the string, and uses this value REM the hash table size,
+// which is arranged to be prime.  This method relies on the trailing
+// bytes of the string being padded with zeroes.
+$(  LET hashval =  string ! 0
+    FOR i = 1 TO string % 0 / bytesperword DO hashval := hashval NEQV string ! i
+    RESULTIS hash.table + (ABS hashval) REM hash.table.size
+$)
+
+
+
+
+AND getsymb(s) = VALOF
+$(  LET t = !findentry(s)
+    LET symty = (t=null->type.none, t!t.type&type.mask)
+    LET rel.pos=(t=null-> 1, t!t.info-lineno)
+    IF t=null | rel.pos>=0 |
+       symty=type.ref  | symty=type.none | (t!t.type&flag.fwd)\=0 THEN
+       dontknow:=TRUE
+    IF symty=type.ref & rel.pos>=0 THEN warn(e.forward)
+    iden.valid:= \(t=null-> pass=second,
+                  (t!t.type&flag.fwd)\=0 & rel.pos>=0)
+    RESULTIS t
+$)
+
+
+
+
+AND getlab(s, ansvec) = VALOF
+$(  /* if symbol 's' is found 'ansvec' is filled with its value in
+       offset 0, its type in offset 1 and the address where its value
+       field is kept in offset 2.  It is also returned as the result
+       of the call.. 'null' is returned if the symbol was not found
+    */
+    LET ans=getsymb(s)
+    UNLESS ans=null THEN
+    $(  ansvec!0 := ((ans!t.type&type.mask) >= type. ->
+                     valtype((ans!t.type&type.mask), ans!t.val), ans!t.val)
+        ansvec!1 := ans!t.type & \flag.double
+        ansvec!2 := @ans!t.val
+        ans:=ansvec
+    $)
+    RESULTIS ans
+$)
+
+
+
+AND putlab(string,v,ty) = VALOF
+$(  /*   Inserts 'string' with value 'v' and type 'ty' into the
+       dictionary.  Returns TRUE if 's' was a forewards reference
+       and FALSE otherwise.  Allows sensible type conversions and
+       value redefinitions.
+         A problem, in practice, is that, for efficiency's sake, many symbols
+       are only set during the first pass and not checked again on the second
+       -- since error messages cannot be generated on the first pass double
+       definition is not explicitly reported.
+         A second factor to consider with respect to this code, and with the
+       surrounding code, is that it is important to give similar results
+       on both first and second passes in order to avoid differences in the
+       flow of control between the two passes.
+         27.02.80
+         If a new symbol is inserted it is placed at the end of the
+       hash chain, this being pointed to by the result of a call to 'findentry'.
+         16.07.81
+    */
+    LET t       = findentry(string)
+    LET ans     = ?
+    LET rel.posn= ?
+    LET symty   = ?
+
+    TEST !t = null THEN
+    $(  // pointer to dictionary element is null
+        // element does not exist for this string so create it
+        LET length = (string % 0) / bytesperword
+        LET new.elem = simplegetvec(tentrysize + length)
+
+        new.elem ! t.val  := v      // Fill in fields of new element
+        new.elem ! t.info := lineno
+        new.elem ! t.type := ty
+        FOR i = 0 TO length DO (new.elem + t.str) ! i := string ! i
+        new.elem ! t.link := null   // Link it into end of chain
+        !t                := new.elem
+        IF pass = second & (ty & flag.temp) = 0 THEN error(e.interror, 6)
+RESULTIS TRUE
+    $) ELSE t := !t
+
+    IF t=null THEN              // entry was not defined before
+    TEST pass=second & (ty & flag.temp) = 0 THEN error (e.interror, 6) ELSE
+RESULTIS TRUE
+
+    symty:=t!t.type&type.mask   // extract type number
+    rel.posn := t!t.info-lineno
+    ans:= rel.posn>=0 | symty=type.ref  // forwards reference ?
+//  writef("** putlab(%S,%X4,%N) forward=%C t!ty=%N t!val=%N*N",
+//         string,v,ty,(ans->'T','F'),t!t.type,t!t.val)
+    TEST pass=second & (t!t.type&flag.double)\=0 THEN
+      // flag.double is SET if this symbol was doubly defined
+      // during the first pass (when the error could not be reported)
+      error(e.doublelab, string) ELSE
+    $(  // if symbol was DEF'd it can now be redefined to its new type
+        IF (ty & flag.def)\=0 THEN
+        $(  // it is legal to redefine a REF as a DEF but not vice versa
+            TEST symty\=type.ref & rel.posn<0 THEN
+            $(  t!t.type:=t!t.type | flag.double
+                // use 'warn' so that first pass will do the same as the
+                // second. (otherwise binary output might get out of phase)
+                warn(e.doublelab, t+t.str)
+            $) ELSE
+            t!t.type:=(symty=type.ref -> type.def, t!t.type | flag.def)
+            IF symty=type.ref THEN
+            $(  // if symbol was a ref change variables completely to make
+                // it look as if it were defined as a DEF here
+                t!t.info:=lineno
+                symty := t!t.type & type.mask
+                rel.posn := 0
+            $)
+            // error if a DEF variable was never defined during the first pass
+            IF pass=second & symty=type.none THEN error(e.baddef)
+        $)
+        // sort out whether any type coersion being done is legal or not
+        // redefining a variable to 'type.none' has no effect
+        // (type.none is used as part of the primitive type for DEF)
+        UNLESS (ty & type.mask) = type.none THEN
+        TEST (ty&type.mask)=type.ref & (pass=second | (ty&flag.needs)\=0) THEN
+            // a NEEDS variable (type.ref with flag.needs) can be redefined
+            // an unlimited number of times without changing their value
+            IF symty=type.ref THEN
+            TEST (ty&flag.needs)=0 THEN t!t.val:=v
+            ELSE t!t.type:=t!t.type | flag.needs  // make it a NEEDS variable
+        ELSE
+        TEST VALOF SWITCHON symty INTO
+        // can this type be redefined ?
+        $(  CASE type.none:    RESULTIS TRUE
+            CASE type.const:
+            CASE type.lab:     RESULTIS rel.posn=0
+            CASE type.macro:   RESULTIS FALSE
+            DEFAULT:           RESULTIS (ty&type.mask)=symty
+        $) THEN
+        $(  // yes! coersion is legal: delete old value
+            deletetype(t!t.type, t!t.val)
+            // redefine dictionary record
+            t!t.val:=v
+            t!t.info:=lineno
+            t!t.type:=ty  | (t!t.type & (flag.double | flag.def))
+        $) ELSE
+        $(  // no! coersion is illegal: delete redefining value
+            deletetype(t!t.type, t!t.val)
+            // mark as a double definition and try to give error message
+            t!t.type:=t!t.type | flag.double
+            warn(e.doublelab, string)
+        $)
+    $)
+    RESULTIS ans                // TRUE if 's' was a forewards reference
+$)
+
+
+
+
+
+AND deletelab(s, ty) = VALOF
+$(  // locates symbol "S" and deletes it
+    // returns TRUE if the symbol was found
+    LET entry = findentry(s)
+    LET ans = (pass=first)
+    UNLESS !entry = 0 THEN
+    TEST ((!entry)!t.type & type.mask) = (ty & type.mask) THEN
+    $(  deletetype((!entry)!t.type, (!entry)!t.val)
+        !entry := (!entry)!t.link
+        ans := TRUE
+    $) ELSE ans := FALSE
+    RESULTIS ans
+$)
+
+
+
+
+
+
+//      Types can be invented by the user of the general assembler.
+// new type number's (to go in the 'type.mask' field of the type part of
+// a dictionary entry) may start at 'type.'.
+//      If new types are used the procedures 'freetype', 'valtype', 'savetype'
+// (no longer used), and 'printtype' must be defined to delete an object,
+// return a value to be used in an arithmetic expression for that object,
+// print out an object's creating line of text, and print out the object's
+// value in an 11 character field, respectively.  Each of these procedures
+// takes the type and the value of such an object as parameter.
+//      Predeclared types are already dealt with.
+
+
+
+
+AND looktype(ty, s) = VALOF
+$(  LET t=!findentry(s)
+    // iden.valid is TRUE if 's' is of type 'ty' and already declared
+    iden.valid:=(t=null | t!t.info >= lineno -> FALSE,(t!t.type&type.mask)=ty)
+    RESULTIS (iden.valid->t!t.val, 0)
+$)
+
+
+
+AND checktype (ty, s) = VALOF
+$(  LET sym=getsymb(s)
+    LET ans=FALSE
+    TEST sym=null THEN
+    IF pass=first THEN
+    $(  dontknow:=TRUE
+        ans:=TRUE
+    $)
+    ELSE ans:=((sym!t.type&type.mask) = ty)
+//  writef("Checktype : ans = %s*n",(ans->"TRUE","FALSE"))
+    RESULTIS ans
+$)
+
+
+
+AND gettype(ty,s) = VALOF
+$(  // produces an error is 's' is not type 'ty'
+    // returns the value of the symbol
+    LET ans=getsymb(s)
+    IF ans=null & pass=second |
+       ans\=null & (ans!t.type&type.mask)\=ty
+    DO warn(e.badtype)
+//  writef("gettype : ans=%X4, its type = %N, name='%S'*N",
+//         ans, ans!t.type, ans+t.str)
+    RESULTIS (ans=null -> -1, ans!t.val)
+$)
+
+
+AND valtype(ty, v) = VALOF            // for redefinition
+$(  warn(e.notlab)
+    RESULTIS -1
+$)
+
+
+
+AND deletetype(ty, val) BE
+SWITCHON ty & type.mask INTO
+$(  CASE type.none:
+    CASE type.const:
+    CASE type.var:
+    CASE type.lab:
+    CASE type.ref:
+    CASE type.text:
+    CASE type.macro:
+      ENDCASE
+    DEFAULT:
+      freetype(ty, val)
+$)
+
+
+
+AND freetype(ty, val) BE RETURN         // for redefinition
+
+
+AND writetype(ty, val) BE
+$(  LET string = VALOF
+    SWITCHON ty INTO
+    $(  CASE type.none:    RESULTIS "undefined  "
+        CASE type.const:   RESULTIS "const  %X4"
+        CASE type.var:     RESULTIS "var    %X4"
+        CASE type.lab:     RESULTIS "lab    %X4"
+        CASE type.ref:
+             TEST val=#XFFFF THEN
+                           RESULTIS "ref  UNUSED"
+             ELSE
+                           RESULTIS "ref   @%X4"
+        CASE type.text:
+             val := val % 0
+                           RESULTIS "text %I3 ch"
+        CASE type.macro:
+             val := val!2 // macro.chars
+                           RESULTIS "mac%I5 ch"
+        DEFAULT:
+             printtype(ty, val)                    // User defined type
+             RETURN
+    $)
+    writef(string, val)
+$)
+
+
+
+AND printtype(ty,val) BE writef("%I5 %I5",ty, val)     // for redefinition
+
+
+
+
+
+AND printlabs() BE
+$(  // This procedure completely rewritten to print symbols out in
+    // alphabetic order from the hash table (previous data structure
+    // was a tree).
+    //    16.07.81
+    LET number.of.symbols = 0
+    LET chpos             = 0
+
+    // Count entries in hash table
+    FOR anchor = hash.table TO hash.table + hash.table.size DO
+    $(  LET entry = ! anchor
+        WHILE entry \= null DO
+        $(  LET line.no = t.info ! entry
+            IF allsyms | file.number(@line.no) = 0 |
+               (t.type ! entry & flag.double) \= 0 THEN
+               number.of.symbols := number.of.symbols + 1
+            entry := t.link ! entry
+        $)
+    $)
+
+    UNLESS number.of.symbols = 0 THEN
+    $(  LET list     = concatenate.hash.list()   // Get all symbols
+        LET rels     = FALSE     // flags for particular key items
+        LET defs     = FALSE
+        LET weakrefs = FALSE
+
+        // Now sort the symbol list by calling sort.list
+        $(  LET compare(elem1, elem2) = compstring(elem1 + t.str, elem2 + t.str)
+            sort.list(@list, null, null, t.link, compare)
+        $)
+        // reserve number of lines necessary for cross reference and for
+        // key to symbols that are to be used
+        neads(number.of.symbols/((pw+5)/(32+3))+
+                          (mode=relative->1,0)+1+3+(badlabs>0->1,0)+1+1)
+        // neads will have set 'restartpage' if there are not enough lines to
+        // the current output page.
+        // the 'wrch' will only write a page throw if 'throws' is TRUE
+        IF restartpage THEN wrch('*P')
+        writef("*N*NNames available in section %N:*N*N",sectno)
+        WHILE list \= null DO
+        $(  LET line     = t.info ! list
+            LET file.no  = file.number(@line)
+            LET typecode = t.type ! list
+            LET string   = t.str + list
+            MANIFEST  $(  outfield = 32  $)
+            IF chpos+outfield>pw THEN
+            $(  wrch('*N')
+                IF restartpage THEN wrch('*P')
+                chpos:=0
+            $)
+            IF allsyms | file.no=0 | (typecode&flag.double)\=0 THEN
+            $(  chpos:=chpos+outfield
+                writef((file.no =  0 -> "   ",
+                        file.no < 10 -> "+%I1 ",
+                                        "+%I2"), file.no)
+                writef("%I4 ",line)
+                FOR i=1 TO 9 DO wrch(string%0 >= i -> string%i, ' ')
+                wrch('*S')
+                writetype(typecode&type.mask, t.val ! list)
+                wrch((typecode&flag.double) = 0 -> '*S','**')
+                wrch((typecode&flag.rel)    = 0 -> '*S','R')
+                wrch((typecode&flag.def)   \= 0 -> 'D',
+                     (typecode&flag.weak)  \= 0 -> 'W','*S')
+                rels:=rels | (typecode & flag.rel)\=0
+                TEST (typecode & flag.def)=0 THEN
+                    IF (typecode & flag.weak)\=0 THEN weakrefs:=TRUE
+                ELSE defs:=TRUE
+                UNLESS chpos+2>pw THEN
+                $(  writes("  ")
+                    chpos:=chpos+2
+                $)
+            $)
+            list := t.link ! list
+        $)
+        writes("*N*N*N")
+
+        IF badlabs>0 THEN writes("** - multiply defined label*N")
+        IF rels      THEN writes("R - relocatable value*N")
+        IF defs      THEN writes("D - internally defined value*N")
+        IF weakrefs  THEN writes("W - weak reference*N")
+        wrch('*N')
+    $)
+$)
+
+
+
+AND deletelabs() BE
+$(  LET entry = concatenate.hash.list()   // Get all symbols
+    WHILE entry \= null DO                // and run down list deleting each
+    $(  deletetype(t.type ! entry & type.mask, t.val ! entry)
+        entry := t.link ! entry
+    $)
+    hash.table := 0                       // Table will be freed, so mark it
+$)                                        // so that a new one will be obtained
+
+
+
+
+
+AND concatenate.hash.list() = VALOF
+//   Concatenate all the hash lists together and hang them from
+// the normally unused last hash table slot.
+//   The routine may be called more than once on the same table
+//   The value returned is the address of the first list element.
+$(  // The <HASH conditional compilation comments are used to collect
+    // statistics about the hashing algorithm.
+/*<HASH statistics
+   LET size.incidence.vec = VEC 5
+   LET max.chain.size     = 0
+/*HASH>*/
+
+   IF hash.table ! hash.table.size \= null THEN
+   // List concatenated already, just return it
+RESULTIS hash.table ! hash.table.size
+
+/*<HASH
+   FOR i = 0 TO 5 DO size.incidence.vec ! i := 0
+/*HASH>*/
+
+   FOR anchor = hash.table TO hash.table + hash.table.size - 1 DO
+   $(
+/*<HASH
+      LET count = 0
+/*HASH>*/
+
+      IF ! anchor \= null THEN
+      $(  LET entry = ! anchor
+/*<HASH
+          count := 1
+/*HASH>*/
+          WHILE t.link ! entry \= null DO
+          $(  // Find the last element in the chain
+              entry := t.link ! entry
+/*<HASH
+              count := count + 1
+/*HASH>*/
+          $)
+
+          // Now link the old chain onto the end
+          // and put the new chain in the complete chain head
+          t.link ! entry               := hash.table ! hash.table.size
+          hash.table ! hash.table.size := ! anchor
+          ! anchor := null
+      $)
+
+/*<HASH
+        IF count > max.chain.size THEN max.chain.size := count
+        IF count >= 5 THEN count := 5
+        size.incidence.vec ! count := size.incidence.vec ! count + 1
+/*HASH>*/
+    $)
+
+/*<HASH
+    writef("Hash table size: %N,  chain length incidences:*N", hash.table.size)
+    FOR i = 0 TO 4 DO writef("  %N:  %N*N", i, size.incidence.vec ! i)
+    writef(">=5:  %N*N*
+           *longest: %N*N", size.incidence.vec ! 5, max.chain.size)
+/*HASH>*/
+    RESULTIS hash.table ! hash.table.size
+$)
+
+
+
+AND gen.defs() BE
+// goes through the dictionary generating external/internal reference
+// records in the output format for the relevent variables (REF & DEF)
+$(  code.gen(cd.clear)
+    FOR anchor = hash.table TO hash.table + hash.table.size DO
+    $(  LET t = ! anchor
+        WHILE t\=null DO
+        $(  LET typecode = t.type ! t
+            LET value    = t.val ! t
+            LET string   = t.str + t
+
+            IF (typecode&flag.double)\=0 THEN badlabs:=badlabs+1
+            TEST (typecode & type.mask)=type.ref THEN
+                IF (typecode&flag.needs)\=0 | value\=#XFFFF THEN
+                    // i.e. never used!
+                    code.gen( ((typecode&flag.weak)=0->cd.ext,cd.wext),
+                              string, value /* last referance */)
+            ELSE
+               IF (typecode & flag.def)=flag.def &
+                   (typecode&type.mask)\=type.none THEN
+                   TEST (typecode & flag.rel)=0 & mode=relative
+                   THEN code.gen(cd.absint, string, value /* address */)
+                   ELSE code.gen(cd.int, string, value /* address */)
+            t := t.link ! t
+        $)
+    $)
+$)
+
+
+
+AND sort.list(first.elem.ptr, last.elem.link, null.elem, link.field, compare) BE
+//
+//   Sort the list a pointer to the first element of which is given.
+//
+//   The list is single linked through the given link field and
+// the null element reference is given in 'null.elem'.
+//
+//   The list is sorted using a user supplied comparison routine.
+//
+//   The comparison routine should accept 2 list elements as arguments.
+// Sorting is such that for any two adjacent elements En and En+1 in
+// the final list:
+//                  compare(En, En+1) <= 0
+//
+//   For any two elements where compare(Em, En) = 0, their order in the
+// final list will be the same as in the original list.
+//
+//   WARNING.    This routine uses the quicksort algorithm so
+//               will be poor for an already-sorted list.
+//
+//   The first element of the sorted list will be inserted into
+// the first element pointer, and 'last.elem.link' assigned to
+// the link field of the last element of the sorted list.
+
+WHILE TRUE DO
+$(  LET first.elem  = ! first.elem.ptr
+    LET sublist1    = ?
+    LET sublist2    = ?
+    LET length.diff = ?
+
+    IF first.elem = null.elem THEN                 // Empty list
+    $(  !first.elem.ptr := last.elem.link
+        RETURN
+    $)
+
+    sublist1 := link.field ! first.elem
+    sublist2 := null.elem
+    IF sublist1 = null.elem THEN
+    $(  link.field ! first.elem := last.elem.link
+        RETURN
+    $)
+
+    $(  LET entry         = sublist1
+        LET prev.entry    = @sublist1 - link.field
+        LET sublist2.tail = @sublist2 - link.field
+
+        length.diff := 0
+
+        // Now pass through sublist1 removing all elements larger than
+        // first.elem and placing them on sublist2.
+        WHILE entry \= null.elem DO
+        $(  TEST compare(entry, first.elem) > 0 THEN
+            $(  LET next.entry = link.field ! entry
+
+                // Remove element from sublist1
+                link.field ! prev.entry := next.entry
+
+                link.field ! sublist2.tail := entry     // Append to sublist2
+                link.field ! entry         := null.elem
+                sublist2.tail              := entry
+
+                entry := next.entry
+                length.diff := length.diff - 1
+            $) ELSE
+            $(  prev.entry := entry
+                entry      := link.field ! entry
+                length.diff := length.diff + 1
+            $)
+        $)
+    $)
+
+    // Now sort the shorter of the two sublists and
+    // loop round to deal with the longer.
+    TEST length.diff > 0 THEN
+    $(  link.field ! first.elem := sublist2
+
+        sort.list(first.elem + link.field, last.elem.link,
+                               null.elem, link.field, compare)
+
+        last.elem.link   := first.elem
+        ! first.elem.ptr := sublist1
+    $) ELSE
+    $(  ! first.elem.ptr := sublist1
+
+        sort.list(first.elem.ptr, first.elem,
+                               null.elem, link.field, compare)
+
+        first.elem.ptr   := first.elem + link.field
+        ! first.elem.ptr := sublist2
+    $)
+$)
+
+

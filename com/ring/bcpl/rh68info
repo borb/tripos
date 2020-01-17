@@ -1,0 +1,155 @@
+/***********************************************************************
+**             (C) Copyright 1983  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+*                                                                      *
+* #######   ##    ##   ######    ######   ########  ##    ##  ######## *
+* ########  ##    ##  ########  ########  ########  ###   ##  ######## *
+* ##    ##  ##    ##  ##        ##    ##     ##     ####  ##  ##       *
+* ########  ########  #######    ######      ##     ## ## ##  ######   *
+* #######   ##    ##  ##    ##  ##    ##     ##     ##  ####  ##       *
+* ##  ##    ##    ##  ##    ##  ##    ##     ##     ##  ####  ##       *
+* ##   ##   ##    ##   ######   ########  ########  ##   ###  ##       *
+* ##    ##  ##    ##    ####     ######   ########  ##    ##  ##       *
+*                                                                      *
+************************************************************************
+**    Author:  Brian Knight                          November 1981    **
+***********************************************************************/
+
+
+
+// Command to give information about the 68000 Ring Handler task.
+//
+// Lists: reserved ports
+//        reception requests outstanding
+//        counts of unwanted and bad blocks received
+
+// Modifications:
+// 16 Sep 83 by BJK: (incorrect) code to list reception requests commented out
+
+SECTION "RH68INFO"
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+
+
+MANIFEST
+    $(
+    gn.receive.queue                = ug + 2
+    gn.last.port.alloc              = ug + 3
+    gn.port.list                    = ug + 4
+    gn.log.incomplete.blocks        = ug + 5
+    gn.log.rx.requests.not.serviced = ug + 6
+    gn.log.overlong.blocks          = ug + 7   // Not logged in this version
+    gn.log.rx.request.timeouts      = ug + 8
+    gn.log.bad.checksums            = ug + 10
+    gn.log.unwanted.blocks          = ug + 11
+    gn.log.rx.timeouts              = ug + 12
+    gn.log.bad.headers              = ug + 13
+    gn.last.unwanted.source         = ug + 21
+    gn.log.unsel.tries              = ug + 22
+    $)
+
+LET start() BE
+    $(
+    LET rhtaskid      = rootnode ! rtn.info ! rtninfo.ring ! ri.rhtaskid
+    LET tcb           = ?
+    LET gv            = ?
+    LET port.list     = ?
+    LET receive.queue = ?
+
+//    IF rdargs("kill/s", argv, 20) = 0
+//    THEN $( WRITES("Bad args*n"); stop(20) $)
+
+    IF rhtaskid = 0
+    THEN $( writes("Ring handler not loaded*N"); stop(20) $)
+
+    IF rhtaskid < 0
+    THEN $( writef("Ring handler is device %N*N", rhtaskid); stop(20) $)
+
+    tcb := rootnode ! rtn.tasktab ! rhtaskid
+    gv  := tcb ! tcb.gbase
+
+//    IF ARGV!0 \= 0
+//    THEN
+//      $( // Kill ring handler
+//      setflags(rhtaskid, 4)
+//      IF NOT gv!173 THEN writes("Ring handler is not breakable*n")
+//      FINISH
+//      $)
+
+    writef("Ring handler is task %n*n", rhtaskid)
+
+    wrline(gv!gn.log.rx.requests.not.serviced, "rx requests not serviced*n")
+    wrline(gv!gn.log.overlong.blocks, "overlong blocks received*n")
+    wrline(gv!gn.log.rx.request.timeouts, "rx request timeouts*N")
+    wrline(gv!gn.log.bad.checksums, "blocks with bad checksum received*n")
+
+    IF gv!gn.log.unwanted.blocks \= 0
+    THEN
+      $(
+      writef("%u5 unwanted blocks received: last from ", gv!gn.log.unwanted.blocks)
+      write.machine.name(gv!gn.last.unwanted.source)
+      newline()
+      $)
+
+    wrline(gv!gn.log.incomplete.blocks, "incomplete blocks received*n")
+    wrline(gv!gn.log.bad.headers, "bad header packets received*N")
+    wrline(gv!gn.log.unsel.tries, "retries on unselected*N")
+
+    // List reserved port numbers
+    writes("Reception ports reserved: ")
+    port.list := gv ! gn.port.list
+
+    TEST port.list = 0
+    THEN writes("none")
+    ELSE UNTIL port.list = 0
+         DO $( writef("%N ", port.list!1); port.list := !port.list $)
+    newline()
+
+    // List reception requests
+    // This is somewhat dangerous, as the queue can change
+    // while we're looking at it.  Therefore, give up on
+    // a silly station number or bad memory address.
+
+//    writes("Outstanding reception requests: ")
+//    receive.queue := gv!gn.receive.queue
+//
+//    TEST receive.queue = 0
+//    THEN writes("none")
+//    ELSE
+//      UNTIL receive.queue = 0 | NOT validpointer(receive.queue)
+//      DO $(
+//         LET mc.id = receive.queue ! rhpkt.station
+//
+//         // Is station number sensible?
+//
+//         UNLESS 1 <= mc.id <= 255 THEN BREAK // No
+//
+//         writes("*N  From ")
+//         TEST mc.id = 255
+//         THEN writes("anywhere")
+//         ELSE write.machine.name(mc.id)
+//         writef(" on port %N (size %n, from task %N",
+//                receive.queue ! rhpkt.port,
+//                receive.queue ! rhpkt.size,
+//                receive.queue ! pkt.id)
+//
+//         writef("; lifetime %N secs", pkt.res2!receive.queue / tickspersecond)
+//         wrch(')')
+//         receive.queue := !receive.queue
+//         $)
+//    newline()
+    $)
+
+
+AND wrline(val, string) BE
+    $(
+    writef("%u5 %s", val, string)
+    $)
+
+
+AND validpointer(a) = 0 <= a < (rootnode!rtn.memsize * 1024)
+
+

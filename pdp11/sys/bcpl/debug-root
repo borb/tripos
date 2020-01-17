@@ -1,0 +1,61 @@
+|| (C) Copyright 1979 Tripos Research Group
+||     University of Cambridge
+||     Computer Laboratory
+
+SECTION "DEBUG"
+
+GET "LIBHDR"
+
+GLOBAL $( currtask:199 $)
+
+LET start(pkt) = VALOF
+ $( LET mode = pkt!0
+    AND task = pkt!1
+    TEST mode=-1 THEN     || startup
+    $( qpkt(pkt)
+       initio()
+       selectinput(findinput("**"))
+       selectoutput(findoutput("**"))
+       currtask := task
+       rootnode!rtn.debtask := tcb
+       $( LET ch = rdch()
+          LET file = "SYS:L.DEBUG--"
+          task := currtask
+          TEST ch='*N' THEN
+             writes(": *E")
+          ELSE
+          $( file%13 := ch
+             IF callseg(file, @mode, start)=0 DO
+                writes("??*N")
+          $)
+       $) REPEAT
+    $)
+    ELSE                 || standalone entry
+    $( LET res = 0
+       LET wwrch = wrch
+       LET code = pkt!2
+       LET arg  = pkt!3
+       wrch := sawrch
+       IF mode=1  DO    || abort
+       $( writef("*N!!T%N ABORT %N: ",task,code)
+          IF code=0 DO  || break
+          $( task := arg
+             writef("BREAK T") $)
+          writef("%N ", arg)
+       $)
+       UNLESS task=0 DO currtask := task
+       SWITCHON capitalch(sardch()) INTO
+       $( CASE 'H':
+             res := task
+          CASE 'C':
+             newline()
+             wrch := wwrch
+             RESULTIS res
+
+          CASE 'Z':
+             #173104(?,#177406)
+       $) REPEAT
+   $)
+ $)
+
+

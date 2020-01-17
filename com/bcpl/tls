@@ -1,0 +1,2961 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+                          ########  ##         ######
+                          ########  ##        ########
+                             ##     ##        ##
+                             ##     ##        #######
+                             ##     ##              ##
+                             ##     ##              ##
+                             ##     ########  ########
+                             ##     ########   ######
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   PB    -   14/05/86             *
+\*****************************************************************************/
+
+
+
+GET "LIBHDR"
+
+
+
+GLOBAL
+$(
+    veclist           :  ug + 0
+    dictstream        :  ug + 1
+    withstream        :  ug + 2
+    workstream        :  ug + 3
+    tapestream        :  ug + 4
+    filestream        :  ug + 5
+    verstream         :  ug + 6
+    sysout            :  ug + 7
+    maxfile           :  ug + 8
+    tapedevice        :  ug + 9
+    filelist          :  ug + 10
+    fileliste         :  ug + 11
+    readonly          :  ug + 12
+    dictdate          :  ug + 13
+    filedate          :  ug + 14
+    tapedate          :  ug + 15
+    broken            :  ug + 16
+    interactive       :  ug + 17
+    filesize          :  ug + 18
+    buffer            :  ug + 19
+    notape            :  ug + 20
+    volumename        :  ug + 21
+    version           :  ug + 22
+    workspace         :  ug + 23
+    workspaceptr      :  ug + 24
+    workfile          :  ug + 25
+    includelist       :  ug + 26
+    excludelist       :  ug + 27
+    set.name          :  ug + 28
+    set.as            :  ug + 29
+    mt.is.disc        :  ug + 30
+
+    //  Global routines...
+
+    gvec              :  ug + 50
+    fvec              :  ug + 51
+    fvectors          :  ug + 52
+    error             :  ug + 53
+    readcommand       :  ug + 54
+    read.string       :  ug + 55
+    read.number       :  ug + 56
+    restorefiles      :  ug + 57
+    constructname     :  ug + 58
+    checkvalid        :  ug + 59
+    examinename       :  ug + 60
+    joinnames         :  ug + 61
+    addentry          :  ug + 62
+    matchnames        :  ug + 63
+    getspace          :  ug + 64
+    fillinnumber      :  ug + 65
+    numberofdigits    :  ug + 66
+    relevant          :  ug + 67
+    freelist          :  ug + 68
+    splitstrings      :  ug + 69
+    validdiscname     :  ug + 70
+    rootname          :  ug + 71
+$)
+
+
+
+MANIFEST
+$(
+    a.dict            =  0
+    a.with            =  1
+    a.ver             =  2
+    a.init            =  3
+    a.notape          =  4
+    a.tapedevice      =  5
+    a.work            =  6
+    a.mt.is.disc      =  7
+
+    f.flink           =  0
+    f.blink           =  1
+    f.seq             =  2
+    f.ddays           =  3
+    f.dmins           =  4
+    f.dticks          =  5
+    f.tdays           =  6
+    f.tmins           =  7
+    f.tticks          =  8
+    f.name            =  9
+    f.kilobytes       =  10
+    f.bytes           =  11
+    f.version         =  12
+    f.comments        =  13
+    f.size            =  13
+
+    exco.stacksize    =  500
+
+    byte.buffersize   =  1024
+    buffersize        =  byte.buffersize / bytesperword
+
+    workbuffersize    =  2048
+
+    versionnumber     =  2
+
+    error.noerror     =  0        //  :sys.tapeserver.bcpl.tapehdr-manifests
+    act.volumeinfo    =  906      //  :sys.tapeserver.bcpl.tapehandler-hdr
+
+
+    list.link         =  0
+    list.name         =  1
+    list.size         =  2
+$)
+
+
+.
+
+
+//              T A P E    L I B R A R Y    S Y S T E M
+//              =======================================
+//
+//  Library to provide incremental file archiving for the File Server based
+//  TRIPOS filing system.  The specification is modelled quite heavily on
+//  that for the TLS system, run by the Computing Service.  The master
+//  dictionary for a tape is always on Disc, but a duplicate copy is kept as
+//  the last file on the tape.
+
+
+SECTION "TLS"
+
+
+GET ""
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+
+
+
+MANIFEST
+$(
+    size.exinfo       =  dirent.size + file.header.size - 1
+    exinfo.name       =  dirent.name
+    maxchars.name     =  30
+$)
+
+
+
+
+LET start()  BE
+$(
+//  Main routine of TLS.  Check the parameters, and read in the TLS dictionary
+//  from disc.  When that is done, write the dictionary to tape and disc.
+//
+//
+//  The format of the dictionary is simply:
+//
+//  (First Record)
+//                 version/nfiles/<dictdate>/volume     (for the dictionary)
+//
+//  (Subsequent Records)
+//                 seq/<discdate>/<tapedate>/name/Kbytes/bytes/version/comments
+//
+//
+//  Commands to TLS are:
+//
+//      TT [<name>]                   [AS <name>]       [COMMENTS "<comments>"]
+//                                    [INCLUDE <list>]  [EXCLUDE <list>]
+//
+//      FT [<name>] (or SEQ <seq>)    [AS <name>]       [VERSION <version>]
+//                                    [INCLUDE <list>]  [EXCLUDE <list>]
+//
+//      ARCHIVE [<name>]              [AS <name>]       [COMMENTS "<comments>"]
+//                                    [INCLUDE <list>]  [EXCLUDE <list>]
+//
+//      RESTORE [<name>] (or SEQ seq) [AS <name>]       [VERSION <version>]
+//                                    [INCLUDE <list>]  [EXCLUDE <list>]
+//
+//      EX [<name>]                   [FULL] [ALL] [FIFO] [LIFO] [TO <file>]
+//
+//      SET [<name>]  [AS <name>]
+//
+//      Q
+//
+//      ABANDON
+
+    LET args  =  "DICT/A,WITH/K,VER/K,INIT/S,NOTAPE/S,TAPEDEVICE/K,WORK/K,DISC/S"
+    LET argv  =  VEC 50
+    LET dict  =  0
+    LET with  =  0
+    LET ver   =  0
+    LET init  =  0
+    LET tape  =  0
+
+    veclist        :=  0
+    filelist       :=  0
+    fileliste      :=  0
+    workfile       :=  0
+    dictstream     :=  0
+    withstream     :=  0
+    workstream     :=  0
+    tapestream     :=  0
+    filestream     :=  0
+    volumename     :=  0
+    version        :=  0
+    sysout         :=  output()
+    verstream      :=  sysout
+    maxfile        :=  0
+    readonly       :=  TRUE
+    broken         :=  FALSE
+    interactive    :=  FALSE
+    dictdate       :=  gvec( 3 )
+    tapedate       :=  gvec( 3 )
+    buffer         :=  gvec( buffersize )
+    filedate       :=  0
+    filesize       :=  0
+    includelist    :=  0
+    excludelist    :=  0
+
+    set.name       :=  joinnames( "", "" )
+    set.as         :=  joinnames( "", "" )
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+        error( "Bad arguments for string *"%S*"", args )
+
+    workspace      :=  gvec( workbuffersize )
+    workspaceptr   :=  workspace + workbuffersize
+
+    dict           :=  argv!a.dict
+    with           :=  argv!a.with
+    ver            :=  argv!a.ver
+    init           :=  argv!a.init
+    notape         :=  argv!a.notape
+    tapedevice     :=  argv!a.tapedevice
+    workfile       :=  argv!a.work
+    mt.is.disc     :=  argv!a.mt.is.disc
+
+    IF  tapedevice = 0  THEN  tapedevice  :=  "MT:"
+
+    IF  devicetask( tapedevice ) = 0  THEN
+        UNLESS  notape  DO
+            error( "Device *"%S*" not mounted", tapedevice )
+
+    //  Construct the name of the work file.  We need to do this to make sure
+    //  that we put the work file onto the same disc pack as the dictionary.
+
+    TEST  notape  THEN
+        UNLESS  workfile = 0  DO
+            error( "Unexpected WORK in command line" )
+
+    ELSE
+    $(
+        workfile  :=  workfile = 0  ->  makeworkfile( dict ),
+                                        joinnames( workfile, "" )
+
+        //  Make sure that we can open our work stream.  This is no good if
+        //  we can't, and should be moaned at!
+
+        workstream  :=  findoutput( workfile )
+
+        IF  workstream = 0  THEN  error( "Cannot open WORK stream *"%S*"", workfile )
+    $)
+
+    //  Try and open the "ver" stream.
+
+    UNLESS  ver = 0  DO
+    $(
+        verstream  :=  findoutput( ver )
+
+        IF  verstream = 0  THEN  error( "Cannot open VER stream *"%S*"", ver )
+    $)
+
+    selectoutput( verstream )
+
+    //  Before we do anything else, say hello
+
+    writef( "TLS  Version %N.62*N", versionnumber )
+
+    //  We are now ready to start dealing with the arguments given to
+    //  us.  If we are being asked to INIT, then the DICT file must NOT
+    //  exist - this is for safety's sake.  Also, if we are INITing, then
+    //  the WITH stream should not be present.
+
+    TEST  init  THEN
+    $(
+        //  We must check to see whether we have been given a "WITH" stream,
+        //  and if we have, moan about it.  Otherwise, we must check to see
+        //  that the dictionary file doesn't exist, and if it does, moan about
+        //  that as well.  Otherwise we just wind up in the normal way.
+
+        LET lock  =  0
+
+        UNLESS  with = 0  DO
+            error( "Unexpected *"WITH %S*" in command line", with )
+
+        IF  notape  THEN
+            error( "Must have a tape to initialise dictionary" )
+
+        volumename  :=  findvolumename()
+
+        lock  :=  locateobj( dict )
+
+        UNLESS  lock = 0  DO
+        $(
+            freeobj( lock )
+
+            error( "DICT file *"%S*" already exists", dict )
+        $)
+
+        readonly  :=  FALSE
+    $)
+    ELSE
+    $(
+        //  This is the normal occurrence.  We have been asked to do something
+        //  other than "INIT", and so we must read the dictionary from the disc
+        //  file specified.
+
+        LET command  =  0
+        LET type     =  0
+        LET lock     =  locateobj( dict )
+        LET ch       =  0
+
+        IF  lock = 0  THEN
+            error( "Cannot locate DICT file *"%S*"", dict )
+
+        freeobj( lock )
+
+        dictstream  :=  findinput( dict )
+
+        IF  dictstream = 0  THEN
+            error( "Cannot open DICT file *"%S*"", dict )
+
+        IF  with = 0  THEN  with  :=  "**"
+
+        interactive  :=  compstring( with, "**" ) = 0
+        withstream   :=  findinput( with )
+
+        IF  withstream = 0  THEN
+            error( "Cannot open WITH file *"%S*"", with )
+
+        //  Ok.  All the files we expect are open, so we should read the
+        //  dictionary.
+
+        IF  interactive  THEN  writes( "Reading dictionary...    *E" )
+
+        selectinput( dictstream )
+        readdictionary()
+        endread()
+
+        dictstream  :=  0
+
+        writef( "Tape *"%S*"  -  %N Dictionary entr%S used.*N*N",
+                 volumename, maxfile, maxfile = 1  ->  "y", "ies" )
+
+        //  Ok.  Having read the dictionary, we are in a state to start
+        //  reading commands from the "WITH" file.
+
+        selectinput( withstream )
+
+        $(  //  Loop to read commands to the TLS program.  The commands
+            //  are terminated by EOF (@Q at the console).
+
+            IF  broken  THEN
+            $(
+                writes( "****** (TLS) BREAK.*N" )
+
+                TEST  interactive  
+                    THEN  broken  :=  FALSE
+                    ELSE  BREAK
+            $)
+
+            IF  interactive  THEN
+            $(
+                selectoutput( sysout )
+                writes( ">*E" )
+                selectoutput( verstream )
+            $)
+
+            ch  :=  rdch()
+
+            WHILE  ch = '*S'  |  ch = '*T'  DO  ch  :=  rdch()
+
+            IF  ch = '*N'         THEN  LOOP
+            IF  ch = endstreamch  THEN  BREAK
+
+            //  Ok, we have a bona fide character, which should be the
+            //  first of a command.
+            
+            unrdch()
+
+            command  :=  readcommand()
+
+            IF  command % 0 = 0  THEN
+            $(
+                fvec( command )
+
+                ch  :=  rdch()
+
+                IF  ch = '?'  THEN
+                $(
+                    //  He wants to know what the commands are for the TLS
+                    //  program.  Print out a list for him.
+
+                    ch  :=  rdch()
+
+                    IF  ch = '*N'  THEN
+                    $(
+                        writes( "*NList of TLS commands:*N*N*
+                                  *    TOTAPE     (TT)*N*
+                                  *    FROMTAPE   (FT)*N*
+                                  *    ARCHIVE*N*
+                                  *    RESTORE*N*
+                                  *    EXAMINE    (EX)*N*
+                                  *    SET*N*
+                                  *    QUIT       (Q)*N*
+                                  *    ABANDON*N*N" )
+
+                        LOOP
+                    $)
+                $)
+
+                //  Otherwise, he is mucking us about, and we ought to
+                //  have nothing to do with is.
+
+                writes( "Unknown TLS command  -  see *"HELP*"*N" )
+
+                ch  :=  rdch()   REPEATUNTIL  ch = '*N'  |  ch = endstreamch
+
+                LOOP
+            $)
+
+            type     :=  findarg( "TT=TOTAPE,FT=FROMTAPE,ARCHIVE,RESTORE,*
+                                  *EX=EXAMINE,SET,Q=QUIT,ABANDON,HELP", command )
+
+            fvec( command )
+
+            SWITCHON  type  INTO
+            $(
+                CASE  0 :  totape()                       ;  LOOP
+                CASE  1 :  fromtape()                     ;  LOOP
+                CASE  2 :  archive()                      ;  LOOP
+                CASE  3 :  restore()                      ;  LOOP
+                CASE  4 :  examine()                      ;  LOOP
+                CASE  5 :  set()                          ;  LOOP
+
+                CASE  6 :  BREAK
+
+                CASE  7 :  error( "ABANDONED." )
+
+                CASE  8 :  help()                         ;  LOOP
+
+                CASE -1 :  writes( "Unknown TLS command  -  see *"HELP*"*N" )
+                           ENDCASE
+
+                DEFAULT :  writef( "****** Internal error (CMND %N)*N", type )
+                           ENDCASE
+            $)
+
+            ch  :=  rdch()    REPEATUNTIL  ch = '*N'  |  ch = endstreamch
+   
+            IF  ch = endstreamch  THEN  BREAK
+        $)
+        REPEAT
+
+        //  End of the "WITH" stream
+
+        endread()
+
+        withstream  :=  0
+    $)
+ 
+
+    TEST  readonly  THEN
+    $(
+        //  The dictionary hasn't actually been updated, we need not write
+        //  it to the tape or disc.  We must close the work stream, and
+        //  delete the work file.
+
+         UNLESS  workstream = 0  DO
+         $(
+             selectoutput( workstream )
+             endwrite()
+
+             workstream  :=  0
+
+             IF  deleteobj( workfile ) = 0  THEN
+                 error( "Cannot delete work file *"%S*"", workfile )
+
+             selectoutput( verstream )
+         $)
+
+         writes( "Dictionary unchanged.*N" )
+    $)
+    ELSE
+    $(
+        //  We have now finished processing commands.  Write the new dictionary
+        //  to the Work File, and rename the work file on top of the old
+        //  dictionary.
+
+        IF  interactive  THEN  writes( "Writing dictionary...    *E" )
+
+        datstamp( dictdate )
+        maxfile  :=  maxfile + 1
+
+        selectoutput( workstream )
+
+        writef( "%N/%N/%N/%N/%N/%S*N",
+                 versionnumber, maxfile, dictdate!0, dictdate!1, dictdate!2, volumename )
+        writedictionary()
+        endwrite()
+
+        workstream  :=  0
+
+        //  Now write the TLS dictionary at the end of tape as well.
+
+        tape        :=  constructname( "TLS-DICTIONARY", maxfile )
+        tapestream  :=  findoutput( tape )
+
+        IF  tapestream = 0  THEN  error( "Cannot open *"%S*"", tape )
+
+        selectoutput( tapestream )
+
+        writef( "%N/%N/%N/%N/%N/%S*N",
+                 versionnumber, maxfile, dictdate!0, dictdate!1, dictdate!2, volumename )
+        writedictionary()
+        endwrite()
+
+        tapestream  :=  0
+
+        fvec( tape )
+
+        selectoutput( verstream )
+
+        UNLESS  init  DO
+            writef( "%N Dictionary entr%S used.*N*N",
+                     maxfile, maxfile = 1  ->  "y", "ies" )
+
+        //  ...and as the very last job of all, rename the new tape dictionary
+        //  on top of the old one.  This SHOULD succeed.
+
+        IF  renameobj( workfile, dict ) = 0  THEN
+        $(
+            //  We must stop the error routine from deleting this file.
+            //  Print out a message as to why the rename failed, and tell
+            //  the user of the silly place where his dictionary has been
+            //  left.
+
+            LET res2  =  result2
+
+            writef( "*N*N****** Failed to rename *"%S*" as *"%S*":  ", workfile, dict )
+            fault( res2 )
+            newline()
+
+            //  Set the variable "dict" equal to the "workfile" value, so that
+            //  the next message to be printed out is actually correct.
+
+            dict      :=  workfile
+        $)
+
+        writef( "Dictionary written to *"%S*" and updated on tape.*N", dict )
+    $)
+
+    fvec( dictdate )
+    fvec( tapedate )
+    fvec( buffer )
+    fvec( set.name )
+    fvec( set.as )
+
+    UNLESS  workfile = 0  DO  fvec( workfile )
+
+    fvectors()
+
+    UNLESS  verstream = sysout  DO
+    $(
+        selectoutput( verstream )
+        endwrite()
+    $)
+$)
+
+
+
+AND help()  BE
+$(
+//  Attempt to give help on what has been asked.
+
+    LET args   =  ",,,,,,,,,"
+    LET argv   =  VEC 100
+    LET keys   =  "TT=TOTAPE,FT=FROMTAPE,ARCHIVE,RESTORE,EX=EXAMINE,SET,Q=QUIT,ABANDON"
+    LET asked  =  0
+
+    rdargs( args, argv, 100 )
+
+    FOR  i = 0  TO  9  DO
+    $(
+        LET key  =  argv!i
+
+        UNLESS  key = 0  DO
+        $(
+            asked  :=  asked + 1
+
+            SWITCHON  findarg( keys, key )  INTO
+            $(
+                CASE  0 :  writes( "TT [<name>] *
+                                   *[AS <name>] *
+                                   *[COMMENTS *"<comments>*"] *
+                                   *[INCLUDE <list>] *
+                                   *[EXCLUDE <list>]*N" )
+                           writes( "    (Transfer all files from disc to tape)*N" )
+                           ENDCASE
+
+
+                CASE  1 :  writes( "FT [<name>] (or SEQ <seq>) *
+                                   *[AS <name>] *
+                                   *[VERSION <version>] *
+                                   *[FROMSEQ <seq>] *
+                                   *[INCLUDE <list>] *
+                                   *[EXCLUDE <list>]*N" )
+                           writes( "    (Transfer all files from tape to disc)*N" )
+                           ENDCASE
+
+
+                CASE  2 :  writes( "ARCHIVE [<name>] *
+                                   *[AS <name>] *
+                                   *[COMMENTS *"<comments>*"] *
+                                   *[INCLUDE <list>] *
+                                   *[EXCLUDE <list>]*N" )
+                           writes( "    (Transfer newest files from disc to tape)*N" )
+                           ENDCASE
+
+
+                CASE  3 :  writes( "RESTORE [<name>] (or SEQ seq) *
+                                   *[AS <name>] *
+                                   *[VERSION <version>] *
+                                   *[FROMSEQ <seq>] *
+                                   *[INCLUDE <list>] *
+                                   *[EXCLUDE <list>]*N" )
+                           writes( "    (Transfer newest files from tape to disc)*N" )
+                           ENDCASE
+
+
+                CASE  4 :  writes( "EX [<name>] *
+                                   *[FULL] *
+                                   *[ALL] *
+                                   *[FIFO] *
+                                   *[LIFO] *
+                                   *[TO <file>]*N" )
+                           writes( "    (Examine tape dictionary)*N" )
+                           ENDCASE
+
+  
+                CASE  5 :  writes( "SET [<name>] *
+                                   *[AS <name>]*N" )
+                           writes( "    (Set file transfer root names)*N" )
+                           ENDCASE
+
+
+                CASE  6 :  writes( "Q*N" )
+                           writes( "    (Write dictionary, and terminate session)*N" )
+                           ENDCASE
+
+
+                CASE  7 :  writes( "ABANDON*N" )
+                           writes( "    (Abandon whole session)*N" )
+                           ENDCASE
+
+
+                DEFAULT :  writef( "No help available on *"%S*"*N", key )
+                           ENDCASE
+            $)
+        $)
+    $)
+
+
+    IF  asked = 0  THEN
+
+        //  He didn't ask for help on anything in particular.  Give him a
+        //  list of commands, and hope that this keeps him happy.
+
+        writes( "List of TLS commands:*N*N*
+                 *    TOTAPE     (TT)*N*
+                 *    FROMTAPE   (FT)*N*
+                 *    ARCHIVE*N*
+                 *    RESTORE*N*
+                 *    EXAMINE    (EX)*N*
+                 *    SET*N*
+                 *    QUIT       (Q)*N*
+                 *    ABANDON*N" )
+$)
+
+
+
+AND makeworkfile( dictname )  =  VALOF
+$(
+//  Construct a work file name, consisting of the directory name of the
+//  DICT file, the string TLS-WORKFILE, and a random element, set by the
+//  date and time.  There is a very small chance that this exists, but we
+//  must check for this as well!!
+
+    LET workv      =  VEC 256/bytesperword
+    LET datev      =  VEC 2
+    LET pos        =  dictname % 0
+    LET ch         =  dictname % pos
+    LET nonrandom  =  "TLS-WORKFILE-"
+    LET lock       =  0
+
+    //  First, search backwards through the filename until we find the
+    //  beginning of the string, or a directory component.
+
+    UNTIL  pos = 0  |  ch = '.'  |  ch = ':'  DO
+    $(
+        pos  :=  pos - 1
+        ch   :=  dictname % pos
+    $)
+
+    FOR  i = 1  TO  pos  DO  workv % i  :=  dictname % i
+
+    //  Having found it, we have the prefix for the whole name.
+
+    FOR  i = 1  TO  nonrandom % 0  DO
+    $(
+        pos          :=  pos + 1
+        workv % pos  :=  nonrandom % i
+    $)
+
+    //  Now construct the random part.  We can do this by getting the Days,
+    //  Minutes and Ticks values from the rootnode, and making a suffix with
+    //  them.
+
+    datstamp( datev )
+
+    FOR  i = 0  TO  2  DO
+    $(
+        LET number  =  datev!i
+        LET digits  =  numberofdigits( number )
+
+        fillinnumber( workv, pos + 1, number, digits )
+
+        pos  :=  pos + digits
+    $)
+
+    workv % 0  :=  pos
+
+    //  We now have the entire string in "workv".  We should make sure that
+    //  the object does not exist before we pass it back.
+
+    lock       :=  locateobj( workv )
+
+    UNLESS  lock = 0  DO
+    $(
+        freeobj( lock )
+
+        error( "WORK file name *"%S*" is not unique", workv )
+    $)
+
+    //  Otherwise return a copy of this name from the heap.
+
+    RESULTIS  joinnames( workv, "" )
+$)
+
+
+
+AND readdictionary()  BE
+$(
+//  Read the dictionary, and put the items into the file list.
+
+    //  The first record is of the form:
+    //
+    //      Maxfile/Days/Mins/Ticks
+
+    LET ch  =  0
+
+    version     :=  read.number( '/' )
+
+    UNLESS  version = versionnumber  DO
+        error( "Incompatible dictionary version %N/%N", version, versionnumber )
+
+    maxfile     :=  read.number( '/' )
+    dictdate!0  :=  read.number( '/' )
+    dictdate!1  :=  read.number( '/' )
+    dictdate!2  :=  read.number( '/' )
+    volumename  :=  read.string( '*N' )
+
+    UNLESS  notape  DO
+    $(
+        LET name  =  findvolumename()
+
+        UNLESS  compstring( name, volumename ) = 0  DO
+            error( "Wrong volume mounted  (%S instead of %S)", name, volumename )
+    $)
+    
+    ch  :=  rdch()
+
+    UNTIL  ch = endstreamch  DO
+    $(
+        //  All subsequent records are of the form:
+        //
+        //      Seq/<discdate>/<tapedate>/Name/Kbytes/Bytes/Version/Comments
+
+        LET node  =  getspace( f.size )
+        
+        unrdch()
+
+        node!f.flink      :=  0
+        node!f.blink      :=  fileliste
+        node!f.seq        :=  read.number( '/' )
+        node!f.ddays      :=  read.number( '/' )
+        node!f.dmins      :=  read.number( '/' )
+        node!f.dticks     :=  read.number( '/' )
+        node!f.tdays      :=  read.number( '/' )
+        node!f.tmins      :=  read.number( '/' )
+        node!f.tticks     :=  read.number( '/' )
+        node!f.name       :=  read.string( '/' )
+        node!f.kilobytes  :=  read.number( '/' )
+        node!f.bytes      :=  read.number( '/' )
+        node!f.version    :=  read.number( '/' )
+        node!f.comments   :=  read.string( '*N' )
+
+        TEST  filelist = 0  THEN  filelist           :=  node
+                            ELSE  fileliste!f.flink  :=  node
+
+        fileliste         :=  node
+        ch                :=  rdch()
+    $)
+$)
+
+
+
+AND writedictionary()  BE
+$(
+//  Write the dictionary to the currently selected output stream.  All records
+//  are of the form:
+//
+//      Seq/<discdate>/<tapedate>/Name/Kbytes/Bytes/Version/Comments
+
+    LET list  =  filelist
+
+    UNTIL  list = 0  DO
+    $(
+        writef( "%N/%N/%N/%N/%N/%N/%N", list!f.seq, list!f.ddays, list!f.dmins,
+                 list!f.dticks, list!f.tdays, list!f.tmins, list!f.tticks )
+
+        writef( "/%S/%N/%N/%N/%S*N", list!f.name, list!f.kilobytes,
+                 list!f.bytes, list!f.version, list!f.comments )
+
+        list  :=  list!f.flink
+    $)
+$)
+
+
+
+AND findvolumename()  =  VALOF
+$(
+    LET task      =  devicetask( tapedevice )
+    LET volerror  =  error.noerror
+
+    IF mt.is.disc
+    THEN RESULTIS "<Disc>"
+
+    UNTIL  testflags( #B0001 )  DO
+    $(
+        LET name  =  sendpkt( notinuse, task, act.volumeinfo )
+        LET r2    =  result2
+
+        TEST  name = 0  THEN
+            UNLESS  volerror = r2  DO
+            $(
+                writes( "*N*N****** (TLS) waiting to read volume label  -  " )
+                fault( r2 )
+
+                volerror  :=  r2
+            $)
+
+        ELSE
+        $(
+            UNLESS  volerror = error.noerror  DO
+                writes( "****** (TLS) volume label now read*N*N" )
+
+            RESULTIS  name
+        $)
+
+        delay( tickspersecond * 5 )
+    $)
+
+    error( "BREAK.   Unable to read volume label" )
+$)
+
+
+
+AND totape()  BE  archivefiles( FALSE )
+
+
+
+AND archive()  BE  archivefiles( TRUE )
+
+
+
+AND fromtape()  BE  restorefiles( FALSE )
+
+
+
+AND restore()  BE  restorefiles( TRUE )
+
+
+
+AND examine()  BE
+$(
+//  Examine the tape.  Possible options are:
+//
+//       FULL    -    Give FULL information on each dataset
+//       ALL     -    Examine ALL datasets (not just current versions)
+//       FIFO    -    Oldest files first
+//       LIFO    -    Newest files first
+//       TO      -    Optional output stream
+
+    LET argv   =  VEC 50
+    LET datv   =  VEC 15
+    LET args   =  "NAME,FULL/S,ALL/S,FIFO/S,LIFO/S,TO/K"
+    LET s      =  start
+    LET d      =  loadseg( "sys:l.dat-to-strings" )
+    LET total  =  VEC 1
+
+    IF  d = 0  THEN  error( "Cannot load DAT-TO-STRINGS" )
+
+    UNLESS  globin( d )  DO
+    $(
+        //  We cannot initialise the overlay.  Moan about it.
+
+        unloadseg( d )
+
+        error( "Cannot initialise DAT-TO-STRINGS" )
+    $)
+
+    //  Ok, we are now ready to read the arguments from the command line.
+
+    TEST  rdargs( args, argv, 50 )  THEN
+    $(
+        //  He should only have quoted one of "LIFO" or "FIFO" - if he
+        //  has quoted both, he is a LOONY!
+
+        LET name    =  argv!0
+        LET full    =  argv!1
+        LET all     =  argv!2
+        LET fifo    =  argv!3
+        LET lifo    =  argv!4
+        LET file    =  argv!5
+        LET sysout  =  output()
+        LET stream  =  0
+
+        IF  fifo & lifo  THEN
+            writes( "FIFO and LIFO ?   Go away!*N" )
+
+        //  Try and open the file "file" if there is one.
+
+        UNLESS  file = 0  DO
+        $(
+            stream  :=  findoutput( file )
+
+            IF  stream = 0  THEN
+            $(
+                writef( "Cannot open TO file *"%S*":  ", file )
+
+                fault( result2 )
+            $)
+        $)
+
+        UNLESS  stream = 0  DO  selectoutput( stream )
+
+        total!0  :=  0
+        total!1  :=  0
+
+
+        TEST  name = 0          THEN  name  :=  joinnames( set.name, "" )  ELSE
+        TEST  rootname( name )  THEN  name  :=  joinnames( name, "" )      ELSE
+        
+              name  :=  joinnames( set.name, name )
+
+
+        TEST  NOT validdiscname( name )  THEN
+              writef( "Invalid disc file name:  *"%S*"*N", name )
+              
+        ELSE
+
+        TEST  lifo  THEN  examine.lifo( name, full, all, total )  ELSE
+        TEST  fifo  THEN  examine.fifo( name, full, all, total )  ELSE
+                          examine.alph( name, full, all, total )
+
+        fvec( name )
+
+        start( dictdate, datv )
+
+        UNLESS  broken  DO
+        $(
+            UNLESS  total!0 = 0  &  total!1 = 0  DO
+            $(
+                LET kbytes  =  total!0
+                LET bytes   =  total!1
+
+                writes( "*NTotal file size:   " )
+
+                TEST  kbytes < 10  THEN  writef( "%N  bytes*N", kbytes*1024 + bytes )
+                                   ELSE  writef( "%NK bytes*N", kbytes )
+            $)
+
+            writef( "*NDictionary last updated on %S, %S at %S*N*N",
+                     datv+10, datv+0, datv+5 )
+        $)
+
+        UNLESS  stream = 0  DO
+        $(
+            endstream( stream )
+            selectoutput( sysout )
+        $)
+    $)
+    ELSE
+
+    writef( "EXAMINE takes arguments of the form *"%S*"*N", args )
+
+    unloadseg( d )
+    start  :=  s
+$)
+
+
+
+AND rootname( name )  =  VALOF
+$(
+//  Return TRUE if this name is specified from the root of a filing system.
+//  This implies that it contains a comma.
+
+    FOR  i = 1  TO  name % 0  DO  IF  name % i = ':'  THEN  RESULTIS  TRUE
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND examine.fifo( name, full, all, total )  BE
+$(
+//  Examine the Dictionary, printing out ALL members, if "all" is set.
+//  We scan the dictionary from the beginning.
+
+    LET ptr      =  filelist
+    LET success  =  FALSE
+
+    TEST  ptr = 0  THEN  writef( "Dictionary is empty*N" )
+    ELSE
+    $(
+        examine.heading( full )
+
+        UNTIL  ptr = 0  |  broken  DO
+        $(
+            IF  matchnames( name, ptr!f.name )  &  (all | (ptr!f.version = 0))  THEN
+            $(
+                success  :=  TRUE
+
+                examine.entry( full, ptr, total, TRUE )
+            $)
+
+            ptr  :=  ptr!f.flink
+
+            IF  testflags( #B0001 )  THEN  broken  :=  TRUE
+        $)
+
+        UNLESS  broken  DO
+            UNLESS  success  DO
+                writef( "No entries for *"%S*"*N", name )
+    $)
+$)
+
+
+
+AND examine.lifo( name, full, all, total )  BE
+$(
+//  Examine the Dictionary, printing out ALL members, if "all" is set.
+//  We scan the dictionary from the end.
+
+    LET ptr      =  fileliste
+    LET success  =  FALSE
+
+    TEST  ptr = 0  THEN  writef( "Dictionary is empty*N" )
+    ELSE
+    $(
+        examine.heading( full )
+
+        UNTIL  ptr = 0  |  broken  DO
+        $(
+            IF  matchnames( name, ptr!f.name )  &  (all | (ptr!f.version = 0))  THEN
+            $(
+                success  :=  TRUE
+
+                examine.entry( full, ptr, total, TRUE )
+            $)
+
+            ptr  :=  ptr!f.blink
+
+            IF  testflags( #B0001 )  THEN  broken  :=  TRUE
+        $)
+
+        UNLESS  broken  DO
+            UNLESS  success  DO
+                writef( "No entries for *"%S*"*N", name )
+    $)
+$)
+
+
+
+AND examine.alph( name, full, all, total )  BE
+$(
+//  Examine the Dictionary, printing out ALL members, if "all" is set.
+//  We print out the entries in alphabetical order.  We sort in a vector
+//  of size "maxfile" (which is the largest possible number of files we
+//  we will have to sort).
+
+    LET ptr  =  filelist
+
+    TEST  ptr = 0  THEN  writef( "Dictionary is empty*N" )
+    ELSE
+    $(
+        LET vector   =  gvec( maxfile )
+        LET nfiles   =  0
+
+        UNTIL  ptr = 0  DO
+        $(
+            IF  matchnames( name, ptr!f.name)  &  (all | (ptr!f.version = 0))  THEN
+            $(
+                vector!nfiles  :=  ptr
+                nfiles         :=  nfiles + 1
+            $)
+
+            ptr  :=  ptr!f.flink
+        $)
+
+        TEST  nfiles = 0  THEN  writef( "No entries for *"%S*"*N", name )
+        ELSE
+        $(
+            //  We have some entries which need sorting.  Do the sorting,
+            //  and print out the results.
+
+            examine.heading( full )
+
+            FOR  i = 1  TO  nfiles  DO
+            $(
+                //  Find the first relevant entry in the vector, and then
+                //  compare it against all others.
+                
+                LET firstp  =  0
+                LET first   =  vector!firstp
+                
+                IF  testflags( #B0001 )  THEN
+                $(
+                    broken  :=  TRUE
+
+                    BREAK
+                $)
+
+                WHILE  first = 0  DO
+                $(
+                    firstp  :=  firstp + 1
+                    first   :=  vector!firstp
+                $)
+                
+                //  Now, search along the vector from the first position,
+                //  looking to see if we can find the smallest one.
+                
+                FOR  j = firstp+1  TO  nfiles-1  DO
+                $(
+                    LET entry  =  vector!j
+                
+                    //  Look to see if this entry is strictly less, and if
+                    //  it is, make it the current entry.
+
+                    UNLESS  entry = 0  DO
+
+                        IF  comp.less( entry, first )  THEN
+                        $(
+                            //  We have a new smallest entry.  Rememer it,
+                            //  and where it is in the vector.
+                            
+                            first   :=  entry
+                            firstp  :=  j
+                        $)
+                $)
+                
+                //  When we drop out of that loop, "first" points to the
+                //  entry to be examined, and "firstp" contains the position
+                //  the the "vector" where this item is found.
+                
+                examine.entry( full, first, total, FALSE )
+                
+                vector!firstp  :=  0
+            $)
+        $)
+
+        //  Free the space used, and return to the caller.
+
+        fvec( vector )
+    $)
+$)
+
+
+
+AND comp.less( a, b )  =  VALOF
+$(
+//  One entry is strictly LESS than another if:
+//
+//      a)  The name is lexically less
+//  or  b)  The name is equal, and the version is less
+
+    LET lexcompare  =  compstring( a!f.name, b!f.name )
+
+    TEST  lexcompare < 0  THEN  RESULTIS  TRUE   ELSE
+    TEST  lexcompare > 0  THEN  RESULTIS  FALSE  ELSE
+
+          RESULTIS  a!f.version < b!f.version
+$)
+
+
+
+AND matchnames( name1, name2 )  =  VALOF
+$(
+//  For a name match to succeed, then "name1" must not be longer than
+//  "name2", and all its characters must match the corresponding ones
+//  of name2.
+
+    LET l1  =  name1 % 0
+    LET l2  =  name2 % 0
+
+    IF  l1 = 0   THEN  RESULTIS  TRUE
+    IF  l1 > l2  THEN  RESULTIS  FALSE
+
+    FOR  i = 1  TO  l1  DO
+        UNLESS  compch( name1 % i, name2 % i )  =  0  DO
+            RESULTIS  FALSE
+
+    RESULTIS  (l1 = l2)  ->  TRUE,
+                             (name2 % (l1 + 1) = '.') NEQV (name1 % l1 = ':')
+$)
+
+
+
+AND examine.heading( full )  BE
+$(
+    writef( "*PContents of tape *"%S*"*N*N*
+              *  SEQ  FILE NAME                                 SIZE       ", volumename )
+
+    IF  full  THEN
+        writes( "      DISC DATE            TAPE DATE      VER COMMENTS" )
+
+    writes( "*N*N" )
+$)
+
+
+
+AND examine.entry( full, entry, total, printname )  BE
+$(
+//  Print out the information corresponding to the entry "entry".
+
+    LET seq        =  entry!f.seq
+    LET ddate      =  entry+f.ddays
+    LET tdate      =  entry+f.tdays
+    LET name       =  entry!f.name
+    LET kilobytes  =  entry!f.kilobytes
+    LET bytes      =  entry!f.bytes
+    LET version    =  entry!f.version
+    LET comments   =  entry!f.comments
+    LET ddatev     =  VEC 15
+    LET tdatev     =  VEC 15
+    LET tkb        =  total!0
+    LET tb         =  total!1
+    LET print      =  (version = 0)  |  printname
+
+    start( ddate, ddatev )
+    start( tdate, tdatev )
+
+    writef( "%I5 ", seq )
+    wrch( ((version = 0) | (NOT print))  ->  '*S', '**' )
+    writestring( (print  ->  name, ""), 40 )
+
+    TEST  kilobytes < 10  THEN  writef( " %I5  bytes  ", kilobytes*1024 + bytes )
+                          ELSE  writef( " %I5K bytes  ", kilobytes )
+
+    IF  full  THEN
+    $(
+        writestring( ddatev+0, 10 )
+        writestring( ddatev+5, 9 )
+
+        writes( "  " )
+
+        writestring( tdatev+0, 10 )
+        writestring( tdatev+5, 9 )
+
+        TEST  version = 0  THEN  writes( "   " )
+                           ELSE  writef( "%I3", version )
+
+        writef( " %S", comments )
+    $)
+
+    newline()
+
+    //  Now add the size onto the total.
+
+    tb       :=  tb + bytes
+    total!0  :=  tkb + kilobytes + (tb / 1024)
+    total!1  :=  tb REM 1024
+$)
+
+
+
+AND writestring( string, width )  BE
+$(
+    writes( string )
+
+    FOR  i = string % 0  TO  width-1  DO  wrch( '*S' )
+$)
+
+
+
+AND set()  BE
+$(
+//  Set name prefixes for NAME or AS keywords.  These are then used in
+//  other command to save typing.
+
+    LET argv   =  VEC 100
+    LET args   =  "NAME,AS/K"
+
+    TEST  rdargs( args, argv, 100 )  THEN
+    $(
+        //  We have successfully read the command line.  We must look at the
+        //  arguments given, to tell which of the parameters to reset.  The
+        //  values must be explicitly set to be the null string to be reset.
+        //  If no arguments are given then the current values are printed
+        //  out.
+
+        LET name  =  argv!0
+        LET as    =  argv!1
+
+        IF  name = 0  &  as = 0  THEN
+            writef( "Current SET values are:  NAME = *"%S*",  AS = *"%S*"*N",
+                     stringunset( set.name ), stringunset( set.as ) )
+
+        UNLESS  name = 0  DO
+        $(
+            LET root  =  rootname( name )
+            LET olds  =  set.name
+            
+            TEST  root  |  (name % 0  =  0)
+                THEN  set.name  :=  joinnames( name, "" )
+                ELSE  set.name  :=  joinnames( set.name, name )
+
+            fvec( olds )
+        $)
+
+        UNLESS  as = 0  DO
+        $(
+            LET root  =  rootname( as )
+            LET olds  =  set.as
+            
+            TEST  root  |  (as % 0  =  0)
+                THEN  set.as  :=  joinnames( as, "" )
+                ELSE  set.as  :=  joinnames( set.as, as )
+
+            fvec( olds )
+        $)
+    $)
+    ELSE
+
+    //  Bad command line.  Moan about it.
+
+    writes( "SET takes arguments of the form *"%S*"*N", args )
+$)
+
+
+
+AND stringunset( string )  =  string % 0 = 0  ->  " (unset) ",  string
+
+
+
+AND archivefiles( incremental )  BE
+$(
+//  Write a file or directory to tape.  This will over-ride any files of the
+//  same names on the tape.
+
+    LET argv      =  VEC 100
+    LET args      =  "NAME,AS/K,INCLUDE/K,EXCLUDE/K,COMMENTS/K"
+    LET name      =  0
+    LET as        =  0
+    LET comments  =  0
+
+    TEST  rdargs( args, argv, 100 )  THEN
+    $(
+        //  We have successfully read the command line, and are now ready
+        //  to do something about it.
+
+        LET examineco  =  0
+        LET filename   =  0
+        LET lock       =  0
+        LET exists     =  FALSE
+
+        name         :=  argv!0
+        as           :=  argv!1
+        includelist  :=  argv!2
+        excludelist  :=  argv!3
+        comments     :=  argv!4  =  0  ->  "",        argv!4
+
+        //  Now create the from and to names out of what we have been
+        //  given, and the current set values.
+
+        TEST  name = 0          THEN  name  :=  joinnames( set.name, "" ) ELSE
+
+        TEST  rootname( name )  THEN  name  :=  joinnames( name, "" )     ELSE
+        
+              name  :=  joinnames( set.name, name )
+
+
+        TEST  as = 0  THEN  
+            TEST  set.as % 0 = 0  
+                THEN  as  :=  joinnames( name, "" )
+                ELSE  as  :=  joinnames( set.as, "" )                     ELSE
+
+        TEST  rootname( as )    THEN  as  :=  joinnames( as, "" )         ELSE
+        
+              as  :=  joinnames( set.as, as )
+
+
+        //  And now check the name validity.
+
+        UNLESS  validdiscname( name )  DO
+        $(
+            writef( "Invalid disc file name:  *"%S*"*N", name )
+
+            fvec( name )
+            fvec( as )
+
+            RETURN
+        $)
+
+        //  We must check to see that the "as" name is valid, otherwise
+        //  we will not be able to read it from the dictionary.
+
+        UNLESS  checkvalid( as )  DO
+        $(
+            writef( "Invalid tape file name:  *"%S*"*N", as )
+
+            fvec( name )
+            fvec( as )
+
+            RETURN
+        $)
+
+        //  Check to see if the object we wish to transfer actually exists.
+        //  If not, then we can moan here and now.
+
+        lock  :=  locateobj( name )
+
+        UNLESS  lock = 0  DO
+        $(
+            exists  :=  TRUE
+
+            freeobj( lock )
+        $)
+
+        UNLESS  includelist = 0  DO  includelist  :=  splitstrings( name, includelist )
+        UNLESS  excludelist = 0  DO  excludelist  :=  splitstrings( name, excludelist )
+
+        //  Having checked for random syntax,  set up the examine coroutine,
+        //  to enable us to examine the directory (if this is a directory).
+
+        examineco  :=  createco( examinename, exco.stacksize )
+
+        IF  examineco = 0  THEN
+        $(
+            writes( "****** Cannot create the EXAMINE coroutine*N" )
+
+            fvec( name )
+            fvec( as )
+
+            RETURN
+        $)
+
+        filename  :=  callco( examineco, name )
+
+        //  If the file name were ZERO, then we have been unable to examine
+        //  this object, and so we moan.
+
+        IF  filename = 0  THEN
+            TEST  exists
+                THEN  writef( "Directory *"%S*" contains no files*N", name )
+                ELSE  writef( "File *"%S*" does not exist*N", name )
+
+        UNTIL  filename = 0  DO
+        $(
+            LET fullname  =  joinnames( name, filename )
+            LET asname    =  joinnames( as, filename )
+
+            //  Check to see that this file is included (or not excluded), and
+            //  if so, do something about it.
+
+            IF  relevant( fullname )  THEN
+
+            //  If we are being incremental, then we had better look in the
+            //  dictionary, and see if we already have this file.  If we have,
+            //  then there is not much point in archiving it!
+
+            TEST  incremental  &  uptodate( asname )  THEN
+            $(
+                writef( "%S    ", asname )
+
+                FOR  i = asname % 0  TO  40  DO  wrch( '*S' )
+
+                writes( "Not transferred*N" )
+            $)
+            ELSE  archivefile( fullname, asname, comments )
+
+            fvec( fullname )
+            fvec( asname )
+
+            filename  :=  callco( examineco, name )
+        $)
+
+        //  When we drop out of there, we must delete the EXAMINE coroutine,
+        //  and free the include/exclude lists.
+
+        deleteco( examineco )
+
+        freelist( includelist )
+        freelist( excludelist )
+
+        fvec( name )
+        fvec( as )
+    $)
+    ELSE
+
+    //  This was a bad command line.  Moan about it, and skip to the
+    //  end of the line.
+
+    writef( "TOTAPE/ARCHIVE take arguments of the form *"%S*"*N", args )
+$)
+
+
+
+AND archivefile( fullname, asname, comments )  BE
+$(
+//  Archive the file, whose name is "fullname", to the tape as name "asname".
+
+    LET tape  =  0
+
+    IF  notape  THEN
+    $(
+        writef( "%S    ", asname )
+
+        FOR  i = asname % 0  TO  40  DO  wrch( '*S' )
+
+        writes( "(Would be transferred)*N" )
+
+        RETURN
+    $)
+
+    filestream  :=  findinput( fullname )
+
+    IF  filestream = 0  THEN
+    $(
+        writef( "****** Cannot open *"%S*":  ", fullname )
+        fault( result2 )
+
+        RETURN
+    $)
+
+    //  We can now open the tape stream, and start to send
+    //  the file to tape.
+
+    tape        :=  constructname( "TLS-FILE", maxfile+1 )
+    tapestream  :=  findoutput( tape )
+
+    TEST  tapestream = 0  THEN
+    $(
+        writef( "****** Cannot open *"%S*":  ", tape )
+        fault( result2 )
+
+        endstream( filestream )
+        filestream  :=  0
+    $)
+    ELSE
+    $(
+        //  All is Hunky Dory, and we can send the file to tape.
+        //  Keep a count of the number of characters we have sent,
+        //  so that we can keep a record of the file size in the
+        //  dictionary entry.
+
+        LET kilobytes  =  (filesize!0 << 6)  +  (filesize!1 >> 10)
+        LET bytes      =  (filesize!1 & #B1111111111)
+
+        writef( "%S    ", asname )
+
+        FOR  i = asname % 0  TO  40  DO  wrch( '*S' )
+
+        wrch( '*E' )
+
+        //  Take the time now, and treat this as being the tape date.
+
+        datstamp( tapedate )
+
+        selectinput( filestream )
+        selectoutput( tapestream )
+
+        $(  //  Loop to read the file, and transfer to tape.
+
+            LET length  =  readwords( buffer, buffersize )
+
+            IF  length = 0  THEN  BREAK
+
+            writewords( buffer, ABS length )
+        $)
+        REPEAT
+
+        endread()
+        endwrite()
+
+        filestream  :=  0
+        tapestream  :=  0
+
+        selectinput( withstream )
+        selectoutput( verstream )
+
+        //  We have successfully transferred the file.  Create an
+        //  entry in the dictionary, and go back for more.
+
+        maxfile  :=  maxfile + 1
+
+        addentry( maxfile, filedate, asname, kilobytes, bytes, comments )
+
+        TEST  kilobytes < 10  THEN  writef( "%I5  bytes*N", kilobytes*1024 + bytes )
+                              ELSE  writef( "%I5K bytes*N", kilobytes )
+
+        readonly  :=  FALSE
+    $)
+
+    fvec( tape )
+$)
+
+
+
+AND uptodate( name )  =  VALOF
+$(
+//  Look in the directory to see if this file already exists.  If it does,
+//  then it must have the same name, and the same "last modified" date.
+
+    LET previous  =  fileliste
+
+    UNTIL  previous = 0  DO
+    $(
+        IF  compstring( name, previous!f.name ) = 0  &  previous!f.version = 0  THEN
+        $(
+            //  Most up to date version of this file on tape.  Check to see
+            //  whether it is up to date enough.
+
+            LET tapedate  =  previous + f.ddays
+
+            FOR  i = 0  TO  2  DO
+            $(
+                LET tapevalue   =  tapedate!i
+                LET discvalue   =  filedate!i
+
+                IF  tapevalue > discvalue  THEN  RESULTIS  TRUE
+                IF  tapevalue < discvalue  THEN  RESULTIS  FALSE
+            $)
+
+            //  If we drop out of that loop, this implies that the dates are
+            //  identical, and so we are up to date.
+
+            RESULTIS  TRUE
+        $)
+
+        previous  :=  previous!f.blink
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+.
+
+
+SECTION "TLS-2"
+
+
+GET ""
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+GET "BCPL.OBJINFO"
+
+
+MANIFEST
+$(
+    size.exinfo       =  dirent.size + file.header.size - 1
+    exinfo.name       =  dirent.name
+    maxchars.name     =  30
+$)
+
+
+LET restorefiles( incremental )  BE
+$(
+//  Restore files from the tape to disc.  If the restoration is "incremental",
+//  then we only copy onto disc those files which are not already there.
+
+    LET argv     =  VEC 100
+    LET args     =  "NAME,SEQ/K,AS/K,VERSION/K,INCLUDE/K,EXCLUDE/K,FROMSEQ/K"
+    LET name     =  0
+    LET seq      =  0
+    LET as       =  0
+    LET version  =  0
+    LET fromseq  =  0
+
+    TEST  rdargs( args, argv, 100 )  THEN
+    $(
+        //  The arguments are (we hope) correct. Whether they are meaningful
+        //  is another matter.  If the user has specified a Sequence number,
+        //  then a name and version number are meaningless.
+
+        name         :=  argv!0
+        seq          :=  argv!1
+        as           :=  argv!2
+        version      :=  argv!3
+        includelist  :=  argv!4
+        excludelist  :=  argv!5
+        fromseq      :=  argv!6
+
+        //  If neither "name" nor "seq" were quoted, then we take the current
+        //  "set name" as where to start.
+
+        UNLESS  name = 0  |  seq = 0  DO
+        $(
+            writes( "Must quote only one of *"NAME*" or *"SEQ*"*N" )
+
+            RETURN
+        $)
+
+        //  If it is SEQ, then a version number is meaningless
+
+        UNLESS  seq = 0  DO
+            UNLESS  version = 0  DO
+                writes( "VERSION is meaningless when quoting SEQ - ignored*N" )
+
+        //  ...as are INCLUDE and EXCLUDE
+
+        UNLESS  seq = 0  DO
+            UNLESS  includelist = 0  &  excludelist = 0  DO
+                writes( "INCLUDE/EXCLUDE are meaningless when quoting SEQ - ignored*N" )
+
+        //  ...and FROMSEQ
+
+        UNLESS  seq = 0  DO
+            UNLESS  fromseq = 0  DO
+                writes( "FROMSEQ is meaningless when quoting SEQ - ignored*N" )
+
+
+        //  Now create the from and to names out of what we have been
+        //  given, and the current set values.
+
+        TEST  name = 0          THEN  name  :=  joinnames( set.name, "" ) ELSE
+
+        TEST  rootname( name )  THEN  name  :=  joinnames( name, "" )     ELSE
+        
+              name  :=  joinnames( set.name, name )
+
+
+        TEST  as = 0  THEN
+            TEST  set.as % 0 = 0  
+                THEN  as  :=  joinnames( name, "" )
+                ELSE  as  :=  joinnames( set.as, "" )                     ELSE
+
+        TEST  rootname( as )    THEN  as  :=  joinnames( as, "" )         ELSE
+        
+              as  :=  joinnames( set.as, as )
+
+
+        TEST  seq = 0  THEN
+        $(
+            //  We are restoring a name.  We must calculate which version
+            //  number we are going to restore.
+
+            LET vernumber      =  version = 0  ->  0,  makenumber( version )
+            LET fromsequence   =  fromseq = 0  ->  1,  makenumber( fromseq )
+            LET files          =  filelist
+            LET filesrestored  =  0
+
+            IF  vernumber = -1  THEN
+            $(
+                //  Invalid version number.  Moan and return
+
+                writef( "Invalid VERSION number *"%S*"*N", version )
+
+                fvec( name )
+                fvec( as )
+
+                RETURN
+            $)
+
+            IF  fromsequence < 1  |  fromsequence > maxfile  THEN
+            $(
+                //  Invalid FROMSEQ number.  Moan and return
+
+                writef( "Invalid FROMSEQ number *"%S*"*N", fromseq )
+
+                fvec( name )
+                fvec( as )
+
+                RETURN
+            $)
+
+            UNLESS  includelist = 0  DO  includelist  :=  splitstrings( name, includelist )
+            UNLESS  excludelist = 0  DO  excludelist  :=  splitstrings( name, excludelist )
+
+            //  Otherwise, we can start to restore the files specified.  Since
+            //  we are restoring items with a specified Version number, it does
+            //  not matter whether we search forwards or backwards.
+
+            UNTIL  files = 0  |  broken  DO
+            $(
+                IF  relevant( files!f.name )          &
+                    matchnames( name, files!f.name )  &
+                    files!f.seq >= fromsequence       &
+                    files!f.version = vernumber       THEN
+                    $(
+                        restorefile( files, name, as, incremental )
+
+                        filesrestored  :=  filesrestored + 1
+                    $)
+
+                files  :=  files!f.flink
+
+                IF  testflags( #B0001 )  THEN  broken  :=  TRUE
+            $)
+
+            IF  filesrestored = 0  THEN
+            $(
+                writef( "No entry for *"%S*"", name )
+
+                UNLESS  vernumber = 0  DO  writef( " (version %N) ", vernumber )
+
+                newline()
+            $)
+
+            freelist( includelist )
+            freelist( excludelist )
+        $)
+        ELSE
+        $(
+            //  We are being asked to retore a given sequence number.  This
+            //  is much easier, as we know that there is only one file to
+            //  restore.
+
+            LET file       =  filelist
+            LET seqnumber  =  makenumber( seq )
+
+            IF  seqnumber < 1  |  seqnumber > maxfile  THEN
+            $(
+                writef( "Invalid SEQ number:  *"%S*"*N", seq )
+
+                fvec( name )
+                fvec( as )
+
+                RETURN
+            $)
+
+            UNTIL  file = 0  DO
+            $(
+                IF  file!f.seq = seqnumber  THEN  BREAK
+
+                file  :=  file!f.flink
+            $)
+
+            TEST  file = 0  THEN
+                  writef( "No Dictionary entry for SEQ=%N*N", seqnumber )
+
+            ELSE  restorefile( file, file!f.name, as, incremental )
+        $)
+
+        fvec( name )
+        fvec( as )
+    $)
+    ELSE  writef( "FROMTAPE/RESTORE take arguments of the form *"%S*"*N", args )
+$)
+
+
+
+AND restorefile( entry, name, as, incremental )  BE
+$(
+//  Restore a single file, given its dictionary entry, and root names.
+//  Before anything else, construct the name we are going to write to disc.
+
+    LET tapename   =  entry!f.name
+    LET ltapename  =  tapename % 0
+    LET lname      =  name % 0
+    LET las        =  as % 0
+    LET asname     =  gvec( (ltapename - lname + las + 1) / bytesperword )
+    LET pos        =  0
+    LET tape       =  constructname( "TLS-FILE", entry!f.seq )
+    LET fromdev    =  lname = 0  ->  FALSE,  (name % lname  =  ':')
+    LET asdev      =  las = 0    ->  FALSE,  (as % las =  ':')
+    LET lock       =  0
+    LET newer      =  TRUE
+
+    //  The root name is of the form:
+    //
+    //       a)  DEV:[name]
+    //       b)  DIR[.name]
+    //
+    //  If we are going DEV to DIR  then a dot needs inserting
+    //  If we are going DIR to DEV  then a dot needs removing
+    //
+    //  otherwise, all is ok.
+
+    FOR  i = 1  TO  las  DO
+    $(
+        pos           :=  pos + 1
+        asname % pos  :=  as % i
+    $)
+
+    //  If DEV to DIR  then  insert a dot...
+
+    IF  fromdev  &  NOT asdev  THEN
+    $(
+        pos           :=  pos + 1
+        asname % pos  :=  '.'
+    $)
+
+    //  If DIR to DEV  then  remove a dot...
+
+    IF  NOT fromdev  &  asdev  THEN
+        lname  :=  lname + 1
+
+    FOR  i = lname+1  TO  ltapename  DO
+    $(
+        pos           :=  pos + 1
+        asname % pos  :=  tapename % i
+    $)
+
+    asname % 0  :=  pos
+
+    //  Make sure that the name we have just synthesised is in fact valid.
+
+    UNLESS  validdiscname( asname )  DO
+    $(
+        writef( "Invalid disc file name:  *"%S*"*N", asname )
+
+        fvec( asname )
+        fvec( tape )
+
+        RETURN
+    $)
+
+    //  Having found the name we are going to use on disc, if we are in
+    //  incremental mode, we only restore those files which do not exist
+    //  on disc, or have been changed since the move to tape.
+
+    lock  :=  locateobj( asname )
+
+    UNLESS  lock = 0  DO
+    $(
+        LET entryinfo  =  VEC size.exinfo
+        LET fhtask     =  lock!lock.task
+
+        TEST  examine.obj( fhtask, lock, entryinfo )  THEN
+        $(
+            //  Compare Disc and Tape dates, and type
+
+            LET tdate    =  entry+f.ddays
+            LET ddate    =  VEC 3
+            LET type     =  0
+            LET current  =  TRUE
+
+            objinfo.ex( objinfo.date, lock, entryinfo, ddate )
+            objinfo.ex( objinfo.type, lock, entryinfo, @type )
+
+            FOR  i = 0  TO  2  DO
+            $(
+                LET discvalue  =  ddate!i
+                LET tapevalue  =  tdate!i
+
+                IF  discvalue > tapevalue  THEN  BREAK
+                IF  discvalue < tapevalue  THEN
+                $(
+                    current  :=  FALSE
+                    BREAK
+                $)
+            $)
+
+            //  When we drop out of that loop, the flag "current" is set, as
+            //  to whether the disc version of a file is the current version
+            //  or not, i.e. the opposite of whether the file needs to be copied
+
+            newer  :=  NOT current
+
+
+            UNLESS  type = type.file  DO
+            $(
+                writef( "****** File *"%S*" already exists as a directory*N",
+                         asname )
+
+                fvec( asname )
+                fvec( tape )
+
+                freeobj( lock )
+
+                RETURN
+            $)
+        $)
+        ELSE
+        $(
+            writef( "****** Cannot examine *"%S*":  ", asname )
+            fault( result2 )
+        $)
+
+        freeobj( lock )
+
+        IF  incremental  &  NOT newer  THEN
+        $(
+            writef( "%S    ", asname )
+
+            FOR  i = asname % 0  TO  40  DO  wrch( '*S' )
+
+            writes( "Not transferred*N" )
+
+            fvec( asname )
+            fvec( tape )
+
+            RETURN
+        $)
+    $)
+
+    //  We have decided that we want to move the file from tape to disc, but
+    //  if we do not have a tape attached, then this might prove a trifle
+    //  difficult!
+
+    IF  notape  THEN
+    $(
+        writef( "%S    ", asname )
+
+        FOR  i = asname % 0  TO  40  DO  wrch( '*S' )
+
+        writes( "(Would be transferred)*N" )
+
+        fvec( asname )
+        fvec( tape )
+
+        RETURN
+    $)
+
+    tapestream  :=  findinput( tape )
+
+    IF  tapestream = 0  THEN
+    $(
+        writef( "****** Cannot open *"%S*":  ", tape )
+        fault( result2 )
+    $)
+
+    //  Make sure that we can open the output stream to the disc.  Before
+    //  we must check to see that all subdirectories are created.
+
+    UNLESS  tapestream = 0  DO
+    $(
+        filestream  :=  findoutput( asname )
+
+        IF  filestream = 0  THEN
+        $(
+            TEST  createsubdirs( asname )  THEN
+            $(
+                filestream  :=  findoutput( asname )
+
+                IF  filestream = 0  THEN
+                $(
+                    writef( "****** Cannot open *"%S*":  ", asname )
+                    fault( result2 )
+
+                    endstream( tapestream )
+                    tapestream  :=  0
+                $)
+            $)
+            ELSE
+            $(
+                endstream( tapestream )
+
+                tapestream  :=  0
+            $)
+        $)
+
+        UNLESS  filestream = 0  DO
+        $(
+            LET bytes      =  entry!f.bytes
+            LET kilobytes  =  entry!f.kilobytes
+
+            writef( "%S    ", asname )
+
+            FOR  i = asname % 0  TO  40  DO  wrch( '*S' )
+
+            wrch( '*E' )
+
+            selectinput( tapestream )
+            selectoutput( filestream )
+
+            UNLESS  kilobytes = 0  &  bytes = 0  DO
+
+            //  i.e. unless we have a file on tape with no records in it...
+
+            $(  //  Loop to read the file from tape, and write it to
+                //  disc.  We read in Words, but write in Bytes, so we can get
+                //  the file size correct.
+
+                LET length  =  ABS( readwords( buffer, buffersize ) )
+
+                IF  length = 0  THEN  BREAK
+
+                writewords( buffer, length )
+            $)
+            REPEAT
+
+            endread()
+            endwrite()
+
+            filestream  :=  0
+            tapestream  :=  0
+
+            //  Now set the file size and date back to what it was before it
+            //  was archived.
+
+            setheader( asname, kilobytes, bytes,
+                       entry!f.ddays, entry!f.dmins, entry!f.dticks )
+
+            selectinput( withstream )
+            selectoutput( verstream )
+
+            TEST  kilobytes < 10  THEN writef( "%I5  bytes*N", kilobytes*1024 + bytes )
+                                  ELSE writef( "%I5K bytes*N", kilobytes )
+        $)
+    $)
+
+    fvec( tape )
+    fvec( asname )
+$)
+
+
+
+AND setheader( name, sizek, sizeb, dated, datem, datet )  BE
+$(
+//  Set the header of the file to contain the OLD information from before
+//  the last archive.
+//
+//  ********  N.B.  This will only work for FMFH systems  ********
+
+    LET task   =  devicetask( name )
+    LET lock   =  result2
+    LET sizev  =  VEC 1
+    LET datev  =  VEC 2
+
+    sizev!0  :=  sizek >> 6
+    sizev!1  :=  sizeb  +  ((sizek & #B111111) << 10)
+
+    datev!0  :=  dated
+    datev!1  :=  datem
+    datev!2  :=  datet
+
+    sendpkt( notinuse, task, action.setheader, 0, 0, lock, name, sizev, datev )
+$)
+
+
+
+AND validdiscname( name )  =  VALOF
+$(
+//  Look in the string given to us, and make sure that the characters are
+//  legal.  We should not have more than one ":", and punctuation "." and ":"
+//  should not be next to each other.
+
+    LET colonfound  =  FALSE
+    LET last        =  0
+
+    FOR  i = 1  TO  name % 0  DO
+    $(
+        LET ch  =  name % i
+
+        UNLESS  'A' <= ch <= 'Z'  |
+                'a' <= ch <= 'z'  |
+                '0' <= ch <= '9'  |
+                ch = ':'          |
+                ch = '.'          |
+                ch = '-'          DO  RESULTIS  FALSE
+
+        IF  ch = ':'  THEN
+        $(
+            IF  colonfound  THEN  RESULTIS  FALSE
+
+            colonfound  :=  TRUE
+        $)
+
+        IF  ch = ':'  |  ch = '.'  THEN
+        $(
+            UNLESS  last = 0  DO  IF  last = (i-1)  THEN  RESULTIS  FALSE
+
+            last  :=  i
+        $)
+    $)
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND splitstrings( root, string )  =  VALOF
+$(
+//  Take the string "string", which should be a list of the form:
+//
+//      <name>,<name>,<name>,...
+//
+//  and form an in store data structure to represent it.
+
+    LET workvec  =  gvec( maxchars.name / bytesperword )
+    LET node     =  gvec( list.size )
+    LET pos      =  splitname( workvec, ',', string, 1 )
+    LET list     =  0
+
+    UNTIL  pos = 0  DO
+    $(
+        //  We have an item to be added to the list.  Add an element to the
+        //  list, and continue.
+
+        UNLESS  workvec % 0  =  0  DO
+        $(
+            node!list.link  :=  list
+            node!list.name  :=  joinnames( root, workvec )
+            list            :=  node
+            node            :=  gvec( list.size )
+        $)
+
+        pos  :=  splitname( workvec, ',', string, pos )
+    $)
+
+    //  When we drop out of there, there is still one more substring to get
+    //  (that one at the end of the list).  Add this to the list, and return
+    //  it.
+
+    TEST  workvec % 0  =  0  THEN  fvec( node )
+    ELSE
+    $(
+        node!list.link  :=  list
+        node!list.name  :=  joinnames( root, workvec )
+    $)
+
+    fvec( workvec )
+
+    RESULTIS  node
+$)
+
+
+
+AND relevant( name )  =  VALOF
+$(
+//  Examine the INCLUDE and EXCLUDE lists to decide on whether a name is
+//  relevant.
+
+    TEST  includelist = 0  THEN
+
+          //  We are included, but are we excluded ?
+
+          RESULTIS  NOT isinlist( name, excludelist )
+
+    ELSE
+
+    TEST  excludelist = 0  THEN
+
+          //  We are not excluded, but are we included ?
+
+          RESULTIS  isinlist( name, includelist )
+
+    ELSE  //  He has specified both an INCLUDE and EXCLUDE list.  It is
+          //  possible that the EXCLUDE list is a subset of the INCLUDE
+          //  list, and hence we must check both.
+
+          RESULTIS  isinlist( name, includelist )  &  NOT isinlist( name, excludelist )
+$)
+
+
+
+AND isinlist( name, list )  =  VALOF
+$(
+//  Look in the list to see if the name is in it.
+
+    UNTIL  list = 0  DO
+    $(
+        IF  matchnames( list!list.name, name )  THEN  RESULTIS  TRUE
+
+        list  :=  list!list.link
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND freelist( list )  BE  UNTIL  list = 0  DO
+$(
+    LET next  =  list!list.link
+
+    fvec( list!list.name )
+    fvec( list )
+
+    list  :=  next
+$)
+
+
+
+AND createsubdirs( name )  =  VALOF
+$(
+    LET workvec  =  gvec( maxchars.name / bytesperword )
+    LET dirname  =  0
+    LET pos      =  0
+
+    pos       :=  splitname( workvec, '.', name, 1 )
+    dirname   :=  joinnames( "", "" )
+
+    UNTIL  pos = 0  DO
+    $(
+        LET ndirname  =  joinnames( dirname, workvec )
+        LET obj       =  0
+
+        fvec( dirname )
+
+        dirname  :=  ndirname
+        obj      :=  locateobj( dirname )
+
+        TEST  obj = 0  THEN
+        $(
+            obj  :=  createdir( dirname )
+
+            IF  obj = 0  THEN
+            $(
+                writef( "****** Cannot create Sub-Directory *"%S*":  ",
+                         dirname )
+                fault( result2 )
+
+                fvec( workvec )
+                fvec( dirname )
+
+                RESULTIS  FALSE
+            $)
+        $)
+        ELSE
+        $(
+            //  The object exists, but is it a directory ???
+
+            LET entryinfo  =  VEC size.exinfo
+            LET fhtask     =  obj!lock.task
+            LET ok         =  examine.obj( fhtask, obj, entryinfo )
+            LET r2         =  result2
+            LET type       =  0
+            LET dummy      =  ok  ->  objinfo.ex( objinfo.type, obj, entryinfo, @type ), 0
+
+            UNLESS  ok  &  type = type.dir  DO
+            $(
+                TEST  NOT ok  THEN
+                $(
+                    writef( "****** Cannot examine *"%S*":  ", dirname )
+                    fault( r2 )
+                $)
+                ELSE
+
+                TEST  type = type.file  THEN
+                      writef( "****** Directory *"%S*" already exists as a file*N",
+                               dirname )
+
+                ELSE  writef( "****** Internal error:  *"%S*" has type %N", dirname, type )
+
+                fvec( workvec )
+                fvec( dirname )
+
+                freeobj( obj )
+
+                RESULTIS  FALSE
+            $)
+        $)
+
+        freeobj( obj )
+
+        pos  :=  splitname( workvec, '.', name, pos )
+    $)
+
+    fvec( dirname )
+    fvec( workvec )
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND makenumber( string )  =  VALOF
+$(
+    LET number  =  0
+
+    FOR  i = 1  TO  string % 0  DO
+    $(
+        LET ch  =  string % i
+
+        UNLESS  '0' <= ch <= '9'  DO  RESULTIS  -1
+
+        number  :=  number * 10  +  ch - '0'
+    $)
+
+    RESULTIS  number
+$)
+
+
+AND examinename( directory )  =  VALOF
+$(
+//  Coroutine to handle the examining of a particular directory.
+//  When called, it creates an entry info table for the directory,
+//  and examines the first entry of the directory.  From then on,
+//  it calls the "examine next" operation, until no more entries
+//  exist.
+
+    LET lock       =  locateobj( directory )
+    LET entryinfo  =  VEC size.exinfo
+    LET datetime   =  VEC 3
+    LET size       =  VEC 2
+    LET fhtask     =  0
+    LET exco       =  0
+    LET type       =  0
+
+
+    //  Check to see that the object really does exist...
+
+    IF  lock = 0  THEN  RESULTIS  0
+
+    fhtask  :=  lock!lock.task
+
+
+    //  Get an "examine object" of the first entry in the directory.
+
+    UNLESS  examine.obj( fhtask, lock, entryinfo )  DO
+    $(
+        writef( "****** Cannot examine *"%S*": ", directory )
+        fault( result2 )
+        freeobj( lock )
+
+        RESULTIS  0
+    $)
+
+    objinfo.ex( objinfo.type, lock, entryinfo, @type )
+
+    UNLESS  type = type.dir  DO
+    $(
+        //  If this is a FILE, then we must treat it as a directory,
+        //  and return back its name.  Unfortunately its name is what
+        //  we are calling the directory name, and so the FILE name is null.
+
+        objinfo.ex( objinfo.date, lock, entryinfo, datetime )
+        objinfo.ex( objinfo.size, lock, entryinfo, size )
+
+        filedate  :=  datetime
+        filesize  :=  size
+
+        cowait( "" )
+        freeobj( lock )
+
+        RESULTIS  0
+    $)
+
+
+    //  Ok.  We can now start the main loop of the coroutine, returning
+    //  information about the current directory.
+
+    $(  //  Loop to examine the whole directory...
+
+        UNLESS  examine.nextobj( fhtask, lock, entryinfo )  DO  BREAK
+
+        IF  testflags( #B0001 )  THEN
+        $(
+            broken  :=  TRUE
+
+            BREAK
+        $)
+
+        //  This must be a file for the examine to be meaningful, so
+        //  check this.
+
+        objinfo.ex( objinfo.type, lock, entryinfo, @type )
+
+        UNLESS  type = type.file  DO
+        $(
+            //  This is a sub-directory, which we must also archive.
+
+            LET name  =  entryinfo+exinfo.name
+            LET buff  =  0
+            LET file  =  0
+
+            exco  :=  createco( examinename, exco.stacksize )
+
+            IF  exco = 0  THEN
+            $(
+                writes( "****** Cannot create EXAMINE coroutine*N" )
+                LOOP
+            $)
+
+            buff  :=  joinnames( directory, name )
+
+            //  Make sure that this directory is in fact relevant, because
+            //  if it isn't, then there's no point in examining it.
+
+            IF  relevant( buff )  THEN
+            $(
+                file  :=  callco( exco, buff )
+
+                UNTIL  file = 0  DO
+                $(
+                    LET fullname  =  joinnames( name, file )
+
+                    cowait( fullname )
+                    fvec( fullname )
+
+                    file  :=  callco( exco )
+                $)
+            $)
+
+            deleteco( exco )
+            fvec( buff )
+
+            LOOP
+        $)
+
+        //  Otherwise, this is a perfectly good file, and so we should
+        //  have a go at archiving it.
+
+        objinfo.ex( objinfo.date, lock, entryinfo, datetime )
+        objinfo.ex( objinfo.size, lock, entryinfo, size )
+
+        filedate  :=  datetime
+        filesize  :=  size
+
+        cowait( entryinfo+exinfo.name )
+    $)
+    REPEATUNTIL  broken
+
+    freeobj( lock )
+
+    RESULTIS  0
+$)
+
+
+
+AND examine.obj( fhtask, lock, entryinfo )  =
+    sendpkt( notinuse, fhtask, action.examineobject, ?, ?, lock, entryinfo )
+
+
+
+AND examine.nextobj( fhtask, lock, entryinfo )  =  VALOF
+$(
+    LET ok  =  sendpkt( notinuse, fhtask, action.examinenext, ?, ?, lock, entryinfo, TRUE )
+
+    UNLESS  ok  DO
+    $(
+        IF  result2 = error.nomoreentries  THEN  RESULTIS  FALSE
+
+        //  Otherwise, print out a message, and try again.
+
+        writef( "****** Error in entry *"%S*":  ", entryinfo+exinfo.name )
+        fault( result2 )
+
+        LOOP
+    $)
+
+    RESULTIS  ok
+$)
+REPEAT
+
+
+
+AND readcommand()  =  VALOF
+$(
+//  Read a string stopping when we hit a character which is not alphabetic.
+
+    LET buffer  =  VEC 256 / bytesperword
+    LET length  =  0
+    LET string  =  0
+    LET ch      =  rdch()
+
+    WHILE  ('A' <= ch <= 'Z')  |  ('a' <= ch <= 'z')  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  ch
+        ch               :=  rdch()
+    $)
+
+    unrdch()
+
+    string      :=  gvec( length / bytesperword )
+    string % 0  :=  length
+
+    FOR  i = 1  TO  length  DO  string % i  :=  buffer % i
+
+    RESULTIS  string
+$)
+
+
+
+AND read.number( terminator )  =  VALOF
+$(
+    LET number  =  0
+    LET ch      =  rdch()
+
+    WHILE  '0' <= ch <= '9'  DO
+    $(
+        number  :=  number * 10  +  ch  -  '0'
+        ch      :=  rdch()
+    $)
+
+    UNLESS  ch = terminator  DO
+        error( "Unexpected *"%C*" after number %N", ch, number )
+
+    RESULTIS  number
+$)
+
+
+
+AND read.string( terminator )  =  VALOF
+$(
+//  Read the string, whose first character is in "ch", until we
+//  hit a the character "terminator", or endstreamch is found first.
+
+    LET buffer  =  VEC 256 / bytesperword
+    LET length  =  0
+    LET string  =  0
+    LET ch      =  rdch()
+
+    UNTIL  ch = terminator  |  ch = endstreamch  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  ch
+        ch               :=  rdch()
+    $)
+
+    IF  ch = endstreamch  THEN  error( "Unexpected END-OF-FILE" )
+
+    string      :=  getspace( length / bytesperword )
+    string % 0  :=  length
+
+    FOR  i = 1  TO  length  DO  string % i  :=  buffer % i
+
+    RESULTIS  string
+$)
+
+
+
+AND checkvalid( string )  =  VALOF
+$(
+//  Return TRUE if the string is a valid TLS name.  The only criterion for
+//  this is that the characters "*N" and "/" must not be present.
+
+    FOR  i = 1  TO  string % 0  DO
+        IF  (string % i  =  '*N')  |  (string % i  =  '/')  THEN
+            RESULTIS  FALSE
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND addentry( seq, date, name, kilobytes, bytes, comments )  BE
+$(
+//  Add the file given by the arguments to the in-store directory list.
+//  This involves looking backwards through the list, and invalidating the
+//  files which are of the same name, by incrementing their version number.
+
+    LET node        =  getspace( f.size )
+    LET newname     =  stringcopy( name )
+    LET newcomment  =  stringcopy( comments )
+    LET previous    =  fileliste
+
+    node!f.flink      :=  0
+    node!f.blink      :=  previous
+    node!f.seq        :=  seq
+    node!f.ddays      :=  date!0
+    node!f.dmins      :=  date!1
+    node!f.dticks     :=  date!2
+    node!f.tdays      :=  tapedate!0
+    node!f.tmins      :=  tapedate!1
+    node!f.tticks     :=  tapedate!2
+    node!f.name       :=  newname
+    node!f.kilobytes  :=  kilobytes
+    node!f.bytes      :=  bytes
+    node!f.version    :=  0
+    node!f.comments   :=  newcomment
+
+    UNTIL  previous = 0  DO
+    $(
+        IF  compstring( name, previous!f.name ) = 0  THEN
+        $(
+            //  This is an old version  -  increment its number.
+
+            LET nversion  =  previous!f.version + 1
+
+            previous!f.version  :=  nversion
+        $)
+
+        previous  :=  previous!f.blink
+    $)
+
+    TEST  filelist = 0  THEN  filelist           :=  node
+                        ELSE  fileliste!f.flink  :=  node
+
+    fileliste  :=  node
+$)
+
+
+AND constructname( string, seq )  =  VALOF
+$(
+//  Construct a file name out of the strings "MT:", <string>, and the number
+//  <seq>.
+
+    LET root     =  tapedevice
+    LET rootl    =  root % 0
+    LET stringl  =  string % 0
+    LET ndigits  =  numberofdigits( seq )
+    LET name     =  gvec( (rootl + stringl + ndigits + 1) / bytesperword )
+    LET length   =  0
+
+    FOR  i = 1  TO  rootl  DO
+    $(
+        length         :=  length + 1
+        name % length  :=  root % i
+    $)
+
+    FOR  i = 1  TO  stringl  DO
+    $(
+        length         :=  length + 1
+        name % length  :=  string % i
+    $)
+
+    length         :=  length + 1
+    name % length  :=  (mt.is.disc) -> '-', '/'
+
+    fillinnumber( name, length+1, seq, ndigits )
+
+    name % 0  :=  length + ndigits
+
+    RESULTIS  name
+$)
+
+
+
+AND stringcopy( string )  =  VALOF
+$(
+//  Make a copy of a string from Static memory to Heap memory.
+
+    LET length  =  string % 0
+    LET copy    =  getspace( length / bytesperword )
+
+    FOR  i = 0  TO  length  DO  copy % i  :=  string % i
+
+    RESULTIS  copy
+$)
+
+
+
+AND joinnames( name1, name2 )  =  VALOF
+$(
+//  Join the two halves of a filename together to make one.  A dot is the
+//  separator, unless:
+//
+//        a)  name1 is a device name of the form  DEV:
+//        b)  name1 or name2 are the null string.
+
+    LET lname1  =  name1 % 0
+    LET lname2  =  name2 % 0
+    LET nodot   =  (name1 % 0) = 0  |  (name2 % 0) = 0  |  (name1 % lname1) = ':'
+
+    LET buffer  =  gvec( (lname1 + lname2 + 1) / bytesperword )
+    LET length  =  0
+
+    FOR  i = 1  TO  lname1  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  name1 % i
+    $)
+
+    UNLESS  nodot  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  '.'
+    $)
+
+    FOR  i = 1  TO  lname2  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  name2 % i
+    $)
+
+    buffer % 0  :=  length
+
+    RESULTIS  buffer
+$)
+
+
+
+AND numberofdigits( n )  =  n < 10  ->  1,  numberofdigits( n/10 ) + 1
+
+
+
+AND fillinnumber( string, offset, number, width )  BE  UNLESS  width = 0  DO
+$(
+    fillinnumber( string, offset, number/10, width-1 )
+
+    string % (offset + width - 1)  :=  number REM 10  +  '0'
+$)
+
+
+
+AND error( message, arg1, arg2, arg3 )  BE
+$(
+    LET r2  =  result2
+
+    selectoutput( verstream = 0  ->  sysout, verstream )
+
+    writes( "*N****** TLS error:  " )
+    writef( message, arg1, arg2, arg3 )
+    writes( "*N****** TLS abandoned.*N" )
+
+    UNLESS  dictstream = 0  DO  endstream( dictstream )
+    UNLESS  withstream = 0  DO  endstream( withstream )
+    UNLESS  workstream = 0  DO  endstream( workstream )
+    UNLESS  tapestream = 0  DO  endstream( tapestream )
+    UNLESS  filestream = 0  DO  endstream( filestream )
+
+    UNLESS  workfile = 0  DO  deleteobj( workfile )
+
+    UNLESS  verstream = sysout  |  verstream = 0  DO  endstream( verstream )
+
+    fvectors()
+
+    result2  :=  r2
+
+    stop( 20 )
+$)
+
+
+
+AND gvec( vecsize )  =  VALOF
+$(
+//  Add a new vector to the list of those "got" already.
+
+    LET node   =  getvec( 2 )
+    LET space  =  getvec( vecsize )
+
+    TEST  node = 0  |  space = 0  THEN
+    $(
+        //  Cannot get either the main space, or the node space.
+        //  Free whichever one was successful, and flag an error.
+
+        UNLESS  node   = 0  DO  freevec( node )
+        UNLESS  space  = 0  DO  freevec( space )
+
+        error( "Cannot get vector of size %U5", vecsize )
+    $)
+    ELSE
+    $(
+        //  We have got the vector successfully, so add it to the
+        //  chain of allocated vectors.
+
+        node!0  :=  veclist
+        node!1  :=  space
+        veclist :=  node
+
+        RESULTIS  space
+    $)
+$)
+
+
+
+AND fvec( vector )  BE
+$(
+//  Free the vector pointed to by "vector".  Look in the allocated space chain
+//  to find this vector, and when found, de-allocate the space.
+
+    LET node  =  veclist
+    LET ptr   =  @veclist
+
+    UNTIL  node = 0  DO
+    $(
+        IF  node!1 = vector  THEN
+        $(
+            //  We have found the vector to deallocate.  Remove this node from
+            //  the list, and deallocate the space involved.
+
+            !ptr   :=  node!0
+
+             freevec( vector )
+             freevec( node )
+
+             RETURN
+        $)
+
+        ptr   :=  node
+        node  :=  node!0
+    $)
+
+    error( "Cannot free vector %N", vector )
+$)
+
+
+
+AND fvectors()  BE
+$(
+//  Free all the vectors pointed to by the list "veclist"
+
+    UNTIL veclist = 0  DO
+    $(
+        LET nlist  =  veclist!0
+        LET space  =  veclist!1
+
+        freevec( space )
+        freevec( veclist  )
+
+        veclist  :=  nlist
+    $)
+$)
+
+
+
+AND getspace( n )  =  VALOF
+$(
+//  Get a chunk of space, of size "n", which will not be freed.  This is taken
+//  from internally allocated "workspace".
+
+    IF  n > workbuffersize  THEN
+        error( "Internal error:  GETSPACE( %N )", n )
+
+    workspaceptr  :=  workspaceptr - n - 1
+
+    IF  workspaceptr < workspace  THEN
+    $(
+        workspace     :=  gvec( workbuffersize )
+        workspaceptr  :=  workspace + workbuffersize - n - 1
+    $)
+
+    RESULTIS  workspaceptr
+$)
+
+

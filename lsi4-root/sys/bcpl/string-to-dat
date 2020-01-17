@@ -1,0 +1,118 @@
+|| (C) Copyright 1979 Tripos Research Group
+||     University of Cambridge
+||     Computer Laboratory
+
+|| Purpose:
+|| Converts a string to a datstamp (date-and-time stamp) representation
+||
+|| Authors:
+|| Brian Knight         1978 October
+|| Paul Bond            1979 April
+
+SECTION "string-to-dat"
+
+GET "libhdr"
+
+LET start(stamp, string) = VALOF
+|| Args:
+|| string       a date determining string
+||
+|| Results:
+|| stamp        datstamp corresponding to 'string'
+||
+|| Resultis:
+|| NOT 0        legal date
+|| 0            illegal date
+||
+|| Accepted formats for date:
+||      DD-MMM-YY
+||      Yesterday | Today | Tomorrow
+||      Sunday | Monday | Tuesday | Wednesday |
+||              Thursday | Friday | Saturday
+$(
+   LET day.total = 0
+   LET arg = ?
+   LET days, month, year = ?, ?, ?
+   LET day.table = ?
+   LET errv = VEC 1
+   LET today.stamp = VEC 2
+   LET month.string = VEC 3/bytesperword
+   LET leap.table = TABLE 31,29,31,30,31,30,31,31,30,31,30,31
+   LET norm.table = TABLE 31,28,31,30,31,30,31,31,30,31,30,31
+
+   result2 := 0
+   errv!0, errv!1 := level(), fail
+        || used to longjump from called routine in case of error
+
+   IF string = 0 THEN RESULTIS NOT 0
+
+   datstamp(today.stamp)
+        || today.stamp == 'todays date'
+
+   arg := findarg("Tomorrow,Today,Yesterday", string)
+   IF arg >= 0 THEN
+   $( IF today.stamp!0 = 0 THEN error(errv)
+      stamp!0 := today.stamp!0 + 1 - arg
+      RESULTIS NOT 0
+   $)
+
+   arg := findarg("Sunday,Monday,Tuesday,Wednesday,*
+                  *Thursday,Friday,Saturday", string)
+   IF arg >= 0 THEN
+   $( IF today.stamp!0 = 0 THEN error(errv)
+      stamp!0 := today.stamp!0 - 7 +
+                 (arg - [today.stamp!0 REM 7] + 7) REM 7
+      result2 := 1
+        || day name encountered
+      RESULTIS NOT 0
+   $)
+
+   UNLESS string%0 = 9 THEN error(errv)
+        || wrong length
+
+   year := digit(errv, string%8)*10 + digit(errv, string%9)
+        || year = 'YY'
+   year := year + ([year < 78] -> 2000, 1900)
+        || year = 'NOT 0 year'
+
+   day.table:= (year REM 4)=0 -> leap.table, norm.table
+
+   FOR y = 1978 TO year-1
+      DO day.total := day.total + ([y REM 4]=0 -> 366, 365)
+        || day.total = 'days since 1978 in all previous years'
+
+   month.string%0 := 3
+   FOR j=1 TO 3 DO month.string%j := string%[j+3]
+        || month.string == 'MMM'
+   month := findarg("Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec",
+                     month.string)
+   IF month < 0 THEN error(errv)
+        || month not recognised
+
+   FOR j=0 TO month-1
+      DO day.total := day.total + day.table!j
+        || day.table += 'days in all preceding months of this year'
+
+   days := digit(errv, string%1)*10 + digit(errv, string%2)
+        || days = 'DD'
+   UNLESS 1 <= days <= day.table!month THEN error(errv)
+
+   stamp!0 := day.total + days - 1
+        || set date entry in stamp
+   IF stamp!0 < 0 THEN error(errv)
+   RESULTIS NOT 0
+
+fail:
+   result2 := 0
+   RESULTIS 0
+$)
+
+AND digit(errv, ch) = VALOF
+$(
+   UNLESS '0' <= ch <= '9' THEN error(errv)
+   RESULTIS ch - '0'
+$)
+
+AND error(errv) BE longjump(errv!0, errv!1)
+
+

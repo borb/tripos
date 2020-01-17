@@ -1,0 +1,126 @@
+LET ms.analyse (full) BE
+$(
+    // Print out structure of mail system database
+    LET file            = VEC file.desc.size
+    LET index           = VEC file.desc.size
+    LET md              = VEC file.desc.size
+    LET md.cache        = VEC 600/rwpw
+    LET um.cache.address= um!cache.address
+    LET um.number       = -1
+    LET um.hash         = 0
+    LET chain.um        = 0
+    LET chain.md        = ?
+    LET md.number       = ?
+
+    read.cache(um, 0)
+
+    writes("*n*nMAIL SYSTEM DATABASE ANALYSIS *N*
+               *============================= *n*N")
+
+    ms.fs.fail.level    := level()
+    ms.fs.fail.link     := ms.analyse.fail
+
+ms.analyse.loop:
+    $(
+        LET next.chain.um       = ?
+        LET um.offset.dibyte    = ?
+        // Loop for each element in MML
+
+        // If the end of the current hash chain has been reached, find the next
+        // one with anything on it.
+        IF chain.um = 0
+        $(  $(  um.hash := um.hash+1
+                IF um.hash = 128 THEN BREAK
+            $) REPEATUNTIL (um.cache.address %% um.hash) ~= 0
+
+            IF um.hash=128 THEN BREAK
+            chain.um := um.cache.address %% um.hash
+            writef("HASH CHAIN #%X4 giving %X4*N", um.hash, chain.um)
+        $)
+        next.chain.um := um.cache.address %% (chain.um + um.chain)
+        um.number := (chain.um - User.um.Base)/um.element.size
+
+        um.offset.dibyte := address.offset(um, chain.um, um.element.size)
+        writes("User=")
+        write..uid(um.cache.address, um.offset.dibyte + um.user.puid)
+        $(  LET name = VEC 20
+            convert..puid.to.name(um.cache.address,
+                                  um.offset.dibyte+um.user.puid, name)
+            WRITEF("=%T8", name, name)
+        $)
+        writes(" MD=")
+        write..uid(um.cache.address, um.offset.dibyte + um.md.puid)
+
+        copy.uid  (um.cache.address, um.offset.dibyte + um.md.puid, md+uid,0)
+
+        retrieve.entry(master.index,(um.number*master.index.slot.size)+
+                                                master.index.user.index,index)
+        retrieve.entry(master.index,(um.number*master.index.slot.size)+
+                                                master.index.md,file)
+
+        TEST compare.uid(file+uid, 0, md+uid, 0)
+        $(  NEWLINE()
+            md.number := -1
+            md!cache.size := 600
+            md!cache.address := md.cache
+            chain.md := 0
+
+            $(
+                // Loop for each element in a message info file
+                read.cache(md, chain.md)
+                chain.md := md.cache %% md.chain
+                UNLESS (chain.md & #X8000)=0 THEN chain.md := chain.md | #XFFFF0000
+                IF chain.md<0 THEN BREAK
+
+                md.number := md.number +1
+
+                writef("  @%X4 Mess ID ", md!start.of.block)
+                write..uid(md.cache, md.umid)
+                writes(" Text   file ")
+                write..uid(md.cache, md.message.puid)
+                IF md.sizebytes.version <= md.cache %% md.version <= md.max.version
+                THEN WRITEF(" %I5 bytes", md.cache %% md.message.bytes)
+
+
+                writef("*N        Flags %X4", md.cache %% md.flags)
+                writef(" Ver %I4/%I2,  ",
+                                md.cache %% md.version, md.current.version)
+                writes(" Header file ")
+                write..uid(md.cache, md.header.puid)
+                IF md.sizebytes.version <= md.cache %% md.version <= md.max.version
+                THEN WRITEF(" %I5 bytes ", md.cache %% md.header.bytes)
+
+                retrieve.entry(index,md.number*2,file)
+
+                TEST compare.uid(file+uid, 0, md.cache, md.message.puid)
+                THEN newline()
+                ELSE
+                $(  writes("U/S*N ----------- DF=")
+                    write..uid(file + uid, 0)
+                    writes("  DH=")
+                    retrieve.entry(index,md.number*2+1,file)
+                    write..uid(file + uid, 0)
+                    newline()
+                $)
+            $) REPEAT        // End of message loop
+        $)             // End of conditional "IF b ..."
+        ELSE
+        $(  writes("U/S*N ----------- IMD=")
+            write..uid(file + uid, 0)
+        $)
+        newline()
+        chain.um := next.chain.um
+    $) REPEAT     // End of user loop
+
+    GOTO ms.analyse.end
+
+ms.analyse.fail:
+    writes("*N FAILED - ")
+    fs.explain(fs.rc)
+    GOTO ms.analyse.loop
+
+ms.analyse.end:
+    writes("END OF ANALYSIS*N*N")
+$)
+
+

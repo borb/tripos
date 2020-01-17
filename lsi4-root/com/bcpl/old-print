@@ -1,0 +1,2849 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+                #######   #######   ########  ##    ##  ########
+                ########  ########  ########  ###   ##  ########
+                ##    ##  ##    ##     ##     ####  ##     ##
+                #######   ########     ##     ## ## ##     ##
+                ##        #######      ##     ##  ####     ##
+                ##        ##  ##       ##     ##  ####     ##
+                ##        ##   ##   ########  ##   ###     ##
+                ##        ##    ##  ########  ##    ##     ##
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   PB    -   03/07/86             *
+\*****************************************************************************/
+
+
+SECTION "PRINT"
+
+
+            GET "LIBHDR"
+$<TRIPOS    GET "CLIHDR"       $>TRIPOS
+$<CAP1      GET "TRIPOSHDR"    $>CAP1
+
+
+GLOBAL
+$(
+    aborted               :  ug + 0
+    blib.rdch             :  ug + 1
+    blib.unrdch           :  ug + 2
+    columnpermember       :  ug + 3
+    commandname           :  ug + 4
+    d.balfour             :  ug + 5
+    d.canon               :  ug + 6
+    d.default             :  ug + 7
+    d.mond                :  ug + 8
+    d.oms                 :  ug + 9
+    d.pad                 :  ug + 10
+    d.titan               :  ug + 11
+    d.vdu                 :  ug + 12
+    datestring            :  ug + 13
+    debugging             :  ug + 14
+    endoffile             :  ug + 15
+    filename              :  ug + 16
+    inputco               :  ug + 17
+    linebuffer            :  ug + 18
+    linelength            :  ug + 19
+    linenumber            :  ug + 20
+    lineoffset            :  ug + 21
+    linequeue             :  ug + 22
+    linespercolumn        :  ug + 23
+    listcommand           :  ug + 24
+    maxcolumns            :  ug + 25
+    maxtotalwords         :  ug + 26
+    mincolumns            :  ug + 27
+    naming                :  ug + 28
+    numbering             :  ug + 29
+    opentitle             :  ug + 30
+    outputco              :  ug + 31
+    outputfile            :  ug + 32
+    page.waiting          :  ug + 33
+    pagefactor            :  ug + 34
+    pagelength            :  ug + 35
+    pagename              :  ug + 36
+    pagenumber            :  ug + 37
+    pagepermember         :  ug + 38
+    pagepointer           :  ug + 39
+    paging                :  ug + 40
+    printertype           :  ug + 41
+    returncode            :  ug + 42
+    scbqueue              :  ug + 43
+    separation            :  ug + 44
+    spooling              :  ug + 45
+    spreading             :  ug + 46
+    stringbuff            :  ug + 47
+    stringbuffb           :  ug + 48
+    stringbuffe           :  ug + 49
+    sysin                 :  ug + 50
+    sysout                :  ug + 51
+    timestring            :  ug + 52
+    title                 :  ug + 53
+    titling               :  ug + 54
+    totalwords            :  ug + 55
+    truncating            :  ug + 56
+    underlining           :  ug + 57
+    waitstring            :  ug + 58
+    address.suffix        :  ug + 59
+$)
+
+
+
+MANIFEST
+$(
+    le.link               =  0
+    le.overprint          =  1
+    le.linenumber         =  2
+    le.offset             =  3
+    le.chars              =  4
+    le.size               =  4
+
+    fl.link               =  0
+    fl.name               =  1
+    fl.scb                =  2
+    fl.size               =  3
+
+    columnspacing         =  2
+    numberwidth           =  7
+    titledepth            =  2
+
+    minlinelength         =  20
+    maxlinelength         =  255
+    minpagelength         =  20
+    maxpagelength         =  255
+    mincolumnwidth        =  minlinelength
+
+    linebufferlength      =  maxlinelength
+
+    NIL                   =  -1
+    print.toolong         =  -2
+    print.newpage         =  -3
+    print.end             =  -4
+
+    a.file                =  0
+    a.files               =  1
+    a.to                  =  2
+    a.opt                 =  3
+
+    p.default             =  0
+    p.titan               =  1
+    p.mond                =  2
+    p.canon               =  3
+    p.ccanon              =  4
+    p.pad                 =  5
+    p.vdu                 =  6
+    p.balfour             =  7
+    p.cbalfour            =  8
+    p.lbalfour            =  9
+    p.lcbalfour           = 10
+    p.oms                 = 11
+
+    co.stacksize          =  500
+
+    error.nospace         =  103        //  Error.getvecfailure in MANHDR
+$)
+
+
+
+LET start()  BE
+$(
+//  General purpose multi column print program.  Options to the
+//  program are:
+//
+//      C=n         Set number of columns
+//      MC=n        Set maximum number of columns
+//      S=n         Set separation of columns to "n"
+//      SPREAD      Spread the columns if room
+//      NOSPREAD    Do not spread the columns
+//      TITLE=t     Set page title
+//      NOTITLE     No page titles
+//      U           Underline page titles
+//      NOU         Don't underline page titles
+//      L=n         Set page length
+//      W=n         Set page width
+//      LN          Print line numbers
+//      NOLN        Don't print line numbers
+//      LO=n        Set line offset
+//      PN          Print page numbers
+//      NOPN        Don't print page numbers
+//      PW=s        Page wait with string "s"
+//      NOPW        Don't page wait
+//      PM          New page per output member
+//      CM          New column per output member
+//      N           Print file names
+//      NN          Do not print file names
+//      TR          Truncate overlong lines
+//      NOTR        Wrap overlong lines
+//      PF[=]n      Set page factor to "n"
+//      TITAN       Send output to Titan room printer
+//      MOND        Send output to Mond room printer
+//      BALFOUR     Send output to                   Balfour rooms LaserWriter
+//      CBALFOUR    Send output to compact           Balfour rooms LaserWriter
+//      LBALFOUR    Send output to         landscape Balfour rooms LaserWriter
+//      CLBALFOUR   Send output to compact landscape Balfour rooms LaserWriter
+//      CANON       Send output to Canon printer
+//      CCANON      Send output to compact Canon printer
+//      OMS         Send output to (Old Music School)Balfour Rooms line printer
+//      PAD         Send output to CS Padprint service
+//      VDU         Send output to VDU
+//      SPOOL       Use the ring SPOOL server
+
+    LET args       =  "FILE,FILES/K,TO/K,OPT/K"
+    LET argv       =  VEC 50
+    LET datv       =  VEC 15
+    LET file       =  0
+    LET options    =  0
+    LET files      =  0
+    LET tofile     =  0
+    LET instream   =  0
+    LET outstream  =  0
+
+    sysout         :=  output()
+    totalwords     :=  0
+    maxtotalwords  :=  0
+    returncode     :=  0
+
+    //  Before anything, decide on whether we are the "PRINT" or "LIST"
+    //  program.  This is done by looking at what the command we were
+    //  loaded with is (yuck).
+
+$<CAP1      stringinput( command.line )       $>CAP1
+$<TRIPOS    stringinput( cli.commandname )    $>TRIPOS
+
+    listcommand  :=  islist()
+    commandname  :=  listcommand  ->  "LIST", "PRINT"
+
+    endstringinput()
+
+
+$<CAP1
+    $(  //  On CAP, we have to get the command line in a dubious way.  The global
+        //  "command.line" points to a string representing the command line,
+        //  including the command itself.  Skip past the command name, and call
+        //  TRIPOS rdargs on it.
+
+        LET ch  =  0
+        LET ok  =  0
+
+        stringinput( command.line )
+
+        ch  :=  rdch()  REPEATUNTIL  isterminator( ch )
+
+        unrdch()
+
+        ok  :=  rdargs( args, argv, 50 )
+        
+        endstringinput()
+
+        UNLESS  ok  DO
+        $(
+            errormessage( "Bad arguments for string *"%S*"", args )
+
+            stop( returncode )
+        $)
+    $)
+$>CAP1
+
+
+$<TRIPOS
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        errormessage( "Bad arguments for string *"%S*"", args )
+
+        stop( returncode )
+    $)
+$>TRIPOS
+
+
+    file         :=  argv!a.file
+    files        :=  argv!a.files
+    tofile       :=  argv!a.to
+    options      :=  argv!a.opt
+
+    UNLESS  file = 0  |  files = 0  DO
+    $(
+        errormessage( "Only one of *"FILE/FILES*" should be quoted  -  *"FILES*" ignored" )
+
+        files  :=  0
+    $)
+
+    //  Set up default options.
+
+    mincolumns       :=  1
+    maxcolumns       :=  8
+    lineoffset       :=  0
+    pagefactor       :=  1
+    separation       :=  columnspacing
+    numbering        :=  listcommand
+    titling          :=  listcommand
+    naming           :=  file = 0
+    underlining      :=  FALSE
+    paging           :=  FALSE
+    pagepermember    :=  FALSE
+    columnpermember  :=  FALSE
+    truncating       :=  FALSE
+    spooling         :=  FALSE
+    debugging        :=  FALSE
+    spreading        :=  TRUE
+    title            :=  NIL
+    waitstring       :=  NIL
+    outputfile       :=  NIL
+    opentitle        :=  NIL
+    page.waiting     :=  "Page waiting ... "
+
+
+    //  Set up characteristics for the default printer, and then decode
+    //  the options as given to us.
+
+    setprinter( p.default )
+
+    UNLESS  options = 0  DO  decodeoptions( options )
+
+
+$<CAP1
+    d.default  :=  "/LP"
+    d.titan    :=  "/LP"
+    d.mond     :=  "/MOND"
+    d.canon    :=  "/CANON"
+    d.vdu      :=  "/M"
+    d.oms      :=  d.default       //  ******  No BALFOUR for CAP   ******
+    d.balfour  :=  d.default       //  ******  No BALFOUR for CAP   ******
+    d.pad      :=  d.default       //  ******  No PADPRINT for CAP  ******
+$>CAP1
+
+
+$<TRIPOS
+    d.default  :=  "LP:"
+    d.titan    :=  "TP:"
+    d.mond     :=  "MP:"
+    d.balfour  :=  "BP:"
+    d.oms      :=  "OP:"
+    d.canon    :=  "CP:"
+    d.pad      :=  "PADPRINT:"
+    d.vdu      :=  "**"                       
+$>TRIPOS
+
+
+    //  If we have been asked to send output to an explicit file, then
+    //  we must override the name of the device.
+
+    TEST  tofile = 0  THEN
+    $(
+        //  No output file, so set the printer up as output.
+        
+        LET name  =  printertype = p.default  ->  d.default,
+                     printertype = p.titan    ->    d.titan,
+                     printertype = p.mond     ->     d.mond,
+                     printertype = p.balfour  ->  d.balfour,
+                     printertype = p.cbalfour ->  d.balfour,
+                     printertype = p.lbalfour ->  d.balfour,
+                     printertype = p.lcbalfour->  d.balfour,
+                     printertype = p.oms      ->      d.oms,
+                     printertype = p.canon    ->    d.canon,
+                     printertype = p.ccanon   ->    d.canon,
+                     printertype = p.pad      ->      d.pad,
+                  /* printertype = p.vdu      -> */   d.vdu
+
+$<TRIPOS
+        //  If we are running on TRIPOS, then we should concatenate the 
+        //  "opentitle" with the output stream name.
+
+        LET filename  =  file  \= 0  ->  file,
+                         files \= 0  ->  files,  NIL
+                         
+        outputfile  :=  printertype = p.vdu  ->  copystring( name ),
+                        printertype = p.pad  ->  joinstrings( name, opentitle ),
+                                                 join3strings( name,
+                                (opentitle=NIL) -> filename, opentitle,
+                                                        address.suffix)
+$>TRIPOS
+
+$<TRIPOS'
+        //  Otherwise, the name of the stream is all that is allowed, so
+        //  make a copy of that instead.
+
+        outputfile  :=  copystring( name )
+$>TRIPOS'
+    $)
+    ELSE  outputfile  :=  copystring( tofile )
+
+    //  Initialise the essential variables for the print run.
+
+    sysin  :=  findinput( d.vdu )
+
+    selectinput( sysin )
+
+$<CAP1
+    datestring      :=  date()
+    timestring      :=  time()
+$>CAP1
+
+$<TRIPOS
+    datstring( datv )
+
+    datestring      :=  datv + 0
+    timestring      :=  datv + 5
+$>TRIPOS
+
+    IF  datestring % 1 = '0'  THEN  datestring % 1  :=  '*S'
+
+    datestring % 3  :=  '*S'
+    datestring % 7  :=  '*S'
+
+    IF  timestring % 1 = '0'  THEN  timestring % 1  :=  '*S'
+
+    timestring % 0  :=  5
+    timestring % 3  :=  '.'
+
+    linequeue       :=  NIL
+    linebuffer      :=  getvector( linebufferlength / bytesperword )
+    pagepointer     :=  NIL
+    pagenumber      :=  0
+    aborted         :=  FALSE
+
+    //  Now create the list of open SCBs which will be printed.  All files
+    //  are opened first before they are used.
+
+    scbqueue  :=  NIL
+
+    TEST  file = 0  THEN
+    $(
+        //  We should have been given a list of files with the "FILES"
+        //  parameter.  If not, then we should prompt the console for
+        //  files to be printed.
+
+        LET in  =  0
+
+        IF  files = 0  THEN  files  :=  d.vdu
+
+        in  :=  findinput( files )
+
+        TEST  in = 0  THEN
+            errormessage( "Cannot open *"FILES*" file *"%S*"", files )
+
+        ELSE
+        $(
+            selectinput( in )
+            openfiles( @scbqueue, (compstring( files, d.vdu ) = 0) )
+            endread()
+
+            selectinput( sysin )
+        $)
+    $)
+    ELSE  openfile( @scbqueue, file )
+
+    //  The files are now open.  If there is nothing to print, then just
+    //  finish now, otherwise open the output stream.
+
+    UNLESS  scbqueue = NIL  |  aborted  DO
+    $(
+        outstream  :=  findoutput( outputfile )
+
+        IF  outstream = 0  THEN
+        $(
+            errormessage( "Cannot open output file *"%S*"", outputfile )
+
+            GOTO  endoffiles
+        $)
+
+        //  The output stream is open, so start sending something down it.
+
+        selectoutput( outstream )
+
+        //  If this is the special canon mode, then print the escape sequence.
+
+        IF  printertype = p.ccanon  THEN  canonescape()
+
+
+$<TRIPOS'
+        //  Under anything other than TRIPOS, there is no point in 
+        //  interleaving input and output, so run the two sequentially.
+
+        printinput()
+$>TRIPOS'
+
+$<TRIPOS
+        //  The output stream and all the input streams are open.  This means
+        //  that we can create the input and output coroutines, and start the
+        //  ball rolling.
+
+        inputco   :=  createco( printinput,  co.stacksize )
+        outputco  :=  createco( printoutput, co.stacksize )
+
+        IF  inputco = 0  |  outputco = 0  THEN  abort( error.nospace )
+
+        print( input(), output() )
+
+        deleteco( inputco )
+        deleteco( outputco )
+$>TRIPOS
+
+        endwrite()
+    $)
+
+
+endoffiles:
+
+    selectinput( sysin )   ;   endread()
+
+    selectoutput( sysout )
+
+    //  Free any SCBs which are on the queue of files yet to be printed.
+
+    UNTIL  scbqueue = NIL  DO
+    $(
+        LET next  =  scbqueue!fl.link
+        LET name  =  scbqueue!fl.name
+        LET scb   =  scbqueue!fl.scb
+
+        freevector( name )
+        freevector( scbqueue )
+
+        selectinput( scb )
+        endread()
+
+        scbqueue  :=  next
+    $)
+
+    //  Free any lines which are queued up for printing
+
+    UNTIL  linequeue = NIL  DO  freeline( dequeueline() )
+
+    UNLESS  title = NIL       DO  freevector( title )
+    UNLESS  opentitle = NIL   DO  freevector( opentitle )
+    UNLESS  waitstring = NIL  DO  freevector( waitstring )
+    UNLESS  outputfile = NIL  DO  freevector( outputfile )
+
+    freevector( linebuffer )
+
+    IF  debugging  THEN  message( "Space allocated:     %N words", totalwords )
+    IF  debugging  THEN  message( "Maximum space used:  %N words", maxtotalwords )
+
+    stop( returncode )
+$)
+
+
+
+AND freeline( line )  BE  UNTIL  line = NIL  DO
+$(
+    LET op  =  line!le.overprint
+    
+    freevector( line )
+    
+    line  :=  op
+$)        
+
+
+
+$<TRIPOS
+AND print( inputstream, outputstream )  BE
+$(
+//  Routine to handle the scheduling of the two coroutines for TRIPOS.
+
+    LET blibpktwait  =  pktwait
+    LET inpkt        =  0
+    LET outpkt       =  0
+    LET in.in        =  0
+    LET in.out       =  0
+    LET out.in       =  0
+    LET out.out      =  0
+
+    pktwait  :=  copktwait
+
+    selectinput( inputstream )
+    selectoutput( outputstream )
+
+    inpkt    :=  callco( inputco )
+
+    in.in    :=  input()
+    in.out   :=  output()
+
+    selectinput( inputstream )
+    selectoutput( outputstream )
+
+    outpkt   :=  callco( outputco )
+
+    out.in   :=  input()
+    out.out  :=  output()
+
+    UNTIL  inpkt = NIL  &  outpkt = NIL  DO
+    $(
+        LET pkt  =  taskwait()
+
+        IF  pkt = inpkt  THEN
+        $(
+            selectinput( in.in )
+            selectoutput( in.out )
+
+            inpkt   :=  callco( inputco, pkt )
+
+            in.in   :=  input()
+            in.out  :=  output()
+
+            LOOP
+        $)
+
+        IF  pkt = outpkt  THEN
+        $(
+            selectinput( out.in )
+            selectoutput( out.out )
+
+            outpkt   :=  callco( outputco, pkt )
+
+            out.in   :=  input()
+            out.out  :=  output()
+
+            LOOP
+        $)
+
+        //  If it wasn't one of those, then HELP!
+
+        abort( 9999 )
+    $)
+
+    pktwait  :=  blibpktwait
+$)
+$>TRIPOS
+
+
+
+AND openfiles( scblist, prompting )  BE
+$(
+//  Take the names of files from the current input stream, and add control
+//  blocks for these file onto the end of "scblist".
+
+    MANIFEST
+    $(
+        a.file  =  0
+    $)
+
+    IF  prompting  THEN
+    $(
+        LET o  =  output()
+
+        selectoutput( sysout )
+        writes( "Enter list of files, terminated by *"/***"*N" )
+        selectoutput( o )
+    $)
+
+
+    $(  //  Repeat loop to read file names from the file, and open them.
+
+        LET args  =  "FILE"
+        LET argv  =  VEC 50
+        LET file  =  0
+        LET ch    =  0
+
+        IF  prompting  THEN
+        $(
+            LET o  =  output()
+
+            selectoutput( sysout )
+            writes( ": *E" )
+            selectoutput( o )
+        $)
+
+        ch  :=  rdch()  ;  unrdch()
+
+        IF  ch = endstreamch  THEN  BREAK
+
+$<TRIPOS
+    IF  testflags( #B0001 )  THEN
+    $(
+        //  Break.  Set the "aborted" flag.
+
+        errormessage( "BREAK." )
+
+        aborted    :=  TRUE
+
+        RETURN
+    $)
+$>TRIPOS
+
+        UNLESS  rdargs( args, argv, 50 )  DO
+        $(
+            errormessage( "Arguments are of the form *"%S*"", args )
+
+            LOOP
+        $)
+
+        file  :=  argv!a.file
+
+        IF  file = 0  THEN  LOOP
+
+        //  Check for the end of list marker:  "/*"
+
+        IF  compstring( file, "/**" ) = 0  THEN  BREAK
+
+        //  Otherwise, open the file.
+
+        openfile( scblist, file )
+    $)
+    REPEAT  //  Until an end of list marker has been found.
+$)
+
+
+
+AND openfile( scblist, name )  BE
+$(
+    LET scb  =  findinput( name )
+
+    TEST  scb = 0  THEN
+          errormessage( "Cannot open *"%S*"", name )
+
+    ELSE
+    $(
+        LET entry  =  getfileentry()
+
+        entry!fl.link  :=  NIL
+        entry!fl.name  :=  copystring( name )
+        entry!fl.scb   :=  scb
+
+        UNTIL  scblist!fl.link = NIL  DO  scblist  :=  scblist!fl.link
+
+        scblist!fl.link  :=  entry
+    $)
+$)
+
+
+
+AND printinput()  =  VALOF
+$(
+    //  Main input coroutine to take files from the scb list, and print
+    //  them.
+
+    LET link  =  scbqueue!fl.link
+    LET name  =  scbqueue!fl.name
+    LET scb   =  scbqueue!fl.scb
+
+    selectinput( scbqueue!fl.scb )
+    
+    freevector( scbqueue )
+
+    filename  :=  name
+    scbqueue  :=  link
+    
+    IF  naming  THEN  generatename( filename )
+
+    printfiles()
+    endinput()
+
+    RESULTIS  NIL
+$)
+
+
+
+AND printfiles()  BE
+$(
+//  Print the list of files.  Check that the options we have been given
+//  make sense, and assuming they do, attempt to print the first file.
+
+    IF  linelength < minlinelength  THEN
+    $(
+        errormessage( "Line length %N too small  -  set to %N", linelength, minlinelength )
+
+        linelength  :=  minlinelength
+    $)
+
+    IF  linelength > maxlinelength  THEN
+    $(
+        errormessage( "Line length %N too large  -  set to %N", linelength, maxlinelength )
+
+        linelength  :=  maxlinelength
+    $)
+
+    IF  (linelength - lineoffset) < mincolumnwidth  THEN
+    $(
+        LET actual  =  linelength - mincolumnwidth
+
+        errormessage( "Line offset %N too large  -  set to %N", lineoffset, actual )
+
+        lineoffset  :=  actual
+    $)
+
+    IF  pagelength < minpagelength  THEN
+    $(
+        errormessage( "Page length %N too small  -  set to %N", pagelength, minpagelength )
+
+        pagelength  :=  minpagelength
+    $)
+
+    IF  pagelength > maxpagelength  THEN
+    $(
+        errormessage( "Page length %N too large  -  set to %N", pagelength, maxpagelength )
+
+        pagelength  :=  maxpagelength
+    $)
+
+    IF  mincolumns = 0  |  maxcolumns = 0  THEN
+    $(
+        errormessage( "Illegal number of columns  -  set to *"C=1*"" )
+
+        mincolumns  :=  1
+        maxcolumns  :=  1
+    $)
+
+    IF  (linelength / mincolumns) < mincolumnwidth  THEN
+    $(
+        LET actual  =  linelength / mincolumnwidth
+
+        errormessage( "Too many columns: %N  -  set to %N", mincolumns, actual )
+
+        mincolumns  :=  actual
+    $)
+
+    //  Assuming all is ok, then we can carry on with the printing.
+
+    linespercolumn  :=  pagelength
+
+    IF  titling  THEN  linespercolumn  :=  linespercolumn - titledepth
+
+    //  Now do the printing.  Reset the flags for the beginning of file,
+    //  and then start printing the pages.  We return when all is finished.
+    
+    endoffile   :=  FALSE
+    linenumber  :=  0
+    
+    printpages()
+
+    //  If we hit premature end of file, then it is possible that there are
+    //  buffered lines waiting to be freed.
+
+    UNTIL  linequeue = NIL  DO  freeline( dequeueline() )
+$)
+
+
+
+AND canonescape()  BE  writef( "*P%C", #X11 )
+
+
+
+AND setprinter( type )  BE
+$(
+//  Set the defaults for the printer given.
+
+    LET name  =  0
+
+    address.suffix := NIL
+
+    SWITCHON  type  INTO
+    $(
+        CASE p.default  :  
+        CASE p.titan    :  linelength  :=  132
+                           pagelength  :=  60
+                           ENDCASE
+
+
+        CASE p.mond     :  linelength  :=  136
+                           pagelength  :=  60
+                           ENDCASE
+
+
+        CASE p.balfour  :  linelength  :=  91
+                           pagelength  :=  72
+                           ENDCASE
+
+
+        CASE p.cbalfour :  linelength  := 182 -2
+                           pagelength  := 136 -2
+                           address.suffix := "*Npointsize=5"
+                           ENDCASE
+
+        CASE p.lbalfour :  linelength  := 132
+                           pagelength  := 50
+                           address.suffix := "*Nlandscape"
+                           ENDCASE
+
+        CASE p.lcbalfour : linelength  := 255 // 264
+                           pagelength  := 93
+                           address.suffix := "*Npointsize=5 landscape"
+                           ENDCASE
+
+        CASE p.oms      :  linelength  :=  132
+                           pagelength  :=  60
+                           ENDCASE
+
+
+        CASE p.canon    :  linelength  :=  98
+                           pagelength  :=  98
+                           ENDCASE
+
+
+        CASE p.ccanon   :  linelength  :=  196
+                           pagelength  :=  196
+                           ENDCASE
+
+
+        CASE p.pad      :  linelength  :=  132
+                           pagelength  :=  60
+                           ENDCASE
+
+
+        CASE p.vdu      :  linelength  :=  80
+                           pagelength  :=  22
+
+                           IF  waitstring = NIL  THEN
+                               waitstring  :=  copystring( page.waiting )
+
+                           ENDCASE
+
+
+        DEFAULT         :  errormessage( "Internal error, bad printer type %N", type )
+                           RETURN
+    $)
+
+    printertype  :=  type
+$)
+
+
+
+AND decodeoptions( options )  BE
+$(
+    //  Read the options from the string given.  First, construct a
+    //  dummy input stream from the string.
+
+    stringinput( options )
+
+    $(  //  Repeat loop to read characters from the input stream, and
+        //  check them against valid options.
+
+        LET oplist  =  "C,MC,S,SPREAD,NOSPREAD,TITLE,NOTITLE,U,NOU,L,W,LN,NOLN,*
+                       *LO,PN,NOPN,PW,NOPW,PM,CM,N,NN,TR,NOTR,PF,TITAN,MOND,*
+                       *BALFOUR,CBALFOUR,LBALFOUR,LCBALFOUR,CANON,CCANON,PAD,*
+                       *VDU,SPOOL,DEBUG,OMS"
+
+        LET string  =  readstring()
+
+        IF  string = NIL  THEN  BREAK
+
+        SWITCHON  findarg( oplist, string )   INTO
+        $(
+            CASE  0 :  //  C[=]n     Set number of columns to "n"
+
+                       set.columns()
+                       ENDCASE
+
+
+            CASE  1 :  //  MC[=]n    Set maximum number of columns to "n"
+
+                       set.maxcolumns()
+                       ENDCASE
+
+
+            CASE  2 :  //  S[=]n     Set column separation to "n"
+            
+                       set.separation()
+                       ENDCASE
+                       
+                       
+            CASE  3 :  //  SPREAD    Set column spreading on
+            
+                       set.spreading()
+                       ENDCASE
+
+
+            CASE  4 :  //  NOSPREAD  Set column spreading off
+
+                       set.nospreading()
+                       ENDCASE
+
+
+            CASE  5 :  //  TITLE[=]s Set title string to "s"
+
+                       set.title()
+                       ENDCASE
+
+
+            CASE  6 :  //  NOTITLE   Do not print title
+
+                       set.notitle()
+                       ENDCASE
+
+
+            CASE  7 :  //  U         Underline the title
+
+                       set.underline()
+                       ENDCASE
+
+
+            CASE  8 :  //  NOU       Do not underline the title
+
+                       set.nounderline()
+                       ENDCASE
+
+
+            CASE  9 :  //  L[=]n     Set Page Length to "n"
+
+                       set.pagelength()
+                       ENDCASE
+
+
+            CASE 10 :  //  W[=]n     Set Page Width to "n"
+
+                       set.pagewidth()
+                       ENDCASE
+
+
+            CASE 11 :  //  LN        Print line numbers
+
+                       set.numbering()
+                       ENDCASE
+
+
+            CASE 12 :  //  NOLN      Do not print line numbers
+
+                       set.nonumbering()
+                       ENDCASE
+
+
+            CASE 13 :  //  LO[=]n    Set line offset to "n"
+
+                       set.lineoffset()
+                       ENDCASE
+
+
+            CASE 14 :  //  PN        Print page numbers
+
+                       set.paging()
+                       ENDCASE
+
+
+            CASE 15 :  //  NOPN      Do not print page numbers
+
+                       set.nopaging()
+                       ENDCASE
+
+
+            CASE 16 :  //  PW=s      Set page waiting string to "s"
+
+                       set.pagewait()
+                       ENDCASE
+
+
+            CASE 17 :  //  NOPW      Don't page wait
+
+                       set.nopagewait()
+                       ENDCASE
+
+
+            CASE 18 :  //  PM        New page per output member
+            
+                       set.pagepermember()
+                       ENDCASE
+                       
+                       
+            CASE 19 :  //  CM        New column per output member
+            
+                       set.columnpermember()
+                       ENDCASE
+
+
+            CASE 20 :  //  N         Name individual files
+            
+                       set.naming()
+                       ENDCASE
+
+
+            CASE 21 :  //  NN        Do not name individual files
+            
+                       set.nonaming()
+                       ENDCASE
+
+
+            CASE 22 :  //  TR        Truncate overlong lines
+            
+                       set.truncating()
+                       ENDCASE
+
+
+            CASE 23 :  //  NOTR      Wrap overlong lines
+
+                       set.notruncating()
+                       ENDCASE
+
+
+            CASE 24 :  //  PF[=]n    Set page factor to "n"
+
+                       set.pagefactor()
+                       ENDCASE
+
+
+            CASE 25 :  //  TITAN     Send output to titan printer
+
+                       set.printer( p.titan )
+                       ENDCASE
+
+
+            CASE 26 :  //  MOND      Send output to mond printer
+
+                       set.printer( p.mond )
+                       ENDCASE
+
+
+            CASE 27 :  //  BALFOUR   Send output to balfour room printer
+
+                       set.printer( p.balfour )
+                       ENDCASE
+
+
+            CASE 28 :  //  CBALFOUR   Send output to compact balfour room printer
+
+                       set.printer( p.cbalfour )
+                       ENDCASE
+
+            CASE 29 :  //  LBALFOUR   Send output to landscape balfour room printer
+
+                       set.printer( p.lbalfour )
+                       ENDCASE
+
+            CASE 30 :  //  LCBALFOUR   Send output to landscape compact balfour room printer
+
+                       set.printer( p.lcbalfour )
+                       ENDCASE
+
+
+            CASE 31 :  //  CANON     Send output to canon printer
+
+                       set.printer( p.canon )
+                       ENDCASE
+
+
+            CASE 32 :  //  CCANON    Send output to compact canon printer
+
+                       set.printer( p.ccanon )
+                       ENDCASE
+
+
+            CASE 33 :  //  PAD      Send output to CS Pad Printer
+
+                       set.printer( p.pad )
+                       ENDCASE
+
+
+            CASE 34 :  //  VDU      Send output to vdu printer
+
+                       set.printer( p.vdu )
+                       ENDCASE
+
+
+            CASE 35 :  //  SPOOL    Send output via the spool server
+            
+                       set.spooling()
+                       ENDCASE
+
+
+            CASE 36 :  //  DEBUG    Print debugging information
+
+                       set.debugging()
+                       ENDCASE
+
+
+            CASE 37 :  //  OMS    Send output to OMS line printer
+
+                       set.printer( p.oms )
+                       ENDCASE
+
+            CASE -1 :  //  Unknown command
+
+                       errormessage( "Unknown option:  *"%S*"  -  ignored", string )
+                       skipoption()
+                       ENDCASE
+
+
+            DEFAULT :  //  Internal cock up.
+
+                       errormessage( "Internal cock up, command *"%S*"", string )
+                       skipoption()
+                       ENDCASE
+        $)
+
+        freevector( string )
+    $)
+    REPEAT
+
+    endstringinput()
+$)
+
+
+
+AND readstring()  =  VALOF
+$(
+    LET v       =  getvector( 255 / bytesperword )
+    LET ch      =  uppercase( rdch() )
+    LET length  =  0
+
+    WHILE  isterminator( ch )  DO
+    $(
+        IF  ch = endstreamch  THEN
+        $(
+            freevector( v )
+
+            RESULTIS  NIL
+        $)
+
+        ch  :=  rdch()
+    $)
+
+    WHILE  'A' <= ch <= 'Z'  DO
+    $(
+        length      :=  length + 1
+        v % length  :=  ch
+        ch          :=  uppercase( rdch() )
+    $)
+
+    unrdch()
+
+    v % 0  :=  length
+
+    RESULTIS  v
+$)
+
+
+
+AND uppercase( ch )  =  'a' <= ch <= 'z'  ->  ch - 'a' + 'A',  ch
+
+
+
+AND readnumber()  =  VALOF
+$(
+    LET ch      =  rdch()
+    LET result  =  0
+
+    WHILE  ch = '*S'  DO    ch  :=  rdch()
+    IF     ch = '='   THEN  ch  :=  rdch()
+    WHILE  ch = '*S'  DO    ch  :=  rdch()
+
+    WHILE  '0' <= ch <= '9'  DO
+    $(
+        result  :=  result * 10  +  ch  -  '0'
+        ch      :=  rdch()
+    $)
+
+    RESULTIS  isterminator( ch )  ->  result,  -1
+$)
+
+
+
+AND isterminator( ch )  =  (ch = '*S'  |  ch = ','  |  ch = endstreamch)
+
+
+
+AND set.columns()  BE
+$(
+    LET number  =  readnumber()
+
+    TEST  number = -1  THEN
+        errormessage( "Invalid number after *"C*" option" )
+
+    ELSE
+    $(
+        mincolumns  :=  number
+        maxcolumns  :=  number
+    $)
+$)
+
+
+
+AND set.maxcolumns()  BE
+$(
+    LET number  =  readnumber()
+
+    TEST  number = -1  THEN  errormessage( "Invalid number after *"MC*" option" )
+    ELSE
+    $(
+        mincolumns  :=  1
+        maxcolumns  :=  number
+    $)
+$)
+
+
+
+AND set.separation()  BE
+$(
+    LET number  =  readnumber()
+
+    TEST  number = -1
+        THEN  errormessage( "Invalid number after *"S*" option" )
+        ELSE  separation  :=  number
+$)
+
+
+
+AND set.spreading()  BE
+    IF  checknoargs( "SPREAD" )  THEN
+        spreading  :=  TRUE
+
+
+
+AND set.nospreading()  BE
+    IF  checknoargs( "NOSPREAD" )  THEN
+        spreading  :=  FALSE
+
+
+
+AND set.title()  BE
+$(
+    LET titlevec  =  getvector( 255/bytesperword )
+    LET quoted    =  FALSE
+    LET length    =  0
+    LET ch        =  rdch()
+
+    WHILE  ch = '*S'  DO    ch  :=  rdch()
+    IF     ch = '='   THEN  ch  :=  rdch()
+    WHILE  ch = '*S'  DO    ch  :=  rdch()
+
+    IF  ch = '*''  THEN
+    $(
+        quoted  :=  TRUE
+        ch      :=  rdch()
+    $)
+
+    $(  //  Loop to read the title string from the input stream.  Continue
+        //  reading until the terminator is found (either a real terminator
+        //  or a quote.
+
+        IF  ch = endstreamch  THEN  BREAK
+
+        TEST  quoted  THEN
+            IF  ch = '*''  THEN
+            $(
+                ch  := rdch()
+
+                UNLESS  ch = '*''  DO
+                $(
+                    unrdch()
+                    BREAK
+                $)
+            $)
+
+        ELSE
+            IF  isterminator( ch )  THEN  BREAK
+
+        length             :=  length + 1
+        titlevec % length  :=  ch
+        ch                 :=  rdch()
+    $)
+    REPEAT
+
+    titlevec % 0  :=  length
+
+    UNLESS  title = NIL  DO  freevector( title )
+
+    TEST  length = 0  THEN
+    $(
+        freevector( titlevec )
+        
+        title  :=  NIL
+    $)
+    ELSE  title  :=  titlevec
+
+    titling  :=  TRUE
+$)
+
+
+
+AND set.notitle()  BE
+    IF  checknoargs( "NOTITLE" )  THEN
+        titling  :=  FALSE
+
+
+
+AND set.underline()  BE
+    IF  checknoargs( "U" )  THEN
+    $(
+        underlining  :=  TRUE
+        titling      :=  TRUE
+    $)
+
+
+
+AND set.nounderline()  BE
+    IF  checknoargs( "NOU" )  THEN
+        underlining  :=  FALSE
+
+
+AND set.pagelength()  BE
+$(
+    LET number  =  readnumber()
+
+    TEST  number = -1
+        THEN  errormessage( "Invalid number after *"P*" option" )
+        ELSE  pagelength  :=  number
+$)
+
+
+
+AND set.pagewidth()  BE
+$(
+    LET number  =  readnumber()
+
+    TEST  number = -1
+        THEN  errormessage( "Invalid number after *"W*" option" )
+        ELSE  linelength  :=  number
+$)
+
+
+
+AND set.numbering()  BE
+    IF  checknoargs( "LN" )  THEN
+    $(
+        numbering  :=  TRUE
+        titling    :=  TRUE
+    $)
+
+
+
+AND set.nonumbering()  BE
+    IF  checknoargs( "NOLN" )  THEN
+        numbering  :=  FALSE
+
+
+
+AND set.lineoffset()  BE
+$(
+    LET number  =  readnumber()
+
+    TEST  number = -1
+        THEN  errormessage( "Invalid number after *"LO*" option" )
+        ELSE  lineoffset  :=  number
+$)
+
+
+
+AND set.paging()  BE
+    IF  checknoargs( "PN" )  THEN
+    $(
+        paging   :=  TRUE
+        titling  :=  TRUE
+    $)
+
+
+
+AND set.nopaging()  BE
+    IF  checknoargs( "NOPN" )  THEN
+        paging  :=  FALSE
+
+
+
+AND set.pagewait()  BE
+$(
+    LET waitvec   =  getvector( 255/bytesperword )
+    LET quoted    =  FALSE
+    LET length    =  0
+    LET ch        =  rdch()
+
+    WHILE  ch = '*S'  DO    ch  :=  rdch()
+    IF     ch = '='   THEN  ch  :=  rdch()
+    WHILE  ch = '*S'  DO    ch  :=  rdch()
+
+
+    IF  ch = '*''  THEN
+    $(
+        quoted  :=  TRUE
+        ch      :=  rdch()
+    $)
+
+    $(  //  Loop to read the wait string from the input stream.  Continue
+        //  reading until the terminator is found (either a real terminator
+        //  or a quote.
+
+        IF  ch = endstreamch  THEN  BREAK
+
+        TEST  quoted  THEN
+            IF  ch = '*''  THEN
+            $(
+                ch  := rdch()
+
+                UNLESS  ch = '*''  DO
+                $(
+                    unrdch()
+                    BREAK
+                $)
+            $)
+
+        ELSE
+            IF  isterminator( ch )  THEN  BREAK
+
+        length            :=  length + 1
+        waitvec % length  :=  ch
+        ch                :=  rdch()
+    $)
+    REPEAT
+
+    waitvec % 0  :=  length
+
+    UNLESS  waitstring = NIL  DO  freevector( waitstring )
+
+    TEST  length = 0  THEN
+    $(
+        freevector( waitvec )
+        
+        waitstring  :=  copystring( page.waiting )
+    $)
+    ELSE  waitstring  :=  waitvec
+$)
+
+
+
+AND set.nopagewait()  BE
+    IF  checknoargs( "NOPW" )  THEN
+    $(
+        UNLESS  waitstring = NIL  DO  freevector( waitstring )
+
+        waitstring  :=  NIL
+    $)
+
+
+
+AND set.pagepermember()  BE
+    IF  checknoargs( "PM" )  THEN
+        pagepermember  :=  TRUE
+
+
+
+AND set.columnpermember()  BE
+    IF  checknoargs( "CM" )  THEN
+        columnpermember  :=  TRUE
+
+
+
+AND set.naming()  BE
+    IF  checknoargs( "N" )  THEN
+        naming  :=  TRUE
+
+
+
+AND set.nonaming()  BE
+    IF  checknoargs( "NN" )  THEN
+        naming  :=  FALSE
+
+
+
+AND set.truncating()  BE
+    IF  checknoargs( "TR" )  THEN
+        truncating  :=  TRUE
+
+
+
+AND set.notruncating()  BE
+    IF  checknoargs( "NOTR" )  THEN
+        truncating  :=  FALSE
+
+
+
+AND set.pagefactor()  BE
+$(
+    LET number  =  readnumber()
+
+    TEST  number = -1
+        THEN  errormessage( "Invalid number after *"PF*" option" )
+        ELSE  pagefactor  :=  number
+$)
+
+
+
+AND set.printer( type )  BE
+$(
+//  Set up the required printer.  The optional argument is the name of the
+//  output to be printed.
+
+    LET titlevec  =  getvector( 255/bytesperword )
+    LET quoted    =  FALSE
+    LET length    =  0
+    LET ch        =  rdch()
+
+    WHILE  ch = '*S'  DO    ch  :=  rdch()
+    IF     ch = '='   THEN  ch  :=  rdch()
+    WHILE  ch = '*S'  DO    ch  :=  rdch()
+
+    IF  ch = '*''  THEN
+    $(
+        quoted  :=  TRUE
+        ch      :=  rdch()
+    $)
+
+    $(  //  Loop to read the title string from the input stream.  Continue
+        //  reading until the terminator is found (either a real terminator
+        //  or a quote.
+
+        IF  ch = endstreamch  THEN  BREAK
+
+        TEST  quoted  THEN
+            IF  ch = '*''  THEN
+            $(
+                ch  := rdch()
+
+                UNLESS  ch = '*''  DO
+                $(
+                    unrdch()
+                    BREAK
+                $)
+            $)
+
+        ELSE
+            IF  isterminator( ch )  THEN  BREAK
+
+        length             :=  length + 1
+        titlevec % length  :=  ch
+        ch                 :=  rdch()
+    $)
+    REPEAT
+
+    titlevec % 0  :=  length
+
+    TEST  length = 0  THEN  freevector( titlevec )
+    ELSE
+    $(
+        UNLESS  opentitle = NIL  DO  freevector( opentitle )
+
+        opentitle  :=  titlevec
+    $)
+
+    //  The open title is now set up properly.  We can now set up the shape
+    //  of the printer.
+
+    setprinter( type )
+$)
+
+
+
+AND set.spooling()  BE
+    IF  checknoargs( "SPOOL" )  THEN
+        spooling  :=  TRUE
+
+
+
+AND set.debugging()  BE
+    IF  checknoargs( "DEBUG" )  THEN
+        debugging  :=  TRUE
+
+
+
+AND checknoargs( option )  =  VALOF
+$(
+    LET ch  =  rdch()
+
+    TEST  isterminator( ch )  THEN  RESULTIS  TRUE
+    ELSE
+    $(
+        errormessage( "Invalid character *"%C*" after *"%S*" option", ch, option )
+
+        skipoption()
+
+        RESULTIS  FALSE
+    $)
+$)
+
+
+
+AND skipoption()  BE
+$(
+    LET ch  =  rdch()
+
+    UNTIL  isterminator( ch )  DO  ch  :=  rdch()
+$)
+
+
+
+AND printpages()  BE
+$(
+//  We have a completely fresh piece of paper on which to work.  We must
+//  take the file line by line, and add it the the virtual page, doing
+//  multi-columning if necessary.
+
+    LET pagewidth   =  linelength - lineoffset
+    LET pagevec     =  getpagevec()
+    LET offset      =  lineoffset
+    LET fixedwidth  =  mincolumns = maxcolumns
+    LET spacing     =  fixedwidth  &  (maxcolumns > 1)
+
+    LET pagefull    =  FALSE
+    LET lasttime    =  FALSE
+    LET finished    =  FALSE
+
+    //  Since we might be printing multiple files on this page, we had
+    //  better make sure that the page title matches up to the file
+    //  at the top of the page.
+
+    pagename  :=  copystring( filename )
+
+    IF  debugging  THEN  message( "Composition (Start):  %N words", totalwords )
+
+    FOR  column = 1  TO  maxcolumns  DO
+    $(
+        //  For each potential column on the page, we must get lines from
+        //  the file to fill it.  If we are using a fixed number of columns,
+        //  or this is the first column, then we must ALWAYS line wrap.
+        //  Otherwise, we must move onto another page.
+
+        TEST  column = 1  |  fixedwidth  THEN
+        $(
+            //  We are printing the file in a fixed width column format.  First,
+            //  calculate the column width we are going to use.
+
+            LET margin       =  spacing  ->  separation, 0
+            LET columnwidth  =  pagewidth / mincolumns  -  margin
+            LET columnvec    =  getcolumnvec()
+            LET npcount      =  0
+
+        startagain:
+
+            FOR  i = 1  TO  linespercolumn  DO
+            $(
+                LET line  =  getline( column, columnwidth, offset, TRUE )
+                
+                IF  endoffile  THEN
+                $(
+                    //  What we do here depends on the options given to us.
+                    //  If we have the "CM" option, then we should go to the
+                    //  to of a new column.  If we have the "PM" option, we
+                    //  should go to the top of a new page.
+                    
+                    endread()
+                    freevector( filename )
+                    
+                    endoffile  :=  FALSE
+                    
+                    //  If we have been aborted, then now is the time for
+                    //  us to call a halt to the proceedings.
+                    
+                    IF  aborted  THEN  BREAK
+                    
+                    //  Otherwise, we can go on to the next file (if there
+                    //  is one of course)
+                    
+                    TEST  scbqueue = NIL  THEN
+                    $(
+                        //  No more pages to print, so finish off.  We print
+                        //  this page, and then finish the operation.
+                        
+                        finished  :=  TRUE
+                        
+                        BREAK
+                    $)
+                    ELSE
+                    $(
+                        //  There is another file to print, and so we should 
+                        //  decide where we are going to print it.
+                        
+                        LET link  =  scbqueue!fl.link
+                        LET name  =  scbqueue!fl.name
+                        LET scb   =  scbqueue!fl.scb
+                        
+                        freevector( scbqueue )
+                        
+                        selectinput( scb )
+                        
+                        filename    :=  name
+                        scbqueue    :=  link
+                        linenumber  :=  0
+
+                        IF  naming  THEN  generatename( filename )
+
+                        IF  pagepermember  THEN  
+                        $(
+                            pagefull  :=  TRUE
+                            
+                            BREAK
+                        $)
+                    
+                        IF  columnpermember  |  i > linespercolumn - (naming -> 8, 6)  THEN
+
+                            //  We want to start a new column, which just
+                            //  involves leaving this column.
+                            
+                            BREAK
+                            
+                        //  Otherwise, we queue up blank lines, and 
+                        //  go round again.
+                        
+                        enqueueline( NIL )
+                        enqueueline( NIL )
+                    $)
+                $)
+
+                IF  line = NIL  THEN
+                
+                    //  This is a null line.  It is possible that this is
+                    //  the only line on the page, in which case we should
+                    //  stop now.
+
+                    IF  column = 1  &  i = 1  THEN
+                    $(
+                        freevector( columnvec )
+                        freevector( pagevec )
+                        
+                        RETURN
+                    $)
+                    
+
+                IF  line = print.newpage  THEN
+
+                    //  We have found a "*P" character.  Ignore it if we are
+                    //  already at the top of a new page.
+
+                    TEST  i = 1  THEN  GOTO startagain
+                    ELSE
+                    $(
+                        npcount  :=  npcount + 1
+                        
+                        IF  npcount = pagefactor  THEN
+                        $(
+                            pagefull  :=  TRUE
+                            
+                            BREAK
+                        $)
+                        
+                        //  If we haven't reached the page factor yet, then
+                        //  we should leave blank lines.  
+
+                        TEST  i  >  linespercolumn - 6  THEN  BREAK
+                        ELSE
+                        $(
+                            enqueueline( NIL )
+                            enqueueline( NIL )
+
+                            line  :=  NIL
+                        $)
+                    $)
+
+                columnvec!i  :=  line
+            $)
+
+            pagevec!column  :=  columnvec
+
+            TEST  fixedwidth  THEN
+
+                //  This is a fixed width column, and so the calculation of the
+                //  next offset is easy, since all lines are effectively the
+                //  same length.
+
+                offset  :=  offset + columnwidth + separation
+
+            ELSE
+
+                //  This is slightly more complicated.  This is the first
+                //  column of multi columned output, and hence we want to
+                //  calculate what the longest line is, and set the offset
+                //  to that.
+
+                offset  :=  offset + longestline( columnvec ) + separation
+        $)
+        ELSE
+        $(
+            //  This is a column other that one, and we are potentially
+            //  multi-columning.  We should therefore calculate the amount
+            //  of space left on the current page.
+
+            LET columnwidth  =  linelength - offset
+            LET columnvec    =  getcolumnvec()
+            LET npcount      =  0
+
+        startagain:   
+
+            FOR  i = 1  TO  linespercolumn  DO
+            $(
+                LET line  =  getline( column, columnwidth, offset, FALSE )
+
+                IF  endoffile  THEN
+                $(
+                    //  What we do here depends on the options given to us.
+                    //  If we have the "CM" option, then we should go to the
+                    //  to of a new column.  If we have the "PM" option, we
+                    //  should go to the top of a new page.
+                    
+                    endread()
+                    freevector( filename )
+                    
+                    endoffile  :=  FALSE
+                    
+                    //  If we have been aborted, then now is the time for
+                    //  us to call a halt to the proceedings.
+                    
+                    IF  aborted  THEN  BREAK
+                    
+                    //  Otherwise, we can go on to the next file (if there
+                    //  is one of course)
+                    
+                    TEST  scbqueue = NIL  THEN
+                    $(
+                        //  No more pages to print, so finish off.  We print
+                        //  this page, and then finish the operation.
+                        
+                        finished  :=  TRUE
+                        
+                        BREAK
+                    $)
+                    ELSE
+                    $(
+                        //  There is another file to print, and so we should 
+                        //  decide where we are going to print it.
+                        
+                        LET link  =  scbqueue!fl.link
+                        LET name  =  scbqueue!fl.name
+                        LET scb   =  scbqueue!fl.scb
+                        
+                        freevector( scbqueue )
+                        
+                        selectinput( scb )
+                        
+                        filename    :=  name
+                        scbqueue    :=  link
+                        linenumber  :=  0
+
+                        IF  naming  THEN  generatename( filename )
+
+                        IF  pagepermember  THEN
+                        $(
+                            pagefull  :=  TRUE
+                            
+                            BREAK
+                        $)
+                    
+                        IF  columnpermember  |  i > linespercolumn - (naming -> 8, 6)  THEN
+
+                            //  We want to start a new column, which just
+                            //  involves leaving this column.
+                            
+                            BREAK
+                            
+                        //  Otherwise, we queue up blank lines, and 
+                        //  go round again.
+                        
+                        enqueueline( NIL )
+                        enqueueline( NIL )
+                    $)
+                $)
+
+                //  If the result from that call were "print.toolong" then
+                //  we have been unable to fit this line into the column
+                //  provided, and hence we should discard it.
+
+                IF  line = print.toolong  THEN
+                $(
+                    FOR  j = i-1  TO  1  BY  -1  DO  enqueueline( columnvec!j )
+
+                    freevector( columnvec )
+
+                    columnvec  :=  NIL
+                    pagefull   :=  TRUE
+
+                    BREAK
+                $)
+
+                IF  line = print.newpage  THEN
+                
+                    TEST  i = 1  THEN  GOTO  startagain
+                    ELSE
+                    $(
+                        npcount  :=  npcount + 1
+                        
+                        IF  npcount = pagefactor  THEN  
+                        $(
+                            pagefull  :=  TRUE
+                            
+                            BREAK
+                        $)
+                        
+                        //  If we haven't reached the page factor yet, then
+                        //  we should leave blank lines.  
+                        
+                        enqueueline( NIL )
+                        enqueueline( NIL )
+
+                        line  :=  NIL
+                    $)
+
+                //  Otherwise, we can put this line on and go on to the
+                //  next.
+
+                columnvec!i  :=  line
+            $)
+
+            pagevec!column  :=  columnvec
+            offset          :=  offset + longestline( columnvec ) + separation
+        $)
+
+        IF  pagefull  |  finished  |  aborted  |  toosmall( linelength - offset )  THEN  BREAK
+    $)
+
+    //  When we drop out of that lot, the page is full, and we should
+    //  submit it to the output routine to be sent off.
+
+    IF  spreading  &  NOT fixedwidth  THEN
+    $(
+        //  At this point, we can spread the lines if we have been
+        //  requested to do so.
+            
+        LET spacesleft  =  linelength - offset
+                    
+        IF  spacesleft > 0  THEN  spreadlines( pagevec, spacesleft )
+    $)
+
+    IF  debugging  THEN  message( "Composition (End):    %N words", totalwords )
+
+    //  Check the aborted flag, and if set, print out a page for the
+    //  last time. 
+    
+    lasttime  :=  aborted  |  finished
+
+    outputpage( pagevec, pagename )
+    freevector( pagename )
+
+    //  If this is the last time, then goodbye cruel world...
+    
+    IF  lasttime  THEN  RETURN
+$)
+REPEAT
+
+
+
+AND generatename( name )  BE
+$(
+//  Enqueue a name line onto the line queue, so that files will come out
+//  each preceeded by their name.
+
+    LET length  =  name % 0
+    LET line    =  getlineentry( length )
+    LET buff    =  line + le.chars
+    
+    line!le.link        :=  NIL
+    line!le.overprint   :=  NIL
+    line!le.linenumber  :=  0
+    line!le.offset      :=  0
+
+    FOR  i = 0  TO  length  DO  buff % i  :=  name % i
+    
+    enqueueline( NIL )
+    enqueueline( line )
+$)
+
+
+
+AND spreadlines( pagevec, spacesleft )  BE
+$(
+//  Spread the free space left around the columns.  The value of "columns" is
+//  the number of columns successfully put onto the page.
+
+    LET columns          =  countcolumns( pagevec )
+    LET spacespercolumn  =  0
+
+    IF  columns = 0  THEN  RETURN    //  Spreads straight from the fridge!
+
+    spacespercolumn  :=  spacesleft / columns
+
+    FOR  i = 1  TO  columns-1  DO
+    $(
+        LET addition   =  spacespercolumn * i
+        LET columnvec  =  pagevec!(i+1)
+
+        FOR  j = 1  TO  linespercolumn  DO
+        $(
+            LET line  =  columnvec!j
+
+            UNTIL  line = NIL  DO
+            $(
+                line!le.offset  :=  line!le.offset + addition
+                line            :=  line!le.overprint
+            $)
+        $)
+    $)
+$)
+
+
+
+AND countcolumns( pagevec )  =  VALOF
+$(
+    LET count  =  0
+
+    FOR  i = 1  TO  maxcolumns  DO
+        UNLESS  pagevec!i = NIL  DO
+            count  :=  count + 1
+
+    RESULTIS  count
+$)
+
+
+
+AND toosmall( columnwidth )  =  columnwidth < mincolumnwidth
+
+
+
+AND outputpage( pagevec, pagename )  BE
+$(
+//  Output a page to the printer.  If we are coroutining, then we must schedule
+//  the page to be printed, otherwise, print it immediately.
+
+$<TRIPOS
+    pagepointer  :=  pagevec
+
+    UNTIL  pagepointer = NIL  DO  delay( tickspersecond/10 )
+$>TRIPOS
+
+$<TRIPOS'
+    UNLESS  pagevec = print.end  DO  printoutputpage( pagevec )
+$>TRIPOS'
+$)
+
+
+
+AND endinput()  BE  outputpage( print.end )
+
+
+
+$<TRIPOS
+AND printoutput()  =  VALOF
+$(
+//  Main output coroutine.  Wait for a page to be produced, and then print
+//  it.
+
+    WHILE  pagepointer = NIL  DO  delay( tickspersecond/10 )
+
+    IF  pagepointer = print.end  THEN
+    $(
+        pagepointer  :=  NIL
+
+        RESULTIS  NIL
+    $)
+
+    printoutputpage( pagepointer )
+$)
+REPEAT
+$>TRIPOS
+
+
+
+AND printoutputpage( pagevec )  BE
+$(
+//  Print a page whose page vector is "pagevec".  Take the page which has been
+//  buffered, and print it out.  Since the information on the top of the page
+//  is transient (title etc.) we cannot acknowledge receipt of the page until
+//  we have finished with this information.  We acknowledge receipt by setting
+//  the variable "pagepointer" to NIL.
+
+    pagenumber  :=  pagenumber + 1
+
+    UNLESS  printertype = p.vdu  DO  wrch( '*P' )
+
+    IF  titling  &  NOT aborted  THEN
+    $(
+        LET titlevec     =  title = NIL  ->  pagename,  title
+        LET titlelength  =  titlevec % 0  +  datestring % 0  +  timestring % 0  +  4
+
+        FOR  i = 1  TO  lineoffset  DO  wrch( '*S' )
+
+        IF  paging  THEN
+        $(
+            writef( "Page %N  ", pagenumber )
+
+            titlelength  :=  titlelength + digits( pagenumber ) + 7
+        $)
+
+        writef( "%S  %S  %S", titlevec, datestring, timestring )
+
+        IF  underlining  THEN
+        $(
+            wrch( '*C' )
+
+            FOR  i = 1  TO  lineoffset   DO  wrch( '*S' )
+            FOR  i = 1  TO  titlelength  DO  wrch( '_' )
+        $)
+
+        writes( "*N*N" )
+    $)
+
+$<TRIPOS
+    //  We have now extracted all relevant information from the input side
+    //  of the program, and hence we can tell it so.
+
+    pagepointer  :=  NIL
+$>TRIPOS
+
+    FOR  i = 1  TO  linespercolumn  DO
+    $(
+        //  For each line in the output we must print the buffered characters,
+        //  (and any overprinted lines as well).
+
+        LET finished   =  TRUE
+
+        $(  //  Repeat loop to take the buffered lines in each column, and
+            //  print them out.
+
+            LET offset  =  0
+
+            FOR  j = 1  TO  maxcolumns  DO
+            $(
+                LET columnvec  =  pagevec!j
+                LET linevec    =  columnvec = NIL  ->  NIL,  columnvec!i
+
+                UNLESS  linevec = NIL  DO
+                $(
+                    LET loffset  =  linevec!le.offset
+                    LET loprint  =  linevec!le.overprint
+                    LET lnumber  =  linevec!le.linenumber
+                    LET chars    =  linevec + le.chars
+                    LET length   =  chars % 0
+
+                    UNLESS  aborted  DO
+                    $(
+                        FOR  k = offset  TO  loffset-1  DO  wrch( '*S' )
+
+                        IF  lnumber > 0  THEN
+                        $(
+                            //  Line number required.
+
+                            length  :=  length + numberwidth
+
+                            writed( lnumber, numberwidth-2 )
+                            writes( "  " )
+                        $)
+
+                        IF  lnumber < 0  THEN
+                        $(
+                            //  Overflow from line numbered output.
+
+                            length  :=  length + numberwidth
+
+                            FOR  k = 1  TO  numberwidth  DO  wrch( '*S' )
+                        $)
+
+                        writes( chars )
+
+                        offset  :=  loffset + length
+                    $)
+
+                    //  We can now free this part of the line, and move on
+                    //  to greater things.
+
+                    freevector( linevec )
+
+                    columnvec!i  :=  loprint
+
+                    UNLESS  loprint = NIL  DO  finished  :=  FALSE
+                $)
+            $)
+
+            //  When we drop out here, we have printed one line.  We may
+            //  Have to overprint though.
+
+            TEST  finished  THEN  BREAK
+            ELSE
+            $(
+                UNLESS  aborted  DO  wrch( '*C' )
+
+                finished  :=  TRUE
+            $)
+        $)
+        REPEAT
+
+        //  End of a line.  Terminate the line with a '*N'
+
+        UNLESS  aborted  DO  wrch( '*N' )
+    $)
+
+    //  End of a page.  Nothing left to do, but to free "pagevec" and its
+    //  associated "columnvec"s.
+
+    FOR  i = 1  TO  maxcolumns  DO
+    $(
+        LET columnvec  =  pagevec!i
+
+        UNLESS  columnvec = NIL  DO  freevector( columnvec )
+    $)
+
+    freevector( pagevec )
+
+    //  If we are page waiting, then we must wait here.
+
+    UNLESS  waitstring = NIL  |  aborted  DO
+    $(
+        LET i    =  input()
+        LET o    =  output()
+        LET qch  =  0
+        LET ch   =  0
+
+        selectinput( sysin )
+        selectoutput( sysout )
+
+        writef( "*N%S*E", waitstring )
+
+        qch  :=  uppercase( rdch() )
+        ch   :=  qch
+
+        UNTIL  ch = '*N'  |  ch = '*E'  |  ch = endstreamch  DO  ch  :=  rdch()
+
+        IF  qch = 'Q'  |  qch = endstreamch  THEN
+        $(
+            endoffile  :=  TRUE
+            aborted    :=  TRUE
+        $)
+
+        selectinput( i )
+        selectoutput( o )
+    $)
+$)
+
+
+
+AND digits( number )  =  number < 10  ->  1,  (digits( number/10 ) + 1)
+
+
+
+AND copystring( string )  =  string = NIL  ->  NIL,  VALOF
+$(
+    LET length  =  string % 0
+    LET v       =  getvector( length / bytesperword )
+
+    FOR  i = 0  TO  length  DO  v % i  :=  string % i
+
+    RESULTIS  v
+$)
+
+
+
+AND longestline( columnvec )  =  columnvec = NIL  ->  0,  VALOF
+$(
+//  Find the length of the longest line in a column.
+
+    LET longest  =  0
+
+    FOR  i = 1  TO  linespercolumn  DO
+    $(
+        LET line  =  columnvec!i
+
+        UNLESS  line = NIL  DO
+        $(
+            LET length  =  findlength( line )
+
+            IF  length > longest  THEN  longest  :=  length
+        $)
+    $)
+
+    RESULTIS  longest
+$)
+
+
+
+AND findlength( line )  =  VALOF
+$(
+//  Find the length of the longest overprinted item in a line.
+
+    LET longest  =  0
+
+    UNTIL  line = NIL  DO
+    $(
+        LET ln      =  line!le.linenumber
+        LET chars   =  line + le.chars
+        LET length  =  chars % 0
+
+        UNLESS  ln = 0  DO  length  :=  length + numberwidth
+
+        IF  length > longest  THEN  longest  :=  length
+
+        line  :=  line!le.overprint
+    $)
+
+    RESULTIS  longest
+$)
+
+
+
+AND getline( column, columnwidth, offset, splitline )  =  VALOF
+$(
+//  Get a line from the input queue, assuming it has the right specifications.
+//  If the flag "splitline" is TRUE, then we must always split the line,
+//  but if not, we must only return the line if it has the correct shape.
+
+    LET line    =  dequeueline()
+    LET length  =  0
+
+    IF  line = NIL  |  line = print.newpage  THEN  RESULTIS  line
+
+    //  Otherwise, we have a line to play with.  We should get the length
+    //  of the line, and check it, that we can reject it if necessary.
+
+    length  :=  findlength( line )
+
+    IF  length > columnwidth  &  NOT splitline  THEN
+    $(
+        //  We must reject this line, and return an error.
+
+        enqueueline( line )
+
+        RESULTIS  print.toolong
+    $)
+
+    //  Fair enough.  We have decided that the line is acceptable, and so
+    //  we must do something about it.  This does not mean that it is short
+    //  enough, and so, we must split the line if necessary.
+
+    IF  length > columnwidth  THEN
+    $(
+        //  We do have to split the line.  We have to bear in mind that the
+        //  line will be shorter than "length" if we are numbering lines, and
+        //  so we must take account of this.
+
+        LET deduction   =  numbering  ->  numberwidth, 0
+        LET reallength  =  columnwidth - deduction
+        LET nextline    =  NIL
+        LET lineentry   =  line
+
+        UNTIL  lineentry = NIL  DO
+        $(
+            //  Look at this element of the line, and see if it needs
+            //  splitting.  If it does, just reset the length in the
+            //  current line, and make a new copy of the rest of the
+            //  line for a rainy day.
+
+            LET linechars     =  lineentry + le.chars
+            LET stringlength  =  linechars % 0
+
+            IF  stringlength > reallength  THEN
+
+                //  What we do here depends on whether we are wrapping or
+                //  truncating.
+                
+                TEST  truncating  THEN  linechars % 0  :=  reallength
+                ELSE
+                $(
+                    //  This string is too long.   Get a new entry item and
+                    //  copy the rest of the string across.
+    
+                    LET lnumber  =  ABS lineentry!le.linenumber
+                    LET diff     =  stringlength - reallength
+                    LET entry    =  getlineentry( diff )
+                    LET chars    =  entry + le.chars
+    
+                    FOR  i = 1  TO  diff  DO
+                        chars % i  :=  linechars % (reallength + i)
+    
+                    linechars % 0        :=  reallength
+                    chars % 0            :=  diff
+    
+                    entry!le.overprint   :=  nextline
+                    entry!le.linenumber  :=  -lnumber
+    
+                    nextline             :=  entry
+                $)
+
+            //  Move on to the next line in the overprint sequence.
+
+            lineentry  :=  lineentry!le.overprint
+        $)
+
+        //  When we drop through here, the current line has been butchered
+        //  to bring it within specification, and we have a new line which
+        //  is the result of the line split.  Push this line onto the input
+        //  queue, so that we will get it next time.
+
+        UNLESS  nextline = NIL  DO  enqueueline( nextline )
+    $)
+
+    //  When we drop out of that lot, we have the line in our hand which
+    //  should be returned to the caller.
+
+    RESULTIS  setoffset( line, offset )
+$)
+
+
+
+AND setoffset( line, offset )  =  VALOF
+$(
+    LET lineptr  =  line
+
+    UNTIL  line = NIL  DO
+    $(
+        line!le.offset  :=  offset
+        line            :=  line!le.overprint
+    $)
+
+    RESULTIS  lineptr
+$)
+
+
+
+AND enqueueline( line )  BE
+$(
+//  Push an input line back into the queue.  It is possible that we are
+//  enqueueing NIL (a blank line), and if so, we must generate a real blank
+//  line in its place.
+
+    IF  line = NIL  THEN
+    $(
+        line  :=  getlineentry( 0 )
+
+        line!le.link         :=  NIL
+        line!le.overprint    :=  NIL
+        line!le.linenumber   :=  0
+        line!le.offset       :=  0
+
+        (line+le.chars) % 0  :=  0
+    $)
+
+    line!le.link  :=  linequeue
+    linequeue     :=  line
+$)
+
+
+
+AND dequeueline()  =  linequeue = NIL  ->  readline(),  VALOF
+$(
+    LET line  =  linequeue
+
+    linequeue  :=  linequeue!le.link
+
+    RESULTIS  line
+$)
+
+
+
+AND readline()  =  endoffile  ->  NIL,  VALOF
+$(
+    LET line  =  NIL
+    LET ch    =  0
+
+$<TRIPOS
+    IF  testflags( #B0001 )  THEN
+    $(
+        //  Break.  Set the "end of file" and "aborted" flags.
+
+        errormessage( "BREAK." )
+
+        endoffile  :=  TRUE
+        aborted    :=  TRUE
+
+        RESULTIS  NIL
+    $)
+
+    IF  testflags( #B1000 )  THEN  message( "Line %N of file *"%S*"", linenumber, filename )
+$>TRIPOS
+
+    //  This is a new line, so increase the line number.
+
+    linenumber  :=  linenumber + 1
+
+    $(  //  Loop to continue reading lines from the file until a real
+        //  line terminator is found.
+
+        LET length     =  0
+        LET lineentry  =  0
+        LET linechars  =  0
+
+        ch  :=  readch()
+
+        UNTIL  ch = '*N'  |  ch = '*C'  |  ch = '*P'  |  ch = endstreamch  DO
+        $(
+            LET repeatcount  =  1
+
+            IF  ch = '*T'  THEN
+            $(
+                //  This is a tab character which we should expand into
+                //  spaces.
+
+                ch           :=  '*S'
+                repeatcount  :=  8 - (length REM 8)
+            $)
+
+            FOR  i = 1  TO  repeatcount  DO
+            $(
+                length               :=  length + 1
+                linebuffer % length  :=  ch
+
+                IF  length = linebufferlength  THEN
+                $(
+                    errormessage( "Line %N of file *"%S*" truncated", linenumber, filename )
+
+                    UNTIL  ch = '*N'  |  ch = '*C'  |  ch = endstreamch  DO  ch  :=  readch()
+
+                    GOTO  endofline
+                $)
+            $)
+
+            ch  :=  readch()
+        $)
+
+    endofline:
+
+        //  We drop out of that loop with a buffered record in "linebuffer" and
+        //  the length of the line in "length".  The character which terminated
+        //  the record is in "ch".  We now add this line to the list of lines
+        //  gathered already, and look for more.
+
+
+        IF  ch = '*P'  THEN
+
+            //  This case is special, since *P is more a prefix than a
+            //  terminator.  Hopefully there will be nothing on the line,
+            //  in which case we can ignore it, otherwise we have to
+            //  generate a spurious '*N'
+
+            TEST  length = 0  &  lineentry = 0  THEN  RESULTIS  print.newpage
+            ELSE
+            $(
+                unrdch()
+
+                ch  :=  '*N'
+            $)
+
+        IF  ch = endstreamch  THEN
+        
+            //  If we have found "endstreamch" without a preceding "*N", then
+            //  we must insert one.  If we really have hit end of file, then
+            //  we don't want to print the null line.
+            
+            TEST  length = 0  &  lineentry = 0  THEN  
+            $(
+                endoffile  :=  TRUE
+
+                BREAK
+            $)
+            ELSE
+            $(
+                unrdch()
+                
+                ch  :=  '*N'
+            $)
+
+        //  There are characters buffered up, and so we had better print them.
+
+        linebuffer % 0           :=  length
+        lineentry                :=  getlineentry( length )
+        linechars                :=  lineentry + le.chars
+
+        lineentry!le.overprint   :=  line
+        lineentry!le.linenumber  :=  numbering  ->  (line = NIL  ->  linenumber,
+                                                                    -linenumber),  0
+
+        FOR  i = 0  TO  length  DO  linechars % i  :=  linebuffer % i
+
+        line  :=  lineentry
+    $)
+    REPEATWHILE  ch = '*C'
+
+    //  When we drop out of that loop, we have an entire line in our hand
+    //  We should return this forthwith to the caller.
+
+   RESULTIS  line
+$)
+
+
+
+AND joinstrings( string1, string2 )  =  string2 = NIL  ->  copystring( string1 ),  VALOF
+$(
+//  Return the concatenation of strings 1 and 2.
+
+    LET l1  =  string1 % 0
+    LET l2  =  string2 % 0
+    LET s   =  getvector( l1 + l2 )
+
+    FOR  i = 1  TO  l1  DO  s % i         :=  string1 % i
+    FOR  i = 1  TO  l2  DO  s % (l1 + i)  :=  string2 % i
+    
+    s % 0  :=  l1 + l2
+
+    RESULTIS  s
+$)
+
+
+AND join3strings( string1, string2, string3 )  =
+string3 = NIL -> joinstrings( string1, string2 ),
+string2 = NIL -> joinstrings( string1, string3 ),  VALOF
+$(
+//  Return the concatenation of strings 1, 2 and 3.
+
+    LET l1  =  string1 % 0
+    LET l2  =  string2 % 0
+    LET l3  =  string3 % 0
+    LET s   =  getvector( l1 + l2 + l3 )
+
+    FOR  i = 1  TO  l1  DO  s % i         :=  string1 % i
+    FOR  i = 1  TO  l2  DO  s % (l1 + i)  :=  string2 % i
+    FOR  i = 1  TO  l3  DO  s % (l1+l2+i) :=  string3 % i
+    
+    s % 0  :=  l1 + l2 + l3
+
+    RESULTIS  s
+$)
+
+
+
+AND getpagevec()  =  getvector( maxcolumns )
+
+
+
+AND getcolumnvec()  =  getvector( linespercolumn )
+
+
+
+AND getfileentry()  =  getvector( fl.size )
+
+
+
+AND getlineentry( chars )  =  getvector( le.size + chars/bytesperword )
+
+
+
+AND getvector( size )  =  VALOF
+$(
+    LET words   =  size + 1
+    LET vector  =  getvec( words )
+
+    IF  vector = 0  THEN  abort( error.nospace )
+
+    FOR  i = 1  TO  words  DO  vector!i  :=  NIL
+
+    vector!0    :=  words
+    totalwords  :=  totalwords + words
+
+    IF  totalwords > maxtotalwords  THEN  maxtotalwords  :=  totalwords
+
+    RESULTIS  vector + 1
+$)
+
+
+
+AND freevector( vector )  BE
+$(
+//  Free the vector "vector", keeping account of the amount of store used.
+
+    LET v  =  vector - 1
+
+    totalwords  :=  totalwords - v!0
+
+    freevec( v )
+$)
+
+
+
+AND errormessage( format, arg1, arg2, arg3 )  BE
+$(
+//  Print out a message, but set final return code, so that we can
+//  stop a command sequence.
+
+    message( format, arg1, arg2, arg3 )
+
+    returncode  :=  20
+$)
+
+
+
+AND message( format, arg1, arg2, arg3 )  BE
+$(
+    LET o  =  output()
+
+    selectoutput( sysout )
+    writef( "****** %S:  ", commandname )
+    writef( format, arg1, arg2, arg3 )
+    newline()
+
+    selectoutput( o )
+$)
+
+
+
+AND readch()  =  VALOF
+$(
+    LET ch  =  rdch()
+
+    WHILE  ch = '*E'  DO  ch  :=  rdch()
+
+    RESULTIS  (ch = '*C'  |  ch = '*N'  |  ch = '*T'  |
+               ch = '*P'  |  ch = endstreamch)  ->  ch,  c( ch )
+$)
+
+
+
+AND c( char )  =      //  N.B.  ASCII specific!
+
+    ( "???????????????????????????????? !*"#$%&'()**+,-./0123456789:;<=>?*
+      *@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~?"
+    ) % ((char & #X7F) + 1)
+
+
+
+$<TRIPOS
+AND copktwait( id, pkt )  =  cowait( pkt )
+$>TRIPOS
+
+
+
+AND stringinput( string )  BE
+$(
+    blib.rdch    :=  rdch
+    blib.unrdch  :=  unrdch
+
+    stringbuff   :=  copystring( string )
+    stringbuffb  :=  0
+    stringbuffe  :=  stringbuff % 0
+
+    rdch         :=  string.rdch
+    unrdch       :=  string.unrdch
+$)
+
+
+
+AND endstringinput()  BE
+$(
+    freevector( stringbuff )
+
+    rdch    :=  blib.rdch
+    unrdch  :=  blib.unrdch
+$)
+
+
+
+AND string.rdch()  =  VALOF
+$(
+    stringbuffb  :=  stringbuffb + 1
+
+    RESULTIS  stringbuffb > stringbuffe  ->  endstreamch,  
+                                             stringbuff % stringbuffb
+$)
+
+
+
+AND string.unrdch()  =  VALOF
+$(
+    IF  stringbuffb = 0  THEN  RESULTIS  FALSE
+
+    stringbuffb  :=  stringbuffb - 1
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND islist()  =  VALOF
+$(
+//  Look at the input stream, and decide whether we are a "PRINT" or "LIST"
+//  command.  Before anything else, skip over the leading part of the command
+//  name "if any".
+
+    LET ch    =  rdch()
+    LET name  =  0
+    LET list  =  0
+
+    UNTIL  isterminator( ch )  DO  ch  :=  rdch()
+
+    //  Now read backwards in the file until we hit the beginning of the
+    //  string, or a file name separator.
+
+    WHILE  unrdch()  &  unrdch()  DO
+    $(
+        ch  :=  uppercase( rdch() )
+
+        IF  ch = '.'  |  ch = ':'  THEN  BREAK
+    $)
+
+    name  :=  readstring()
+    list  :=  compstring( name, "LIST" )  =  0
+
+    freevector( name )
+
+    RESULTIS  list
+$)
+
+

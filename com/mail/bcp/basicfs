@@ -1,0 +1,604 @@
+// This module should be "got" after header
+//GET "BCPL.find-fileserver"
+
+LET find.fileserver(puid, nsvec) = VALOF
+$(
+    // Do an SSP transaction to the PUID.LOCATE service to find the
+    // name of the fileserver to use, then lookup that name and fill
+    // in 'nsvec'.
+
+    MANIFEST
+        $(
+        ringwordsperword = bytesperword/2
+        pl.txwords = 7
+        pl.rxwords = 64
+        $)
+
+    LET pl.txbuff = VEC pl.txwords/ringwordsperword
+    LET pl.rxbuff = VEC pl.rxwords/ringwordsperword
+
+    FOR i = 0 TO 3 DO pl.txbuff%%(i+3) := puid%%i       // copy puid to request
+
+    IF ssp("PUID.LOCATE", pl.txbuff, pl.txwords, pl.rxbuff, pl.rxwords, 0,
+                        -1, -1, -1,     tickspersecond)
+    THEN IF lookup.name(pl.rxbuff+(8/ringwordsperword), nsvec)
+         THEN $( result2 := pl.rxbuff %% 7 // pack number
+                 RESULTIS TRUE
+              $)
+    RESULTIS FALSE
+
+$)
+
+LET fs.find(puid) = VALOF
+$(      LET ns.vec      = VEC nsv.upb
+        LET dummyroot   = VEC 8/BYTESPERWORD
+        LET FIRST       = TRUE
+
+        IF (puid=0 | puid=-1)
+        THEN    TEST dynamic
+                THEN puid := root+uid
+                ELSE
+                $(      puid := dummyroot
+                        puid %% 0       := #X800d
+                        puid %% 1       := #x2a6e
+                        puid %% 2       := #xd59f
+                        puid %% 3       := #x79b9
+                $)
+
+        UNTIL find.fileserver(puid, ns.vec)
+        $(      IF first
+                $(      FIRST := FALSE
+                        WRITEF("Failed to find Fileserver %X4=%N. Waiting*N",
+                                RESULT2, RESULT2)
+                $)
+                DELAY(tickspersecond*5)
+                IF testflags(1) RESULTIS false
+        $)
+        UNLESS first WRITEF("Fileserver found*N") <> DELAY(tickspersecond)
+        fs.station      := ns.vec!0
+        fs.port         := ns.vec!2
+        RESULTIS TRUE
+$)
+
+//==============================================================================
+
+LET copy.uid (from.base, from.disp, to.base, to.disp) BE
+$(
+    // Copy an 8 byte uid from a halfword displacement of some base
+    // address to a halfword displacment of another base address.
+    FOR i=0 TO 3 DO to.base%%(to.disp+i) := from.base%%(from.disp+i)
+$)
+
+//==============================================================================
+
+LET compare.uid (from.base, from.disp, to.base, to.disp) = VALOF
+$(
+    // Compare an 8 byte uid from a halfword displacement of some base
+    // address with a halfword displacment of another base address.
+    FOR i=0 TO 3
+    DO UNLESS to.base%%(to.disp+i) = from.base%%(from.disp+i) RESULTIS FALSE
+    RESULTIS TRUE
+$)
+
+//==============================================================================
+LET fs.command (tx.buff, tx.len, rx.buff, rx.len, fs.func) BE
+$(
+$<TRACE
+    STATIC
+    $(  last.error      = 0
+        last.func       = 0
+        Error.count     = 0
+        puid1           = 0
+        puid2           = 0
+        log             = 1
+    $)
+$>TRACE
+
+    // Tx.buff is a buffer holding the arguments of a file server SSP command
+    // at ringword 3 onward.  This routine fires off an ssp and if appropriate
+    // repeats it until it succeeds, or there is a timeout, or a break in.
+    // Tx.len and rx.len are in ringwords.
+
+    // On completion the vector rx.buff holds the reply
+
+    LET rx.pkt = TABLE notinuse, 0, act.rx.bb, 0, 0, 0, 0, 0, 0, long.timeout
+
+    // Get port number for file server reply:
+    LET reply.port      = sendpkt(notinuse, rhtaskid, act.findfreeport)
+    LET old.pktwait     = pktwait
+    LET explained       = -1
+    LET local.pktwait(dest, pkt) = VALOF
+$(
+    LET queue   = 0
+    LET re.queue(q, res) = q=0 -> res, VALOF
+    $(  $( LET next              = !q
+            LET from             = q ! pkt.taskid
+            !q                  := notinuse
+            q ! pkt.taskid      := taskid
+            qpkt(q)
+            q ! pkt.taskid      := from
+            q                   := next
+        $) REPEATUNTIL q=0
+        RESULTIS res
+    $)  
+
+    $(  LET got.pkt = taskwait()
+        IF pkt = got.pkt RESULTIS re.queue(queue, pkt)
+        UNLESS got.pkt=0
+        $(      !got.pkt := queue
+                queue := got.pkt
+                IF trusted & dynamic
+                THEN ABORT(1002, got.pkt, pkt)
+        $)
+    $) REPEAT
+$)
+
+    // Finish setting up SSP arguments
+    //    IF log=1 wto.mc("file", "temp start") <> log := TRUE
+    tx.buff%%bb.ssp.type        := (fs.func=22) -> code.open, code.sspreq
+    tx.buff%%bb.ssp.replyport   := reply.port
+    tx.buff%%bb.ssp.func        := fs.func
+
+    fs.rc := 0
+
+    pktwait := local.pktwait
+    // Repeat transmission up to 100 times, if necessary.
+    FOR i=0 TO 100
+    $(
+        UNLESS i=0 fs.find(0)
+        IF testflags(2) BREAK
+        IF testflags(4) GOTO fs.command.success
+        rx.pkt  ! 9     := (i<10) -> (tickspersecond*(i+1))/2, long.timeout
+        // Test if the user has got bored
+        break.test()
+        // Impose a delay on repeat attempts, to avoid clogging ring
+        UNLESS i=0 THEN delay( (i REM 10)=0 -> 20, 2)
+
+        // If necessary queue receive request on ring handler
+        queue.ring.receive(rx.pkt, rx.buff, rx.len, reply.port, fs.station)
+
+        // Fire transmit requests until one gets out OK
+        UNLESS sendpkt(notinuse, rhtaskid, act.tx, 0, 0, tx.buff, tx.len,
+                                fs.station, fs.port) = txst.accepted THEN LOOP
+        // Wait for reply
+        pktwait(rhtaskid, rx.pkt)
+
+        // Repeat transmission if there was no reply at all (fs down?)
+        IF rx.pkt!pkt.res1 = 0
+        $( UNLESS i=0
+           $(   LET timeout = (i<10) -> (tickspersecond*(i+1))/2, long.timeout
+$<TRACE wto.mc("File", "mailserv FS: no reply on %n, TO %N", i, timeout); $>TRACE
+                WRITEF("<No reply from FS on loop %n, timeout %n ticks>*N",
+                                                                i, timeout)
+           $)
+           LOOP
+        $)
+
+        // Examine return code from file server
+        fs.rc := rx.buff%%bb.ssp.rc
+        IF (fs.rc & #xf000) = 0 THEN GOTO fs.command.success
+
+        // For failure responses check if action is worth repeating
+        TEST ((fs.rc & #xf000) = #xf000) | ((fs.rc&#xff00) =
+                                              (rc.obj.in.use&#xff00))
+        $(      UNLESS fs.rc = #Xf700
+                DO WRITEF("<FS RC %X8, action %n, loop %N>%c",
+                        fs.rc, fs.func, i, fs.rc=explained -> '*C', '*N')
+        $)
+        ELSE
+        $(      WRITEF(
+                "FS hard failed %X8 on action %n -- use BREAK C to give up%c",
+                                fs.rc, fs.func, fs.rc=explained -> '*C', '*N')
+                delay(tickspersecond*5)
+//              BREAK
+        $)
+
+        UNLESS explained = fs.rc | fs.rc = #Xf700
+        DO  fs.explain(fs.rc) <> explained := fs.rc
+    $)
+
+$<TRACE
+    IF log
+    TEST (last.func=fs.func) & (last.error=fs.rc) &
+         (puid1=tx.buff %% bb.ssp.arg2) & (puid2=tx.buff%%(bb.ssp.arg2+1)) &
+         (stop.time > rootnode!rtn.mins)
+    THEN error.count +:= 1
+    ELSE
+    $(  UNLESS error.count=0
+        $(  wto.mc("File","Mailserv FS: RC %X4. Op %I3, on %X4 %X4 OK after %N",
+                        last.error, last.func,
+                        puid1, puid2, error.count)
+        $)
+        puid1           := tx.buff %% bb.ssp.arg2
+        puid2           := tx.buff %%(bb.ssp.arg2+1)
+        wto.mc("File", "Mailserv FS: RC %X4. Op %I3, on %X4 %X4 %X4 %X4",
+                fs.rc, fs.func,
+                puid1,                      puid2,
+                tx.buff %% (bb.ssp.arg2+2), tx.buff %% (bb.ssp.arg2+3) )
+        last.error      := fs.rc
+        error.count     := 1
+        last.func       := fs.func
+
+        LOG := (stop.time > rootnode!rtn.mins)
+    $)
+$>TRACE
+    // Failure handling
+    sendpkt(notinuse, rhtaskid, act.releaseport, ?, ?, reply.port)
+    IF trusted & dynamic
+    THEN abort(1001, fs.rc, ms.fs.fail.level, ms.fs.fail.link)
+    pktwait := old.pktwait
+    LONGJUMP(ms.fs.fail.level, ms.fs.fail.link)
+
+fs.command.success:
+    // free reply port unless the command was a full write
+    UNLESS (fs.func=22) THEN
+                   sendpkt(notinuse, rhtaskid, act.releaseport, ?, ?, reply.port)
+
+$<TRACE
+    UNLESS error.count=0
+    $(
+        wto.mc("File", "Mailserv FS: RC %X4. Op %I3, on %X4 %X4 OK after %N",
+                last.error, last.func,
+                puid1, puid2, error.count)
+        last.error      := 0
+        error.count     := 0
+    $)
+$>TRACE
+    pktwait := old.pktwait
+$)
+
+//=============================================================================
+
+LET fs.explain (rc) BE
+$(
+    // Routine to print out the explanation of a file server failure
+
+    LET tx.buff = VEC fslen/rwpw
+    LET rx.buff = VEC 54/rwpw
+
+    TEST fs.rc=0 THEN writes("file server not listening*n")
+    ELSE $(
+        writehex(rc, 4)
+        writes("  ")
+        // Use the file server explain function
+        tx.buff%%bb.ssp.arg2 := rc
+        fs.command(tx.buff, fslen, rx.buff, 54, 14)
+
+        // Print out the reply
+        FOR i=1 TO rx.buff%(bb.ssp.arg2*bprw) DO
+                                wrch(rx.buff%(bb.ssp.arg2*bprw +i))
+        newline()
+    $)
+
+$)
+
+//=============================================================================
+
+LET open.file (file) BE
+$(
+    // Get a write interlock on the file described at "file"
+
+    LET tx.buff = VEC fslen/rwpw
+    LET rx.buff = VEC fslen/rwpw
+
+    UNLESS ms.interlocked.file = 0
+    $(
+        writes("Trying to get more than one interlock*N")
+        abort(99, 0)
+    $)
+    ms.interlocked.file := file
+
+    // Save PUID
+    copy.uid (@file!uid, 0 , @file!uid2, 0)
+
+    // Set command arguments:
+    copy.uid (@file!uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff%%(bb.ssp.args+5) := 1       // Set "for writing" boolean
+
+    fs.command(tx.buff, fslen, rx.buff, fslen, 11)
+
+    // Save resulting TUID (needed for close.file if for nothing else)
+    copy.uid (rx.buff, bb.ssp.arg2, @file!uid, 0)
+$<TRACE IF trace THEN trace.file(file, "Open") $>TRACE
+$)
+
+//=============================================================================
+
+LET close.file (file) BE
+$(
+    // Release write interlock on the file described at "file"
+
+    LET tx.buff = VEC fslen/rwpw
+    LET rx.buff = VEC fslen/rwpw
+
+    UNLESS ms.interlocked.file = file
+    $(  writes("Interlock cock up")
+        abort(99, 0)
+    $)
+    ms.interlocked.file := 0
+
+    // Set command arguments:
+    copy.uid (@file!uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff%%(bb.ssp.args+5) := 1       // Set "update" boolean true.
+
+    fs.command(tx.buff, fslen, rx.buff, fslen, 13)
+
+    // Restore PUID as file UID
+    copy.uid (@file!uid2, 0, @file!uid, 0)
+    FOR i = 0 TO 7/bpw BY 1 DO file!(uid2+i) := 0
+
+$<TRACE IF trace THEN trace.file(file, "Close") $>TRACE
+$)
+//=============================================================================
+
+LET read.little.block (file, buffer, block.start, length) BE
+$(
+    // This routine exists to read a small ( < 80 bytes) block from a file into
+    // the middle of a cache.
+    // "File" points to a file descriptor, "buffer" is the address where the
+    // block should be placed and "length" is the length in ring words.
+
+    // Due to SSP headers it is not possible to read straight into the middle
+    // of the cache.
+    LET rx.buff = VEC 55/rwpw
+    LET tx.buff = VEC fslen/rwpw
+
+$<TRACE IF trace THEN trace.file(file, "Read block") $>TRACE
+
+    // Set up SSP arguments:
+    copy.uid(file+uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff%%(bb.ssp.args+5) := 0       // block.start is only 16 bits
+    tx.buff%%(bb.ssp.args+6) := block.start
+    tx.buff%%(bb.ssp.args+7) := 0
+    tx.buff%%(bb.ssp.args+8) := length
+
+    fs.command(tx.buff, fslen, rx.buff, 55, 16)
+
+    // Copy read block into destination buffer
+    FOR i=0 TO length-1 BY 1 DO buffer%%i := rx.buff%%(bb.ssp.arg4 + i)
+
+$<TRACE
+    IF trace THEN $(
+        writes("SOLB=#%X4 : ", block.start)
+        FOR i=0 TO length-1 DO writef("%X4 ", buffer%%i)
+        newline()
+    $)
+$>TRACE
+$)
+$<COMMAND'
+
+//=============================================================================
+
+LET write.little.block (file, buffer, block.start, length) BE
+$(
+    // This routine writes a small ( <40 bytes) block from the middle of a
+    // cache to a file.
+    // "File" points to a file descriptor, "buffer" is the address where the
+    // block should be taken from and "length" is the length in ring words.
+
+    LET tx.buff = VEC 200/rwpw
+    LET rx.buff = VEC fslen/rwpw
+
+$<TRACE
+    IF trace
+    $(  trace.file(file, "Write block")
+        writef("SOLB=#%X4 : ", block.start)
+        FOR i=0 TO length-1
+        $(  writes(" ")
+            writehex(buffer%%i, 4)
+        $)
+        newline()
+    $)
+$>TRACE
+
+    // Copy block into transmission buffer ( write cannot be directly from
+    // cache because of SSP headers)
+    FOR i=0 TO length-1 BY 1 DO
+                          tx.buff%%(bb.ssp.args + 7 + i) := buffer%%i
+
+    // Set command arguments
+    copy.uid (@file!uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff%%(bb.ssp.args+5) := 0
+    tx.buff%%(bb.ssp.args+6) := block.start
+
+    // The length of the SSP block determines how much data is written
+    fs.command(tx.buff, (bb.ssp.args+7+length), rx.buff, fslen, 17)
+$)
+
+//=============================================================================
+$>COMMAND'
+
+LET write.tiny.block ( file, data, block.start) BE
+$(  LET cache   = file ! cache.address
+$<TRACE IF trace WRITEF("Write %X4 @ %N, ", data, block.start) $>TRACE
+
+    TEST (file!cache.address ~= 0) & (file!start.of.block ~= -1) &
+        ( file!start.of.block <= block.start <
+          (file!start.of.block + file!cache.size) )
+    $(  LET offset      = address.offset(file, block.start, 1)
+$<TRACE IF trace WRITEF("buffered*N") $>TRACE
+        cache%%offset   := data
+        write..little.block (file, offset, block.start, 1)
+    $)
+    ELSE
+    $(  LET buff                 = VEC 1
+        buff %% 0               := data
+        file!cache.address      := buff
+$<TRACE IF trace WRITEF("Not in store*N") $>TRACE
+        write..little.block (file, 0, block.start, 1)
+        file ! cache.address    := cache
+    $)
+$)
+
+//=============================================================================
+
+LET write..little.block (file, offset, block.start, length) BE
+$(
+    // This routine writes a small ( <40 bytes) block from the middle of a
+    // cache to a file.
+    // "File" points to a file descriptor, "offset" is the RINGWORD offset in
+    // the file buffer and "length" is the length in ring words.
+
+    LET tx.buff = VEC 200/rwpw
+    LET rx.buff = VEC fslen/rwpw
+    LET buffer  = file ! cache.address
+
+$<TRACE
+    IF trace
+    $(  //trace.file(file, "Write.block")
+        writef(" SORB=#%X4 : ", file !start.of.block)
+        writef(" SOLB=#%X4 : ", block.start)
+        FOR i=0 TO length-1
+        $(  writes(" ")
+            writehex(buffer%%(i+offset), 4)
+        $)
+        newline()
+    $)
+$>TRACE
+
+    // Copy block into transmission buffer ( write cannot be directly from
+    // cache because of SSP headers)
+    FOR i=0 TO length-1 DO tx.buff%%(bb.ssp.args + 7 + i) := buffer%%(offset+i)
+
+    // Set command arguments
+    copy.uid (@file!uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff%%(bb.ssp.args+5) := 0
+    tx.buff%%(bb.ssp.args+6) := block.start
+
+    // The length of the SSP block determines how much data is written
+    fs.command(tx.buff, (bb.ssp.args+7+length), rx.buff, fslen, 17)
+$)
+
+//=============================================================================
+
+LET read.cache (file, block.start) BE
+$(
+    // This routine carries out a full file server read from the file
+    // described in "file" into that file's cache.
+    // The cache is filled with data from position block.start in the file:
+
+    LET tx.buff         = VEC fslen
+    LET rx.buff         = VEC fslen
+    LET read.pkt        = TABLE notinuse, 0, act.rx.chain, 0,0,0,0,0,0, long.timeout
+    LET reply.pkt       = TABLE notinuse, 0, act.rx.bb,    0,0,0,0,0,0, long.timeout
+    LET reply.port      = sendpkt(notinuse, rhtaskid, act.findfreeport)
+    LET read.port       = reply.port | #X1000 //sendpkt(notinuse, rhtaskid, act.findfreeport)
+    LET explained       = -1
+
+    // Construct the arguments for the initial file server command
+    tx.buff%%(bb.ssp.type) := code.sspreq
+    tx.buff%%(bb.ssp.replyport) := reply.port
+    tx.buff%%(bb.ssp.func) := 21        //7
+    copy.uid (file + uid, 0, tx.buff, bb.ssp.arg2)
+    tx.buff%%(bb.ssp.args+5) := 0
+    tx.buff%%(bb.ssp.args+6) := block.start
+    tx.buff%%(bb.ssp.args+7) := 0
+    tx.buff%%(bb.ssp.args+8) := file!cache.size
+    tx.buff%%(bb.ssp.args+9) := read.port       // Not needed !
+
+    fs.rc := 0
+
+    // Repeat attempt up to 1000 times if necessary and appropriate
+    FOR i = 0 TO 1000
+    $(  LET timeout     = ((i+1) * tickspersecond * ((file!cache.size/128)+1))/2
+        // Test for user break in:
+        break.test()
+        unless i=0 fs.find(0)
+        IF testflags(2) BREAK
+        IF testflags(4) GOTO read.cache.success
+        IF timeout > long.timeout THEN timeout := long.timeout
+        reply.pkt       ! 9     := timeout
+        read.pkt        ! 9     := timeout
+        // Queue receive requests if necessary
+        queue.ring.receive(read.pkt, file!cache.address,
+                                  file!cache.size, read.port, fs.station)
+        queue.ring.receive(reply.pkt, rx.buff, fslen, reply.port, fs.station)
+
+        // Fire read requests until one gets out OK
+        UNLESS sendpkt(notinuse, rhtaskid, act.tx, 0, 0, tx.buff, bb.ssp.args+10,
+                                  fs.station, fs.port) = txst.accepted THEN LOOP
+
+        // Wait for read to finish and for reply to arrive:
+        TEST pktwait(rhtaskid, read.pkt) = reply.pkt
+        $(
+            sendpkt(notinuse, rhtaskid, act.cancel.rx, ?,?,
+                                                ?,?, Fs.station, read.port)
+            dqpkt(rhtaskid, read.pkt)
+            WRITEF("<FS returned reply packet before read packet, rc %X8>*N",
+                        rx.buff%%bb.ssp.rc)
+        $)
+        ELSE pktwait(rhtaskid, reply.pkt)
+
+        // Repeat request if there was no reply at all
+        IF reply.pkt!pkt.res1 = 0
+        THEN WRITEF("<FS failed to reply %N, rc %N, to=%N>*N",
+                                                i, RESULT2, timeout) <> LOOP
+
+        // Examine return code to see if it succeeded or is worth repeating
+        fs.rc := rx.buff%%bb.ssp.rc
+        IF (fs.rc & #xf000) = 0
+            TEST read.pkt!pkt.res1 = file!cache.size
+            THEN GOTO read.cache.success
+            ELSE $( writef("<FS Read fail %X4>*N", fs.rc); LOOP $)
+
+        // Break if it is not worth repeating
+        TEST ((fs.rc & #xf000) = #xf000) | ((fs.rc&#xff00) =
+                                              (rc.obj.in.use&#xff00))
+        $(      UNLESS fs.rc = #Xf700
+                DO WRITEF("<FS RC %X8, read.cache, loop %N>%C",
+                        fs.rc, i, fs.rc=explained -> '*C', '*N')
+        $)
+        ELSE
+        $(      WRITEF(
+                "FS hard failed %X8 on read.cache -- Use BREAK C to give up%C",
+                        fs.rc, fs.rc=explained -> '*C', '*N')
+                delay(5*tickspersecond)
+//              BREAK
+        $)
+
+        UNLESS explained = fs.rc | fs.rc = #Xf700
+        DO  fs.explain(fs.rc) <> explained := fs.rc
+    $)
+    // Failure handling.   Free port numbers and jump to disaster action code
+    sendpkt(notinuse, rhtaskid, act.releaseport, ?, ?, reply.port)
+    LONGJUMP(ms.fs.fail.level, ms.fs.fail.link)
+
+read.cache.success:
+
+    sendpkt(notinuse, rhtaskid, act.releaseport, ?, ?, reply.port)
+    file!start.of.block := block.start
+$<TRACE
+    IF trace
+    $(  LET upto= file!cache.size
+
+        IF upto > 100 upto := 50
+        trace.file(file, "Cache read")
+        FOR i=0 TO upto-1 WRITEF("%X4 ", file!cache.address%%i)
+        newline()
+    $)
+$>TRACE
+$)
+
+//=============================================================================
+
+LET read.byte.from.file (file) = VALOF
+$(  LET pos = file!next.read
+    // Read the next byte from the next position in the file described at
+    // "file".  Read from the cache (after refreshing it if the read has gone
+    // over the end).
+
+    IF pos >= file!cache.size*bprw
+    $(  read.cache(file, file!start.of.block + file!next.read/bprw)
+        file!next.read := 0
+        pos := 0
+    $)
+
+    // Increment the read pointer
+    file!next.read := pos+1
+
+    RESULTIS (file!cache.address) % pos
+$)
+
+//=============================================================================
+
+

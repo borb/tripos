@@ -1,0 +1,1079 @@
+GET "libhdr"
+
+MANIFEST
+$(
+
+// **** Configuration constants
+
+    cv.max              = 7                     // max number of channels
+                                                // N.B. wired into DEQNA init
+    min.packet.size     = 60                    // smallest valid packet
+    packet.byte.size    = 1514                  // max packet size in bytes
+    packet.word.size    = packet.byte.size/2    // ditto in ring words
+    erx.pkt.max         = 16                    // packets to queue on DEQNA
+    openport            = 111                   // port number for OPENs
+    openpkt.count       = 2                     // number of OPEN requests
+    openbuf.size        = 64                    // size of OPEN buffer
+    timer.interval      = tickspersecond        // timer pkt bounce frequency
+    idle.interval       = 10*tickspersecond/timer.interval // for idle pkts
+    small.interval      = 1                     // small retry interval
+    timervec.upb        = 15                    // 2**n-1; > idle.interval
+    rx.timeout          = 180*tickspersecond/timer.interval
+
+
+// **** Useful values
+
+    code.open           = #X6A00                // code for OPEN request
+    code.openack        = #X6500                // code for OPENACK
+    codemask            = #XFF00                // mask for code value
+
+
+// **** Ethernet pseudo-address
+
+    ea.0        = #X00
+    ea.1        = #X11
+    ea.2        = #X11
+    ea.3        = #X11
+    ea.4        = #X00
+    ea.5        = #X00
+
+
+// **** Machine I/O addresses
+
+    nil         = #160000 >> 1                  // non-existent area of store
+
+    io.k.pdr    = #172300 >> 1                  // kernel mode PDRs
+    io.k.par    = #172340 >> 1                  // kernel mode PARs
+    io.u.pdr    = #177600 >> 1                  // user mode PDRs
+    io.u.par    = #177640 >> 1                  // user mode PARs
+    io.sr0      = #177572 >> 1                  // MMU status register 0
+        io.sr0.mapen    = #000001               // enable mapping bit
+    io.sr3      = #172516 >> 1                  // MMU status register 3
+        io.sr3.map22    = #000020               // enable 22 bit mapping
+    io.ps       = #177776 >> 1                  // processor status
+
+
+// **** Device numbers
+
+    id.timer    = -1                            // timer pseudo-device
+    id.rrxdev   = -7                            // ring receiver driver
+    id.rtxdev   = -8                            // ring transmitter driver
+    id.etherdev = -9                            // ethernet driver
+
+
+// **** Tripos packet format
+
+//      Ring receiver driver
+
+    pkt.type.rrx        = 2                     // receive block
+        pkt.rrx.stn     = pkt.arg1              // station to receive from
+        pkt.rrx.port    = pkt.arg2              // port number to listen on
+        pkt.rrx.wcnt    = pkt.arg3              // word count in buffer
+        pkt.rrx.buff    = pkt.arg4              // buffer pointer
+
+    pkt.type.rcan       = 4                     // cancel reception request
+        pkt.rcan.pkt    = pkt.arg1              // address of packet
+
+//      Ring transmitter driver
+
+    pkt.type.rtx        = 1                     // transmit block
+        pkt.rtx.stn     = pkt.arg1              // station to transmit to
+        pkt.rtx.port    = pkt.arg2              // port number to transmit to
+        pkt.rtx.wcnt    = pkt.arg3              // word count in buffer
+        pkt.rtx.buff    = pkt.arg4              // buffer pointer
+
+//      Ethernet driver
+
+    pkt.type.era        = 1                     // read physical address
+        pkt.era.buff    = pkt.arg1              // pointer to buffer
+
+    pkt.type.est        = 2                     // set status
+        pkt.est.status  = pkt.arg1              // status bits
+
+    pkt.type.etx        = 3                     // transmit packet
+        pkt.etx.adh     = pkt.arg1              // addr descriptor & high bits
+        pkt.etx.buffb   = pkt.arg2              // low address bits
+        pkt.etx.negwcnt = pkt.arg3              // - word count
+
+    pkt.type.erx        = 4                     // receive packet
+        pkt.erx.adh     = pkt.arg1              // addr descriptor & high bits
+        pkt.erx.buffb   = pkt.arg2              // low address bits
+        pkt.erx.negwcnt = pkt.arg3              // - word count
+
+//      All ring and ethernet packets - private fields
+
+//  The private area begins after the 'arg8' field of the packet, because
+//  the DEQNA driver uses fields up to there for workspace.
+
+    pkt.private = pkt.arg1+8
+    pkt.cv      = pkt.private                   // pointer to owning cv
+    pkt.buffid  = pkt.private+1                 // identifier of buffer
+    pkt.bytes   = pkt.private+2                 // slave of count from buffer
+    pkt.bcptr   = pkt.private+3                 // pointer for broadcasting
+    pkt.buff.type = pkt.private+4               // type for broadcast filter
+
+    pkt.upb     = pkt.private+4                 // upper bound
+
+
+// **** Data structure describing connection
+
+    cv.ident    = 0                             // channel identification
+
+//  invariant: (cvvec!x)!cv.ident = x
+
+    cv.fl       = 1                             // flags
+        cv.fl.none      = 0                     // default state
+        cv.fl.active    = #X0001                // connection is active
+        cv.fl.dying     = #X0002                // connection is dying
+
+    cv.rrx.stn  = 2                             // ring station
+    cv.rtx.stn  = cv.rrx.stn                    // same for tx and rx
+    cv.rrx.port = 3                             // port to listen on
+    cv.rtx.port = 4                             // port to send to
+    cv.rrx.pkt  = 5                             // rrx packet outstanding
+    cv.last.rrx = 6                             // last reception time
+    cv.timerval = 7                             // time the timer is set for
+    cv.opts     = 8                             // client options
+        cv.opts.bc      = #X0003                // broadcast options
+        cv.opts.bc.none = #X0000                //  none
+        cv.opts.bc.all  = #X0001                //  all
+        cv.opts.bc.filt = #X0002                //  filtered
+        cv.opts.loop    = #X0004                // loopback mode
+        cv.opts.mbz     = #XFFF8                // bits which must be zero
+    cv.bfilt    = 9                             // broadcast filter
+
+    cv.upb      = 9                             // upb for allocation
+
+
+// **** Buffer layout
+
+    buff.bytes  = 0                             // private field for byte cnt
+    buff.packet = 1                             // start of packet proper
+    buff.dest   = buff.packet + 0               // Ethernet destination addr
+    buff.source = buff.packet + 3               // Ethernet source addr
+    buff.type   = buff.packet + 6               // Ethernet packet type
+    buff.level1 = buff.packet + 7               // Start of level 1 data
+    buff.size   = buff.packet + packet.word.size// size of a buffer
+
+
+// **** OPEN block layout
+
+    open.ident  = 0                             // identification word
+    open.port   = 1                             // reply port
+    open.func   = 2                             // function code
+    open.opts   = 3                             // options
+    open.bfilt  = 4                             // broadcast filter
+
+    open.len    = 5                             // minimum length
+
+
+// **** OPENACK block layout
+
+    oack.ident  = 0                             // identification word
+    oack.port   = 1                             // port for traffic
+    oack.rc     = 2                             // return code
+ // oack.?      = 3                             // reserved
+    oack.eaddr  = 4                             // Ethernet address (3 words)
+
+    oack.len    = 7                             // length of ack
+
+
+// **** OPENACK return codes
+
+    oack.rc.badfunction = #XC002                // bad function code
+    oack.rc.congestion  = #XA003                // service congested
+    oack.rc.badpars     = #X8005                // invalid parameters
+    oack.rc.badlen      = #XC00B                // invalid OPEN block length
+
+
+// **** Dynamic port numbers
+
+    port.min            = 500                   // smallest I use
+    port.inc            = cv.max + 1            // increment: allows ident to
+                                                // be added in (avoids
+                                                // duplicates)
+    port.max            = 4095 - cv.max         // maximum possible
+
+$)
+
+
+GLOBAL
+$(
+    tracing     : ug + 0                        // whether tracing
+    cvvec       : ug + 1                        // table of cvs
+    cv          : ug + 2                        // current cv
+    free.pkt.q  : ug + 3                        // chain of free packets
+    free.count  : ug + 4                        // count of free packets
+    ea.template : ug + 5                        // ethernet address template
+    lock.r.pkt  : ug + 6                        // rx packet currently locked
+    lock.r.free : ug + 7                        // whether lock.r.pkt freed
+    lock.t.pkt  : ug + 8                        // tx packet currently locked
+    lock.t.free : ug + 9                        // whether lock.t.pkt freed
+    freepkt.ptr : ug + 10                       // pointer for freepkt
+    erx.pkt.count : ug + 11                     // count of Ethernet pkts
+    newcv.ptr   : ug + 12                       // used when searching for cv
+    port.val    : ug + 13                       // dynamic port counter
+    timervec    : ug + 14                       // timer vector
+    now         : ug + 15                       // current clock value
+    timer.ptr   : ug + 16                       // for idle scanning
+    reset.count : ug + 17                       // copy of reset counter
+$)
+
+
+// **** Debugging code
+
+LET queue(pkt) BE
+    IF qpkt(pkt) = 0 THEN abort(1, 1)
+
+LET trace(ch) BE IF tracing THEN sawrch(ch)
+
+
+// **** Buffer management
+
+/*
+
+   Buffers for ring and Ethernet packets are kept in the second 64Kbytes
+of physical memory. This memory is outside the normal Tripos address space,
+but within the 128Kbyte region that the Type2 ring interface can address.
+This program sometimes needs to peek into a buffer, to decide where to
+route it. The memory mapping unit is used to do this.
+
+   The whole of this program normally runs in kernel mode, with a 1-1
+address mapping set up. To address an I/O buffer, the user mode mapping
+registers are set up the same, except that the top page (I/O page) is
+mapped onto the page containing the buffer. Then the program is switched
+into user mode. Note that the kernel mode mapping registers may not be
+touched because interrupt service routines must be able to access the I/O
+page. An EMT instruction is used to get back into kernel mode.
+
+   The absolute address of a buffer will obviously not fit in a 16-bit
+word. The address used internally is its absolute address masked to 16
+bits - i.e. the byte offset from the beginning of the buffer region.
+This format is easy to convert into the various forms the address is
+required to be in for different parts of the program.
+
+   The routines 'map.buffer' and 'unmap.buffer' are used to make a buffer
+page available. The two routines must be called alternately. While a buffer
+is mapped, the normal I/O page is not available, and explicit system calls
+should not be made because they are likely to fiddle around with the
+processor status word in unhelpful ways. Interrupts preserve the PS, so
+they are OK.
+
+*/
+
+LET map.buffer(buffid) = VALOF
+$(  // Make the given buffer accessible, returning its virtual address
+
+    LET page = (buffid >> 13) + 8               // page number in memory
+    io.u.par!7 := page << 7                     // set up mapping register
+    !io.ps := !io.ps | #140000                  // tweak PS to user mode
+    RESULTIS (buffid | #160000) >> 1            // return BCPL virtual address
+$)
+
+LET unmap.buffer() BE
+$(  LET code = 2 * TABLE
+
+        // The following machine code sets up a trap handler and then takes
+        // a trap. The trap handler (running in kernel state) alters the
+        // stacked PS so that the code resumes in kernel state. Note that
+        // the return link to the BCPL code must be recovered from the stack
+        // before the trap, since changing mode will have the side effect of
+        // changing which stack pointer is in use. The trap handler must run
+        // disabled because there are two items on the system stack while it
+        // is running, which is a state not allowed in enabled code.
+
+        #010700,                                // MOV R7,R0    ; prog counter
+        #062700, #000020,                       // ADD #20,R0   ; handler addr
+        #010037, #000030,                       // MOV R0,@#30  ; trap vector
+        #012603,                                // MOV (SP)+,R3 ; recover link
+        #104000,                                // EMT 0        ; take trap
+        #000163, #000002,                       // JMP 2(R3)    ; return
+
+        #042766, #140000, #000002,              // BIC #140000,2(SP) ; k mode
+        #000002                                 // RTI          ; return
+
+    code()
+$)
+
+
+// **** Packet handling
+
+/*
+
+   There is a Tripos packet associated with each buffer. A queue of free
+packets is kept, and maintained by the following routines.
+
+   There is a mis-feature of the DEQNA driver, which means that the hardware
+is still using certain fields of a packet when it sends it back.
+It is therefore important that the last packet to come back from the
+DEQNA driver is not sent back to it. It is OK to send the packet to the ring
+driver however, so the desired effect can be achieved by refraining from
+freeing the packet. This is done by 'locking' the packet, which notes its
+identity in the global 'lock.x.pkt'. If 'freepkt' finds that it is trying to
+free the locked packet, it sets the flag 'lock.x.free' instead. If this flag
+is set when the packet is unlocked (implicitly, by locking another one), it
+is freed again. ('x' is 'r' for the last reception packet and 't' for the
+last transmission packet).
+
+   Buffer shortages may be expected to be rare, so there is a fairly
+lightweight mechanism for coping with them.  If no packet is available for a
+reception, we simply forget about it. Later, when a packet is freed, 'freepkt'
+notices that the free queue was empty, and so looks around for a sensible
+place to use the packet rather than freeing it. No attempt is made to deal
+with shortages in the correct order, but to make it moderately fair, each
+search resumes from where the last successful one left off, so that no single
+connection can be starved indefinitely.
+
+*/
+
+LET getpkt() = VALOF
+$(  LET pkt = free.pkt.q                        // first item on free queue
+    IF pkt = nil THEN
+    $(  trace('#')
+        RESULTIS nil                            // no packet
+    $)
+    free.pkt.q := free.pkt.q!pkt.link           // unlink it
+    free.count := free.count - 1                // decrement count
+    pkt!pkt.link := notinuse                    // clear link
+    RESULTIS pkt                                // and return packet
+$)
+
+
+AND freepkt(pkt) BE
+$(  // It doesn't matter what order the free queue is kept in. For debugging
+    // it is convenient to put recently used packets on the end of the
+    // queue. Later I'll change it to put them on the front for efficiency.
+
+    LET ptr = @free.pkt.q
+    LET was.empty = free.pkt.q = nil
+
+    IF pkt = lock.r.pkt THEN
+    $(  lock.r.free := TRUE
+        RETURN
+    $)
+
+    IF pkt = lock.t.pkt THEN
+    $(  lock.t.free := TRUE
+        RETURN
+    $)
+
+    WHILE !ptr ~= nil DO ptr := ptr!pkt.link    // scan to end
+    pkt!pkt.link := nil
+    !ptr := pkt                                 // chain on to end
+    free.count := free.count + 1                // increment count
+
+    IF was.empty
+    $(  // The free queue was empty, so there might have been a packet
+        // shortage previously.  Poke around to see if anything useful
+        // can now be done. This code can be quite tortuous, since it
+        // should be executed only rarely.
+
+        // In general, the ring is more critcal than the Ethernet, since
+        // there is only one reception buffer per port. However, the DEQNA
+        // must not be allowed to be without buffers for long, because
+        // lack of reception buffers will block DEQNA transmission (because
+        // transmit status queues behind data in the receive fifo). So we
+        // give priority to the DEQNA if it is running very short of buffers.
+        // I believe that the current algorithm cannot deadlock. When the
+        // last packet comes back from the DEQNA, a time bomb starts ticking,
+        // which will go off as soon as another packet comes in. However, that
+        // last packet will always unlock the packet before, and that packet
+        // is guaranteed to be seen by 'freevec' sometime AFTER the
+        // 'erx.pkt.count' counter was decremented to zero. This routine
+        // ensures that that packet goes to the DEQNA, thus defusing the bomb.
+
+        LET old.cv = cv
+        LET ptr = freepkt.ptr
+        trace('F')
+        TEST erx.pkt.count = 0 THEN
+        $(  start.erx()
+            trace('+')
+        $)
+        ELSE
+        $(  ptr := ptr + 1                      // onto next
+            IF ptr > cv.max THEN ptr := 0       // wrap
+            cv := cvvec!ptr
+            IF ((cv!cv.fl & cv.fl.active) ~= 0) & (cv!cv.rrx.pkt = nil) THEN
+            $(  start.rrx()
+                trace('0'+cv!cv.ident)
+                freepkt.ptr := ptr
+                BREAK
+            $)
+            IF ptr = freepkt.ptr THEN           // done all ring, try Ethernet
+            $(  IF erx.pkt.count < erx.pkt.max THEN
+                $(  start.erx()
+                    trace('-')
+                $)
+                BREAK
+            $)
+        $)  REPEAT
+        IF free.pkt.q ~= nil THEN trace('f')    // crisis over
+        cv := old.cv
+    $)
+$)
+
+
+AND lockrpkt(pkt) BE
+$(  LET unlock.r.pkt = lock.r.pkt               // this is the packet unlocked
+    lock.r.pkt := pkt                           // lock this one
+    IF lock.r.free THEN                         // check whether last free
+    $(  freepkt(unlock.r.pkt)                   // really free it this time
+        lock.r.free := FALSE                    // and clear flag
+    $)
+$)
+
+
+AND locktpkt(pkt) BE
+$(  LET unlock.t.pkt = lock.t.pkt               // this is the packet unlocked
+    lock.t.pkt := pkt                           // lock this one
+    IF lock.t.free THEN                         // check whether last free
+    $(  freepkt(unlock.t.pkt)                   // really free it this time
+        lock.t.free := FALSE                    // and clear flag
+    $)
+$)
+
+
+// **** Routines for sending off packets
+
+AND start.rrx() BE
+$(  LET pkt = getpkt()
+    IF pkt = nil THEN RETURN
+    pkt!pkt.cv := cv
+    pkt!pkt.id := id.rrxdev                     // fill in packet
+    pkt!pkt.type := pkt.type.rrx
+    pkt!pkt.rrx.stn := cv!cv.rrx.stn
+    pkt!pkt.rrx.port := cv!cv.rrx.port
+    pkt!pkt.rrx.wcnt := packet.word.size + 1    // allow 1 for the length word
+    pkt!pkt.rrx.buff := (pkt!pkt.buffid >> 1) | #X8000
+    queue(pkt)
+    cv!cv.rrx.pkt := pkt
+$)
+
+
+AND start.rtx(pkt) BE
+$(  LET temp, bit = ?, ?
+    pkt!pkt.id := id.rtxdev                     // fill in packet
+    pkt!pkt.type := pkt.type.rtx
+    pkt!pkt.rtx.stn := cv!cv.rtx.stn
+    pkt!pkt.rtx.port := cv!cv.rtx.port
+    pkt!pkt.rtx.wcnt := (pkt!pkt.bytes + 3)/2   // round up, allow for count
+    pkt!pkt.rtx.buff := (pkt!pkt.buffid >> 1) | #X8000
+    queue(pkt)
+    set.timer(idle.interval)
+$)
+
+
+AND start.erx() BE
+$(  LET pkt = getpkt()
+    IF pkt = nil THEN RETURN
+    pkt!pkt.cv := nil
+    pkt!pkt.id := id.etherdev
+    pkt!pkt.type := pkt.type.erx
+    pkt!pkt.erx.adh := 1                        // high order address bit
+    pkt!pkt.erx.buffb := pkt!pkt.buffid + 2     // allow for count
+    pkt!pkt.erx.negwcnt := -packet.word.size
+    queue(pkt)
+    erx.pkt.count := erx.pkt.count + 1
+$)
+
+
+AND start.etx(pkt) BE
+$(  pkt!pkt.id := id.etherdev
+    pkt!pkt.type := pkt.type.etx
+    pkt!pkt.etx.adh := ((pkt!pkt.bytes & 1) ~= 0) -> #X2081, #X2001
+    pkt!pkt.etx.buffb := pkt!pkt.buffid + 2     // allow for count
+    pkt!pkt.etx.negwcnt := -((pkt!pkt.bytes + 1)/2)
+    queue(pkt)
+$)
+
+
+// **** Timeouts, idle traffic
+
+/*
+
+   The timer routine has two jobs to do: arranging to send out idle packets
+on channels which have not transmitted anything recently, and deleting
+channels which have not received anything for a long time.
+
+   The first of these activities makes use of the vector 'timervec'. This is
+used as a circular array. The word pointed to by 'now' (mod timervec.upb)
+refers to the current time, the next word refers to one time interval in the
+future, and so on. Each channel has a bit associated with it, and it sets that
+bit in the appropriate word of 'timervec' to indicate when it next needs
+attention. If the timer does not expire, it clears the bit and moves it
+further on. If the timer routine finds a bit set when it moves 'now', it
+arranges to schedule the appropriate idle packet.
+
+   The second is done simply by recording the time of the last received packet
+for each channel. Each call of the timer routine looks at one channel, to see
+if it has timed out by comparing the time recorded with 'now'.
+
+*/
+
+AND set.timer(interval) BE
+$(  LET bit = 1 << cv!cv.ident                  // bit for this channel
+    LET temp = ?
+    temp := timervec + cv!cv.timerval           // point to old timer
+    !temp := !temp & NOT bit                    // remove it
+    temp := (now + interval) & timervec.upb
+    cv!cv.timerval := temp                      // record new one
+    temp := timervec + temp                     // point to it
+    !temp := !temp | bit                        // and set it
+$)
+
+LET timer.routine() BE
+$(  LET lv.timer = ?
+    now := now + 1
+    lv.timer := timervec + (now & timervec.upb)
+    IF !lv.timer ~= 0 THEN
+    $(  FOR cvid = 0 TO cv.max DO
+        $(  IF (!lv.timer & (1 << cvid)) ~= 0 THEN
+            $(  LET pkt = getpkt()
+                cv := cvvec!cvid
+                IF pkt = nil THEN               // no pkt, reset timer
+                $(  set.timer(small.interval)
+                    LOOP
+                $)
+                trace('i')
+                trace('0'+cvid)
+                pkt!pkt.bytes := 0
+                pkt!pkt.bcptr := cv.max         // not to be broadcast
+                map.buffer(pkt!pkt.buffid)!buff.bytes := 0
+                unmap.buffer()
+                start.rtx(pkt)                  // which resets the timer
+            $)
+        $)
+        IF !lv.timer ~= 0 THEN abort(1, 7)      // should be by now
+    $)
+    timer.ptr := timer.ptr + 1
+    IF timer.ptr > cv.max THEN timer.ptr := 0
+    cv := cvvec!timer.ptr
+    IF ((cv!cv.fl & cv.fl.active) ~= 0) &
+        ((now - cv!cv.last.rrx) > rx.timeout) THEN
+    $(  LET temp, bit = ?, ?
+        LET pkt = getpkt()
+        IF pkt = nil THEN RETURN                // it will come up again
+        trace('K')
+        trace('0'+cv!cv.ident)
+        cv!cv.fl := cv!cv.fl & NOT cv.fl.active
+        cv!cv.fl := cv!cv.fl | cv.fl.dying      // mark it dying
+        bit := 1 << cv!cv.ident
+        temp := timervec + cv!cv.timerval
+        !temp := !temp & NOT bit                // clear timer
+        TEST cv!cv.rrx.pkt = nil THEN
+        $(  freepkt(pkt)                        // nothing to cancel
+            cv!cv.fl := cv.fl.none              // channel now dead
+        $)
+        ELSE
+        $(  pkt!pkt.id := id.rrxdev
+            pkt!pkt.type := pkt.type.rcan
+            pkt!pkt.rcan.pkt := cv!cv.rrx.pkt
+            pkt!pkt.cv := cv
+            queue(pkt)
+        $)
+    $)
+$)
+
+
+// **** Initial connection
+
+LET open(openpkt) BE
+$(  LET openbuff = openpkt!pkt.rrx.buff
+    LET stn = openpkt!pkt.res1 & 255
+    LET oackpkt, oackbuff = ?, ?
+    LET channel.opened = FALSE
+
+    // First check that it is a reasonable looking request
+
+    IF (openpkt!pkt.res1 & #XFF00) ~= 0 THEN RETURN     // bad pkt
+    IF (openbuff!open.ident & codemask) ~= code.open THEN RETURN
+
+    // It looks like an OPEN, so it should be acknowledged. A buffer from the
+    // main pool is used for the OPENACK (there are dedicated small buffers
+    // for the OPEN to avoid tying down main buffers permanently).
+
+    trace('o')
+    oackpkt := getpkt()
+    IF oackpkt = nil THEN RETURN                // How sad!
+    oackbuff := map.buffer(oackpkt!pkt.buffid)
+
+    FOR i = 0 TO oack.len - 1 DO oackbuff!i := 0 // just to be clean
+    oackbuff!oack.ident := code.openack
+
+    TEST openpkt!pkt.res2 ~= open.len THEN oackbuff!oack.rc := oack.rc.badlen
+    ELSE TEST (openbuff!open.opts & cv.opts.mbz) ~= 0 THEN
+        oackbuff!oack.rc := oack.rc.badpars
+    ELSE
+    $(  LET ptr = newcv.ptr
+        $(  ptr := ptr + 1
+            IF ptr > cv.max THEN ptr := 0
+            cv := cvvec!ptr
+            IF (cv!cv.fl & (cv.fl.active|cv.fl.dying)) = 0 THEN
+            $(  // Found a free channel to use
+                LET temp, bit = ?, ?
+                port.val := port.val + port.inc
+                IF port.val > port.max THEN port.val := port.min
+                newcv.ptr := ptr
+                cv!cv.fl := cv.fl.active        // set active flag; clear rest
+                cv!cv.rrx.stn := stn
+                cv!cv.rrx.port := port.val + cv!cv.ident
+                cv!cv.rtx.port := openbuff!open.port
+                cv!cv.rrx.pkt := nil
+                cv!cv.timerval := 0
+                set.timer(idle.interval)
+                cv!cv.last.rrx := now
+                cv!cv.opts := openbuff!open.opts
+                cv!cv.bfilt := openbuff!open.bfilt
+                oackbuff!oack.port := cv!cv.rrx.port
+                FOR i = 0 TO 2 DO oackbuff!(oack.eaddr+i) := ea.template!i
+                (oackbuff+oack.eaddr)%5 := cv!cv.ident // Ethernet address
+                channel.opened := TRUE
+                BREAK
+            $)
+            IF ptr = newcv.ptr THEN
+            $(  // Cycled through all - none free
+                oackbuff!oack.rc := oack.rc.congestion
+                BREAK
+            $)
+        $)  REPEAT
+    $)
+
+    unmap.buffer()
+    oackbuff := nil
+
+    // Now that the buffer is unmapped, it is safe to start listening on
+    // the new channel.
+
+    IF channel.opened THEN
+    $(  trace('0'+cv!cv.ident)
+        start.rrx()
+    $)
+
+    // Send off the OPENACK
+
+    oackpkt!pkt.id   := id.rtxdev
+    oackpkt!pkt.type := pkt.type.rtx
+    oackpkt!pkt.rtx.stn := stn
+    oackpkt!pkt.rtx.port := openbuff!open.port
+    oackpkt!pkt.rtx.wcnt := oack.len
+    oackpkt!pkt.rtx.buff := (oackpkt!pkt.buffid >> 1) | #X8000
+    oackpkt!pkt.bcptr := cv.max                 // don't broadcast
+    queue(oackpkt)
+    trace(channel.opened -> 'a', 'A')
+$)
+
+
+// **** Initialization
+
+LET initialize() BE
+$(
+    LET store(upb) = VALOF
+    $(  LET s = getvec(upb)
+        IF s = 0 THEN abort(1, 2)
+        FOR i = 0 TO upb DO s!i := 0
+        RESULTIS s
+    $)
+
+    LET init.code = 2 * TABLE
+
+        // The following code sets up the user mode stack pointer. Since
+        // system calls cannot be done safely while in user mode, the only
+        // activity which will use the user stack is a BCPL procedure call
+        // (and that cannot be forbidden because one is needed to get out
+        // of user state). It is therefore known that only one word of user
+        // stack is needed, so it is put right at the end of the main system
+        // stack, location #400. To achieve this, the user stack pointer must
+        // be set to #402.
+
+        #012603,                                // MOV (SP)+,R3 ; recover link
+        #052737, #140000, #177776,              // BIS #140000,@#PS ; user
+        #012706, #402,                          // MOV #402,R6  : set usp
+        #042737, #140000, #177776,              // BIC #140000,@#PS ; kernel
+        #000163, #000002                        // JMP 2(R3)    ; return
+
+    // Misc variables
+
+    tracing := FALSE                            // tracing off by default
+    free.pkt.q := nil                           // empty queue
+    free.count := 0                             // count of free buffers
+    lock.r.pkt := nil                           // isn't one yet
+    lock.r.free := FALSE                        // not yet
+    lock.t.pkt := nil                           // isn't one yet
+    lock.t.free := FALSE                        // not yet
+    freepkt.ptr := 0                            //
+    erx.pkt.count := 0                          // none queued yet
+    newcv.ptr := 0                              //
+    port.val := port.min                        // port number value
+    now := 0                                    // init clock
+    timer.ptr := 0                              //
+    reset.count := 0                            // reset counter
+
+    // MMU
+
+    !io.sr0 := 0                                // mapping off
+    init.code()                                 // machine code initialization
+    FOR page = 0 TO 7 DO                        // set up memory mapping
+    $(  io.k.pdr!page := #B0111111100000110
+        io.k.par!page := page << 7
+        io.u.pdr!page := #B0111111100000110
+        io.u.par!page := page << 7
+    $)
+    io.k.par!7 := #177600                       // I/O page
+    !io.sr3 := io.sr3.map22                     // 22-bit mapping
+    !io.sr0 := io.sr0.mapen                     // enable mapping
+
+    // Get cv blocks
+
+    cvvec := store(cv.max)
+    FOR cvident = 0 TO cv.max DO
+    $(  LET cv = store(cv.upb)
+        cvvec!cvident := cv
+        cv!cv.ident := cvident
+        cv!cv.fl := cv.fl.none
+    $)
+
+    // Get buffers and packets. The first 'erx.pkt.max' calls of 'freepkt'
+    // will automatically send the buffers to the Ethernet receiver.
+
+    FOR buffpage = 0 TO 7 DO
+    $(  MANIFEST $( byte.size = buff.size << 1 $)
+        FOR ptr = 0 TO 8192 - byte.size BY byte.size DO
+        $(  LET pkt = store(pkt.upb)
+            pkt!pkt.link := notinuse
+            pkt!pkt.buffid := (buffpage << 13) | ptr
+            freepkt(pkt)
+        $)
+    $)
+
+    IF free.count ~= 40 - erx.pkt.max THEN abort(1, 3)
+
+    // Initialize DEQNA. For details, see DEQNA manual.
+
+    FOR light = 1 TO 3 DO
+    $(  LET pkt = getpkt()
+        LET buffer = ?
+        IF pkt = nil THEN abort(1, 4)
+        pkt!pkt.id := id.etherdev
+        pkt!pkt.type := pkt.type.etx
+        pkt!pkt.etx.adh := #X3001               // setup packet
+        pkt!pkt.etx.buffb := pkt!pkt.buffid
+        pkt!pkt.etx.negwcnt := - (128 + (light<<2))/2
+        buffer := map.buffer(pkt!pkt.buffid)
+        FOR i = 0 TO 127 DO buffer%i := 0
+        FOR abyte = 0 TO 5 DO
+        $(  FOR offset = 1 TO 7 DO
+            $(  buffer%(offset+abyte*8)    := abyte ~= 5 -> ea.template%abyte,
+                                                            offset
+                buffer%(offset+64+abyte*8) := offset ~= 1 -> #XFF,
+                                              abyte ~= 5 -> ea.template%abyte,
+                                                            0
+            $)
+        $)
+        unmap.buffer()
+        queue(pkt)
+    $)
+
+    // Enable DEQNA
+
+    $(  LET pkt = getpkt()
+        IF pkt = nil THEN abort(1, 5)
+        pkt!pkt.id := id.etherdev
+        pkt!pkt.type := pkt.type.est
+        pkt!pkt.est.status := #401              // enable
+        queue(pkt)
+    $)
+
+    // Timer packet
+
+    $(  LET timer.pkt = store(pkt.arg1)
+        timer.pkt!pkt.link := notinuse
+        timer.pkt!pkt.id := id.timer
+        timer.pkt!pkt.arg1 := timer.interval
+        queue(timer.pkt)
+    $)
+
+    // Timeout vector
+
+    timervec := store(timervec.upb)
+
+    // OPEN packets and buffers
+
+    FOR i = 1 TO openpkt.count DO
+    $(  LET openpkt = store(pkt.arg6)
+        openpkt!pkt.link := notinuse
+        openpkt!pkt.id   := id.rrxdev
+        openpkt!pkt.type := pkt.type.rrx
+        openpkt!pkt.rrx.stn  := 255
+        openpkt!pkt.rrx.port := openport
+        openpkt!pkt.rrx.wcnt := openbuf.size
+        openpkt!pkt.rrx.buff := store(openbuf.size - 1)
+        queue(openpkt)
+    $)
+$)
+
+
+
+LET start() BE
+$(
+
+ea.template := TABLE    ea.0 | ea.1 << 8,
+                        ea.2 | ea.3 << 8,
+                        ea.4 | ea.5 << 8
+
+initialize()
+
+// **** Fudge up test channels
+/*
+FOR i = 0 TO 1 DO
+$(
+cv := cvvec!i
+cv!cv.fl := cv.fl.active | #X8000
+cv!cv.rrx.stn := #X2D
+cv!cv.rrx.port := 42+i
+cv!cv.rtx.port := 42+i
+cv!cv.timerval := (now + idle.interval + i) & timervec.upb
+timervec!(cv!cv.timerval) := 1 << i
+cv!cv.last.rrx := now
+start.rrx()
+$)
+*/
+
+// **** Main loop begins here
+
+$(  LET pkt = taskwait()
+    LET buffer = ?
+    LET dest = VEC 2
+    LET reset.ptr = (rootnode!rtn.devtab!(-id.etherdev))+13
+
+    /*
+
+       Most packets come through this code more than once before being freed.
+    The state of a packet is kept in the following fields:
+
+        pkt.id          Indicates which device it came from last.
+        pkt.type        Indicates what function it was doing last.
+        pkt.cv          Indicates the 'cv' of the ring connection the packet
+                        originated from, or 'nil' if it came from the
+                        Ethernet. Used to select the 'cv' quickly when
+                        packets arrive from ring; also used to avoid
+                        broadcasting a ring broadcast packet back to its
+                        sender.
+        pkt.bcptr       Records the index number of the connection a
+                        broadcast packet was last sent to. Initialized to -1
+                        for packets which are to be broadcast, and 'cv.max'
+                        for those which are not.
+
+       Note that packet routing is also affected by whether a channel is in
+    loopback mode.
+
+    */
+
+
+    SWITCHON pkt!pkt.id INTO
+    $(
+        CASE id.timer:
+                TEST reset.count = !reset.ptr THEN
+                    trace('.')
+                ELSE
+                $(  trace('!')
+                    reset.count := !reset.ptr
+                $)
+                queue(pkt)
+                timer.routine()
+                ENDCASE
+
+
+        CASE id.rrxdev:
+
+                // A packet has arrived from the ring receiver driver.
+
+                cv := pkt!pkt.cv                // address connection vector
+                IF pkt!pkt.type = pkt.type.rcan THEN
+                $(  trace('c')
+                    trace('0'+cv!cv.ident)
+                    TEST pkt!pkt.res1 THEN
+                    $(  // The cancellation worked. Free the cancelled packet,
+                        // and kill the channel.
+                        freepkt(cv!cv.rrx.pkt)
+                    $)
+                    ELSE
+                    $(  // The cancellation did not work - the packet must
+                        // have been on its way back when we decided to cancel
+                        // it. It should have come back by now - check that it
+                        // is not still outstanding.
+                        IF cv!cv.rrx.pkt ~= nil THEN abort(1, 8)
+                    $)
+                    cv!cv.fl := cv.fl.none
+                    GOTO droppkt
+                $)
+                trace('r')
+                IF pkt!pkt.rrx.port = openport THEN
+                $(  open(pkt)                   // deal with OPEN request
+                    queue(pkt)                  // requeue the request
+                    ENDCASE
+                $)
+                trace('0'+cv!cv.ident)
+                cv!cv.rrx.pkt := nil
+                IF (cv!cv.fl & cv.fl.active) = 0 THEN GOTO droppkt
+                start.rrx()                     // start another reception
+                IF (pkt!pkt.res1 & #XFF00) ~= 0 THEN GOTO droppkt
+                cv!cv.last.rrx := now
+                buffer := map.buffer(pkt!pkt.buffid)
+                pkt!pkt.bytes := buffer!buff.bytes
+                pkt!pkt.buff.type := buffer!buff.type
+                FOR i = 0 TO 2 DO dest!i := buffer!(buff.dest+i)
+/*TEMP FUDGE - implement Xerox Internet Echo Protocol*/
+        IF (cv!cv.fl & #X8000) ~= 0 THEN
+        $(
+                FOR aword = 0 TO 2 DO
+                $(  dest!aword := buffer!(buff.source+aword)
+                    buffer!(buff.source+aword) := buffer!(buff.dest+aword)
+                    buffer!(buff.dest+aword) := dest!aword
+                $)
+                FOR aword = 0 TO 5 DO
+                $(  LET temp = buffer!(buff.level1+3+aword)
+                    buffer!(buff.level1+3+aword) := buffer!(buff.level1+9+aword)
+                    buffer!(buff.level1+9+aword) := temp
+                $)
+                buffer!(buff.level1+15) := 2 << 8 // echo reply
+                buffer!(buff.level1) := -1 // unchecksummed
+        $)
+/*END TEMP FUDGE*/
+                unmap.buffer()
+                IF pkt!pkt.bytes < min.packet.size THEN GOTO droppkt
+                TEST (cv!cv.opts & cv.opts.loop) ~= 0 THEN
+                $(  // If channel is in loopback mode, reflect the packet
+                    // unconditionally.
+                    trace('L')
+                    pkt!pkt.bcptr := cv.max             // don't broadcast
+                    start.rtx(pkt)
+                $)
+                ELSE TEST (dest!0 = ea.template!0) &
+                          (dest!1 = ea.template!1) &
+                          (dest%4 = ea.template%4) THEN
+                $(  // packet is addressed back to the ring
+                    LET id = dest%5
+                    IF (id > cv.max) | (id = cv!cv.ident) THEN GOTO droppkt
+                    cv := cvvec!id
+                    IF (cv!cv.fl & cv.fl.active) = 0 THEN GOTO droppkt
+                    trace('X')
+                    trace('0'+cv!cv.ident)
+                    pkt!pkt.bcptr := cv.max             // don't broadcast
+                    start.rtx(pkt)
+                $)
+                ELSE TEST (dest!0 = #XFFFF) &
+                          (dest!1 = #XFFFF) &
+                          (dest!2 = #XFFFF) THEN
+                $(  // It is a broadcast packet from the ring. Broadcast it
+                    // on the Ethernet first, marking it for subsequent
+                    // broadcast on the ring.
+                    trace('b')
+                    pkt!pkt.bcptr := -1
+                    start.etx(pkt)
+                $)
+                ELSE
+                $(  // Nothing special about it; just send out on Ethernet.
+                    trace('E')
+                    pkt!pkt.bcptr := cv.max             // don't broadcast
+                    start.etx(pkt)
+                $)
+                ENDCASE
+
+
+        CASE id.etherdev:
+
+                SWITCHON pkt!pkt.type INTO
+                $(
+                        CASE pkt.type.erx:
+                        $(  LET bytes = ?
+                            LET dest.last.byte = ?
+                            trace('e')
+                            erx.pkt.count := erx.pkt.count - 1
+                            lockrpkt(pkt)
+                            start.erx()
+                            IF (pkt!pkt.res1 & #XF800) ~= 0 THEN GOTO droppkt
+                            bytes := (pkt!pkt.res1 & #X0700) +
+                                     (pkt!pkt.res2 & #X00FF) + 60
+                            pkt!pkt.bytes := bytes
+                            buffer := map.buffer(pkt!pkt.buffid)
+                            buffer!buff.bytes := bytes
+                            pkt!pkt.buff.type := buffer!buff.type
+                            dest.last.byte := (buffer+buff.dest)%5
+                            unmap.buffer()
+                            IF dest.last.byte = #XFF THEN
+                            $(  pkt!pkt.bcptr := -1
+                                GOTO broadcast
+                            $)
+                            pkt!pkt.bcptr := cv.max             // NOT broadcast
+                            cv := cvvec!dest.last.byte
+                            IF (cv!cv.fl & cv.fl.active) = 0 THEN GOTO droppkt
+                            IF (cv!cv.opts & cv.opts.loop) ~= 0 THEN GOTO droppkt
+                            trace('0'+cv!cv.ident)
+                            trace('T')
+                            start.rtx(pkt)
+                        $)
+                        ENDCASE
+
+                CASE pkt.type.etx:
+                        $(  trace('d')
+                            locktpkt(pkt)
+                            GOTO broadcast
+                        $)
+
+                CASE pkt.type.est:
+                        $(  trace('s')
+                            GOTO droppkt
+                        $)
+
+                DEFAULT:
+                        $(  trace('?')
+                            GOTO droppkt
+                        $)
+
+                $)
+                ENDCASE
+
+        CASE id.rtxdev:
+
+                trace('t')
+
+        broadcast:
+
+                FOR ptr = pkt!pkt.bcptr + 1 TO cv.max DO
+                $(  cv := cvvec!ptr
+                    IF cv = pkt!pkt.cv THEN LOOP        // avoid self
+                    IF ((cv!cv.fl & cv.fl.active) ~= 0) & VALOF
+                        SWITCHON cv!cv.opts & (cv.opts.bc|cv.opts.loop) INTO
+                        $(  DEFAULT:                    // incl loopback cases
+                            CASE cv.opts.bc.none:
+                                RESULTIS FALSE
+
+                            CASE cv.opts.bc.all:
+                                RESULTIS TRUE
+
+                            CASE cv.opts.bc.filt:
+                                RESULTIS pkt!pkt.buff.type = cv!cv.bfilt
+                        $)
+                    THEN
+                    $(  pkt!pkt.bcptr := ptr
+                        trace('0'+cv!cv.ident)
+                        trace('B')
+                        start.rtx(pkt)
+                        ENDCASE
+                    $)
+                $)
+
+        droppkt:
+                freepkt(pkt)
+                ENDCASE
+
+
+        DEFAULT:
+                abort(1, 6)
+    $)
+$)  REPEAT
+
+
+$)
+
+

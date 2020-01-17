@@ -1,0 +1,31 @@
+// (C) Copyright 1979 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "FIND"
+
+GET "libhdr"
+
+LET start(act, scb, string) = VALOF
+$( LET res = 0
+   LET prefix = vec 30/bytesperword
+   LET ptr = ?
+
+   // check if ':' present
+   ptr := split(prefix, ':', string, 1)
+   IF ptr>0 THEN // colon found
+   $( LET cur = currentdir
+      LET res2 = 204 || Directory not found
+      currentdir := locatedir("SYS:H")
+      UNLESS currentdir=0
+      DO $( res := callseg(prefix, 0, act, scb, string)
+            res2 := result2 $)
+      freeobj(currentdir)
+      currentdir := cur
+      result2 := res2
+      RESULTIS res
+   $)
+   RESULTIS 0
+$)
+
+

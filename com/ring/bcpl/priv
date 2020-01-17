@@ -1,0 +1,309 @@
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*************************************************************************
+*  (C) Copyright 1980  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*        P R I V I L E G E    M A N A G E R    I N T E R F A C E        *
+*                                                                       *
+*************************************************************************
+**  C  Gray  Girling      COMPUTER LAB,  CAMBRIDGE           06.09.80  **
+*************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*/
+
+
+SECTION "Priv"
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.ringhdr"
+GET "BCPL.ring"
+GET "BCPL.ringssp"
+GET "IOHDR"
+GET "BCPL.finduidset"
+GET "BCPL.gethex"
+GET "BCPL.synfind"
+
+LET start() BE
+$(  LET arg=VEC 50
+    MANIFEST
+    $(  a.priv  = 0
+        a.puid  = 1
+        a.auty  = 2
+        a.time  = 3
+        a.serv  = 4
+        a.allow = 5
+        a.grant = 6
+        a.make  = 7
+        a.kill  = 8
+        a.soap  = 9
+    $)
+    TEST
+    rdargs("ALLOWANCE/a,PUID,AUTHENTITY,T=Timeout/k,Service/k,*
+           *Allowed/s,Grant/s,Give/s,Delete/s,AUTY/s",
+                arg,50)=0 THEN
+        writes("Syntax error on command line*N") ELSE
+    TEST 0~=dr.rctype(dr.initialise()) THEN dr.writeringerror(result2) ELSE
+    $(  LET grant  = (arg!a.grant~=0)
+        LET allow  = (arg!a.allow~=0)
+        LET kill   = (arg!a.kill ~=0)
+        LET make   = (arg!a.make ~=0)
+        LET bestow = ~(grant | allow | kill | make)
+        TEST (grant->1,0)+(allow->1,0)+(kill->1,0)+
+           (make->1,0)+(bestow->1,0) ~= 1                |
+           arg!a.time~=0 & ~(grant | bestow)             THEN
+        writes("Illegal combination of arguments*N") ELSE
+        $(  LET privman       = VEC sv.upb
+            LET auth          = VEC uidsize-1
+            LET user          = VEC uidsize-1
+            LET priv          = VEC uidsize-1
+            LET priv.priv     = VEC uidsize-1
+            LET soap.priv     = VEC uidsize-1
+            LET soap          = (arg!a.soap~=0)
+            LET thing         = (soap -> "Authentity", "Privilege")
+            LET service       = (arg!a.serv\=0 & arg!a.serv%0\=0 -> arg!a.serv,
+                                soap -> "SOAP", "PRIVMAN")
+            LET service.auty  = (soap -> auth, priv)
+            LET op.auth       = (soap -> soap.priv, priv.priv)
+            LET results       = VEC 30
+            LET results.tuid  = results+4
+            LET results.tpuid = results+8
+            LET data          = VEC 40
+            LET data.tuid     = data+5
+            LET data.tpuid    = data+9
+            LET data.puid     = data+((grant | bestow)->13,5)
+            LET data.auty     = data+((grant | bestow)->17,9)
+            LET data.priv     = data+((grant | bestow)->21,13)
+            LET data.op.priv  = data+17
+            LET data.timeout  = data+25
+            LET uidsetlist    = (rootnode ! rtn.info ! rtninfo.ring) ! ri.uidset
+            LET uidset        = uidsetlist+1
+            LET op.priv.uidset= ?
+            LET priv.requested= synfind(arg!a.priv, from.name.domain, 0)
+            LET puid.vec      = VEC uidsize-1
+            LET puid          = uidset+cap.puid
+            LET auty.vec      = VEC uidsize-1
+            LET auty          = uidset+cap.auty
+            LET not.users.id  = (arg!a.auty~=0 | arg!a.puid~=0)
+            LET tuid          = uidset + cap.tuid
+            LET tpuid         = uidset + cap.tpuid
+            LET as.uidset     = 0
+            LET rc            = 0
+            LET fridge.tag    = consoletask
+            // initialise constant UIDs
+            gethex("FF00D01A83CCB900", auth     , uidsize)
+            gethex("FF02B7F78FB014C3", user     , uidsize)
+            gethex("FF02DFBBEBF7B5D8", priv     , uidsize)
+            gethex("FF0287C404772CC9", priv.priv, uidsize)
+            gethex("FF028F4ECB0D6619", soap.priv, uidsize)
+            // Find PUID and AUTY from strings
+            IF arg!a.puid\=0 THEN puid:=getpuid(arg!a.puid, puid.vec)
+            IF arg!a.auty\=0 THEN auty:=getpuid(arg!a.auty, auty.vec)
+            // Has user got the appropriate privilege in FRIDGE ?
+            op.priv.uidset := finduidset(op.auth, priv, fridge.tag)
+            // find principal on whose behalf call will be made:
+            IF (grant | bestow) & not.users.id & puid~=0 & auty~=0 THEN
+            as.uidset := finduidset(puid, auty, fridge.tag)
+            IF ~allow & arg!a.time=0 THEN
+            arg!a.time:= "100"  // default timeout
+            results!0 := 30
+            data!0 := (allow->16, (grant | bestow) -> 26, 20)
+            TEST uidsetlist=0 THEN writes("PRIV: no one logged on*N") ELSE
+            TEST 0=priv.requested THEN
+                writef("PRIV: unknown privilege - '%S'*N", arg!a.priv) ELSE
+            TEST (make | kill) & op.priv.uidset=0 THEN
+                writef("PRIV: can't find privilege for %S in Fridge*N",
+                       (soap->"SOAPPRIV", "PRIVPRIV")) ELSE
+            TEST puid=0 THEN writef("Unknown PUID - '%S'*N",arg!a.puid) ELSE
+            TEST auty=0 THEN writef("Unknown AUTY - '%S'*N",arg!a.auty) ELSE
+            TEST (grant | bestow) & not.users.id & as.uidset=0 THEN
+                writef("Can't find %S %S uidset in the Fridge*N",
+                       (arg!a.auty=0 -> "user", arg!a.auty),
+                       (arg!a.priv=0 -> "<users PUID>", arg!a.auty)) ELSE
+            TEST 0=dr.rctype(dr.lookup(service, privman)) THEN
+            $(  // message for debuging
+//              writef("Request to %S %S '%S'",
+//                     (allow -> "check",
+//                      bestow -> "bestow",
+//                      grant -> "grant",
+//                      make -> "add", "delete"),
+//                     (soap->"authentity","privilege"), arg!a.priv)
+//              IF make | kill THEN
+//              writef(" %S %S", (make->"to","from"), service)
+//              IF not.users.id & (grant | bestow) THEN
+//                  writef(" as %S '%S'",
+//                         (arg!a.auty=0 -> "user", arg!a.auty),
+//                         (arg!a.puid=0 -> "<users PUID>", arg!a.puid))
+//              writes(": *N")
+                IF not.users.id THEN
+                $(  tuid  := as.uidset + cap.tuid
+                    tpuid := as.uidset + cap.tpuid
+                $)
+                // get entry number
+                data!4 := (allow->0, grant->1, bestow->2, make->3, 4)
+                FOR i=0 TO 3 DO
+                $(  data.puid!i := get2bytes(puid, i)
+                    data.auty!i := get2bytes(auty, i)
+                    IF (grant | bestow) THEN
+                    $(  data.tpuid!i := get2bytes(tpuid, i)
+                        data.tuid!i := get2bytes(tuid, i)
+                    $)
+                    data.priv!i := get2bytes(priv.requested, i)
+                    IF make | kill THEN
+                    data.op.priv!i := get2bytes(op.priv.uidset+cap.tuid, i)
+                $)
+//              FOR i=1 TO data!0 DO
+//              writef(" data!%N = %X4 (%N)*N",i,data!i,data!i)
+//              writef(" data = %X4  results = %X4  privman = %X4*N",
+//                     data, results, privman)
+//              FOR i=0 TO sv.upb DO
+//              writef(" privman!%N = %X4 (%N)*N",i, privman!i, privman!i)
+                TEST ~allow & ~(kill | make) &
+                     ~get.timeout(arg!a.time, data.timeout) THEN
+                    writef("PRIV: error in timeout (*"%S*")*N", arg!a.time) ELSE
+                TEST -1~=dr.rctype(dr.ssp(privman, data, results, 5, 1)) THEN
+                $(  TEST dr.result2=0 THEN
+                        TEST allow THEN
+                        writef("%S would be allowed*N",thing) ELSE
+                        TEST grant | bestow THEN
+                        $(  LET new.uidset = VEC capsize
+                            writef("%S granted*N",thing)
+                            FOR i=0 TO 3 DO
+                            $(  put2bytes(new.uidset+cap.puid, i,
+                                          get2bytes(priv.requested, i))
+                                put2bytes(new.uidset+cap.auty, i,
+                                          get2bytes(service.auty, i))
+                                put2bytes(new.uidset+cap.tuid, i,
+                                    (grant -> results.tuid!i, data.tuid!i))
+                                put2bytes(new.uidset+cap.tpuid, i,
+                                    (grant ->  results.tpuid!i, data.tpuid!i))
+                                new.uidset!cap.usertag := fridge.tag
+                            $)
+//                          writes("About to join UID set to list*N")
+                            UNLESS insert.uidset(new.uidset, uidsetlist)>0 THEN
+                            writes("Failed to join new UIDSET to list*N")
+                        $) ELSE
+                        TEST kill THEN
+                        writef("%S no longer held in %S*N", thing, service) ELSE
+                        writef("%S now in %S*N", thing, service)
+                    ELSE 
+                    $(  LET r2 = result2
+                        writef("PRIV: (%S in service %S) ", arg!a.priv, service)
+                        result2 := r2
+                        dr.writeringerror(dr.result2)
+                        result2 := r2
+                    $)
+                $) ELSE
+                $(  LET r2 = result2
+                    writef("PRIV: (%S in service %S) ", arg!a.priv, service)
+                    result2 := r2
+                    dr.writeringerror(result2)
+                    result2 := r2
+                $)
+            $) ELSE
+            $(  LET r2 = result2
+                writef("PRIV: couldn't look-up *"%S*": *N", service)
+                result2 := r2
+                dr.writeringerror(dr.result2)
+                result2 := r2
+            $)
+        $)
+        dr.terminate()
+        synfind(0)      // clear out translation tables
+        stop((result2=0 -> 0, 5))
+    $)
+$)
+
+
+
+
+AND get.timeout(str, timevec) = VALOF
+$(  LET tvec = VEC 4/bytesperword-1
+    LET ok = gethex(str, tvec, 4/bytesperword)
+    IF ok THEN
+    $(  timevec!0 := get2bytes(tvec, 0)
+        timevec!1 := get2bytes(tvec, 1)
+    $)
+    RESULTIS ok
+$)
+
+
+
+AND getpuid(string, puid) =
+    (string%0=16 & gethex(string, puid, uidsize) -> puid,
+        synfind(string, from.name.domain, 0))
+
+
+
+AND insert.uidset(uidset, uid.list.root) = VALOF
+$(  // Inserts the UID set 'uidset' at the end of the UID set list
+    // 'uid.list.root' and returns the its index number.
+    // This operation must be done indivisably.
+    // 'uid.list.root' is guarenteed not to be zero.
+    LET old.priority = tcb!tcb.pri
+    LET new.uidsetlist = getvec(capsize)
+    LET delete.new = FALSE
+    LET index = 1
+    changepri(taskid, maxint)       // for indivisablity
+    WHILE !uid.list.root~=0 & ~equal((uid.list.root+1), uidset, capsize) DO
+    $(  index := index + 1
+        uid.list.root := !uid.list.root
+    $)
+    TEST equal((uid.list.root+1), uidset, capsize) THEN delete.new := TRUE ELSE
+    TEST new.uidsetlist = 0 THEN index:=-1 ELSE
+    $(  new.uidsetlist!0 := 0
+        FOR i=1 TO capsize DO new.uidsetlist!i := uidset!(i-1)
+        !uid.list.root := new.uidsetlist
+        index := index+1
+    $)
+    WHILE 0=changepri(taskid, old.priority) DO old.priority := old.priority+1
+    IF delete.new THEN freevec(new.uidsetlist)
+    RESULTIS index
+$)
+
+
+
+
+
+ 
+

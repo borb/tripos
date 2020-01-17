@@ -1,0 +1,188 @@
+// Source file "meta" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+SECTION "META"
+GET "libhdr"
+GET "wrshdr"
+
+// The word meta is intended to inspire awe.
+// This section allows you to kludge a string onto the
+// keyboard input stream.
+// It is fully recursive.
+// It intercepts sys.rdch, sys.killkbd, sys.keywait, sys.keywaiting
+//  and replaces them with its own versions of the same.
+// If an error occurs killkbd destroys everything, and gets you back
+// to the keyboard.
+
+GLOBAL $(
+  meta.wad       : ug + 287
+  meta.bad       : ug + 288
+  meta.len       : ug + 289
+  meta.ctlprefix : ug + 290
+  meta.savevec   : ug + 291   // may use up to 294
+       $)
+
+LET sys.inlevel() = meta.savevec // attempt August 1983 to allow
+                                 // ^QA string to be _obeyed_, not inserted
+
+LET meta.rdch() = VALOF $( // replacement sys.rdch
+  LET c = ?
+  meta.len := meta.len - 1
+  IF meta.len < 0 THEN RESULTIS meta.endstream(8) // very sneaky...
+  c := meta.wad%meta.bad
+  meta.bad := meta.bad + 1
+  IF c = meta.ctlprefix THEN $( // makes preparing suitable strings easier
+    meta.len := meta.len - 1
+    IF meta.len < 0 THEN RESULTIS meta.endstream(8)
+    c := meta.wad%meta.bad; meta.bad := meta.bad + 1
+    TEST c = '(' THEN
+      IF meta.lisp.allowed THEN
+        RESULTIS wspl(3, yes) // COULD CAUSE RECURSION! what fun!
+    ELSE
+    TEST c = '**' THEN c := meta.ctlprefix ELSE c := ctl & c $)
+  RESULTIS c $)
+
+AND meta.endstream(endroutine.number, parm) = VALOF $(
+  // The current routine has run out of characters,
+  // so upwind one level and ask it the same question
+  LET v = meta.savevec
+  LET endroutine = v!endroutine.number
+  meta.savevec    := v!0
+  meta.ctlprefix  := v!1
+  meta.len        := v!2
+  meta.bad        := v!3
+  meta.wad        := v!4
+  sys.keywait     := v!5
+  sys.keywaiting  := v!6
+  sys.killkbd     := v!7
+  sys.rdch        := v!8
+  freevec(v) // got in meta.chars
+  // Now we do the same thing with the next layer down of input.
+  // I have a feeling that all of this would be much easier
+  // with dynamic free variables...
+  RESULTIS endroutine(parm) $) // parm is only for keywait.
+
+AND meta.killkbd() = meta.endstream(7)
+
+AND meta.keywaiting() = meta.len ~= 0 -> yes, meta.endstream(6)
+
+AND meta.keywait(time) =
+  meta.len ~= 0 -> yes, meta.endstream(5, time)
+
+AND meta.chars(wad, bad, len, ctlprefix) BE $(
+  // NB the chars are not copied, so please don't overwrite them!
+  LET save = getvec(10) // could recurse, don't waste stackspace
+  IF sys.rdch ~= meta.rdch & sys.rdch ~= meta.filerdch THEN meta.savevec := 0
+  // ie if at recursion depth 0, make sure meta.savevec has no
+  // embarassing random value
+  setupsave(save)
+  meta.savevec         := save 
+  meta.ctlprefix       := ctlprefix
+  meta.len             := len
+  meta.bad             := bad
+  meta.wad             := wad
+  sys.keywait         := meta.keywait
+  sys.keywaiting      := meta.keywaiting
+  sys.killkbd         := meta.killkbd
+  sys.rdch            := meta.rdch $)
+  // Future requets for keys will now be answered by meta.rdch.
+  // we keep going while the supply of chars continues.
+  // the save vector is freed when the next character is called,
+  // in meta.endstream.
+
+AND meta.string(s, ctlprefix) BE meta.chars(s, 1, s%0, ctlprefix)
+
+AND meta.file(filename, complain) = VALOF $(
+  LET scb = sys.findinput(filename)
+  LET save = ?
+  IF scb = 0 THEN $(
+    IF complain THEN error("Cannot find/open file *"%s*"", filename)
+    RESULTIS 0 $)
+  IF sys.rdch ~= meta.rdch & sys.rdch ~= meta.filerdch THEN meta.savevec := 0
+  // ie if at recursion depth 0, make sure meta.savevec has no
+  // embarassing random value
+  save := getvec(10)
+  setupsave(save)
+  meta.savevec         := save 
+  meta.ctlprefix       := '\' // default from file
+  meta.len             := 0 // not used.
+  $( LET i = input()
+     sys.selectinput(scb); meta.bad := sys.filerdch(); sys.selectinput(i) $)
+  meta.wad             := scb
+  sys.keywait         := meta.filekeywait
+  sys.keywaiting      := meta.filekeywaiting
+  sys.killkbd         := meta.filekillkbd
+  sys.rdch            := meta.filerdch
+  RESULTIS -1  $)
+
+AND meta.filerdch() = VALOF $(
+  LET c = ?
+  LET i = input()
+  selectinput(meta.wad)
+ again:
+  c := metanextc(i); IF c = endstreamch THEN RESULTIS meta.endstream(8)
+  IF c = ' ' | c = (ctl&'I') | c = ch.line THEN GOTO again
+  IF c = meta.ctlprefix THEN $( // various escape clauses
+    c := metanextc(i); IF c = endstreamch THEN RESULTIS meta.endstream(8)
+    IF c = ' ' | c = (ctl&'I') THEN GOTO done
+    IF c = ch.line THEN $( c := (ctl&'M'); GOTO done $)
+    IF c = '**' THEN $( c := meta.ctlprefix; GOTO done $)
+    IF c = '~' THEN $( c := #X7F; GOTO done $)
+    IF c = '=' THEN $(
+      c := metanextc(i); IF c = endstreamch THEN RESULTIS meta.endstream(8)
+      meta.ctlprefix := c
+      GOTO again $)
+    IF c = ';' THEN $(
+      WHILE c ~= ch.line DO $(
+        c := metanextc(i); IF c = endstreamch THEN RESULTIS meta.endstream(8) $)
+      GOTO again $)
+    IF c = '(' THEN $( // lisp: COULD CAUSE RECURSION!!
+      selectinput(i)   // exit must be clean
+      RESULTIS meta.lisp.allowed -> wspl(3, no), c $)
+    c := ctl & c $)
+  done:
+    WHILE meta.bad = ' ' | meta.bad = (ctl&'I') | meta.bad = ch.line DO
+      meta.bad := sys.filerdch() // surely this statement is bogus??
+                                 // it's cos of end of file confusion.
+                                 // must also detect comments!
+    selectinput(i); RESULTIS c $)
+
+AND metanextc(i) = VALOF $(
+  LET c = ?
+  c := meta.bad
+  TEST c = endstreamch THEN $(
+    endread()
+    selectinput(i) $)
+  ELSE meta.bad := sys.filerdch()
+  RESULTIS c $)
+
+AND meta.filekillkbd() = VALOF $(
+  selectinput(meta.wad); endread(); RESULTIS meta.endstream(7) $)
+
+AND meta.filekeywaiting() = VALOF $(
+  LET i = input()
+  IF meta.bad ~= endstreamch THEN RESULTIS yes
+  selectinput(meta.wad); endread()
+  selectinput(i)
+  RESULTIS meta.endstream(6) $)
+
+AND meta.filekeywait(time) = VALOF $(
+  LET i = input()
+  IF meta.bad ~= endstreamch THEN RESULTIS yes
+  selectinput(meta.wad); endread()
+  selectinput(i)
+  RESULTIS meta.endstream(5, time) $)
+
+AND setupsave(save) BE $(
+  save!0   := meta.savevec
+  save!1   := meta.ctlprefix
+  save!2   := meta.len
+  save!3   := meta.bad
+  save!4   := meta.wad
+  save!5   := sys.keywait
+  save!6   := sys.keywaiting
+  save!7   := sys.killkbd
+  save!8   := sys.rdch $)
+
+

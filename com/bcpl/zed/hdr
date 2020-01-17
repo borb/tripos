@@ -1,0 +1,201 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+GET "LIBHDR"
+
+MANIFEST
+$(
+smax=80;  amax=80
+gmax=10;  cfmax=10
+fmin=5;   fmax=30
+lmax=120; pmax=40
+
+s.in=0; s.out=1
+
+// flags to alterglobal
+g.enable = 0
+g.disable = 1
+g.cancel = 2
+
+// file offsets
+f.lk=0;   f.sp=1
+f.lc=2;   f.ex=3
+f.io=4;   f.fn=5
+
+// command file offsets
+cf.el=0;  cf.sp=1
+cf.cp=2;  cf.cl=3
+cf.cb=4
+
+// line offsets
+l.next=0; l.prev=1
+l.numb=2; l.cch=3
+l.len=4;  l.buf=4
+
+// error codes
+err.uc=0;   err.udc=1
+err.bra=2;  err.cntx=3
+err.pm=4;   err.num=5
+err.line=6; err.fnx=7
+err.str=8;  err.nom=9
+err.rep=10; err.noin=11
+err.nopr=12;err.cr=13
+err.glob=14;err.ff=15
+err.ffa=16; err.arg=17
+err.opt=18; err.rn=19
+err.gv=20;  err.cfv=21
+err.qw=22;  err.brk=23
+err.uql=24
+err.iql=25
+
+// repeatable double letter commands
+c.sa = ('S'<<8) | 'A'
+c.sb = ('S'<<8) | 'B'
+c.dt = ('D'<<8) | 'T'
+c.pa = ('P'<<8) | 'A'
+c.pb = ('P'<<8) | 'B'
+c.nc = ('N'<<8) | 'C'
+
+$)
+
+GLOBAL
+$(
+tempname:150
+isinteractive:151
+openstreams:152
+closestreams:153
+rewind:154
+windup:155
+closeout:156
+closein:157
+newvec:158
+discardvec:159
+
+edit:160
+
+checkvalidchar:161
+checkspaceornl:162
+readcommline:163
+commrdch:164
+uncommrdch:165
+nextcomm:166
+readplusminus:167
+commreadn:168
+numarg:169
+readcontext:170
+abe.args:171
+getstring:172
+lf.arg:173
+readfiletitle:174
+addfilespec:175
+findfilespec:176
+losefilespec:177
+closefile:178
+changecom:179
+revertcom:180
+changeout:181
+changein:182
+
+renumber:183
+split:184
+concatenate:185
+insert:186
+readline:187
+writeline:188
+getline:189
+putline:190
+nextline:191
+prevline:192
+move:193
+ver:194
+verline:195
+
+error:196
+truncate:197
+expand:198
+compress:199
+condense:200
+incrementp:201
+subst:202
+index:203
+readglobal:204
+alterglobal:205
+findglobal:206
+changeglobal:207
+
+
+e.to:220
+e.from:221
+e.work:222
+e.ver:223
+e.with:224
+e.workout:225
+e.workin:226
+e.backup:227
+currentoutput:228
+currentinput:229
+primaryoutput:230
+primaryinput:231
+textin:232
+textout:233
+edits:234
+verout:235
+cfstack:236
+cfsp:237
+maxlinel:238
+maxplines:239
+freelines:240
+oldestline:241
+currentline:242
+current:243
+pointer:244
+expanded:245
+condensed:246
+exhausted:247
+quiet:248
+deleting:249
+repeating:250
+unchanged:251
+nosubs:252
+ceiling:253
+linev:254
+linel:255
+commbuf:256
+commpoint:257
+commlinel:258
+comm:259
+delim:260
+cch:261
+sw.comm:262
+str.comm:263
+f.qual:264
+str.match:265
+str.repl:266
+f.match:267
+z.match:268
+globcount:269
+g.match:270
+g.repl:271
+verifying:272
+str.qual:273
+trailing:274
+filelist:275
+veclist:276
+opened:277
+zerolevel:278
+editlevel:279
+quitlevel:280
+editlab:281
+quitlab:282
+rc:283
+g.qual:284
+g.type:285
+getdelim:286
+showdata:287
+g.count:288
+svec:289
+$)
+
+
+

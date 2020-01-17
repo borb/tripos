@@ -1,0 +1,121 @@
+SECTION "GET"
+$<PDPRSX
+NEEDS "PACK"
+NEEDS "UNPACK"
+$>PDPRSX
+$<TRIPOS MANIFEST $( scb.pos=4 $) $>TRIPOS
+
+GET "SYNHDR"
+
+LET PERFORMGET() BE
+    $( TEST PRSOURCE>0 & SHOWALL
+       $( LET skip = skipping
+          SKIPPING := TRUE
+          $<TRIPOS UNLESS skip DO WRITE.LAST.SYMB(-99) $>TRIPOS // Delete output line!!!!
+          NEXTSYMB()
+          SKIPPING := skip
+       $)
+       ELSE NEXTSYMB()
+       UNLESS SYMB=S.STRING THEN synreport(97)
+
+       UNLESS (STFLAGS & stf.noget) = 0 RETURN
+
+       IF getp + get.inc + get.name >= getmax THEN synreport(-96, 0)
+       GETV!(GETP+get.stream)   := SOURCESTREAM
+       GETV!(GETP+get.line)     := LINECOUNT
+       GETV!(GETP+get.ch)       := CH
+       GETP := GETP + get.inc
+       Source.name              := newvec((wordv%0)/bytesperword)
+       FOR I = 0 TO wordv%0 DO source.name%i := wordv%i
+       GETV!(GETP+get.name)     := source.name
+       LINECOUNT := 1
+$<PDPRSX
+       SOURCESTREAM:=FINDINPUT(WORDV%0=0 -> Sourcefile, Wordv)
+       IF SOURCESTREAM < 0 DO
+       $(S
+          IF SOURCESTREAM = IE.NSF DO  // Does'nt exist, try in LB:[1,1]
+          $( LET W = VEC UNP.SIZ/2
+             LET UW = VEC UNP.SIZ
+             LET UIC = TABLE '[','0','0','1',',','0','0','1',']'
+             LET DEV = TABLE 'L','B','0','0',':'
+
+             UNPACKTITLE(WORDV,UW)
+
+             FOR I=0 TO 8 DO UW!(UNP.UIC + I) := UIC!I
+             FOR I=0 TO 4 DO UW!(UNP.DEV + I) := DEV!I
+
+             PACKSTRING(UW,W)
+             SOURCESTREAM := FINDINPUT(W)
+          $)
+          IF SOURCESTREAM < 0 DO
+                 $( REPORTCOUNT:=REPORTMAX; synreport(0, SOURCESTREAM, wordv) $)
+$>PDPRSX
+$<TRIPOS
+       TEST WORDV%0 = 0
+       THEN SOURCESTREAM:=FINDINPUT(Sourcefile)
+       ELSE
+       $(S STATIC $( G0 = -1; G1 = -1; G2 = -1; G3 = -1; G4 = -1;
+                     G5 = -1; G6 = -1; G7 = -1; G8 = -1; G9 = -1
+                  $)
+           LET olddir = currentdir
+           IF G0=-1     // Then we haven't looked yet ...
+           $( LET ass.list = ROOTNODE ! RTN.INFO ! INFO.ASSIGNMENTS
+              LET string = VEC (3/BYTESPERWORD)
+              string%0 := 2
+              string%1 := 'G'
+              FOR i = @G0 TO @G9 DO !I := 0
+              UNTIL ass.list=0
+              $( FOR i = 0 TO 9
+                 $(     string%2 := i+'0'
+                        IF COMPSTRING(string, ass.list + ass.name)=0
+                        (@G0)!I := ass.list!ass.dir
+                 $)
+                 ass.list := !ass.list
+              $)
+           $)
+
+           Sourcestream := 0
+
+           FOR i = @G0 TO @G3 UNLESS !I=0
+           $( currentdir := !I
+              Sourcestream := findinput(wordv)
+              UNLESS Sourcestream=0 BREAK
+           $)
+
+           Currentdir := Olddir
+           IF Sourcestream=0
+                SOURCESTREAM:=FINDINPUT(Wordv)
+
+           IF Sourcestream=0 FOR i = @G4 TO @G5 UNLESS !I=0
+           $( currentdir := !I
+              Sourcestream := findinput(wordv)
+              UNLESS Sourcestream=0 BREAK
+           $)
+
+           IF Sourcestream=0
+           $( currentdir := locatedir("SYS:G")
+              Sourcestream := findinput(wordv)
+              Freeobj(currentdir)
+           $)
+
+           IF Sourcestream=0 FOR i = @G6 TO @G9 UNLESS !I=0
+           $( currentdir := !I
+              Sourcestream := findinput(wordv)
+              UNLESS Sourcestream=0 BREAK
+           $)
+           currentdir := olddir
+           IF SOURCESTREAM = 0 DO
+                   $( REPORTCOUNT:=REPORTMAX; synreport(0, RESULT2, wordv) $)
+$>TRIPOS
+       $)S
+       SELECTINPUT(SOURCESTREAM)
+       PRINTING := PRINTING & SHOWALL
+       RCH()
+$<PDPRSX
+   $<PROD' IF ch<0 THEN DEB("%S gave %N, %N*N", wordv, sourcestream, ch) $>PROD'
+$>PDPRSX
+       IF (ch<0) & (ch~=ENDSTREAMCH) THEN Synreport(-94, ch)
+        // s.info(linecount, source.name)
+$)
+
+

@@ -1,0 +1,392 @@
+GET "LIBHDR"
+
+MANIFEST
+$( t.hunk = 1000; t.reloc = 1001; t.end = 1002 //  Relocatable Object Hunks
+    t.ext = 1005; ext.ref=129; ext.def=1
+    bpw = 4             // BytesPerWord of MC for which we are CGing
+    secword   = 12345
+    s.true    =  4;    s.false   =  5;    s.rv      =  8;    s.fnap    = 10
+    s.mult    = 11;    s.div     = 12;    s.rem     = 13;    s.plus    = 14
+    s.minus   = 15;    s.query   = 16;    s.neg     = 17;    s.abs     = 19
+    s.eq      = 20;    s.ne      = 21;    s.ls      = 22;    s.gr      = 23
+    s.le      = 24;    s.ge      = 25;    s.slctap  = 27;
+    s.not     = 30;    s.lshift  = 31
+    s.rshift  = 32;    s.logand  = 33;    s.logor   = 34;    s.eqv     = 35
+    s.neqv    = 36;    s.lp      = 40;    s.lg      = 41;    s.ln      = 42
+    s.lstr    = 43;    s.ll      = 44;    s.llp     = 45;    s.llg     = 46
+    s.lll     = 47;    s.needs   = 48;    s.section = 49;    s.rtap    = 51
+    s.goto    = 52;    s.finish  = 68;    s.switchon= 70;    s.global  = 76
+    s.sp      = 80;    s.sg      = 81;    s.sl      = 82;    s.stind   = 83
+    s.slctst  = 84;
+    s.jump    = 85;    s.jt      = 86;    s.jf      = 87;    s.endfor  = 88
+    s.blab    = 89;    s.lab     = 90;    s.stack   = 91;    s.store   = 92
+    s.rstack  = 93;    s.entry   = 94;    s.save    = 95;    s.fnrn    = 96
+    s.rtrn    = 97;    s.res     = 98;    s.datalab =100;    s.iteml   =101
+    s.itemn   =102;    s.endproc =103;    s.debug   =109;    s.mod     =110
+    s.none    =111;
+    s.getbyte =120;    s.putbyte =121;    s.gethalfword=122;
+    s.puthalfword=123
+    s.defines   = 1001  // second SECTION is turned into this! (MCG2 & 7)
+    h1        = 0;    h2        = 1;    h3        = 2
+GV = UG
+    CG        = UG+ 57
+cgf.Codegen     = #X0001; cgf.Cgstarted = #X0002; cgf.WORDADDRESS       = #X0004
+cgf.TRANSCHARS  = #X0008; cgf.halfwordop= #X0010; cgf.Backvec           = #X0020
+cgf.Cgcodeing   = #X0040; cgf.Callcounting=#X0080;cgf.Sectnaming        = #X0100
+cgf.Procnames   = #X0200; cgf.Stkchking = #X0400; cgf.Cgonly            = #X0800
+cgf.Restricted  = #X1000; cgf.Cglisting = #X2000;
+cgf.Multiple    = #X4000; cgf.OCODEINPUT= #X8000
+
+
+   cgf.Hexlist  = cgf.cglisting
+   cgf.stack    = cgf.stkchking
+   cgf.call     = cgf.callcounting
+   cgf.name     = cgf.Sectnaming
+   cgf.sectnameing=cgf.Sectnaming
+// cgf.altobj   = cgf.hexlist
+
+//FRE           = #X8000;       // Top bit ....
+cgf2.opt        = #X4000;       // optimise
+cgf2.mdr        = #X2000;       // Use MUL, DIV and REM subroutines as JSR n(R)
+cgf2.profcount  = #X1000
+cgf2.library    = #X0800;       // place 23456 before subroutine
+cgf2.longnames  = #X0400;       // Use long proc names ( len | chars | 0s | len
+cgf2.68020      = #X0200;       // Use M68020 instructions
+
+stf.debug       = #X2000;       // optimise
+stf.opt         = #X1000;       // optimise
+
+stf.cond        = #X0001; stf.err       = #X0002;       stf.glob        = #X0004
+stf.noget       = #X0010; stf.untag     = #X0020;       stf.decls       = #X0040
+stf.reg         = #X0080; stf.byte      = #X0100;       stf.op          = #X0200
+stf.halfwordop  = #X0400;               // -> DONT use !, Actually use %%
+stf.nowarn      = #X0800;       // No warning messages
+
+stf.ext         = stf.cond | stf.err | stf.glob | stf.untag | stf.byte
+stf.def         = stf.ext
+$)
+
+GLOBAL $(
+maxused     :UG+ 42
+ocodestream :CG+  0; codestream  :CG+  1; verstream   :CG+  2;
+switchspace :CG+  3; tempfile    :CG+  4; collapse    :CG+  5;
+//  Global Routines
+//**********************************  Naughties  *******************************
+//**********************************  Naughties  *******************************
+$<LSI4TRIPOS
+SYSIN:6?;       SYSOUT:7?;      //##############################################
+DEB.FILE:87?;   TASKWRITEF:88;  PRCH:89;        //******************************
+VALID.POINTER:94;               VALIDPOINTER:94;                CLEAR.POINTER:95
+WRITE.LAST.SYMB:96;             SHOWALL:97;     //******************************
+LAST.SYMB.PNT:98;               REPEAT.AGAIN:99;//******************************
+SAVESPACESIZE:101;                              //******************************
+CGFLAG2:106;                                    //******************************
+TRN.SW.SPACE:112;                               //******************************
+// 103, 110, 111, 116, 117, 118, 119, 120, 121, 122 ****************************
+OVFILE:124;     createdir:125;  STFLAGS:126     //******************************
+$>LSI4TRIPOS
+$<68000TRIPOS
+SYSIN:103;      SYSOUT:110;     //##############################################
+DEB.FILE:111;   TASKWRITEF:88;  PRCH:89;        //******************************
+VALID.POINTER:119;              VALIDPOINTER:119;       CLEAR.POINTER:120 //****
+WRITE.LAST.SYMB:96;             SHOWALL:97;     //******************************
+LAST.SYMB.PNT:98;               REPEAT.AGAIN:99;//******************************
+SAVESPACESIZE:101;                              //******************************
+CGFLAG2:106;                                    //******************************
+TRN.SW.SPACE:112;                               //******************************
+OVFILE:121;     createdir:122;  STFLAGS:124     //******************************
+$>68000TRIPOS
+//******************************************************************************
+//******************************************************************************
+//**********************************  Naughties  *******************************
+//**********************************  Naughties  *******************************
+        // Routines called from anywhere (so live in the root)
+        LOADOVERLAY             : GV+  0
+        CALLSYNREPORT           : GV+  1
+        TRANSREPORT             : GV+  2
+        CGREPORT                : GV+  3
+$<PROD' DEB                     : GV+  4        $>PROD'
+
+        // Variables used everywhere
+        Listfile                : GV+  5
+        Lastsect                : GV+  6        //<B>
+        Numeric                 : GV+  7        //<B>
+        Numericocode            : GV + 7        //=============================
+        Datevec                 : GV+  8
+        Obufp                   : GV+  9
+        Codefile                : GV+ 10
+        Quiet                   : GV+ 11        //<B>
+        Reportcount             : GV+ 12
+        Reportmax               : GV+ 13
+        Listout                 : GV+ 14
+        Sourcefile              : GV+ 15
+        Rst.p                   : GV+ 16        // Fatal.error
+        Rst.l                   : GV+ 17        // Fatal.error
+        rec.p                   : GV+ 18
+        Err.p                   : GV +18        //==============================
+        Err.l                   : GV+ 19
+        rec.l                   : GV +19        //==============================
+        Workspace               : GV+ 20
+        Heapsize                : GV+ 21        // CGX
+        Sectletter              : GV+ 22        // CGX
+        sourcestream            : GV+ 23
+
+        //                                              SYN
+        prsource                : GV+ 24        //<B>
+        //                                              SYN & TRN
+        //                                              TRN
+        //                                              TRN & CG
+        Slow                    : GV+ 25        //<B>
+        Fileocode               : GV+ 26        //<B>
+        Ocodefile               : GV+ 27
+        charcode                : GV+ 28
+
+        //                                              CG
+        CGFLAGS                 : GV+ 29
+
+        Globalsize              : GV+ 30                // CGX
+        Stacksiz                : GV+ 31
+        Codeout                 : GV+ 32
+        TREEP                   : GV+ 33        // MST1 uses it!
+        condvec                 : GV+ 34
+        linecount               : GV+ 35
+        Ocode                   : GV+ 36
+        Obuf                    : GV+ 37
+        condptr                 : GV+ 38
+        Cgident                 : GV+ 39
+        Cgtitle                 : GV+ 40
+        Progsize                : GV+ 41
+        maxused                 : GV +42
+        OVBASE                  : GV +43
+addtoword  :CG+  6; bswitch    :CG+  7; cgapply    :CG+  8; cgbyteap   :CG+  9;
+cgcmp      :CG+ 10; cgcondjump.:CG+ 11; cgitemn    :CG+ 12; cgdyadic   :CG+ 13;
+cgentry    :CG+ 14; cgerror    :CG+ 15; cgglobal   :CG+ 16; cgmove     :CG+ 17;
+cgname     :CG+ 18; cgpendingop:CG+ 19; cgreturn   :CG+ 20; cgrv       :CG+ 21;
+cgsave     :CG+ 22; cgsects    :CG+ 23; cgstatics  :CG+ 24; cgstind    :CG+ 25;
+cgstring   :CG+ 26; cgswitch   :CG+ 27; checkparam :CG+ 28; checkspace :CG+ 29;
+choosereg  :CG+ 30; class      :CG+ 31; cnop       :CG+ 32; code       :CG+ 33;
+code2      :CG+ 34; condbfn    :CG+ 35; exta       :CG+ 36; extd       :CG+ 37;
+forgetall  :CG+ 38; forgetr    :CG+ 39; forgetvar  :CG+ 40; forgetvars :CG+ 41;
+formea     :CG+ 42; freeblk    :CG+ 43; freereg    :CG+ 44; gen        :CG+ 45;
+genb       :CG+ 46; genea      :CG+ 47; geneaea    :CG+ 48; genqea     :CG+ 49;
+genmoveq   :CG+ 50; genrand    :CG+ 51; genrea     :CG+ 52; genr       :CG+ 53;
+genrr      :CG+ 54; genshkr    :CG+ 55; genwea     :CG+ 56; genwr      :CG+ 57;
+getblk     :CG+ 58; inforegs   :CG+ 59; initdatalists:CG+60;initftables:CG+ 61;
+initslave  :CG+ 62; initstack  :CG+ 63; inregs     :CG+ 64; insertcount:CG+ 65;
+isfree     :CG+ 66; isinslave  :CG+ 67; loadt      :CG+ 68; lose1      :CG+ 69;
+lswitch    :CG+ 70; match      :CG+ 71; moveinfo   :CG+ 72; movetoa    :CG+ 73;
+movetoanycr:CG+ 74; movetoanyr :CG+ 75; movetoanyrsh.:CG+76;movektol   :CG+ 77;
+movetor    :CG+ 78; nextparam  :CG+ 79; objword    :CG+ 80; outputsection:CG+81;
+procbase   :CG+ 82; rdgn       :CG+ 83; rdl        :CG+ 84; rdn        :CG+ 85;
+regscontaining:CG+86;regsinuse :CG+ 87; regswithinfo:CG+88; regusedby  :CG+ 89;
+remem      :CG+ 90; compbfn    :CG+ 91; scan       :CG+ 92; setlab     :CG+ 93;
+stack      :CG+ 94; store      :CG+ 95; storein    :CG+ 96; storet     :CG+ 97;
+swapargs   :CG+ 98; try        :CG+ 99;
+
+// GLOBAL Variables
+ea.m       :CG+100; ea.d       :CG+101; arg1       :CG+102; arg1cl     :CG+103;
+arg2       :CG+104; arg2cl     :CG+105; casek      :CG+106; casel      :CG+107;
+countflag  :CG+108; datalabel  :CG+109; nlist      :CG+110;  nliste     :CG+111;
+dp         :CG+112; fns.add    :CG+113; fns.and    :CG+114; fns.cmp    :CG+115;
+fns.eor    :CG+116; fns.or     :CG+117; fns.sub    :CG+118; fntab      :CG+119;
+freelist   :CG+120; incode     :CG+121; labv       :CG+122; listing    :CG+123;
+llist      :CG+124; maxgn      :CG+125; maxlab     :CG+126; maxssp     :CG+127;
+needslist  :CG+128; //needsliste :CG+129;
+                    cgslctap   :CG+129; numbinl    :CG+130; op         :CG+131;
+paramnumber:CG+132; pendingop  :CG+133; procstk    :CG+134; procstkp   :CG+135;
+rlist      :CG+136; slave      :CG+137; tempv      :CG+138; ssp        :CG+139;
+stv        :CG+140; stvp       :CG+141; tempt      :CG+142; cgslctst   :CG+143
+$)
+
+MANIFEST
+$(
+swapped                    = TRUE; notswapped                 = FALSE
+
+//  DATA Registers
+r0 = 0; r1 = 1; r2 = 2; r3 = 3; r4 = 4; r5 = 5; r6 = 6; r7 = 7;
+
+//  ADDRESS Registers
+rz = 0; rp = 1; rg = 2; rl = 3; rb = 4; rs = 5; rr = 6; rsp= 7
+
+
+//  CLASS Bits:
+//         z   q   b       w  am  cr   r  r7  r6  r5  r4  r3  r2  r1  r0
+//         0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15
+
+c.r          = #X0100    // Item is a register
+c.cr         = #X0200    // Value is in a register or slaved
+c.m          = #X0400    // Alterable memory location
+c.w          = #X0800    // Long constant
+c.b          = #X2000    // Byte constant
+c.q          = #X4000    // Quick constant
+c.z          = #X8000    // Zero constant
+
+c.regs       = #X00FF
+
+
+//  Items in Simulated Stack or Registers
+k.sh         = #10
+k.lv         = #20
+k.hsh        = #100             // Halfword
+k.shs        = k.hsh + k.sh
+
+
+k.loc        = #01
+k.locsh      = k.loc + k.sh
+k.lochsh     = k.loc + k.hsh
+k.lvloc      = k.loc + k.lv
+k.lvlocsh    = k.loc + k.sh + k.lv
+k.lvlochsh   = k.loc + k.hsh + k.lv
+
+k.glob       = #02
+k.globsh     = k.glob + k.sh
+k.globhsh    = k.glob + k.hsh
+k.lvglob     = k.glob + k.lv
+k.lvglobsh   = k.glob + k.sh + k.lv
+k.lvglobhsh  = k.glob + k.hsh + k.lv
+
+k.lab        = #03
+k.labsh      = k.lab + k.sh
+k.labhsh     = k.lab + k.hsh
+k.lvlab      = k.lab + k.lv
+k.lvlabsh    = k.lab + k.sh + k.lv
+k.lvlabhsh   = k.lab + k.hsh + k.lv
+
+k.notshs     = #177 - k.sh              //??????????????????????????????????????
+
+k.numb       = #40
+k.reg        = #50
+
+k.ir0        = #60
+k.ir1        = #61
+k.ir2        = #62
+k.ir3        = #63
+k.ir4        = #64
+k.ir5        = #65
+k.ir6        = #66
+k.ir7        = #67
+
+
+//  GLOBAL routine numbers
+gn.stop      = 2
+gn.mul       = 3    // Temporary fix
+gn.div       = 4    // Temporary fix
+gn.rem       = 5    // Temporary fix
+
+
+//  Machine Code Subroutine Entry Points, relative to R, in BYTES
+
+sr.stkchk    = 128
+sr.profile   = 256
+sr.mul       = 384
+sr.div       = 512
+sr.rem       = 640
+
+
+
+//  M68000 Addressing Modes
+m.w          = #100    //  Abs word extension bit
+m.ww         = #200    //  Abs long extension bit
+m.l          = #400    //  Base rel extension bit
+
+m.00         =  #00    //  R0 register direct
+m.10         =  #10    //  A0 register direct
+m.1l         =  #13    //  L  register direct
+m.20         =  #20    //  (A0)
+m.2p         =  #21    //  P register indirect
+m.2g         =  #22    //  G register indirect
+m.2l         =  #23    //  (L)
+m.2s         =  #25    //  (S) for save routine
+m.2r         =  #26    //  (R) for return routine
+m.50         = #150    //  w(A0)
+m.5p         = #151    //  w(P)  local variables
+m.5g         = #152    //  w(G)  global variables
+m.5b         = #454    //  w(B)  static variables
+m.5s         = #155    //  w(S)  for system subroutines
+m.6z         = #160    //  b(Z,Ri)  for BCPL indirection
+m.6p         = #161    //  b(P,Ri)  out of range locals
+m.6g         = #162    //  b(G,Ti)  out of range globals
+m.6l         = #163    //  b(L,Ri)  out of indirect ref
+m.6b         = #164    //  b(B,Ri)  ????????????
+m.71         = #371    //  ww  Long absolute address (out of range)
+m.73         = #173    //  b(PC,Ri) used in label switch
+m.74         = #374    //  #w  Long immediate data
+
+
+//  Function Table Entries
+ft.qr        = 0       //  #q,Dn
+ft.qm        = 1       //  #q,ea
+ft.rr        = 2       //  Dn,Dm
+ft.rm        = 3       //  Dn,ea
+ft.ir        = 4       //  #w,Dn
+ft.im        = 5       //  #w,ea
+ft.mr        = 6       //  ea,Dn
+ft.zr        = 7       //  #0,Dn
+ft.zm        = 8       //  #0,ea
+
+
+//  Instructions compiled by  "geneaea( f, ms, ds, md, dd )"
+f.moveb      = #X1000  //  MOVE.B    ea,ea
+f.movew      = #X3000  //  MOVE      ea,ea
+f.movel      = #X2000  //  MOVE.L    ea,ea
+
+
+//  Instruction compiled by  "genmoveq( r, b )"
+f.moveq      = #X7000  //  MOVEQ     #q,ea
+
+
+//  Instructions compiled by  "genwea( f, w, m, d )"
+f.addq       = #X5080  //  ADDQ.L    #q,ea
+f.subq       = #X5180  //  SUBQ.L    #q,ea
+
+
+//  Instruction compiled by  "genqea( f, q, m, d )"
+//  (Doesn't appear to have any entries!)
+
+
+//  Instructions compiled by  "genrea( f, r, m, d )"
+f.eor        = #XB180  //  EOR       Dn,ea
+f.lea        = #X41C0  //  LEA       ea,An
+
+
+//  Shift Instructions
+f.lslkr      = #XE188  //  LSL.L     #q,Dn
+f.lsrkr      = #XE088  //  LSR.L     #q,Dn
+f.lslrr      = #XE1A8  //  LSL.L     Dn,Dm
+f.lsrrr      = #XE0A8  //  LSR.L     Dn,Dm
+
+f.aslkr      = #XE180  //  ASL.L     #q,Dn
+f.asrkr      = #XE080  //  ASR.L     #q,Dn
+f.aslrr      = #XE1A0  //  ASL.L     Dn,Dm
+f.asrrr      = #XE0A0  //  ASR.L     Dn,Dm
+
+
+//  Instructions compiled by  "genea( f, m, d )"
+f.clr        = #X4280  //  CLR.L     ea
+f.jmp        = #X4EC0  //  JMP       ea
+f.jsr        = #X4E80  //  JSR       ea
+f.neg        = #X4480  //  NEG.L     ea
+f.not        = #X4680  //  NOT.L     ea
+
+//  Instructions compiled by  "geneaw( f, m, d, w )"    (mcg4)
+f.btst       = #X0800   // BIT       ea
+f.bchg       = #X0840   // BIT       ea
+f.bclr       = #X0880   // BIT       ea
+f.bset       = #X08C0   // BIT       ea
+
+
+//  Instruction compiled by  "gen( f )"
+f.nop        = #X4E71  //  NOP
+
+
+//  Instructions compiled by  "genb( f, l )"
+f.bra        = #X6000  //  BRA       Ln
+f.beq        = #X6700  //  BEQ       Ln
+f.bne        = #X6600  //  BNE       Ln
+f.blt        = #X6D00  //  BLT       Ln
+f.bge        = #X6C00  //  BGE       Ln
+f.ble        = #X6F00  //  BLE       Ln
+f.bgt        = #X6E00  //  BGT       Ln
+$)
+
+

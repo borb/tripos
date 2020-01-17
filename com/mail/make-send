@@ -1,0 +1,19 @@
+IF NOT MCTYPE=68000; SKIP LSI4
+bcp  bcp.send     mobj:send      opt=ws30000cc:sc:-wa
+bcp  bcp.send     mobj:csend     opt=ws30000cc:sc:-wa:cc:command:
+obj:link com mobj: CMAIN CSEND to t:mail
+syslink Mobj:system Mobj:newmail-system OPT fW18000
+:68000sys.ancilla mobj:newmail-system name=TESTMAIL M68K REPLACE
+delete mobj:newmail-system
+QUIT 0
+LAB LSI4
+bcp  bcp.send     mobj:csend     opt=ws21000sl-dbsncc:sc:-wa:cc:command:
+bcp  bcp.send     mobj:send      opt=ws21000sl-dbsncc:sc:-wa
+obj:link com-1     mobj:             to mobj:tcom-1
+obj:link com-2     mobj: CMAIN CSEND to mobj:tcom-2
+join mobj:tcom-1  mobj:tcom-2 as t:mail
+syslink Mobj:system Mobj:newmail-system OPT fW18000
+:sys.ancilla mobj:newmail-system name=TESTMAIL LSI4 REPLACE
+delete mobj:newmail-system
+
+

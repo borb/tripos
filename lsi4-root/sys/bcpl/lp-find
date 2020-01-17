@@ -1,0 +1,36 @@
+GET "libhdr"
+GET "iohdr"
+
+MANIFEST $(
+     lp.def.pri = 1200   // default printer handler task priority
+     lp.stsize  =  200   // printer handler task stack size
+
+  $)
+
+LET start(dummy,action,scb,string) = VALOF
+  $( UNLESS action=act.findoutput RESULTIS 0
+     $( LET printseg=loadseg("SYS:L.LP-HANDLER")
+        LET cohand.seglist=tcb!tcb.seglist // My segment list
+        LET task,seglsize,segl=?,?,?
+
+        IF printseg=0 RESULTIS 0
+        seglsize := !cohand.seglist + 1
+        segl := getvec(seglsize)
+        IF segl=0 DO $( unloadseg(printseg) ; RESULTIS 0 $)
+        segl!0,segl!seglsize := seglsize,printseg
+        FOR i = 1 TO seglsize-1 DO segl!i := cohand.seglist!i
+        FOR lp.pri = lp.def.pri to 1 by -1 DO
+          $( task:= createtask(segl,lp.stsize,lp.pri)
+             UNLESS task=0 & result2=102 BREAK
+          $) // loop while priority invalid
+        freevec(segl)
+        IF task=0 DO
+          $( unloadseg(printseg)
+             RESULTIS 0
+          $)
+        RESULTIS sendpkt(notinuse,task,act.findoutput,?,?,scb)
+        //  activate handler task
+     $)
+  $)
+
+

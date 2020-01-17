@@ -1,0 +1,166 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+        ######   ########    ####    ########  ##    ##   ######
+       ########  ########   ######   ########  ##    ##  ########
+       ##           ##     ##    ##     ##     ##    ##  ##
+       #######      ##     ########     ##     ##    ##  #######
+             ##     ##     ##    ##     ##     ##    ##        ##
+             ##     ##     ##    ##     ##     ##    ##        ##
+       ########     ##     ##    ##     ##     ########  ########
+        ######      ##     ##    ##     ##      ######    ######
+
+************************************************************************
+**    Author:   Brian Knight                          March 1978      **
+***********************************************************************/
+
+
+
+SECTION "STATUS"
+
+GET "LIBHDR"
+GET "CLIHDR"
+
+MANIFEST $( secword = 12345 $)
+
+LET start() BE
+    $(
+    LET tasktab = rootnode ! rtn.tasktab
+    LET cliseg = (tcb ! tcb.seglist)!4
+    LET argv = VEC 40
+    LET tcbinfo, seginfo = ?, ?
+    LET cliinfo = ?
+    LET lower, upper = 1, tasktab!0
+    IF rdargs("TASK,FULL/S,TCB/S,SEGS/S,CLI=ALL/S", argv, 40) = 0
+    THEN $( writes("Args no good*N"); RETURN $)
+
+    IF ( argv ! 1 = 0 ) &
+       ( argv ! 2 = 0 ) &
+       ( argv ! 3 = 0 ) &
+       ( argv ! 4 = 0 ) &
+       ( argv ! 0 = 0 ) THEN argv ! 4 := 1
+
+    tcbinfo := (argv!1 \= 0) | (argv!2 \= 0)
+    seginfo := (argv!1 \= 0) | (argv!3 \= 0)
+    cliinfo := seginfo LOGOR (argv!4 \= 0)
+
+    IF argv!0 \= 0
+    THEN
+      $( || Only give status of specified task
+      LET n = stringval(argv!0)
+
+      IF (n < lower) | (n > upper) | (tasktab!n = 0)
+      THEN $( writef("Task %N does not exist*N", n); RETURN $)
+
+      lower, upper := n, n
+      $)
+
+    FOR j = lower TO upper
+    DO
+      $(
+      LET taskcb = tasktab!j
+      LET state = taskcb ! tcb.state
+      LET flags = taskcb ! tcb.flags
+      LET dead = (state & state.dead) = state.dead
+
+      IF testflags(1) BREAK
+
+      UNLESS taskcb = 0
+      THEN
+        $(
+        writef("Task %i2:", taskcb ! tcb.taskid)
+
+        IF tcbinfo
+        THEN
+            $(
+            writef(" pri %N,", taskcb ! tcb.pri)
+            UNLESS dead
+            THEN writef(" stk %N, gv %N,",
+                        taskcb ! tcb.stsiz,
+                        (taskcb ! tcb.gbase) ! 0)
+            $)
+
+        TEST dead
+        THEN writes(" dead")
+        ELSE
+            $(
+            IF (state & NOT state.pkt) = 0
+            THEN TEST j=taskid
+                 THEN writes(" running") // Current task
+                 ELSE writes(" suspended (in qpkt)")
+            IF (state & state.wait)   \= 0 writes(" waiting")
+            IF (state & state.int)    \= 0 writes(" interrupted")
+            $)
+
+        IF (state & state.hold) \= 0 writes(" held")
+        IF (flags & flag.break) \= 0 writes(" broken")
+        IF (state & state.pkt)  \= 0 writes(" with packet(s)")
+
+        UNLESS cliinfo & NOT seginfo THEN newline()
+
+        IF seginfo | cliinfo
+          $( LET segl = taskcb ! tcb.seglist
+             LET printed = FALSE
+
+             FOR j=1 TO segl!0
+             DO $( LET seg = segl!j
+                   UNTIL seg=0
+                   DO $(
+                      IF testflags(1) THEN stop(10)
+                      IF seginfo | (NOT printed & j>=3)
+                      THEN
+                        $(
+                        wrch(' ')
+                        write.sectname(seg)
+                        printed := TRUE
+                        $)
+
+                      TEST seg = cliseg
+                      THEN // This is a CLI task
+                        $( LET s = (taskcb ! tcb.gbase) ! cli.module.gn
+                           TEST s = 0
+                           THEN writes(" No command loaded")
+                           ELSE
+                             $(
+                             writes(" Loaded as command: ")
+                             write.sectname(s)
+                             $)
+                        $)
+                      ELSE IF seginfo THEN newline()
+                      seg := !seg
+               $)
+                $)
+            newline()
+            $)
+
+        $)
+      $)
+    $)
+
+
+AND stringval(s) = VALOF
+    $(  || converts a string to a number
+    LET val = 0
+
+    FOR j = 1 TO s%0
+    DO
+        $(
+        UNLESS '0' <= s%j <= '9'
+        THEN $( writef("Invalid char *'%C*' in number*N", s%j)
+                stop(20)
+             $)
+        val := val*10 + s%j - '0'
+        $)
+
+    RESULTIS val
+    $)
+
+
+AND write.sectname(s) BE
+    TEST (s!2 = secword) & ((s+3)%0 = 17)
+    THEN FOR i=1 TO 7 DO wrch( [s+3]%i )
+    ELSE writes("???????")
+
+

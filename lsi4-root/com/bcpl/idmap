@@ -1,0 +1,364 @@
+|| (C) Copyright 1979 Tripos Research Group
+||     University of Cambridge
+||     Computer Laboratory
+
+|| Command to map the store allocation under TRIPOS
+|| It counts the store used for its own code, stack
+|| and workspace as free.
+||
+|| IDMAP [BLOCKS] [CODE] [NAMES] [MAPSTORE] [TO file]
+||       [PIC] [IDENTIFY] [FROM address]
+||
+||     BLOCKS gives size and address of every block
+||     CODE   gives layout of loaded code sections
+||     NAMES  gives space used for routine names,
+||            section names, and global initialisation info.
+||     TO     specifies an output file
+||     PIC    gives the allocation map in picture form
+||     IDENTIFY attempts to identify each allocated block
+||     FROM   gives address at which to start listing
+
+SECTION "IDMAP"
+GET "LIBHDR"
+GET "CLIHDR"  // Just for cli.module
+GET "STRING-TO-NUMBER"
+
+MANIFEST $(
+         secword = 12345
+         libword = 23456
+         maxpri = 32767
+         sectnamesize = (17 + bytesperword)/bytesperword
+         routnamesize = (7 + bytesperword)/bytesperword
+         nameoffset = -routnamesize
+/*<PDP
+         entry2 = 0
+         entry3 = #12625
+/*PDP>*/
+//*<LSI4
+         entry2 = #XE27E
+         entry3 = #XA840
+/*LSI4>*/
+         vecupb = 499
+         $)
+
+LET start() BE
+    $(
+    LET blocklist = rootnode ! rtn.blklist
+    LET a = blocklist
+    LET topofstore = (rootnode ! rtn.memsize) * 1024
+    LET free, used, n = 0, 0, 0
+    LET blocks = getvec(vecupb)
+    LET v = VEC 50
+    LET largest.free = 0
+    LET joinfree = 0
+    LET blocksopt = TRUE
+    LET namesopt = FALSE
+    LET idopt   = TRUE
+    LET codeopt = FALSE
+    LET mapstore = FALSE
+    LET picopt = FALSE
+    LET mapstack = stackbase - 1
+    LET mapcode  = cli.module-1  || Section vector
+    LET sectnames, routnames, globinit = 0, 0, 0
+    LET constr = output()
+    LET outstr = 0
+    LET oldpri = ((rootnode ! rtn.tasktab) ! taskid) ! tcb.pri
+    LET fromaddr = 0
+
+    IF rdargs("blocks/s,names/s,code/s,mapstore/s,*
+              *to/k,pic/s,identify/s,from/k", v, 50) = 0
+    THEN $( writes("Invalid args to IDMAP*N"); stop(20) $)
+    IF blocks = 0
+    THEN $( writes("Not enough store for workspace*N")
+            stop(20)
+         $)
+
+    IF v!0 \= 0 THEN blocksopt := TRUE
+    IF v!1 \= 0 THEN namesopt := TRUE
+    IF v!2 \= 0 THEN codeopt := TRUE
+    IF v!3 \= 0 THEN mapstore, codeopt, namesopt := TRUE, TRUE, TRUE
+    IF v!4 \= 0
+    THEN
+        $(
+        outstr := findoutput(v!4)
+        IF outstr = 0
+        THEN $( writef("Can't open %S*N",v!4); stop(20) $)
+        selectoutput(outstr)
+        $)
+
+    IF v!5 \= 0 THEN picopt := TRUE
+    IF v!6 \= 0 THEN idopt,blocksopt  := TRUE,TRUE
+    IF v!7 \= 0 THEN
+        $(
+        TEST string.to.number(v!7)
+        THEN fromaddr:=result2
+        ELSE $( writef("%S is not an address*N",v!7); stop(20) $)
+        $)
+
+    // Take highest task priority for critical section
+    // (Should always be available if we are running)
+    changepri(taskid, maxpri)
+
+    UNTIL !a = 0
+    DO
+      $(
+      LET size = !a
+      LET next = ?
+      IF (a = mapstack) | (a = mapcode) | (a = blocks-1)
+      THEN size := size + 1 || Make it look free
+
+      blocks!n := size; n := n + 1
+      TEST (size & 1) = 0
+      THEN
+          $( || Used block
+          used := used + size
+          IF (joinfree >> 1) > (largest.free >> 1)
+          THEN largest.free := joinfree
+          joinfree := 0
+          $)
+      ELSE
+          $(
+          size := size-1
+          free := free + size
+          joinfree := joinfree + size
+          $)
+
+      next := a + size
+      IF ((a >> 1) >= (next >> 1)) | // Wrap around
+         ((next >> 1) > ((topofstore-1) >> 1))
+      THEN
+        $(
+        changepri(taskid, oldpri)
+        writes("******Store chain corrupt!!*N*
+               *Noticed at ")
+        writeu(a,0); newline()
+        BREAK
+        $)
+      a := next
+      IF n > vecupb
+      THEN
+          $(
+          writef("*N****** Too many blocks for MAP's workspace*N*
+                 ******* Only the first %N mapped*N", vecupb+1)
+          BREAK
+          $)
+      $)
+
+    IF (joinfree >> 1) > (largest.free >> 1)
+    THEN largest.free := joinfree
+
+    changepri(taskid, oldpri)
+
+    // Now print what we've found
+    newline()
+
+    IF blocksopt
+    THEN
+        $(
+        LET idvec.name = "sys:c.idvec"
+        LET module = ?
+        writes("Map of free and allocated store*N*N")
+
+        IF idopt
+        THEN
+          $( // Load code of IDVEC
+          module := loadseg(idvec.name)
+          TEST module=0
+          THEN
+            $( selectoutput(constr)
+               writef("Can't load *"%S*" - IDENTIFY *
+                      * option ignored*N", idvec.name)
+               selectoutput(outstr)
+               idopt := FALSE
+            $)
+          ELSE globin(module) // Redefines START()
+          $)
+
+        a := blocklist
+
+        FOR i = 0 TO n - 1
+        DO
+            $(
+            LET s = blocks!i
+            LET free = (s&1)=1
+
+            IF testflags(1)
+            THEN
+              $( IF idopt THEN unloadseg(module)
+                 GOTO exit
+              $)
+
+            TEST (fromaddr>>1) <= (a>>1) THEN    //avoid unsigned comparason!
+                $(
+                IF idopt THEN newline()
+                writeu(a, 5); writes(": ")
+                TEST free
+                THEN $( writes("free ") ; s := s - 1 $)
+                ELSE    writes("alloc")
+
+                writeu(s, 6); writes(" words")
+                IF a = mapstack writes(" (MAP's stack)")
+                IF a = mapcode  writes(" (MAP's code)")
+                IF a = (blocks-1) writes(" (MAP's workspace)")
+                TEST idopt & NOT free
+                THEN $( wrch(' '); start(a) $) // IDvec(a)
+                ELSE newline()
+                $)
+            ELSE IF free THEN s:=s-1
+            a := a + s
+            $)
+
+        IF idopt THEN unloadseg(module)
+        writes("Top of block list = ")
+        writeu(a, 0); newline()
+        $)
+
+    writef("Largest contiguous free area: ")
+    writeu(largest.free, 0); writes(" words*N")
+    writes("Totals: "); writeu(used+free, 0)
+    writes(" words available, "); writeu(used, 0)
+    writes(" used, "); writeu(free, 0)
+    writes(" free*N*N")
+
+    IF picopt
+    THEN
+      $( // Print as a picture
+      LET alloc = TRUE
+      LET next.block = blocklist
+      LET num=0
+      LET col = 0
+
+      FOR sample = 31 TO (topofstore-1)>>1 BY 32
+      DO $(
+         LET some.alloc = alloc
+         LET some.free  = NOT alloc
+
+         UNLESS (sample <= (next.block >> 1)) | (num > n)
+         DO
+           $( // Move to next block
+           alloc := ((blocks!num) & 1) = 0
+           TEST alloc
+           THEN some.alloc := TRUE
+           ELSE
+             $( some.free := TRUE
+                next.block := next.block - 1
+             $)
+           next.block := next.block + blocks!num
+           num := num+1
+           $)
+
+         col := col+1
+         IF col=65
+         THEN $( newline(); col := 1 $)
+         wrch (num > n -> '?',  // No info
+               some.alloc   -> (some.free -> 'a', '@'), '.')
+         $)
+      newline()
+      $)
+
+    || Print the layout of the code sections, assuming
+    || that they will not change under our feet!
+    || Also, add up space used for section names, routine
+    || names, and global initialisation information.
+
+    a := blocklist
+
+    IF codeopt | namesopt
+    THEN
+        $(
+        IF codeopt THEN writes("Layout of loaded code*N*N")
+
+        FOR i = 0 TO n-1
+        DO $(
+           LET s = blocks!i
+           IF testflags(1) THEN BREAK
+           IF (s&1)=1
+           THEN $( a := a+s-1; LOOP $) // Free block
+
+           IF (a!3 = secword) & ((a+4)%0 = 17)
+           THEN
+             $( // We've found a BCPL section
+             LET goffset = ?
+
+             IF codeopt
+             THEN
+               $(
+               writeu(a+2, 5)
+               writef(": %S - length ", a+4)
+               writeu(a!2, 4)
+               writes(" words*N")
+               $)
+
+             sectnames := sectnames + sectnamesize + 1
+
+             // Count space for global initialisation
+             // table
+             goffset := a+2 + a!2 // Word after highest
+                                  // referenced global
+               $(
+               globinit := globinit+2
+               goffset  := goffset-2
+               $) REPEATUNTIL !goffset=0 // End of list
+
+             IF namesopt
+             THEN
+               FOR j=5 /* skip some junk! */ TO a!2
+               DO $(
+                  LET addr = a+j // Avoid comparing
+                                 // signed addresses
+                  TEST (!addr=libword) & ((addr+1)%0 = 7)
+                  THEN
+                      $( // Non standard entry sequence
+                      routnames := routnames + routnamesize + 1
+                      IF mapstore
+                      THEN
+                          $(
+                          writeu(addr+1-nameoffset, 6)
+                          writef(": **%S*N", addr+1)
+                          $)
+                      $)
+                  ELSE IF (addr!1 = entry2) & (addr!2 = entry3) &
+                          ((addr + nameoffset)%0 = 7)
+                       THEN
+                           $( // BCPL entry sequence
+                           routnames := routnames + routnamesize
+                           IF mapstore
+                           THEN
+                               $(
+                               writeu(addr, 6)
+                               writef(":  %S*N", addr+nameoffset)
+                               $)
+                           $)
+                  $)
+             $)
+           a := a+s // Point to next block
+           $)
+
+        IF namesopt
+        THEN writef("*NRoutine names: %I5 words*N*
+                     *Section names: %I5 words*N*
+                     *Global initialisation info: %N words*N",
+                     routnames, sectnames, globinit)
+        $)
+
+exit:
+    freevec(blocks)
+    UNLESS outstr = 0 THEN endwrite()
+    selectoutput(outstr)
+    $)
+
+
+
+AND writeu(n, d) BE
+    $(
+    // Writes n as an unsigned number in a field of d places
+    LET a = (n >> 1)/5
+
+    TEST a = 0
+    THEN FOR j=1 TO d-1 wrch(' ') // To prevent "00"
+    ELSE writed(a, d-1)
+
+    wrch( (((n >> 1) - a*5) << 1) + (n & 1) + '0')
+    $)
+
+

@@ -1,0 +1,1125 @@
+SECTION "GC2PS2"
+
+//    GCODE to PostScript program
+//    (C) 1985 Gray Girling
+//    Subsequently much hacked by Philip Hazel
+//    Then tinkered with by Piete Brooks
+
+// Part Two: System Dependent part, plus main program
+
+GET "Libhdr"
+GET "Gc2pshdr"
+
+$<MINOS
+
+//
+//                  MINOS  Dependent  Code
+//                  ----------------------
+
+
+MANIFEST
+$(  arg.size   = 100/bytesperword
+a.fromno   = 0
+a.fromlist = 1
+a.to       = 2
+a.hdr      = 3
+a.first    = 4
+a.last     = 5
+a.even     = 6
+a.odd      = 7
+a.opt      = 8
+a.map      = 9
+a.A5onA4   = 10
+bad.rc     = 20
+good.rc    = 0
+mapvec.size= 32
+$)
+
+
+LET read.args(arg, arg.size) = VALOF
+$(  LET arg.str = "From/a,To,Header,First/k,Last/k,Even/s,Odd/s,Request/k"
+LET ok = (0\=rdargs(arg.str, arg+1, arg.size-1))
+command.name := "PSGTYPE"
+device.name  := "POSTSCRIPT"
+arg!a.fromno := 0
+TEST NOT ok THEN
+    report("arguments unsuitable for:*N*"%S*"*N", arg.str) ELSE
+$(  IF arg!a.to=0 THEN arg!a.to := "LP:LSW-BIN"
+    arg!arg.fromno := 1
+    IF arg!a.hdr=0 THEN arg!a.hdr := "POST.GTYPE-Header"
+    IF arg!a.first\=0 THEN
+    TEST stringtonum(arg!a.first) THEN
+        arg!a.first := result2 ELSE
+    $(  report("FIRST (*"%S*") is not numeric*N", arg!a.first)
+        ok := FALSE
+    $)
+    TEST arg!a.last=0 THEN arg!a.last := maxint ELSE
+    TEST stringtonum(arg!a.last) THEN
+        arg!a.last := result2 ELSE
+    $(  report("LAST (*"%S*") is not numeric*N", arg!a.last)
+        ok := FALSE
+    $)
+    arg!a.even := (arg!a.even\=0)
+    arg!a.odd := (arg!a.odd\=0)
+    arg!a.map := 0
+    arg!a.A5onA4 := FALSE
+$)
+chatty := TRUE
+IF ok THEN
+    writef("%S Version %N.%N*N",
+           command.name, major.version, minor.version)
+RESULTIS ok
+$)
+
+
+LET findgetin(name) = VALOF
+$(  LET scb = findinput(name)
+IF scb=0 THEN error("can't open %S GET file *"%S*"*N", device.name, name)
+RESULTIS scb
+$)
+
+LET findmaininput(name) = findinput(name)
+
+
+LET findmainout(name) = VALOF
+$(  LET scb = findoutput(name)
+IF scb=0 THEN error("can't open main output *"%S*"*N", name)
+RESULTIS scb
+$)
+
+
+LET interrupt() = testflags(1)
+
+
+LET eqstring(s1, s2) = (0=compstring(s1, s2))
+
+
+LET get.day(vect, default.day) = VALOF
+$(  IF 0\=datstring(vect) THEN default.day := vect+10
+RESULTIS default.day
+$)
+
+
+LET get.date(vect, default.date) = VALOF
+$(  IF 0\=datstring(vect) THEN default.date := vect+0
+RESULTIS default.date
+$)
+
+
+LET get.time(vect, default.time) = VALOF
+$(  IF 0\=datstring(vect) THEN default.time := vect+5
+RESULTIS default.time
+$)
+
+
+AND tidyup(n) BE STOP(n)
+
+AND get.vec(n) = GETVEC(n)
+
+AND free.vec(n) = FREEVEC(n)
+$>MINOS
+
+
+
+
+$<PANOS
+
+//
+//                    PANOS  Dependent Code
+//                    ---------------------
+
+
+MANIFEST
+$(
+arg.str    = "FROM/a/30/e-gout TO/k HEADER *
+             *FIRST/k/c LAST/k/c EVEN/s ODD/s *
+             *PAGES/k/l A5ONA4/s *
+             *REQUEST/l"
+
+var.hdr = "GCAL$PostscriptHeader"
+
+arg.size   = 1000/bytesperword
+hdr.def.size = 100/bytesperword
+max.from.files  = 30
+
+hdr.def = 0
+a.to       = hdr.def.size+0
+a.hdr      = hdr.def.size+1
+a.first    = hdr.def.size+2
+a.last     = hdr.def.size+3
+a.even     = hdr.def.size+4
+a.odd      = hdr.def.size+5
+a.opt      = hdr.def.size+6
+a.fromno   = hdr.def.size+7
+a.fromlist = hdr.def.size+8
+a.map      = a.fromlist+max.from.files
+a.a5ona4   = a.map+1
+a.spare    = a.a5ona4+1
+
+bad.rc     = return.hard
+good.rc    = 0
+
+mapvec.size= 32
+$)
+
+
+//
+//                   Interrupt  Detection
+//
+
+MANIFEST
+$(  magic.handle = 0         // may as well
+$)
+
+
+LET escape.procedure(code, data1, data2, handle, evptr) BE
+  IF code=6 THEN escape.pressed := TRUE
+
+
+LET init.events() BE
+$(  DeclareEventHandler(escape.procedure, 6, 2, magic.handle)
+// intercept escape events
+SetEventStatus(6, TRUE)    // enable escape events
+escape.pressed := FALSE
+$)
+
+
+// Following doesn't work in current version of Panos:
+// LET end.events() BE RemoveEventHandler(escape.procedure, 6, magic.handle)
+LET end.events() BE RETURN
+
+
+LET interrupt() = escape.pressed
+
+
+LET help() BE
+$(  writef("                    %S FILE PARAMETERS*N", command.name)
+writes("*N")
+writes("  -FROM     lis of input GCODE files produced by GCAL*N*
+       *  -TO       output (Postscript) file (default is RS423:)*N*
+       *  -HEADER   postscript header file (default *
+                                           *<GCAL$PostscriptHeader>)*N")
+writes("*N*
+       *                       PAGE OUTPUT CONTROL*N*
+       **N")
+writes("  -FIRST    number of the first page considered for output*N*
+       *  -LAST     number of the last page considered for output*N*
+       *  -PAGES    list of pages and/or ranges of pages*N")
+writes("  -A5ONA4   prints A5 pages 2-up on A4 paper*N*
+       *  -EVEN     only print the even numbered pages considered*N*
+       *  -ODD      only print the odd numbered pages considered*N")
+writes("*N*
+       *                     GCAL *"REQUEST*" OPTIONS*N*
+       **N")
+writes("  -REQUEST  GCAL *".request*" string - the following *
+                                              *separated by spaces*N*
+       *       COPIES n    produce <n> copies of the output*N*
+       *       MARGIN x    set left margin to <x> points*N")
+writes("       GET file    includes Postscript file <file> in output*N*
+       *       MANUALFEED  subsequent pages use the manual *
+                                                   *feed mechanism*N*
+       *       LANDSCAPE   print subsequent pages in landscape mode*N")
+$)
+
+
+LET read.args(arg, arg.size) = VALOF
+$(proc
+LET rc     = 0
+LET handle = ?
+LET current.output = output()
+LET id.string = VEC 20
+FOR i = 1 TO 6 DO id.string%i := "GC2PS "%i
+id.string%0 := 6 + cvs(major.version, id.string, 7, ".")
+id.string%0 +:= cvs(minor.version, id.string, id.string%0+1, "")
+init.events()
+
+command.name := "GC2PS"
+device.name  := "POSTSCRIPT"
+
+rc := ArgumentInit(arg.str, FALSE, FALSE, id.string, help)
+handle := result2
+selectoutput(errorstream)
+init.ver()
+selectoutput(current.output)
+
+IF rc >= 0 THEN
+  $(1
+  LET pagevec = VEC 20
+  LET mapvec = get.vec(mapvec.size)
+  LET memblock = arg + a.spare
+  LET memremaining = arg.size - a.spare
+  chatty := VerbosityRequired(handle)
+  rc := get.string("to", handle, 1, @memblock, @memremaining)
+  IF rc>=0 THEN
+    $(2
+    TEST rc=0 THEN arg!a.to := result2 ELSE arg!a.to := 0
+    rc := get.string("header", handle, 1, @memblock, @memremaining)
+    TEST rc=0 THEN arg!a.hdr := result2 ELSE
+      $(3
+      LET default.hdr = arg + hdr.def
+      LET rc = getglobalstring(var.hdr, default.hdr, hdr.def.size*bytesperword)
+      TEST rc<0 THEN
+        $(4
+        report("can't look up *"%S*" ", var.hdr)
+        fault.message(rc)
+        newline()
+        arg!a.hdr := ""
+        $)4
+      ELSE arg!a.hdr := default.hdr
+      arg!a.even := get.state("even", handle)
+      arg!a.odd  := get.state("odd",  handle)
+      arg!a.a5ona4 := get.state("a5ona4", handle)
+      rc := get.number("first", handle, 1)
+      IF rc >= 0 THEN
+        $(4
+        arg!a.first := result2
+        rc := get.number("last", handle, maxint)
+        IF rc>=0 THEN arg!a.last := result2
+        $)4
+      arg!a.map := mapvec
+      rc := GetStringArg("Pages", 1, handle, pagevec, 80)
+      TEST rc >= 0 THEN
+        $(4
+        LET ptr = 1
+        decodepagelist(pagevec, @ptr, mapvec, mapvec.size)
+        $)4
+      ELSE FOR i = 0 TO mapvec.size DO mapvec!i := -1
+
+      $)3
+    $)2
+
+  IF rc >= 0 THEN
+    $(2
+    LET index = 1
+    LET fromlist = arg + a.fromlist
+      $(rpt
+      rc := get.string("from", handle, index, @memblock, @memremaining)
+      IF rc=0 THEN
+        $(
+        fromlist!(index-1) := result2
+        index := index + 1
+        $)
+      $)rpt
+      REPEATUNTIL rc \= 0 | index > max.from.files
+    arg!a.fromno := (rc<0 -> 0, index-1)
+    IF arg!a.fromno>0 & arg!a.to=0 THEN arg!a.to := fromlist!0
+    $)2
+
+  IF rc >= 0 THEN
+    $(2
+    rc := get.string("request", handle, 1, @memblock, @memremaining)
+    arg!a.opt := (rc=0 -> result2, 0)
+    $)2
+  $)1
+
+IF rc<0 THEN
+  $(1
+  report("bad arguments ")
+  fault.message(rc)
+  newline()
+  $)1
+RESULTIS rc>=0
+$)proc
+
+
+AND get.number(arg, handle, def) = VALOF
+$(  LET rc  = 0
+IF GetNumberOfValues(arg, handle) >= 0 & result2 > 0 THEN
+$(  rc  := GetCardinalArg(arg, 1, handle)
+    def := result2
+$)
+result2 := def
+RESULTIS rc
+$)
+
+
+AND get.state(arg, handle) = VALOF
+$(  GetStateArg(arg, handle)
+RESULTIS result2
+$)
+
+
+AND get.string(arg, handle, index, lv.vector, lv.vecsize) = VALOF
+$(  LET rc = GetNumberOfValues(arg, handle)
+IF rc>=0 THEN
+TEST index>result2 THEN rc := 1 ELSE
+$(  rc := GetStringArg(arg, index, handle, !lv.vector,
+                                           !lv.vecsize*bytesperword)
+    IF rc>=0 THEN
+    $(  LET string = !lv.vector
+        LET spaceused = string%0/bytesperword + 1
+        result2 := string
+        !lv.vector := string + spaceused
+        !lv.vecsize := !lv.vecsize - spaceused
+    $)
+$)
+RESULTIS rc
+$)
+
+
+AND findgetin(name) = findextfile(findinput, name, "-post", FALSE,
+                          "can't open %S GET file *"%S*"*N")
+
+AND findmaininput(name) = findinput(name)
+
+
+
+
+AND findmainout(name) = findextfile(findoutput, name, "-post", TRUE,
+                                "can't open %S main output *"%S*"*N")
+
+
+AND findextfile(findproc, name, default.ext, force, errstring) = VALOF
+$(  LET contains.dash = FALSE
+LET namelen = name%0
+LET mainlen = namelen
+LET scb = 0
+FOR i=1 TO namelen DO IF name%i='-' THEN
+$(  contains.dash := TRUE
+    mainlen := i-1
+$)
+TEST contains.dash & NOT force | name%namelen=':' THEN
+$(  scb := findproc(name)
+    IF scb=0 THEN error(errstring, device.name, name)
+$) ELSE
+$(  LET string = VEC 256/bytesperword
+    LET newlen = mainlen + default.ext%0
+    IF newlen > 255 THEN newlen := 255
+    FOR i=1 TO mainlen DO string%i := name%i
+    FOR i=mainlen+1 TO newlen DO string%i := default.ext%(i-mainlen)
+    string%0 := newlen
+    scb := findproc(string)
+    IF scb=0 THEN error(errstring, device.name, string)
+$)
+RESULTIS scb
+$)
+
+
+AND eqstring(s1, s2) = (0=compstring(s1, s2))
+
+
+AND get.day(vect, default.day) = VALOF
+$(  IF 0\=datstring(vect) THEN default.day := vect+10
+RESULTIS default.day
+$)
+
+
+AND get.date(vect, default.date) = VALOF
+$(  IF 0\=datstring(vect) THEN default.date := vect+0
+RESULTIS default.date
+$)
+
+
+
+
+
+AND get.time(vect, default.time) = VALOF
+$(  IF 0\=datstring(vect) THEN default.time := vect+5
+RESULTIS default.time
+$)
+
+
+AND tidyup(n) BE STOP(n)
+
+AND get.vec(n) = GETVEC(n)
+
+AND free.vec(n) = FREEVEC(n)
+$>PANOS
+
+
+
+$<MVS
+
+//
+//                      MVS  Dependent Code
+//                      -------------------
+
+
+MANIFEST
+$(
+arg.size   = 100/bytesperword
+a.fromno   = 0
+a.fromlist = 1
+a.to       = 2
+a.hdr      = 3
+a.first    = 4
+a.last     = 5
+a.even     = 6
+a.odd      = 7
+a.opt      = 8
+a.map      = 9
+a.A5onA4   = 10
+
+bad.rc     = 8
+good.rc    = 0
+
+mapvec.size= 32
+$)
+
+
+LET read.args(arg, arg.size) = VALOF
+$(
+command.name := "GC2PS"
+device.name  := "POSTSCRIPT"
+
+arg!a.fromno   := 1
+line.number := 0
+gcode.file.name := ""
+arg!a.fromlist := "GCODE"
+arg!a.to       := "PSOUT"
+arg!a.hdr      := "PSHDR"
+arg!a.first    := 1
+arg!a.last     := maxint
+arg!a.even     := FALSE
+arg!a.odd      := FALSE
+arg!a.opt      := 0
+arg!a.map      := 0
+arg!a.A5onA4   := FALSE
+chatty := TRUE
+writef("%S Version %N.%N*N", command.name, major.version, minor.version)
+decodeparmstring(arg)
+
+setbreak(TRUE)
+RESULTIS TRUE
+$)
+
+
+AND decodeparmstring(arg) BE
+$(proc
+LET pp = 1
+LET word = VEC 20
+WHILE pp <= parmstring%0 DO
+  $(1
+  readparmword(word, @pp)
+  TEST eqstring(word, "first") THEN
+    $(
+    skip(@pp, '=')
+    arg!a.first := readparmint(@pp)
+    $)
+  ELSE TEST eqstring(word, "last") THEN
+    $(
+    skip(@pp, '=')
+    arg!a.last := readparmint(@pp)
+    $)
+  ELSE TEST eqstring(word, "odd") THEN
+    $(
+    skip(@pp, ';')
+    arg!a.odd := TRUE
+    $)
+  ELSE TEST eqstring(word, "even") THEN
+    $(
+    skip(@pp, ';')
+    arg!a.even := TRUE
+    $)
+  ELSE TEST eqstring(word, "pages") THEN
+    $(2
+    LET mapvec = get.vec(mapvec.size)
+    arg!a.map := mapvec
+    skip(@pp, '=')
+    decodepagelist(parmstring, @pp, mapvec, mapvec.size)
+    skip(@pp, ';')
+    $)2
+  ELSE TEST eqstring(word, "copies") | eqstring(word, "margin") THEN
+    $(2
+    LET rstring, p, n = ?,?,?
+    skip(@pp, '=')
+    n := readparmint(@pp)
+    TEST arg!a.opt = 0 THEN
+      $(
+      rstring := get.vec(25)
+      rstring%0 := 0
+      arg!a.opt := rstring
+      p := 1
+      $)
+    ELSE
+      $(
+      rstring := arg!a.opt
+      p := rstring%0 + 1
+      rstring%p := ';'
+      p +:= 1
+      $)
+    FOR i = 1 TO word%0 DO
+      $(
+      rstring%p := word%i
+      p +:= 1
+      $)
+    rstring%p := ' '
+    p +:= 1
+    p +:= cvs(n, rstring, p, ";")
+    rstring%0 := p-1
+    skip(@pp, ';')
+    $)2
+  ELSE TEST eqstring(word, "a5ona4") THEN
+    $(
+    skip(@pp, ';')
+    arg!a.A5onA4 := TRUE
+    $)
+  ELSE TEST eqstring(word, "request") THEN
+    $(2
+    LET l = parmstring%0 - pp + 1
+    LET rstring = get.vec(l/bytesperword + 1)
+    FOR i = 1 TO l DO
+      $(
+      rstring%i := parmstring%pp
+      pp +:= 1
+      $)
+    rstring%0 := l
+    arg!a.opt := rstring
+    $)2
+  ELSE
+    $(2
+    error("unknown option *"%S*"*N", word)
+    tidyup(rc.bad)
+    $)2
+  $)1
+$)proc
+
+
+AND readparmword(word, aptr) BE
+$(proc
+LET n = 0
+word%0 := 0
+WHILE (!aptr <= parmstring%0) & (parmstring%(!aptr) = ' ') DO
+  !aptr +:= 1
+UNTIL (!aptr > parmstring%0) | (parmstring%(!aptr) = ' ') |
+  (parmstring%(!aptr) = '=') | (parmstring%(!aptr) = ';')
+DO
+  $(
+  n +:= 1
+  word%n := parmstring%(!aptr)
+  !aptr +:= 1
+  $)
+word%0 := n
+$)proc
+
+
+AND readparmint(aptr) = VALOF
+$(proc
+LET n = 0
+WHILE (!aptr <= parmstring%0) & (parmstring%(!aptr) = ' ') DO !aptr +:= 1
+UNTIL (!aptr > parmstring%0) | ('0' > parmstring%(!aptr)) |
+      ('9' < parmstring%(!aptr)) DO
+  $(
+  n := n*10 + parmstring%(!aptr) - '0'
+  !aptr +:= 1
+  $)
+skip(aptr, ';')
+RESULTIS n
+$)proc
+
+
+AND skip(aptr, ch) BE
+$(proc
+WHILE (!aptr <= parmstring%0) & (parmstring%(!aptr) = ' ') DO !aptr +:= 1
+IF (!aptr <= parmstring%0) & (parmstring%(!aptr) = ch) THEN !aptr +:= 1
+$)proc
+
+
+AND findgetin(name) = VALOF
+$(  LET scb = findinput(name)
+IF scb=0 THEN error("can't open %S GET file *"%S*"*N", device.name, name)
+RESULTIS scb
+$)
+
+AND findmaininput(name) = findinput(name)
+
+AND findmainout(name) = VALOF
+$(  LET scb = findoutput(name)
+IF scb=0 THEN error("can't open main output *"%S*"*N", name)
+RESULTIS scb
+$)
+
+
+AND interrupt() = isbreak()
+
+
+AND eqstring(s1, s2) = VALOF
+$(
+LET l1 = s1 % 0
+IF l1 ~= s2 % 0 THEN RESULTIS FALSE
+FOR j = 1 TO l1 DO
+  $(
+  LET c1 = s1 % j
+  LET c2 = s2 % j
+  IF 'a' <= c1 <= 'z' THEN c1 := c1 + 'A' - 'a'
+  IF 'a' <= c2 <= 'z' THEN c2 := c2 + 'A' - 'a'
+  IF c1 ~= c2 THEN RESULTIS FALSE
+  $)
+RESULTIS TRUE
+$)
+
+
+AND get.time(vect, default.time) = timeofday()
+
+AND get.day(vect, default.day) = default.day
+
+AND get.date(vect, default.date) = date()
+
+AND tidyup(n) BE STOP(n)
+
+AND get.vec(n) = GETVEC(n)
+
+AND free.vec(n) = FREEVEC(n)
+$>MVS
+
+
+
+
+$<VAXUNIX
+MANIFEST
+$(  arg.size   = 100/bytesperword
+    max.from.files  = 20
+    hdr.def.size = 0
+
+    a.to       = hdr.def.size+0
+    a.hdr      = hdr.def.size+1
+    a.first    = hdr.def.size+2
+    a.last     = hdr.def.size+3
+    a.even     = hdr.def.size+4
+    a.odd      = hdr.def.size+5
+    a.opt      = hdr.def.size+6
+    a.fromno   = hdr.def.size+7
+    a.fromlist = hdr.def.size+8
+    a.map      = hdr.def.size+9
+    a.a5ona4   = hdr.def.size+10
+
+    bad.rc     = 1
+    good.rc    = 0
+
+    mapvec.size= 32
+$)
+
+
+LET read.args(arg, arg.size) = VALOF
+  // UNIX (BSD 4.2) using unix flags (-c)
+  $( LET argp      = 1                  // Pointer into the ARGV
+     LET ident     = "cl.cam.ac.uk $Header: part2.b,v 1.1 86/02/22 09:14:06 pb Exp $"
+
+     command.name := ARGV!0
+     device.name  := "POSTSCRIPT"
+
+     arg!a.fromno   := 1
+     arg!a.fromlist := "-"      // Default is to
+     arg!a.to       := "-"      // act as a pipe
+     arg!a.hdr      := "/usr/lib/gcal/gc2ps.pshdr"
+     arg!a.even     := FALSE
+     arg!a.odd      := FALSE
+     arg!a.map      := 0
+     arg!a.a5ona4   := FALSE
+     arg!a.first    := 1
+     arg!a.last     := maxint
+     arg!a.opt      := 0
+
+     ver.stream     := JOURNAL
+     chatty         := FALSE
+
+     WHILE argp <= ARGC & (ARGV!argp)%1 = '-'
+     $( LET key = ARGV!argp
+        SWITCHON key%2 INTO
+        $(
+        CASE '1': arg!a.odd    := TRUE;               ENDCASE
+        CASE '0': arg!a.even   := TRUE;               ENDCASE
+        CASE '5': arg!a.a5ona4 := TRUE;               ENDCASE
+        CASE 'f': argp := argp + 1
+                  IF (argp > ARGC)
+                  $( report("No number specified after -f*N")
+                     tidyup(bad.rc)
+                  $)
+                  arg!a.first:= atoi(ARGV!argp);      ENDCASE
+        CASE 'h': argp := argp + 1
+                  IF (argp > ARGC)
+                  $( report("No hdr file specified after -h*N")
+                     tidyup(bad.rc)
+                  $)
+                  arg!a.hdr := ARGV!argp;         ENDCASE
+        CASE 'l': argp := argp + 1
+                  IF (argp > ARGC)
+                  $( report("No number specified after -l*N")
+                     tidyup(bad.rc)
+                  $)
+                  arg!a.last := atoi(ARGV!argp);      ENDCASE
+        CASE 'o': argp := argp + 1
+                  IF (argp > ARGC)
+                  $( report("No output file specified after -o*N")
+                     tidyup(bad.rc)
+                  $)
+                  arg!a.to := ARGV!argp;              ENDCASE
+        CASE 'p': argp := argp + 1
+                  IF (argp > ARGC)
+                  $( report("No pages specified after -p*N")
+                     tidyup(bad.rc)
+                  $)
+                  $( LET first = 1
+                     LET mapvec = get.vec(mapvec.size)
+                     IF mapvec = 0
+                     THEN WRITEF("MAP GETVEC FAILED*N") <> tidyup(bad.rc)
+
+                     decodepagelist(ARGV!argp, @first, mapvec, mapvec.size)
+                     arg!a.map := mapvec
+                  $)                                  ENDCASE
+        CASE 'r': argp := argp + 1
+                  IF (argp > ARGC)
+                  $( report("No request string specified after -r*N")
+                     tidyup(bad.rc)
+                  $)
+                  arg!a.opt := ARGV!argp;         ENDCASE
+        CASE 'v': chatty     := TRUE;                 ENDCASE
+        DEFAULT:  report("Unknown option `%s'*N*
+*Usage: [-0] [-1] [-5] [-v] [-f] [-l] [-o output] [-p pages] [-h hdr] [-r requeststring]*N", key)
+                  tidyup(bad.rc)
+        CASE 0:   BREAK
+        $)
+        argp := argp + 1
+     $)
+
+     IF ARGC >= argp
+     $( if ARGC-argp >= max.from.files
+        $( report("Only %n of %n files processed*N", max.from.files, argc-argp+1)
+           ARGC := max.from.files + argp -1
+        $)
+        arg!a.fromno   := ARGC - argp +1
+        FOR i = 0 TO ARGC-argp arg!(a.fromlist + I) := ARGV!(argp + I)
+     $)
+
+     IF chatty THEN report("Version %N.%N `%s'*N",
+                major.version, minor.version, ident)
+
+     RESULTIS TRUE
+$)
+
+AND atoi(ptr) = VALOF
+$(  LET n = 0
+    FOR I = 1 TO ptr%0
+    $(  LET ch = ptr%i
+        UNLESS '0' <= ch <= '9' BREAK
+        n := n*10 + ch - '0'
+    $)
+    RESULTIS n
+$)
+
+AND findgetin(name) = VALOF
+$(  LET scb = findinput(name)
+    IF scb=0 THEN error("can't open %S GET file *"%S*"*N", device.name, name)
+    RESULTIS scb
+$)
+
+AND findmainout(name) = VALOF
+$(  LET scb = eqstring(name, "-") -> SYSOUT, findoutput(name)
+    IF scb=0 THEN error("can't open main output *"%S*"*N", name)
+    RESULTIS scb
+$)
+
+AND eqstring(s1, s2) = VALOF
+$( LET l1 = s1 % 0
+
+   IF l1 ~= s2 % 0 THEN RESULTIS FALSE
+
+   FOR j = 1 TO l1 DO
+   $( LET c1 = s1 % j
+      LET c2 = s2 % j
+      IF 'a' <= c1 <= 'z' THEN c1 := c1 + 'A' - 'a'
+      IF 'a' <= c2 <= 'z' THEN c2 := c2 + 'A' - 'a'
+      IF c1 ~= c2 THEN RESULTIS FALSE
+   $)
+
+   RESULTIS TRUE
+$)
+
+AND findmaininput(name)        = eqstring(name, "-") -> SYSIN, findinput(name)
+AND interrupt()                  = FALSE
+AND get.time(vect, default.time) = timeofday(vect)
+AND get.day(vect, default.day)   = default.day          // Do any better ?
+AND get.date(vect, default.date) = date(vect)
+AND tidyup(n) BE STOP(n)
+AND get.vec(n)                   = GETVEC(n)
+AND free.vec(n)                  = FREEVEC(n)
+$>VAXUNIX
+
+
+
+$<TRIPOS
+GET "string-to-number"
+
+MANIFEST
+$(  arg.size   = 100/bytesperword
+
+    // Keyed
+    a.fromlist = 0
+    a.to       = 1
+    a.hdr      = 2
+    a.first    = 3
+    a.last     = 4
+    a.map      = 5       // holds string form
+    a.opt      = 6
+    a.copies   = 7       // local only
+    a.margin   = 8       // local only
+    // switches
+    a.even     = 9
+    a.odd      = 10
+    a.ver      = 11     // Local to read.args
+    a.a5ona4   = 12
+
+    a.fromno   = a.ver  // Global
+    a.pages    = a.map  // holds bitmap form
+
+    bad.rc     = 20
+    good.rc    = 0
+
+    mapvec.size= 32
+$)
+
+
+LET read.args(argv, arg.size) = VALOF
+  // TRIPOS version, using RDARGS to do the work
+  $( LET args = "from/a,to/k,hdr/k,first/k,last/k,pages/k,request/k,copies/k,*
+                *margin/k,even/s,odd/s,ver/s,a5=a5ona4/s";
+     command.name := "Gc2ps"
+     device.name  := "POSTSCRIPT"
+
+     UNLESS rdargs(args, argv, arg.size)
+     DO report("Bad args for *"%s*"*N", args) <> tidyup (bad.rc)
+
+    // Default to sending it directly to the Balfour Rooms LaserWriter
+     UNLESS argv!a.to  DO argv!a.to  := "OMS:gc2ps"
+     UNLESS argv!a.hdr DO argv!a.hdr := "SYS:gcal.gc2ps-pshdr"
+
+     TEST (argv!a.first)
+     THEN TEST string.to.number(argv!a.first)
+          THEN argv!a.first := RESULT2
+          ELSE report("Bad first page *"%s*"*N", argv!a.first) <> tidyup(bad.rc)
+     ELSE argv!a.first    := 1
+
+     TEST (argv!a.last)
+     THEN TEST string.to.number(argv!a.last)
+          THEN argv!a.last := RESULT2
+          ELSE report("Bad last page *"%s*"*N", argv!a.last) <> tidyup(bad.rc)
+     ELSE argv!a.last := maxint
+
+     TEST (argv!a.pages)
+     $(   LET mapvec  = get.vec (mapvec.size)
+          LET pointer = 1   // We start at character number 1 of the string
+
+          IF mapvec = 0 THEN WRITEF("MAP GETVEC FAILED*N") <> tidyup(bad.rc)
+          decodepagelist(argv!a.pages, @pointer, mapvec, mapvec.size)
+          argv!a.map := mapvec
+     $)
+     ELSE argv!a.map := 0
+
+     IF (argv!a.margin) append.request(argv+a.opt, "margin", argv!a.margin)
+     IF (argv!a.copies) append.request(argv+a.opt, "copies", argv!a.copies)
+
+     chatty        := argv!a.ver // No more need for argv!a.ver
+     argv!a.fromno := 1          // Now re-use it.
+
+     IF chatty THEN report("Version %N.%N*N", major.version, minor.version)
+
+     RESULTIS TRUE
+$)
+
+AND append.request(lv.opt, prefix, value) BE
+$( LET opt  = !lv.opt
+   LET size = prefix%0 + 1 + value%0 + ((opt = 0) -> 0, opt%0)
+   LET new  = get.vec (size/BYTESPERWORD)
+   LET pos  = 0  // n.b. Increment BEFORE using
+
+   IF new=0 error("Can't get vector for %s request*N", prefix) <> RETURN
+
+   UNLESS opt = 0
+   $( FOR I = 1 TO opt%0 DO new%i := opt%i <> pos +:= 1
+      pos +:= 1 <> new%pos := ';'
+   $)
+
+   FOR i = 1 TO prefix%0 DO pos +:= 1 <> new%pos := prefix%i
+   pos +:= 1 <> new%pos := ' '
+   FOR i = 1 TO value%0 DO pos +:= 1 <> new%pos := value%i
+   new%0 := pos
+   if chatty writef("New request is *"%s*"*N", new)
+   !lv.opt := new
+$)
+
+AND findgetin(name) = VALOF
+$(  LET scb = findinput(name)
+    IF scb=0 THEN error("can't open %S GET file *"%S*"*N", device.name, name)
+    RESULTIS scb
+$)
+
+AND findmainout(name) = VALOF
+$(  LET scb = findoutput(name)
+    IF scb=0 THEN error("can't open main output *"%S*"*N", name)
+    RESULTIS scb
+$)
+
+AND eqstring(s1, s2)             = compstring (s1, s2) = 0
+AND findmaininput(name)          = findinput(name)
+AND interrupt()                  = testflags(1)
+AND get.time(vect, default.time) = datstring(vect)+5
+AND get.day(vect, default.day)   = datstring(vect)+10
+AND get.date(vect, default.date) = datstring(vect)
+AND tidyup(n) BE
+$(  UNLOADSEG(getvec.chain)
+    STOP(n)
+$)
+
+AND get.vec(n) = VALOF
+$(  LET data = GETVEC(n+1)
+    IF data = 0 THEN RESULTIS 0
+    !data := getvec.chain
+    getvec.chain := data
+    RESULTIS data+1
+$)
+
+AND free.vec(n) = VALOF
+$(  LET p = @getvec.chain
+    UNTIL !p = n | !p = 0 DO p := !p
+    IF !p = 0 RESULTIS 0
+    !p := !!p
+    RESULTIS FREEVEC(n)
+$)
+$>TRIPOS
+
+
+
+//
+//                Some Common Routines
+//                --------------------
+
+AND decodepagelist(base, aptr, map, map.words) BE
+$(proc
+
+  LET readint(base, aptr) = VALOF
+  $(
+  LET n = -1
+  WHILE (!aptr <= base%0) & (base%(!aptr) = ' ') DO !aptr +:= 1
+  IF (!aptr <= base%0) & ('0' <= base%(!aptr)) & ('9' >= base%(!aptr)) DO
+    $(
+    n := 0
+    UNTIL (!aptr > base%0) | ('0' > base%(!aptr)) | ('9' < base%(!aptr)) DO
+      $(
+      n := n * 10 + base%(!aptr) - '0'
+      !aptr +:= 1
+      $)
+    $)
+  RESULTIS n
+  $)
+
+//
+LET n = readint(base, aptr)
+
+FOR I = 0 TO map.words DO map!I := 0
+
+UNTIL n = -1 DO
+  $(1
+  LET t = n
+
+  // lower-upper : are we in the middle of a range ?
+  IF (!aptr <= base%0) & (base%(!aptr) = '-') THEN
+    $(2
+    !aptr +:= 1
+    t := readint(base, aptr)
+    // - not followed by a valid number: look for special case, else reject
+    IF t = -1 THEN
+      // lower-* : from lower to end of document
+      TEST (!aptr <= base%0) & (base%(!aptr) = '**') THEN
+        $( t := ((map.words + 1) * BITSPERWORD) -1; !aptr +:= 1 $)
+      ELSE
+        $( error("Syntax error in page list*N"); tidyup(bad.rc) $)
+    $)2
+
+  // fill in the bitmap.
+  FOR i = n TO t DO map%(i/BITSPERBYTE) |:= bitmask!(i REM BITSPERBYTE)
+
+  IF !aptr > base%0 THEN BREAK
+  TEST base%(!aptr) = ',' THEN !aptr +:= 1 ELSE BREAK
+  n := readint(base, aptr)
+  $)1
+$)proc
+
+// put the number n at offset o in b and suffix with s, and return # chars
+// [i.e. sprintf(o+b, "%d%s", n, s) ]
+AND cvs(n, b, o, s) = VALOF
+$(proc
+LET count = 1
+LET t = n/10
+LET u = n REM 10
+IF t > 0 THEN
+  $(
+  b%o := t + '0'
+  o +:= 1
+  count +:= 1
+  $)
+b%o := u + '0'
+o +:= 1
+FOR i = 1 TO s%0 DO
+  $(
+  b%o := s%i
+  o +:= 1
+  count +:= 1
+  $)
+RESULTIS count
+$)proc
+
+
+
+//
+//                       Main  Driving Code
+//                       ------------------
+
+
+
+LET do.this.page(page.no) =
+  ((page.no & 1)=0 -> even, odd) & (page.no >= min.page) &
+    (page.map = 0 -> TRUE,
+      (page.map%(page.no/BITSPERBYTE) & bitmask!(page.no REM BITSPERBYTE)) \= 0)
+
+
+LET is.last.page(page.no) = (page.no = max.page)
+
+
+LET start(xxx) BE
+$(proc
+LET mask = TABLE 128,64,32,16,8,4,2,1
+LET arg = VEC arg.size
+LET rc = bad.rc
+bitmask := mask
+line.number := 0
+$<MVS parmstring := xxx $>MVS
+$<TRIPOS getvec.chain := 0 $>TRIPOS
+init.ver()  // set error reporting stream for READ.ARGS to use
+IF read.args(arg, arg.size) THEN
+  $(1
+  min.page := arg!a.first         // first page to print
+  max.page := arg!a.last          // last page to print
+  even     := NOT arg!a.odd       // print the even pages
+  odd      := NOT arg!a.even      // print the odd pages
+  page.map := arg!a.map           // bit map for pages
+  A5onA4   := arg!a.A5onA4        // 2-up printing
+  post.initial.apc := arg!a.opt   // initial application comment
+  IF init.gcode() THEN
+    $(2
+    LET saveout = output()
+    init.laserwriter(arg!a.to, arg!a.hdr)
+      $(3
+      LET next.page = 1
+      LET input.files = arg!a.fromno
+      LET files = arg+a.fromlist
+      LET file.number = 0
+      WHILE next.page>=0 & file.number < input.files DO
+        $(4
+        next.page := read.gcode(files!file.number, next.page,
+          do.this.page, is.last.page)
+        file.number := file.number + 1
+        $)4
+      IF next.page>=0 THEN rc := good.rc
+      end.laserwriter()
+      $)3
+    selectoutput(saveout)
+    $)2
+  end.gcode()
+  $)1
+end.ver()
+tidyup(rc)
+$)proc
+
+// End of Part Two
+
+

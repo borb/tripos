@@ -1,0 +1,31 @@
+/***********************************************************************
+**             (C) Copyright 1980  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+       ########  ########  ######    #      #  ##    ##  #######
+       ########  ########  #######   ##    ##  ##    ##  ########
+          ##        ##     ##    ##   ##  ##   ##    ##  ##    ##
+          ##        ##     ##    ##    ####    ##    ##  #######
+          ##        ##     ##    ##     ##     ##    ##  ##
+          ##        ##     ##    ##     ##     ##    ##  ##
+          ##     ########  #######      ##     ########  ##
+          ##     ########  ######       ##      ######   ##
+
+************************************************************************
+**    Author:   Brian Knight                       February 1980      **
+***********************************************************************/
+
+
+// This section is intended to be loaded as a library to provide
+// a standard TIDYUP routine, so that the KILL command can be
+// used on commands and tasks which do not contain their own
+// definition of it.
+
+SECTION "tidyup"
+
+GET "libhdr"
+
+LET tidyup(in.root.stack) BE IF in.root.stack THEN deletetask(taskid)
+
+

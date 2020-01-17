@@ -1,0 +1,579 @@
+/****************************************************************************\
+*                           Systems Research Group                           *
+******************************************************************************
+
+
+        #####    ######   #######   #      #  ######    ########  #######
+       #######  ########  ########  ##    ##  #######   ########  ########
+      ##        ##    ##  ##    ##   ##  ##   ##    ##     ##     ##    ##
+      ##        ##    ##  #######     ####    ##    ##     ##     ########
+      ##        ##    ##  ##           ##     ##    ##     ##     #######
+      ##        ##    ##  ##           ##     ##    ##     ##     ##  ##
+       #######  ########  ##           ##     #######   ########  ##   ##
+        #####    ######   ##           ##     ######    ########  ##    ##
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   09/02/87            *
+\****************************************************************************/
+
+
+
+SECTION "COPYDIR"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+GET "BCPL.OBJINFO"
+
+
+
+MANIFEST
+$(
+    size.exinfo       =  dirent.size + file.header.size - 1
+    exinfo.name       =  dirent.name
+    maxchars.name     =  30
+
+    buffersize        =  1024 * 8
+
+    a.fromdir         =  0
+    a.todir           =  1
+    a.update          =  2
+    a.all             =  3
+    a.quiet           =  4
+    a.trace           =  5
+$)
+
+
+
+LET start()  BE
+$(
+//  Main routine of the "copydir" command.
+
+    LET args     =  "DIR/A,TO/A,UPDATE/S,ALL/S,QUIET/S,TRACE/S"
+    LET argv     =  VEC 50
+
+    LET fromdir  =  0
+    LET frompat  =  0
+    LET todir    =  0
+    LET update   =  0
+    LET all      =  0
+    LET quiet    =  0
+    LET trace    =  0
+
+    LET exinput  =  0
+    LET oldcurr  =  currentdir
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** Bad arguments for *"%S*"*N", args )
+
+        stop( 20 )
+    $)
+
+    fromdir  :=  argv!a.fromdir
+    todir    :=  argv!a.todir
+    update   :=  argv!a.update
+    all      :=  argv!a.all
+    quiet    :=  argv!a.quiet
+    trace    :=  argv!a.trace
+
+    //  For an interim period, we accept "update" and "all" as keywords.
+    //  Eventually, we want the "update" option to be the default.  The
+    //  same applies to the "quiet" and "trace" options.
+    
+    update  :=  update  |  NOT all
+    quiet   :=  quiet   |  NOT trace
+
+    //  Now, attempt to set ourselves to the "from" directory, so that we
+    //  can examine it.
+
+    frompat     :=  splitdirectory( fromdir )
+    currentdir  :=  locateobj( fromdir )
+
+    IF  currentdir = 0  THEN
+    $(
+        writef( "****** Cannot find directory *"%S*"*N", fromdir )
+
+        currentdir  :=  oldcurr
+
+        fvec( frompat )
+        stop( 20 )
+    $)
+
+    exinput  :=  findexall( frompat )
+
+    IF  exinput = 0  THEN
+    $(
+        writef( "****** Cannot examine directory (exall:%S)*N", frompat )
+
+        freeobj( currentdir )
+
+        currentdir  :=  oldcurr
+
+        fvec( frompat )
+        stop( 20 )
+    $)
+
+    //  Now we have the stream, we can set ourselves back to the old
+    //  directory, and start copying the files.
+
+    freeobj( currentdir )
+    fvec( frompat )
+
+    currentdir  :=  oldcurr
+
+    selectinput( exinput )
+
+    $(  //  Main repeat loop to read file names in the FROM directory,
+        //  and copy them to the destination directory.
+
+        LET buffer  =  VEC 256/bytesperword
+        LET length  =  0
+        LET fname   =  0
+        LET tname   =  0
+        LET ch      =  rdch()
+
+        IF  ch = endstreamch     THEN  BREAK
+        IF  testflags( #B0001 )  THEN  BREAK
+
+        IF  testflags( #B1000 )  THEN  quiet  :=  NOT quiet
+
+        UNTIL  ch = '*N'  DO
+        $(
+            length           :=  length + 1
+            buffer % length  :=  ch
+            ch               :=  rdch()
+        $)
+
+        buffer % 0  :=  length
+
+        //  Having got the file name, construct the "from" and "to"
+        //  names.
+
+        fname  :=  joinnames( fromdir, buffer )
+        tname  :=  joinnames( todir, buffer )
+
+        TEST  update
+          THEN  updatefile( fname, tname, quiet )
+          ELSE  copyfile( fname, tname, quiet )
+
+        fvec( fname )
+        fvec( tname )
+    $)
+    REPEAT  //  Until we reach the end of the directory
+
+    endread()
+$)
+
+
+
+AND splitdirectory( name )  =  VALOF
+$(
+//  Strip the name down to the first unambiguous directory, and then
+//  split it into two halves.
+
+    LET length     =  name % 0
+    LET ambiguous  =  FALSE
+    LET dirpos     =  0
+    LET result     =  0
+
+    FOR  i = 1  TO  length  DO
+    $(
+        LET ch  =  name % i
+        
+        IF  ch = '**'  |  ch = '?'  THEN
+        $(
+            //  Ambiguous part, so set the name string so that it removes
+            //  this bit.
+            
+            name % 0   :=  dirpos
+            ambiguous  :=  TRUE
+
+            BREAK
+        $)
+
+        //  Otherwise, if this is a directory separator, then remember
+        //  where it is, so that we can use it later.
+        
+        IF  ch = '.'  THEN  dirpos  :=  i - 1
+        IF  ch = ':'  THEN  dirpos  :=  i
+    $)
+
+    TEST  NOT ambiguous  THEN  result  :=  joinnames( "", "" )
+    ELSE
+    $(
+        //  Copy the string down, removing the directory bit.
+
+        LET offset   =  dirpos = 0  ->  0, 1
+        LET residue  =  length - dirpos - offset
+
+        result      :=  gvec( residue/bytesperword )
+        result % 0  :=  residue
+
+        FOR  i = 1  TO  residue  DO  
+            result % i  :=  name % (dirpos + i + offset)
+    $)
+
+    RESULTIS  result
+$)
+
+
+
+AND findexall( name )  =  VALOF
+$(
+//  Attempt to open the "exall:" device for the directory mentioned.
+
+    LET exall   =  joinnames( "exall:", name )
+    LET result  =  findinput( exall )
+
+    fvec( exall )
+
+    RESULTIS  result
+$)
+
+
+
+AND updatefile( fname, tname, quiet )  BE
+$(
+//  Copy the first file to the second file, but only if it is more up
+//  to date.
+
+    LET flock  =  locateobj( fname )
+    LET tlock  =  locateobj( tname )
+
+    TEST  flock = 0  |  tlock = 0  THEN
+    $(
+        //  Can't check the dates unless both files exist.  We should
+        //  perform the copy regardless.
+
+        UNLESS  flock = 0  DO  freeobj( flock )
+        UNLESS  tlock = 0  DO  freeobj( tlock )
+
+        copyfile( fname, tname, quiet )
+    $)
+    ELSE
+    $(
+        //  The files exist, so compare the dates.
+
+        LET entryinfo  =  VEC size.exinfo
+
+        LET fdate      =  VEC 2
+        LET tdate      =  VEC 2
+
+        LET ftask      =  flock!lock.task
+        LET ttask      =  tlock!lock.task
+
+        examine.obj( ftask, flock, entryinfo )
+        objinfo.ex( objinfo.date, flock, entryinfo, fdate )
+
+        examine.obj( ttask, tlock, entryinfo )
+        objinfo.ex( objinfo.date, tlock, entryinfo, tdate )
+
+        freeobj( flock )
+        freeobj( tlock )
+
+        //  Now, compare the dates, and only if the "from" date is more
+        //  recent, do the copy.
+
+        IF  morerecent( fdate, tdate )  THEN  copyfile( fname, tname, quiet )
+    $)
+$)
+
+
+
+AND morerecent( date1, date2 )  =  VALOF
+$(
+//  Return TRUE iff the first date is more recent than the second.
+
+    FOR  i = 0  TO  2  DO
+    $(
+        LET d1  =  date1!i
+        LET d2  =  date2!i
+
+        IF  d1 > d2  THEN  RESULTIS  TRUE
+        IF  d1 < d2  THEN  RESULTIS  FALSE
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND copyfile( fromfile, tofile, quiet )  BE
+$(
+//  Copy one file to another.
+
+    LET fromstream  =  findinput( fromfile )
+    LET fr2         =  result2
+
+    LET tostream    =  findoutput( tofile )
+    LET tr2         =  result2
+
+    LET oldinput    =  input()
+    LET oldoutput   =  output()
+
+    IF  tostream = 0  THEN
+        IF  createsubdirs( tofile )  THEN
+        $(
+            tostream  :=  findoutput( tofile )
+            tr2       :=  result2
+        $)
+
+    //  Make sure that both streams have been opened.
+
+    IF  fromstream = 0  |  tostream = 0  THEN
+    $(
+        //  Failed to open one or more of the streams.  Print out a message
+        //  attempting to explain why.
+
+        TEST  fromstream = 0  THEN
+        $(
+            writef( "****** Cannot open *"%S*":  ", fromfile )
+
+            fault( fr2 )
+        $)
+        ELSE  endstream( fromstream )
+
+        TEST  tostream = 0  THEN
+        $(
+            writef( "****** Cannot open *"%S*":  ", tofile )
+
+            fault( tr2 )
+        $)
+        ELSE  endstream( tostream )
+
+        RETURN
+    $)
+
+    //  If we come here, then we have been able to open all the streams,
+    //  so we should copy the file without further ado.
+
+    UNLESS  quiet  DO  writef( "Copying %S to %S*E", fromfile, tofile )
+
+    //  Copy the file in the quickest way possible, which is by reading and
+    //  writing in word units.  This means that the size must be corrected
+    //  after the copy.
+
+    selectinput( fromstream )
+    selectoutput( tostream )
+
+    copywords()
+
+    endread()
+    endwrite()
+
+    selectinput( oldinput )
+    selectoutput( oldoutput )
+
+    //  Having done the copy, correct the size (and last update time) of the
+    //  target file.
+
+    copyattributes( fromfile, tofile )
+
+    UNLESS  quiet  DO  newline()
+$)
+
+
+
+AND copyattributes( fname, tname )  BE
+$(
+//  Read the size and date attributes from the source file and put them into
+//  the target file.
+
+    LET entryinfo  =  VEC size.exinfo
+
+    LET sizev      =  VEC 1
+    LET datev      =  VEC 2
+
+    LET flock      =  locateobj( fname )
+    LET ftask      =  flock!lock.task
+
+    LET ttask      =  devicetask( tname )
+    LET tlock      =  result2
+
+    examine.obj( ftask, flock, entryinfo )
+
+    objinfo.ex( objinfo.size, flock, entryinfo, sizev )
+    objinfo.ex( objinfo.date, flock, entryinfo, datev )
+
+    freeobj( flock )
+
+    sendpkt( notinuse, ttask, action.setheader, 0, 0, tlock, tname, sizev, datev )
+$)
+
+
+
+AND copywords()  BE
+$(
+//  Copy all the words of a file over.
+
+    LET buffer  =  gvec( buffersize )
+
+    $(  //  Repeat loop to read words from the source file and write them to
+        //  the destination file.
+
+        LET length  =  ABS readwords( buffer, buffersize )
+        
+        IF  length = 0  THEN  BREAK
+        
+        writewords( buffer, length )
+    $)
+    REPEAT
+
+    fvec( buffer )
+$)
+
+
+
+AND createsubdirs( name )  =  VALOF
+$(
+//  Create all the subdirectories for a particular name.  If the objects
+//  already exist, make sure that they are of the right type.
+
+    LET workvec  =  gvec( maxchars.name / bytesperword )
+    LET dirname  =  0
+    LET pos      =  0
+
+    pos       :=  splitname( workvec, '.', name, 1 )
+    dirname   :=  joinnames( "", "" )
+
+    UNTIL  pos = 0  DO
+    $(
+        LET ndirname  =  joinnames( dirname, workvec )
+        LET obj       =  0
+
+        fvec( dirname )
+
+        dirname  :=  ndirname
+        obj      :=  locateobj( dirname )
+
+        TEST  obj = 0  THEN
+        $(
+            obj  :=  createdir( dirname )
+
+            IF  obj = 0  THEN
+            $(
+                writef( "****** Cannot create Sub-Directory *"%S*":  ",
+                         dirname )
+                fault( result2 )
+
+                fvec( workvec )
+                fvec( dirname )
+
+                RESULTIS  FALSE
+            $)
+        $)
+        ELSE
+        $(
+            //  The object exists, but is it a directory ?
+
+            LET entryinfo  =  VEC size.exinfo
+            LET fhtask     =  obj!lock.task
+            LET ok         =  examine.obj( fhtask, obj, entryinfo )
+            LET r2         =  result2
+            LET type       =  0
+
+            IF  ok  THEN  objinfo.ex( objinfo.type, obj, entryinfo, @type )
+
+            UNLESS  ok  &  type = type.dir  DO
+            $(
+                TEST  NOT ok  THEN
+                $(
+                    writef( "****** Cannot examine *"%S*":  ", dirname )
+                    fault( r2 )
+                $)
+                ELSE
+
+                TEST  type = type.file  THEN
+                      writef( "****** Directory *"%S*" already exists as a file*N",
+                               dirname )
+
+                ELSE  writef( "****** Internal error:  *"%S*" has type %N", dirname, type )
+
+                fvec( workvec )
+                fvec( dirname )
+
+                freeobj( obj )
+
+                RESULTIS  FALSE
+            $)
+        $)
+
+        freeobj( obj )
+
+        pos  :=  splitname( workvec, '.', name, pos )
+    $)
+
+    fvec( dirname )
+    fvec( workvec )
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND examine.obj( fhtask, lock, entryinfo )  =
+    sendpkt( notinuse, fhtask, action.examineobject, 0, 0, lock, entryinfo )
+
+
+
+AND joinnames( name1, name2 )  =  VALOF
+$(
+//  Join the two halves of a filename together to make one.  A dot is the
+//  separator, unless:
+//
+//        a)  name1 is a device name of the form  DEV:
+//        b)  name1 or name2 are the null string.
+
+    LET lname1  =  name1 % 0
+    LET lname2  =  name2 % 0
+    LET nodot   =  (name1 % 0) = 0  |  (name2 % 0) = 0  |  (name1 % lname1) = ':'
+
+    LET buffer  =  gvec( (lname1 + lname2 + 1) / bytesperword )
+    LET length  =  0
+
+    FOR  i = 1  TO  lname1  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  name1 % i
+    $)
+
+    UNLESS  nodot  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  '.'
+    $)
+
+    FOR  i = 1  TO  lname2  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  name2 % i
+    $)
+
+    buffer % 0  :=  length
+
+    RESULTIS  buffer
+$)
+
+
+
+AND gvec( upb )  =  VALOF
+$(
+//  Get a vector, complaining if we run out of store.
+
+    LET store  =  getvec( upb )
+
+    IF  store = 0  THEN  abort( error.getvecfailure )
+
+    RESULTIS  store
+$)
+
+
+
+AND fvec( store )  BE  freevec( store )
+
+

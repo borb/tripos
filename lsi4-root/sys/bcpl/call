@@ -1,0 +1,101 @@
+/***********************************************************************
+**             (C) Copyright 1983  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+*                                                                      *
+*             #####     ####    ##        ##                           *
+*            #######   ######   ##        ##           ##              *
+*           ##        ##    ##  ##        ##           ##              *
+*           ##        ########  ##        ##                           *
+*           ##        ##    ##  ##        ##                           *
+*           ##        ##    ##  ##        ##           ##              *
+*            #######  ##    ##  ########  ########     ##              *
+*             #####   ##    ##  ########  ########                     *
+*                                                                      *
+************************************************************************
+**    Author:  Brian Knight                              June 1983    **
+***********************************************************************/
+
+// This program lives SYS:H.CALL
+// It allows testing of programs intended for the :H directory without
+// actually installing them there.
+//
+// The stream name "CALL:FILENAME/ARGS" calls the program in FILENAME, as
+// if "LASTCOMPONENT:ARGS" had been used, where LASTCOMPONENT is the last
+// component of the filename.
+
+SECTION "CALL:"
+
+GET "LIBHDR"
+GET "IOHDR"
+
+
+LET start(dummy, action, scb, string) = VALOF
+    $(
+    LET prefix          = getvec(255/bytesperword)
+    LET newstring       = getvec(255/bytesperword)
+    LET filename        = getvec(255/bytesperword)
+    LET fnlen           = 0
+    LET ptr1            = 0
+    LET ptr2            = 0
+    LET ptr3            = 0
+    LET ptr4            = 0
+    LET res             = 0
+    LET r2              = 0
+
+    IF prefix=0 | newstring=0 | filename=0
+    THEN $( freevec(prefix); freevec(newstring); freevec(filename); RESULTIS 0 $) // No store
+
+    // STRING will be in the form "CALL:filename/args"
+    // First strip off the "CALL:".
+
+    ptr1        := splitname(prefix, ':', string, 1)
+
+    // Then the filename:
+
+    ptr2        := splitname(filename, '/', string, ptr1)
+    fnlen       := filename%0
+
+    // Construct the string to be passed to next program from the last
+    // component of the filename, a colon, and the argument part of the
+    // string we were given. This is the form this string would have if
+    // the program had been loaded direct from :H.
+
+    // The filename may be in the form "XXX:". Strip the final colon if so.
+
+    IF fnlen>0 & filename%fnlen=':' THEN fnlen := fnlen-1
+    ptr3        := fnlen
+
+    UNTIL ptr3=0
+    DO $(
+       LET ch   = filename%ptr3
+       IF ch='.' | ch=':' THEN BREAK    // Filename component separator
+       ptr3     := ptr3-1
+       $)
+
+    ptr4        := 0
+
+    FOR i=ptr3+1 TO fnlen
+    DO $( ptr4 := ptr4+1; newstring%ptr4 := filename%i $)
+
+    ptr4                := ptr4+1
+    newstring%ptr4      := ':'
+
+    UNLESS ptr2=0 // No '/' in string
+    THEN FOR i=ptr2 TO string%0
+         DO $( ptr4 := ptr4+1; newstring%ptr4 := string%i $)
+
+    newstring%0         := ptr4
+
+    // Call the target program
+//    writef("CALL: prefix *"%S*", filename*"%S*", newstring *"%S*"*N", prefix, filename, newstring)
+
+    res := callseg(filename, 0, action, scb, newstring)
+    r2  := result2
+
+    freevec(filename); freevec(prefix); freevec(newstring)
+    result2     := r2
+    RESULTIS res
+    $)
+
+

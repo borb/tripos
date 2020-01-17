@@ -1,0 +1,148 @@
+SECTION "LCG9"
+
+GET "LCGHDR"
+
+LET revop(op) = VALOF SWITCHON op INTO
+$(
+    DEFAULT:    RESULTIS op
+    CASE s.ge:  RESULTIS s.le
+    CASE s.ls:  RESULTIS s.gr
+    CASE s.gr:  RESULTIS s.ls
+    CASE s.le:  RESULTIS s.ge
+$)
+
+
+AND cgbranch(op, l) BE
+  $( LET b = op = s.jt
+     LET a1, a2, f = ?, ?, ?
+     LET r, reversed = ?, no
+
+     SWITCHON pendingop INTO
+       $( DEFAULT:
+            cgpendingop()
+            loadt(k.numb,0)
+            pendingop := s.ne
+
+          CASE s.eq: CASE s.ne: CASE s.ls:
+          CASE s.le: CASE s.ge: CASE s.gr:
+            f := b -> pendingop, compop(pendingop)
+       $)
+
+     store(0, ssp - 3)
+
+     a1, a2 := arg1, arg2
+
+     IF h1!a2 = k.numb $( reversed := yes; a1 := arg2; a2 := arg1 $)
+
+     TEST h1 ! a1 = k.numb & h2 ! a1 = 0 THEN
+       // Comparison with zero!
+       $( IF reversed THEN f := revop(f)
+          r := movetoaqy(a2)
+          genb((f - s.eq) !
+          [TABLE f.jeq,f.jne,f.jlt,f.jgt,f.jle,f.jge],r,l)
+       $)
+      ELSE
+       TEST (f = s.eq) | (f = s.ne) THEN
+         $( cgdyadic(s.minus,no)
+            TEST h1 ! arg1 = k.numb
+            THEN IF (h2 ! arg1 \= 0) = (f = s.ne) THEN genjmp(l)
+            ELSE genb((f = s.eq -> f.jeq,f.jne),h2!arg1,l)
+            stack(ssp-1)
+            pendingop := s.none
+            RETURN
+         $)
+        ELSE
+         $( chkrefs((f = s.gr | f = s.ls -> 7,8))
+            IF cgdyadic(0, yes) THEN f := revop(f)
+            TEST f = s.gr | f = s.ge THEN
+              $( TEST f = s.gr
+                  THEN gens(f.jmp, 0, m.rel + #X80 + 1)
+                  ELSE gens(f.jmp, 0, m.rel + #X80 + 2)
+                 genjmp(l)
+                 incode := yes
+              $)
+             ELSE
+              $( genjmp(l)
+                 incode := yes
+                 TEST f = s.ls
+                 THEN code(f.nop, 0)
+                 ELSE gens(f.jmp, 0, m.rel + #X80 + 1)
+              $)
+            IF f = s.le | f = s.ge THEN genjmp(l)
+            incode := yes
+         $)
+
+     stack(ssp - 2)
+     pendingop := s.none
+  $)
+
+AND compop(op) = (op - s.eq) ! [TABLE s.ne, s.eq, s.ge, s.le, s.gr, s.ls]
+
+
+AND code(a, l) BE $( UNLESS l=0 DO labref(l, stvp); stv!stvp := a; incrstvp() $)
+// compile a word
+
+AND gensh(op, r, bits) BE // Eg. SHIFT AQ,RA,16
+  IF incode $( chkrefs(1); code(op + (registers!r<<12) + ((bits-1)<<4),0) $)
+
+AND gens(op, r, a) BE // Eg. ADD 2(Y),A
+IF incode $( chkrefs(1); code(op + (registers ! r << 12) + a,0) $)
+
+AND gene(op, r, mode, a) BE // Eg. MUL LAB,AQ
+  IF incode THEN
+    $( chkrefs(2)
+       code(op + (registers ! r << 12) + (mode >> 2),0)
+       code(a,0)
+    $)
+
+AND gensore(op.s, op.e, r, mode, a) BE TEST (0 <= a <= 63) & (op.s \= 0)
+THEN gens(op.s, r, mode + a)
+ELSE gene(op.e, r, mode, a)
+
+AND genrr(op, s, d) BE IF incode
+$( chkrefs(1); code(op + (registers!d<<12) + (registers!s<<4),0) $)
+
+AND geni(op, r, imop) BE // Eg. ADD =1,A
+IF incode $( chkrefs(1); code(op + (registers!r<<12) + imop, 0) $)
+
+AND genbit(op, bit, r) BE // Eg. CBIT 13,A
+IF incode $( chkrefs(1); code(op + (registers ! r << 12) + (bit << 4),0) $)
+
+AND genb(op, r, l) BE gens(op, r, mref(k.jlab, l))
+
+
+AND genjmp(l) BE $( gens(f.jmp, 0, mref(k.lab, l)); incode := no $)
+
+AND insertcount() BE
+// produce code for profcounting option
+$(  countflag := no
+    freereg(r.y)
+    chkrefs(3)
+    gens(f.jst, 0, a.prfc)
+    forgetreg(r.y)
+    code(0, 0)
+    code(0, 0)
+$)
+
+AND labref(l, a) BE
+$(  LET p = getblk()
+    h2!p, h3!p := l, a
+    !refliste := p
+    refliste := p
+    nlabrefs := nlabrefs+1
+$)
+
+AND checkspace() BE IF (stv + stvp - dp) >= 0
+THEN cgerror(20, "program too large after %N words", stvp)
+
+AND incrstvp() BE
+  $( stvp := stvp + 1
+     checkspace()
+     $( IF kcmpp = kcmpv | h1!kcmpv >= stvp THEN BREAK
+        removerefsto(h1!kcmpv,h2!kcmpv,h3!kcmpv)
+        kcmpp := kcmpp - 3
+        FOR p = kcmpv TO kcmpp - 1 DO p!0 := p!3
+     $) REPEAT
+  $)
+
+

@@ -1,0 +1,337 @@
+/****************************************************************************\
+*                          Systems Research Group                            *
+******************************************************************************
+
+
+      ######   #      #   ######   ##        ########  ##    ##  ##    ##
+     ########  ##    ##  ########  ##        ########  ###   ##  ##   ##
+     ##         ##  ##   ##        ##           ##     ####  ##  ##  ##
+     #######     ####    #######   ##           ##     ## ## ##  ####
+           ##     ##           ##  ##           ##     ##  ####  ## ##
+           ##     ##           ##  ##           ##     ##  ####  ##  ##
+     ########     ##     ########  ########  ########  ##   ###  ##   ##
+      ######      ##      ######   ########  ########  ##    ##  ##    ##
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   21/04/86            *
+\****************************************************************************/
+
+
+
+SECTION "SYSLINK"
+
+
+
+GET "LIBHDR"
+GET "SYSLINKHDR"
+
+
+
+LET start()  BE
+$(
+//  Main routine of the SYSLINK program.  Parse the arguments given to us by
+//  the user, and then set up the default variables.
+
+    LET args    =  "FROM/A,TO/A,MAP/K"
+    LET argv    =  VEC 50
+    LET f.file  =  0
+    LET t.file  =  0
+    LET m.file  =  0
+
+    errorlevel    :=  level()
+    errorlabel    :=  label
+
+    sysin         :=  input()
+    sysout        :=  output()
+
+    linkstream    :=  0
+    mapstream     :=  0
+
+    filename      :=  NIL
+    tempsegments  :=  NIL
+    permsegments  :=  NIL
+    segmentlists  :=  NIL
+    tasklist      :=  NIL
+    devicelist    :=  NIL
+
+    initstore( 1000 )
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+        error( "Bad arguments for *"%S*"", args )
+
+    f.file      :=  argv!a.from
+    t.file      :=  argv!a.to
+    m.file      :=  argv!a.map
+
+    linkstream  :=  findoutput( t.file )
+
+    IF  linkstream = 0  THEN
+        error( "Failed to open TO file *"%S*"", t.file )
+
+    selectoutput( linkstream )
+
+    UNLESS  m.file = 0  DO
+    $(
+        mapstream  :=  findoutput( m.file )
+
+        IF  mapstream = 0  THEN
+            error( "Failed to open MAP file *"%S*"", m.file )
+    $)
+
+    //  Having read the arguments, we should now initialise all the default
+    //  variables.
+
+    definetagtable()
+    definecommands()
+    defineflags()
+
+    //  Having got this far, we can actually parse the main input file we have
+    //  been given.
+
+    writesys( "SYSLINK  Version 1.09*N*N" )
+
+    UNLESS  parsefile( f.file )  DO  error( "Errors in file *"%S*"", f.file )
+
+    //  If we reach here, then the syntax analysis stage has succeeded, and so
+    //  we should go on to greater things.
+
+    writesys( "No errors in source file*N*N" )
+
+    //  We are now in a state of being able to perform the linking operation
+    //  itself.
+
+    linkfile( f.file )
+
+    endwrite()
+
+    UNLESS  mapstream = 0  DO  endstream( mapstream )
+
+    selectoutput( sysout )
+
+    uninitstore()
+
+    writesys( "SYSLINK succeeded.*N" )
+
+    stop( return.ok )
+
+
+    //  Error recovery point.  If we come here, then we should close down
+    //  gracefully, and stop.
+
+label:
+
+    UNLESS  linkstream = 0  DO  endstream( linkstream )
+    UNLESS  mapstream = 0   DO  endstream( mapstream )
+
+    selectoutput( sysout )
+
+    uninitstore()
+
+    writesys( "SYSLINK failed.*N" )
+
+    stop( return.severe )
+$)
+
+
+
+$<PANOS
+AND endstream( stream )  BE
+$(
+//  Replacement for "endstream", which is not actually implemented under
+//  Panos.
+
+    selectoutput( stream )
+
+    endwrite()
+$)
+$>PANOS
+
+
+
+AND compare( v1, v2 )  =  VALOF
+$(
+//  Perform an unsigned comparison on the two values given.  This will only
+//  work for 2's complement machines.
+
+    LET negv1  =  v1 < 0
+    LET negv2  =  v2 < 0
+
+    IF      negv1  &      negv2  THEN  RESULTIS  v2 - v1
+    IF  NOT negv1  &  NOT negv2  THEN  RESULTIS  v1 - v2
+
+    //  If not both the same sign, then the result of a subtraction may
+    //  cause overflow, and so we should be more careful.
+
+    RESULTIS  negv1  ->  +1, -1
+$)
+
+
+
+AND writemap( format, a1, a2, a3, a4, a5, a6 )  BE  UNLESS  mapstream = 0  DO
+$(
+//  Write out the given message to the map file.
+
+    LET o  =  output()
+
+    selectoutput( mapstream )
+
+    writef( format, a1, a2, a3, a4, a5, a6 )
+
+    selectoutput( o )
+$)
+
+
+
+AND writesys( format, a1, a2, a3, a4, a5, a6 )  BE
+$(
+//  Write out the given message to the map file.
+
+    LET o  =  output()
+
+    selectoutput( sysout )
+
+    writef( format, a1, a2, a3, a4, a5, a6 )
+
+    selectoutput( o )
+$)
+
+
+
+AND error( format, arg1, arg2 )  BE
+$(
+//  Write out an error message, and then jump to the error recovery location.
+
+    errormessage( "Error", format, arg1, arg2 )
+
+    longjump( errorlevel, errorlabel )
+$)
+
+
+
+AND warning( format, arg1, arg2 )  BE
+
+//  Write out a warning message.
+
+    errormessage( "Warning", format, arg1, arg2 )
+
+
+
+AND panic( format, arg1, arg2 )  BE
+$(
+//  Throw out a panic message, and stop.
+
+    errormessage( "Fatal error", format, arg1, arg2 )
+
+    abort( 9999 )
+$)
+
+
+
+AND message( format, arg1, arg2 )  BE  errormessage( NIL, format, arg1, arg2 )
+
+
+
+AND errormessage( type, format, arg1, arg2 )  BE
+$(
+//  Write out an error message, giving the file and line number if possible.
+
+    LET o        =  output()
+    LET prefix   =  "****** "
+    LET prefixl  =  prefix % 0
+
+    selectoutput( sysout )
+
+    writes( prefix )
+
+    UNLESS  type = NIL  DO
+    $(
+        LET separator   =  ":  "
+        LET separatorl  =  separator % 0
+
+        writes( type )
+        writes( separator )
+
+        prefixl  :=  prefixl  +  type % 0  +  separatorl
+    $)
+
+    writef( format, arg1, arg2 )
+    newline()
+
+    UNLESS  filename = NIL  DO
+    $(
+        FOR  i = 1  TO  prefixl  DO  wrch( '*S' )
+
+        writef( "detected on line %N of file *"%S*"*N", linenumber, filename )
+    $)
+
+    newline()
+
+    selectoutput( o )
+$)
+
+
+
+AND initstore( chunksize )  BE
+$(
+//  Initialise the storage package, defining the size of chunks which will
+//  be grabbed from the standard storage manager.
+
+    storage.chunksize  :=  chunksize
+    storage.root       :=  NIL
+    storage.high       :=  0
+    storage.low        :=  0
+$)
+
+
+
+AND getstore( upb )  =  VALOF
+$(
+//  Analagous to "getvec"  -  allocate a vector whose word upperbound
+//  is "upb" from the heap.  If there is not enough room in the current
+//  chunk, then allocate a new chunk.
+
+    LET size   =  upb + 1
+    LET chunk  =  0
+
+    IF  size > storage.chunksize  THEN  panic( "Bad store request" )
+
+    IF  (storage.high - storage.low)  <  size  THEN
+    $(
+        //  Not enough room left in the current chunk, so allocate a
+        //  new chunk, and try again.
+
+        LET newchunk  =  getvec( storage.chunksize + 1 )
+
+        IF  newchunk = 0  THEN  panic( "No more store" )
+
+        newchunk!0    :=  storage.root
+        storage.root  :=  newchunk
+        storage.low   :=  newchunk + 1
+        storage.high  :=  storage.low + storage.chunksize + 1
+    $)
+
+    chunk        :=  storage.low
+    storage.low  :=  storage.low + size
+
+    RESULTIS  chunk
+$)
+
+
+
+AND uninitstore()  BE
+$(
+//  Free all the storage in use by the storage package.  The base of the
+//  storage chain is pointed to by "storage.root".
+
+    UNTIL  storage.root = NIL  DO
+    $(
+        LET next  =  storage.root!0
+
+        freevec( storage.root )
+
+        storage.root  :=  next
+    $)
+$)
+
+

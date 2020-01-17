@@ -1,0 +1,90 @@
+GLOBAL:
+    storage.chunksize
+    storage.root
+    storage.high
+    storage.low
+
+MANIFEST:
+    NIL
+
+Headers
+    MANHDR
+
+
+
+AND initstore( chunksize )  BE
+$(
+//  Initialise the storage package, defining the size of chunks which will
+//  be grabbed from the standard storage manager.
+
+    storage.chunksize  :=  chunksize
+    storage.root       :=  NIL
+    storage.high       :=  0
+    storage.low        :=  0
+$)
+
+
+
+AND getstore( upb )  =  VALOF
+$(
+//  Analagous to "getvec"  -  allocate a vector whose word upperbound
+//  is "upb" from the heap.  If there is not enough room in the current
+//  chunk, then allocate a new chunk.
+
+    LET size   =  upb + 1
+    LET chunk  =  0
+
+    IF  size > storage.chunksize  THEN  abort( error.getvecfailure )
+
+    IF  (storage.high - storage.low)  <  size  THEN
+    $(
+        //  Not enough room left in the current chunk, so allocate a
+        //  new chunk, and try again.
+
+        LET newchunk  =  getchunk( storage.chunksize )
+
+        storage.low   :=  newchunk
+        storage.high  :=  storage.low + storage.chunksize + 1
+    $)
+
+    chunk        :=  storage.low
+    storage.low  :=  storage.low + size
+
+    RESULTIS  chunk
+$)
+
+
+
+AND getchunk( size )  =  VALOF
+$(
+//  Get a chunk of the size given, and add it to the chain of chunks which
+//  have already been obtained.
+
+    LET newchunk  =  getvec( size + 1 )
+
+    IF  newchunk = 0  THEN  abort( error.getvecfailure )
+
+    newchunk!0    :=  storage.root
+    storage.root  :=  newchunk
+
+    RESULTIS  newchunk + 1
+$)
+
+
+
+AND uninitstore()  BE
+$(
+//  Free all the storage in use by the storage package.  The base of the
+//  storage chain is pointed to by "storage.root".
+
+    UNTIL  storage.root = NIL  DO
+    $(
+        LET next  =  storage.root!0
+
+        freevec( storage.root )
+
+        storage.root  :=  next
+    $)
+$)
+
+

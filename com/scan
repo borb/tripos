@@ -1,0 +1,482 @@
+/****************************************************************************\
+*                           Systems Research Group                           *
+******************************************************************************
+
+
+                     ######     #####     ####    ##    ##
+                    ########   #######   ######   ###   ##
+                    ##        ##        ##    ##  ####  ##
+                    #######   ##        ########  ## ## ##
+                          ##  ##        ##    ##  ##  ####
+                          ##  ##        ##    ##  ##  ####
+                    ########   #######  ##    ##  ##   ###
+                     ######     #####   ##    ##  ##    ##
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   31/03/87            *
+\****************************************************************************/
+
+
+
+SECTION "SCAN"
+
+
+
+GET "LIBHDR"
+GET "PATTERN"
+
+
+
+GLOBAL
+$(
+    sysout              :  ug + 0
+    errorlevel          :  ug + 1
+    errorlabel          :  ug + 2
+    errorcode           :  ug + 3
+    patternstring       :  ug + 4
+    patternwork         :  ug + 5
+    inputbuffer         :  ug + 6
+    outputstream        :  ug + 7
+    broken              :  ug + 8
+    exact               :  ug + 9
+    ambiguous           :  ug + 10
+$)
+
+
+
+MANIFEST
+$(
+    a.from              =  0
+    a.to                =  1
+    a.substring         =  2
+    a.pattern           =  3
+$)
+
+
+
+LET start()  BE
+$(
+//  Main routine of the "SCAN" program.  We open a file, and scan it, looking
+//  for occurrences of a substring.
+
+    LET args       =  "FROM/A,TO/K,SUBSTRING=S/K,PATTERN=P/K"
+    LET argv       =  VEC 100
+
+    LET fromfile   =  0
+    LET tofile     =  0
+    LET substring  =  0
+    LET pattern    =  0
+
+    sysout         :=  output()
+
+    errorlevel     :=  level()
+    errorlabel     :=  label
+
+    errorcode      :=  0
+    outputstream   :=  0
+    patternstring  :=  0
+    patternwork    :=  0
+    inputbuffer    :=  0
+
+    broken         :=  FALSE
+
+    UNLESS  rdargs( args, argv, 100 )  DO
+        error( "Bad arguments for *"%S*"", args )
+
+    fromfile   :=  argv!a.from
+    tofile     :=  argv!a.to
+    substring  :=  argv!a.substring
+    pattern    :=  argv!a.pattern
+
+    IF  substring = 0  &  pattern = 0  THEN
+        error( "No substring or pattern given" )
+
+    //  Open the output file, if there is one.
+
+    UNLESS  tofile = 0  DO
+    $(
+        outputstream  :=  findoutput( tofile )
+
+        IF  outputstream = 0  THEN
+            error( "Cannot open TO file *"%S*"", tofile )
+
+        selectoutput( outputstream )
+    $)
+
+    //  Now, allocate the storage we require for the rest of the
+    //  program.
+
+    patternstring  :=  getvec( 256/bytesperword )
+    patternwork    :=  getvec( 256/bytesperword )
+    inputbuffer    :=  getvec( 256/bytesperword )
+
+    IF  patternstring = 0  |  patternwork = 0  THEN
+        error( "Not enough store" )
+
+    //  We are now in a position to convert the pattern, and then start
+    //  scanning the input file.
+
+    exact      :=  pattern \= 0
+    ambiguous  :=  FALSE
+
+    constructpattern( exact  ->  pattern, substring )
+
+    handlefile( fromfile )
+
+label:
+
+    UNLESS  patternstring = 0  DO  freevec( patternstring )
+    UNLESS  patternwork = 0    DO  freevec( patternwork )
+    UNLESS  inputbuffer = 0    DO  freevec( inputbuffer )
+    UNLESS  outputstream = 0   DO  endstream( outputstream )
+
+    stop( errorcode )
+$)
+
+
+
+AND handlefile( file )  BE
+$(
+//  Handle the scanning of either a single file or a list of files.
+
+    LET oldlevel  =  errorlevel
+    LET oldlabel  =  errorlabel
+
+    LET filel     =  file % 0
+    LET oldin     =  input()
+    LET stream    =  0
+
+    IF  filel > 1  THEN
+
+        IF  file % 1  =  '!'  THEN
+        $(
+            //  This the name of a file containing a list of files, so we
+            //  should open the file, and handle each of the files in the
+            //  list.
+
+            LET buffer  =  0
+
+            FOR  i = 1  TO  filel-1  DO
+                file % i  :=  file % (i + 1)
+
+            file % 0    :=  filel - 1
+
+            errorlevel  :=  level()
+            errorlabel  :=  label
+
+            //  We are now in a state to open the list of files, and allocate
+            //  the buffer.
+
+            stream  :=  findinput( file )
+
+            IF  stream = 0  THEN  error( "Cannot open *"%S*"", file )
+
+            buffer  :=  getvec( 256/bytesperword )
+
+            IF  buffer = 0  THEN  error( "No more store" )
+
+            //  Having got this far, we can read the file and extract the
+            //  list of filenames from it.
+
+            selectinput( stream )
+
+            UNTIL  broken  DO
+            $(
+                LET length  =  0
+                LET ch      =  rdch()
+
+                IF  testflags( #B0001 )  THEN
+                $(
+                    broken  :=  TRUE
+
+                    error( "BREAK" )
+                $)
+
+                UNTIL  ch = '*N'  |  ch = endstreamch  THEN
+                $(
+                    IF  length = 255  THEN  error( "Input line too long" )
+
+                    length           :=  length + 1
+                    buffer % length  :=  ch
+                    ch               :=  rdch()
+                $)
+
+                IF  length = 0  &  ch = endstreamch  THEN  BREAK
+
+                //  We have now extracted a line from the file, so call
+                //  ourselves recursively to handle it.
+
+                buffer % 0  :=  length
+
+                handlefile( buffer )
+            $)
+
+        label:
+
+            UNLESS  buffer = 0  DO  freevec( buffer )
+            UNLESS  stream = 0  DO  endstream( stream )
+
+            errorlevel  :=  oldlevel
+            errorlabel  :=  oldlabel
+
+            RETURN
+        $)
+
+    //  If we are not handling a list of files, then things are somewhat
+    //  easier.
+
+    errorlevel  :=  level()
+    errorlabel  :=  label
+
+    stream  :=  findinput( file )
+
+    IF  stream = 0  THEN  error( "Cannot open *"%S*"", file )
+
+    selectinput( stream )
+    scanfile( file )
+
+label:
+
+    UNLESS  stream = 0  DO  endstream( stream )
+
+    selectinput( oldin )
+
+    errorlevel  :=  oldlevel
+    errorlabel  :=  oldlabel
+$)
+
+
+
+AND scanfile( file )  BE
+$(
+//  Scan the input file line by line, printing out the lines which
+//  match the pattern.
+
+    LET linenumber  =  0
+    LET firsttime   =  TRUE
+
+    UNTIL  broken  DO
+    $(
+        LET length   =  0
+        LET matched  =  0
+        LET ch       =  rdch()
+
+        IF  testflags( #B1000 )  THEN
+        $(
+            LET oldout  =  output()
+
+            selectoutput( sysout )
+            writef( "****** SCAN:  Line %N of file %S*N", linenumber, file )
+            selectoutput( oldout )
+        $)
+
+        IF  testflags( #B0001 )  THEN
+        $(
+            broken  :=  TRUE
+
+            error( "BREAK" )
+        $)
+
+        UNTIL  ch = '*N'  |  ch = endstreamch  THEN
+        $(
+            IF  length = 255  THEN  error( "Input line too long" )
+
+            length                :=  length + 1
+            inputbuffer % length  :=  ch
+            ch                    :=  rdch()
+        $)
+
+        IF  length = 0  &  ch = endstreamch  THEN  BREAK
+
+        //  Otherwise, we have read a line.  Compare it with the pattern,
+        //  and print it out, if it matches.
+
+        inputbuffer % 0  :=  length
+        linenumber       :=  linenumber + 1
+        
+        TEST  ambiguous
+            THEN  matched  :=  match( patternstring, patternwork, inputbuffer )
+            ELSE  matched  :=  compare( patternstring, inputbuffer )
+
+        IF  matched  THEN
+        $(
+            //  This is a match, so print out all the information necessary
+            //  about this file.
+
+            IF  firsttime  THEN
+            $(
+                writef( "File *"%S*"*N", file )
+
+                firsttime  :=  FALSE
+            $)
+
+            writef( "%I5:  %S*N", linenumber, inputbuffer )
+        $)
+    $)
+$)
+
+
+
+AND error( format, arg1, arg2 )  BE
+$(
+//  Print out an error message.
+
+    selectoutput( sysout )
+
+    writes( "****** SCAN:  " )
+    writef( format, arg1, arg2 )
+    newline()
+
+    errorcode  :=  20
+
+    longjump( errorlevel, errorlabel )
+$)
+
+
+
+AND constructpattern( pattern )  BE
+$(
+//  Construct an MR type pattern out of the CPM/UNIX type pattern.  The
+//  transformations we do are as follows:
+//
+//       *     ->    #?
+//       '     ->    ''
+//       #     ->    '#
+//       (     ->    '(
+//       )     ->    ')
+//       %     ->    '%
+//       /     ->    '/
+//
+//  The pattern string is a direct transformation of the pattern given to us.
+
+    LET length     =  pattern % 0
+
+    //  We should check for the simple case where the user has asked for
+    //  something which contains no ambiguities.  If this is the case, we
+    //  don't need to use MR's horribly inefficient pattern matching stuff!
+    
+    ambiguous  :=  FALSE
+
+    FOR  i = 1  TO  length  DO
+    $(
+        LET ch  =  pattern % i
+        
+        IF  ch = '**'  |  ch = '?'  THEN
+        $(
+            ambiguous  :=  TRUE
+            
+            BREAK
+        $)
+    $)
+
+    //  Look to see whether we can make a short cut, and if we can, get out
+    //  of this pattern rubbish before we have really started.
+    
+    UNLESS  ambiguous  DO
+    $(
+        FOR  i = 0  TO  length  DO  patternstring % i  :=  pattern % i
+        
+        RETURN
+    $)
+    
+    //  If we come here, then we have no choice but to compile the pattern
+    //  properly, with all that this entails.
+
+    patternstring % 0  :=  0
+    patternwork % 0    :=  0
+
+    UNLESS  exact  DO  concatenate( patternstring, "#?" )
+
+    FOR  i = 1  TO  length  DO
+    $(
+        LET ch  =  pattern % i
+
+        SWITCHON  ch  INTO
+        $(
+            CASE '**' :  concatenate( patternstring, "#?" )  ;  ENDCASE
+            CASE '*'' :  concatenate( patternstring, "''" )  ;  ENDCASE
+            CASE '#'  :  concatenate( patternstring, "'#" )  ;  ENDCASE
+            CASE '('  :  concatenate( patternstring, "'(" )  ;  ENDCASE
+            CASE ')'  :  concatenate( patternstring, "')" )  ;  ENDCASE
+            CASE '%'  :  concatenate( patternstring, "'%" )  ;  ENDCASE
+            CASE '/'  :  concatenate( patternstring, "'/" )  ;  ENDCASE
+
+            DEFAULT   :  addtostring( patternstring, ch )    ;  ENDCASE
+        $)
+    $)
+
+    //  Having constructed the first part of the pattern, we must concatenate
+    //  the final part of the pattern to make sure that we pick up all
+    //  occurrences.
+
+    UNLESS  exact  DO  concatenate( patternstring, "#?" )
+
+    //  And compile the pattern for good measure!
+
+    cmplpat( patternstring, patternwork )
+$)
+
+
+
+AND concatenate( mainstring, substring )  BE
+    FOR  i = 1  TO  substring % 0  DO
+        addtostring( mainstring, substring % i )
+
+
+
+AND addtostring( string, ch )  BE
+$(
+    LET length  =  string % 0
+
+    IF  length = 255  THEN  error( "Pattern string too long" )
+
+    length           :=  length + 1
+    string % length  :=  ch
+    string % 0       :=  length
+$)
+
+
+
+AND compare( pattern, line )  =  VALOF
+$(
+//  Return a boolean saying whether this line mathes the pattern given.
+
+    LET lp   =  pattern % 0
+    LET ll   =  line % 0
+        
+    TEST  exact  |  lp = ll  THEN  RESULTIS  compstring( pattern, line ) = 0
+    ELSE
+    $(
+        LET pos  =  0
+
+        UNTIL  lp+pos > ll  DO
+        $(
+            //  There is still room in the current line for a match to take
+            //  place.
+            
+            LET match  =  TRUE
+
+            FOR  i = 1  TO  lp  DO
+            $(
+                LET pch  =  pattern % i
+                LET lch  =  line % (pos + i)
+                
+                UNLESS  compch( pch, lch ) = 0  DO
+                $(
+                    match  :=  FALSE
+                    
+                    BREAK
+                $)
+            $)
+
+            IF  match  THEN  RESULTIS  TRUE
+
+            pos  :=  pos + 1
+        $)
+        
+        RESULTIS  FALSE
+    $)
+$)
+
+

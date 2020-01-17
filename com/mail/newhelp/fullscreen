@@ -1,0 +1,69 @@
+The testing version of MAIL has a full screen interface.  It is partly a
+testing ground for full screen interfaces, so it is liable to change.
+
+It currently has Three modes:
+  1)    At the start of a line it will accept UP and DOWN to change the current
+        item OR
+  2)    A data charecter will tell the program to read a line.
+        This enters a subroutine that performs (limited) line editing.
+        The recognised keys are currently:
+         DEL    delete previous character
+         CTRL/X delete whole line
+        When a complete line is deleted by either of the above, then type 1)
+        keystrokes may be read.
+
+  3)    While reading a form, form mode is used. Valid non data keys are:
+
+             DEL        Delete previous character
+             CTRL/X     Delete line
+             DEL LINE   Ditto
+             Keypad 3   Form completed
+             UP         Previous item
+             DOWN       Next item
+             RETURN     Next item, unless last when it means Form completed.
+             HELP       Describe key bindings
+
+  4)    While reading the body of a message, full screen input is used.
+        This allows cursor moivements to select the current location, and
+        further editing funtions. These are:
+
+         DEL            delete character to LEFT  of cursor.
+         DEL CHAR       delete character to RIGHT of cursor.
+         DEL LINE       delete complete line.
+         INSRT CHAR     insert a blank to the right of the cursor, but do not
+                        move the cursor.
+         SKIP           skip to start of next 'word'.
+         CTRL/SKIP      skip to end of previous 'word'.
+         HOME           got to top LH corner if it is part of the text.
+         CLEAR SCRN     Redraw the current state of the screen.
+         Keypad 1       sets overstrike mode. Any previous contents of the
+                        current location is lost.
+                        // It may soon TOGGLE the mode....
+         Keypad 3       sets insert mode. The previous contents of the current
+                        location is moved to the right.
+         HELP           Describe key bindings
+
+        In the case of reading text for a SEND/REPLY command, Keypad 7 may be
+        used to alter the header.
+
+On terminals without explicit keys, the logical characters may be generated as:
+
+        ABANDON         ESC a           // Same as BREAK B but in data stream
+        SKIP BACK       ESC b
+        CLEAR SCREEN    ESC c
+        DOWN            ESC d
+        INSRT CHAR      ESC i
+        HOME            ESC h
+        LEFT            ESC l
+        RIGHT           ESC r
+        SKIP            ESC s
+        UP              ESC u
+        HELP            ESC ?           // give key bindings.
+
+On terminals that cannot position the cursor other than on the bottom line,
+if the cursor is moved upwards, it puts the character '^' at the start of the
+current line, and then moves onto the previous line.
+CLEAR SCREEN will draw a line of '-'s with the number of logical cursor
+movements indicated by the number of '^'s.
+
+

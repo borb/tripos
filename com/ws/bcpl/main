@@ -1,0 +1,238 @@
+// Source file "main" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+SECTION "MAIN"
+
+GET "libhdr"
+GET "wrshdr"
+
+LET main(defaultinit, otherinit, initstring) BE $(
+  // The first two parameters are either 0 or
+  // the (string) name of initialisation files.
+  // Complain if 'otherinit' is asked for and cannot be found.
+  // 'initstring' is 0 or an initialisation string, \ as ctlprefix.
+  LET vv= getvec (5 * (nmark + 1))
+  LET stat1 = getvec (80 / bytesperword)
+  LET stat2 = getvec (80 / bytesperword)
+  LET stat3 = getvec (80 / bytesperword)
+  LET stat4 = getvec (80 / bytesperword)
+  LET cnt, c = 0, ?
+  LET prevruler, prevdir, prevhelp = ?, ?, -1
+//  let initialised = no // used to catch first time through, re init files etc.
+//  let initruler = "--------!-------!-------!-------!-------!-------!-------!*
+//                  *-------!-------!-------!--(screen has scrolled horizontally)-------------*n"
+  LET oldtop, oldbot, oldsplit, oldttvl, oldupper = ?, ?, ?, 0, 1
+    // Used to decide if the split line, text etc. need redrawing.
+
+  // initialise markers
+  marker.x, marker.y, marker.hidden, marker.name, marker.alternate :=
+    vv, (vv+nmark)*adinc, (vv+2 * nmark)*adinc, (vv+3 * nmark)*adinc, (vv+4 * nmark)*adinc
+  marker.name!0 := "<0>"; marker.name!1 := "<1>";
+  marker.name!2 := "<2>"; marker.name!3 := "<3>";
+  marker.name!4 := "<4>"; marker.name!5 := "<5>";
+  marker.name!6 := "<6>"; marker.name!7 := "<7>";
+  marker.name!8 := "<8>"; marker.name!9 := "<9>";
+  marker.name!10:= "<B>"; marker.name!11:= "<K>";
+//  marker.name!12:= "****" // matching bracket, eventually
+  marker.name!15:= " ... "  // folded block
+  FOR i = 0 TO nmark - 1 DO $( marker.y!i := -1; marker.hidden!i := no
+                               marker.alternate!i := no $)
+
+  // initialise tabs and margins and the ruler line
+  left.margin := 0
+  right.margin := xmax - 5
+  FOR i = 0 TO 240 DO tabbuf%i := ' '
+  FOR i = left.margin TO right.margin BY 8 DO tabbuf%i := '!'
+  t.tabindent := yes  // replaces WS tabs with program indentation
+  t.marrel := no
+  build.tabline()
+
+  line.spacing := 1
+  t.directory := no // not implemented
+  t.editing := yes
+  t.column := no; interrupt := no
+  find.lastop := 0
+  showctlchars, showmarkers := yes, yes
+
+  $( LET dreadful.fudge = twid
+     initialise.toggles() // all boring window-dependent variables
+     twid := dreadful.fudge $)
+
+  prevruler := ~t.ruler; prevdir := t.directory
+  cmd.curline := 1
+  // initialise PF keys
+  pf.keys.upb := 36
+  pf.keys.len := 80 // increased by popular demand May 84
+  pf.keys := getvec(pf.keys.upb + 1)
+  FOR i = 0 TO pf.keys.upb DO pf.keys!i := 0 // space got by need
+//  for i = 0 to pf.keys.upb do $(
+//    pf.keys!i := getvec(pf.keys.len / bytesperword + 2)
+//    (pf.keys!i)%0 := ch.line $)
+
+//  for i = 1 to initruler%0 do rulerbuf%(i-1) := initruler%i
+  text.top.scr.line := 10  // must be correct at first (cheat)
+  text.bot.scr.line := ymax
+  text.top.vis.line := 0
+  t.split := no
+
+//     if ~initialised then $(
+     $(
+       LET savewait = sys.keywaiting
+       // 1.7.2 fix to obscure bug.
+       // these loops repeat until no key left, OR
+       // keys only from physical keyboard
+       // (ie sys.keywaiting = savewait )
+//       initialised := yes
+//       text.update()
+       IF defaultinit ~= 0 THEN $(
+         IF meta.file(defaultinit, no) ~= 0 THEN
+           WHILE sys.keywaiting() & sys.keywaiting ~= savewait DO
+             edit.rdch.obey()
+         defaultinit := 0 $)
+
+       IF otherinit ~= 0 THEN $(
+         IF meta.file(otherinit, yes) THEN
+           WHILE sys.keywaiting() & sys.keywaiting ~= savewait DO
+             edit.rdch.obey()
+         otherinit := 0 $)
+
+       IF initstring ~= 0 THEN $(
+         meta.string(initstring, '^'); initstring := 0
+           WHILE sys.keywaiting() & sys.keywaiting ~= savewait DO
+             edit.rdch.obey() $) $)
+
+
+  WHILE t.editing DO $(
+     // insert useful debugging stuff here.
+     interrupt := no
+     IF text.top.vis.line ~= oldttvl THEN $(
+       text.update.info := text.update.info | 7
+       oldttvl := text.top.vis.line $)
+
+     scroll.top.line := (helplevel = 3 -> 9, 1) + (t.ruler -> 1, 0)
+     scroll.bot.line := ymax // always
+     ruler.scr.line := scroll.top.line - 1
+
+     IF t.ruler ~= prevruler | prevhelp ~= helplevel THEN
+       text.update.info := text.update.info | 15
+     prevruler := t.ruler
+
+     IF prevhelp ~= helplevel & helplevel = 3 THEN print.main.menu()
+     prevhelp := helplevel
+
+     // Menus, rulers, windows and splitlines all compete for screen space
+     // in a ruthless battle for survival...
+     TEST ~t.split THEN $(
+       LET dtop = scroll.top.line - text.top.scr.line
+       oldtop := -1
+       oldbot := -1
+       oldsplit := -1
+       IF dtop ~= 0 | text.bot.scr.line ~= scroll.bot.line THEN $(
+         text.update.info := text.update.info | 7
+         text.top.scr.line := scroll.top.line
+         text.top.vis.line := text.top.vis.line + dtop
+         text.bot.scr.line := scroll.bot.line $) $)
+     ELSE $(
+       IF scr.y.of.split < scroll.top.line + 4 THEN
+          scr.y.of.split :=scroll.top.line + 4
+       IF scr.y.of.split > scroll.bot.line - 4 THEN
+          scr.y.of.split :=scroll.bot.line - 4
+       set.window.limits()
+       IF scroll.top.line ~= oldtop |
+          scroll.bot.line ~= oldbot |
+          scr.y.of.split ~= oldsplit
+       THEN $(
+          swapbufs()
+          set.window.limits()
+          text.update()
+          swapbufs()
+          oldupper := 1 // illegal value
+          oldtop := scroll.top.line
+          oldbot := scroll.bot.line
+          oldsplit := scr.y.of.split $) $)
+
+          $( LET upp = text.top.scr.line < other.t.t.s.l()
+             IF oldupper ~= upp & t.split THEN $(
+               scr.updateline(scr.y.of.split,
+                 (upp -> "UPPER-Window-Active*n",
+                  "LOWER-Window-Active*n"), 1, splitline)
+               oldupper := upp $) $)
+
+        statusline("  EDITING *"%s*"  LINE=%i3  COL=%i2  CHAR=%i4  %s %s*n",
+         source.filename, lines.rolled.past + fileline + 1, filecol + 1,
+         1 + (textsp - textstart) + filecol + scb.dst.ptr * blcksize, // naughty
+         (source.filename%0 > 14 -> "", "    "),
+         (browse ->       "BROWSE",
+          t.insertmode -> "INSERT MODE", "REPLACE MODE"))
+
+//     error("hello ttsl=%n tbsl=%n ttvl=%n t.spl=%n",
+//        text.top.scr.line, text.bot.scr.line, text.top.vis.line, t.split)
+
+
+     $( text.update(); scr.dolineupdates() $)
+       REPEATWHILE text.update.info ~= 0 & (~sys.keywaiting())
+     // repeat is in case of horiz scroll
+     rptstop := no
+
+     $( LET key = sys.keywaiting()
+        UNTIL key DO $(
+          IF processbufallowed & check.processes.for.output() THEN BREAK
+          key := sys.keywait(10) $)
+     IF key THEN edit.rdch.obey() REPEATWHILE sys.keywaiting() $)
+
+          $)
+  FOR i = 0 TO pf.keys.upb DO IF pf.keys!i ~= 0 THEN freevec(pf.keys!i)
+  freevec(pf.keys)
+  freevec(vv);
+  freevec(stat1); freevec(stat2); freevec(stat3); freevec(stat4)
+$)
+
+AND set.window.limits() BE
+   TEST text.top.scr.line < other.t.t.s.l() THEN $( // adequate?
+     // the upper window is the current window
+     LET dtop = scroll.top.line - text.top.scr.line
+     IF text.bot.scr.line ~= scr.y.of.split | dtop ~= 0 THEN
+       text.update.info := text.update.info | 7
+     text.bot.scr.line := scr.y.of.split - 1
+     text.top.scr.line := scroll.top.line
+     text.top.vis.line := text.top.vis.line + dtop $)
+   ELSE $(  // lower window is current
+     LET dtop = (scr.y.of.split + 1) - text.top.scr.line
+     IF text.bot.scr.line ~= scroll.bot.line | dtop ~= 0 THEN
+       text.update.info := text.update.info | 7
+     text.bot.scr.line := scroll.bot.line
+     text.top.scr.line := scr.y.of.split + 1
+     text.top.vis.line := text.top.vis.line + dtop $)
+
+AND other.t.t.s.l() = otherbuf!9
+
+LET print.main.menu() BE $( // ug yech, sorry about the layout God...
+scr.updateline(1,
+"-------------------------------M A I N   M E N U--------------------------------*n", 1, cmdline)
+scr.updateline(2,
+"------Cursor  Movement------|--Delete--|----Miscellaneous-----|---Other Menus---*n",
+1, cmdline); scr.updateline(3,
+"          ^E char up        |^G char rt| ^I Tab or indent     | (from Main only)*n",
+1, cmdline); scr.updateline(4,
+"  ^A   ^S left ^D right ^F  |^T word rt| ^V Insert On or Off  |^J Help  ^K Block*n",
+1, cmdline); scr.updateline(5,
+" word lf  ^X down    word rt|^Y  line  | ^L Find/Replce again |^Q Quick ^P CtlCh*n",
+1, cmdline); scr.updateline(6,
+"---------Scrolling----------|^H  undel | ^] ditto char above  |^KX save and exit*n",
+1, cmdline); scr.updateline(7,
+"^W line down  ^R screen down|-Paragrph-| ^N Insert a RETURN   |^KQ cancel edit*n",
+1, cmdline); scr.updateline(8,
+"^Z line up    ^C screen up  |^B justify| ^U Stop a command    |^^ split/swap*n",
+1, cmdline) $)
+
+LET edit.rdch.obey() BE $(
+  // the same as edit.obey.main(sys.rdch()), except that
+  // during this rdch an escape might occur to the Lisp system.
+  // This would be caused by a Lisp escape in a meta file or string.
+  meta.lisp.allowed := yes
+  $( LET c = sys.rdch()
+     meta.lisp.allowed := no
+     edit.obey.main(c) $) $)
+
+

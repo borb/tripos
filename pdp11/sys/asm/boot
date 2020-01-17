@@ -1,0 +1,145 @@
+; Bootstrap code for MSCP disc
+
+SAFE    = 4000                  ; safe place in store
+STACK   = SAFE+1000             ; somewhere to put the stack
+
+CNT1    = 1024.*2               ; size of first transfer
+LBN1    = 1.                    ; disc address of first transfer
+MEMAD1  = 0.                    ; memory address for first transfer
+
+CNT2    = 20.*1024.*2           ; size of second transfer
+LBN2    = 5.                    ; disc address of second transfer
+MEMAD2  = 8.*1024.*2            ; memory address for second transfer
+
+
+
+ISTEP1  = 4000
+
+START:  NOP                     ; header is like this so that ROM
+        BR      BEGIN           ; recognises the boot block
+        HALT
+
+BEGIN:
+
+; Copy code up to a safe place in store
+
+        CLR     R1              ; address where START is loaded
+        MOV     #SAFE,R2        ; safe place
+        MOV     #LAST-START,R3  ; length in bytes
+
+LOOP1:  MOV     (R1)+,(R2)+     ; copy up
+        SUB     #2,R3           ;
+        BNE     LOOP1           ;
+
+; Jump up to new copy of code
+
+        MOV     #SAFE,R1        ;
+        JMP     GO-START(R1)    ;
+
+GO:     MOV     #STACK,SP       ; set up stack pointer
+
+; Set up unit number from R0
+
+        MOV     R0,BUNIT        ;
+
+; Initialise controller
+
+        MOV     BDUCSR,R5       ; Point to the CSR
+        MOV     R4,(R5)+        ; Strobe AIP to start the init
+        MOV     #ISTEP1,R3      ; Step bit the check is step 1
+        MOV     #INILST+SAFE-START,R4 ; Point to list of words to load
+
+BL1:    TST     @R5             ; Error bit up in the ASA?
+        BMI     GO              ; Yes, retry
+
+        BIT     @R5,R3          ; Is the step bit on?
+        BEQ     BL1             ; No, wait for it
+
+        MOV     (R4)+,@R5       ; Set the next word
+        ASL     R3              ; Next time, next step
+        BPL     BL1             ; Not step 4, wait for this step
+
+        CMP     (R4)+,(R4)+     ; Point to buffer
+        MOV     R4,CRING        ; Both rings point to the
+        MOV     R4,MRING        ;  same buffer
+
+        JSR     R0,MKBUF        ; Set up buffer
+        .WORD   11              ; Online opcode
+        JSR     PC,DOIO         ; Bring the unit online
+
+        JSR     R0,MKBUF        ; Set up buffer for read
+        .WORD   41              ; Read opcode
+        MOV     #CNT1,14(R4)    ; Set byte count
+        MOV     #MEMAD1,20(R4)  ; Set memory address
+        MOV     #LBN1,34(R4)    ; Set lbn
+        JSR     PC,DOIO         ; Do I/O
+        JSR     R0,MKBUF        ; Set up buffer for read
+
+        .WORD   41              ; Read opcode
+        MOV     #CNT2,14(R4)    ; Set byte count
+        MOV     #MEMAD2,20(R4)  ; Set memory address
+        MOV     #LBN2,34(R4)    ; Set lbn
+        JSR     PC,DOIO         ; Do I/O
+
+        MOV     @#500,PC        ; Jump to Tripos
+
+
+CLEN    =       60              ; MSCP command length
+OWN     =       100000          ; Buffer ownership bit
+
+MKBUF:  MOV     #BUFF+SAFE-START+CLEN,R4 ; Point after end of buffer
+
+MBLP:   CLR     -(R4)           ; Clear out the buffer
+        CMP     R4,#BUFF+SAFE-START ; Back to start ?
+        BHI     MBLP            ; No, loop
+
+        MOV     #CLEN,-4(R4)    ; Load command length
+        MOV     (R0)+,10(R4)    ; Set up opcode
+        MOV     BUNIT,4(R4)     ; Set up unit number
+        RTS     R0
+
+DOIO:   MOV     (PC)+,R3        ; Point to the CSR
+BDUCSR: .WORD   172150
+        MOV     #CRING+2+SAFE-START,R4 ; Command ring word 1
+        MOV     #OWN,@R4        ; Give the command buffer to the port
+        MOV     (R3)+,R5        ; Read the UDAIP to start polling
+
+IOLP1:  TST     @R3             ; Check if UDA still online
+        BNE     GO              ; No - panic - retry from the start
+
+        TST     @R4             ; Did the port take the packet
+        BMI     IOLP1           ; No wait
+
+        TST     -(R4)           ; Back up pointer
+        MOV     #OWN,-(R4)      ; Give port a reply buffer
+
+IOLP2:  TST     @R3             ; Check if UDA still online
+        BNE     GO              ; No - panic - retry from the start
+
+        TST     @R4             ; Wait for the port to reply
+        BMI     IOLP2           ; No wait
+
+        TSTB    @#BUFF+SAFE-START+12 ; Any error?
+        BNE     GO              ; Yes, start again from the beginning
+        RTS     PC              ; Return
+
+
+BUNIT:  .WORD   0
+
+INILST: .BYTE   0               ; no vector
+        .BYTE   0*10+0+200      ; ring sizes
+        .WORD   SAFE+MRING-START ; message ring address
+        .WORD   0               ; ditto high order
+        .WORD   1               ; go!
+
+LN:     .WORD   0               ; length of command/response
+VC:     .WORD   0               ; virtual circuit id
+BUFF:   .BLKB   CLEN              ; message/command buff, 1 packet
+
+        .WORD   0,0             ; interrupt identity area
+MRING:  .WORD   0,0             ; message ring
+CRING:  .WORD   0,0             ; command ring
+
+LAST:   .END
+
+

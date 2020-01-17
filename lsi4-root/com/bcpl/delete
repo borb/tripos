@@ -1,0 +1,36 @@
+// (C) Copyright 1979 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+// Modifications
+//
+// 13-sep-85 NJO  Calls FAULT on failure.  Verify switch provided.
+
+SECTION "DELETE"
+
+GET "LIBHDR"
+
+LET start() BE
+ $( LET v = VEC 10 + 120/bytesperword
+    LET rc = 0
+    TEST rdargs(",,,,,,,,,,VERIFY/S", v, 10+120/bytesperword)=0 THEN
+    $( writes("Bad args*N")
+       rc := 20
+    $)
+    ELSE
+       FOR i = 0 TO 9 DO
+       $( IF v!i=0 BREAK
+          TEST deleteobj(v!i)=0 DO
+          $( writef("Can't delete *"%S*" - ", v!i)
+             fault(result2)
+             rc := 5
+          $)
+          OR
+          $( IF v!10 THEN
+                writef("*"%S*" deleted*N", v!i)
+          $)
+       $)
+    stop(rc)
+ $)
+
+

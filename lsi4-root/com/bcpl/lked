@@ -1,0 +1,3574 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+                 ##        ##    ##  ########  ######
+                 ##        ##   ##   ########  #######
+                 ##        ##  ##    ##        ##    ##
+                 ##        ####      ######    ##    ##
+                 ##        ## ##     ##        ##    ##
+                 ##        ##  ##    ##        ##    ##
+                 ########  ##   ##   ########  #######
+                 ########  ##    ##  ########  ######
+
+************************************************************************
+**    Author: Richard Evans                         October 1979      **
+***********************************************************************/
+
+// TRIPOS Linkage Editor Header file.
+
+
+
+GET "LIBHDR"
+GET "CLIHDR"
+
+
+MANIFEST $( rg                                 :  ug + 100 $)
+
+GLOBAL   $( sysprint                           :  ug
+            verstream                          :  ug +   1
+            fromstream                         :  ug +   2
+            tostream                           :  ug +   3
+            withstream                         :  ug +   4
+            mapstream                          :  ug +   5
+            xrefstream                         :  ug +   6
+            from.file                          :  ug +   7
+
+            root.files                         :  ug +  10
+            to.file                            :  ug +  11
+            with.file                          :  ug +  12
+            library.files                      :  ug +  13
+            resident.files                     :  ug +  14
+            map.file                           :  ug +  15
+            xref.file                          :  ug +  16
+            width                              :  ug +  17
+            width.string                       :  ug +  18
+            addrinc                            :  ug +  19
+            addrinc.string                     :  ug +  20
+            line.number                        :  ug +  21
+            overlaying                         :  ug +  22
+            mapping                            :  ug +  23
+            xrefing                            :  ug +  24
+            rcode                              :  ug +  25
+
+            root.given                         :  ug +  26
+            library.given                      :  ug +  27
+            resident.given                     :  ug +  28
+            overlay.given                      :  ug +  29
+
+            vector.chain                       :  ug +  30
+            heapptr                            :  ug +  31
+            work.vector                        :  ug +  32
+            free.symbol.chain                  :  ug +  33
+            free.reference.chain               :  ug +  34
+
+            pass1                              :  ug +  40
+            pass2                              :  ug +  41
+            read.hunk                          :  ug +  42
+
+            hunklist                           :  ug +  50
+            hunkliste                          :  ug +  51
+            completelist                       :  ug +  52
+            completeliste                      :  ug + 53
+            rootliste                          :  ug +  54
+            commonlistptr                      :  ug +  55
+            root.hunk.count                    :  ug +  56
+            resident.hunk.count                :  ug +  57
+            common.count                       :  ug +  58
+            max.hunk.number                    :  ug +  59
+            max.total.size                     :  ug +  60
+            max.level                          :  ug +  61
+            library.table                      :  ug +  62
+            library.count                      :  ug +  63
+            total.root.count                   :  ug +  64
+
+            symbol.table                       :  ug +  70
+            symbol.table.mangled               :  ug +  71
+            any.relocatable.symbols            :  ug +  72
+            refcount                           :  ug +  73
+            overlay.count                      :  ug +  74
+            overlay.tree                       :  ug +  75
+            overlay.hunk                       :  ug +  76
+            overlay.symbol.table               :  ug +  77
+            loading.overlay.supervisor         :  ug +  78
+            reading.resident.library           :  ug +  79
+
+            input.buffer                       :  ug +  80
+            input.ptr                          :  ug +  81
+            input.end                          :  ug +  82
+            output.buffer                      :  ug +  83
+            output.ptr                         :  ug +  84
+
+
+            error                              :  rg
+            warn                               :  rg +   1
+            open                               :  rg +   2
+
+            read.descendents                   :  rg +   5
+            read.files                         :  rg +   6
+            read.file                          :  rg +   7
+            read.extblock                      :  rg +   8
+
+            lookup                             :  rg +  10
+            insert                             :  rg +  11
+            delete                             :  rg +  12
+            scan                               :  rg +  13
+
+            unsigned.ge                        :  rg +  14
+
+            getword                            :  rg +  15
+            getoptword                         :  rg +  16
+            ungetword                          :  rg +  17
+            getwords                           :  rg +  18
+            discard.words                      :  rg +  19
+            putword                            :  rg +  20
+            putwords                           :  rg +  21
+            deplete.output                     :  rg +  22
+
+            getvector                          :  rg +  25
+            freevector                         :  rg +  26
+            getblk                             :  rg +  27
+            freesymbol                         :  rg +  28
+            freereferences                     :  rg +  29
+
+            initialise.and.read.arguments      :  rg +  40
+
+            output.map.and.xref                :  rg +  45
+
+            do.pass1                           :  rg +  50
+
+            do.pass2                           :  rg +  55
+            mark.file.position                 :  rg +  56
+            output.t.table                     :  rg +  57
+            skip.hunk                          :  rg +  58
+         $)
+
+
+MANIFEST $(
+            // First some very basic constants
+
+            yes                                =      TRUE
+            no                                 =     FALSE
+            secword                            =     12345
+            section.name.words                 =     17/bytesperword + 1
+            mark.size                          =         3
+            name.words                         =         4
+
+            // Now the offests in the argument vector
+
+            args.from                          =         0
+            args.to                            =         1
+            args.with                          =         2
+            args.ver                           =         3
+            args.library                       =         4
+            args.resident                      =         5
+            args.map                           =         6
+            args.xref                          =         7
+            args.width                         =         8
+            args.addrinc                       =         9
+
+            argsupb                            =       150
+
+            default.width                      =        80
+
+            // Now the offsets in the file nodes
+
+            node.files                         =         0
+            node.daughter                      =         1
+            node.sibling                       =         2
+            node.hunks                         =         3
+            node.count                         =         4
+            node.mark                          =         5
+            node.size                          = node.mark + mark.size
+
+            // Now the offsets in the hunk blocks
+            // Note that two names share offset 8.
+
+            hunk.type                          =         0
+            hunk.size                          =         1
+            hunk.node                          =         2
+            hunk.file                          =         3
+            hunk.link                          =         4
+            hunk.level                         =         5
+            hunk.ordinate                      =         6
+            hunk.number                        =         7
+            hunk.section                       =         8
+            hunk.absbase                       =         8
+            hunk.symbols                       =         9
+            hunk.gnum                          =        10
+            hunk.resident                      =        11
+            hunk.abslist                       =        12
+            size.hunk                          =        13
+
+            // Now the offsets in absolute hunk blocks
+
+            abs.base                           =         0
+            abs.size                           =         1
+            abs.link                           =         2
+            size.abs                           =         3
+
+            // Now the offsets in symbol nodes
+
+            symbol.value                       =         0
+            symbol.hunk                        =         1
+            symbol.reflist                     =         2
+            symbol.overlaynumber               =         3
+            symbol.link                        =         4
+            symbol.name                        =         5
+            symbol.size                        =  symbol.name + name.words
+
+            symbol.table.size                  =       200
+            symbol.table.upb                   =  symbol.table.size - 1
+
+            // Now the reference blocks
+
+            ref.hunk                           =         0
+            ref.offset                         =         1
+            ref.absolute                       =         2
+            ref.link                           =         3
+            ref.size                           =         4
+
+            // Now the binary file types
+
+            t.hunk                             =      1000
+            t.reloc                            =      1001
+            t.end                              =      1002
+            t.abshunk                          =      1003
+            t.absreloc                         =      1004
+            t.ext                              =      1005
+            t.block                            =      1006
+            t.table                            =      1008
+            t.lkedext                          =      1009
+            t.overlay                          =      1010
+            t.break                            =      1011
+
+            ext.defrel                         =         1
+            ext.defabs                         =         2
+            ext.ref                            =       129
+            ext.common                         =       130
+
+            overlay.entry.size                 =         8
+
+            // Miscellaneous constants
+
+            input.buffer.size                  =       200
+            output.buffer.size                 =       200
+            work.vector.size                   =       200
+
+         $)
+
+.
+// TRIPOS Linkage Editor Version 2.  October 1979
+
+
+SECTION "LKEDRES"
+
+
+GET "BCPL.LKED"
+
+
+
+
+//
+// This first section contains all the routines that are
+//  required to be resident (ie. Those that are called from
+//  more than one of the other sections).
+//
+
+
+
+
+
+LET start() BE
+
+  $( LET argv = VEC argsupb     // Argument space
+
+
+     // First initialise everything, and read all the arguments.
+
+     initialise.and.read.arguments(argv)
+
+
+     // Do the first pass
+
+     do.pass1()
+
+
+     // Output the map and cross reference, if required.
+
+     output.map.and.xref()
+
+
+     // Open the output file, and perform the second pass.
+
+     IF to.file \= 0 THEN
+       $( tostream := open(to.file, "TO", no)
+          selectoutput(tostream)
+          do.pass2()
+          endwrite()
+          tostream := 0
+          selectoutput(verstream)
+       $)
+
+
+     // Output final message and finish
+
+     writef("Linking complete - maximum code size = %U0 words*N",max.total.size)
+
+     tidy.up.and.stop()
+
+
+     // END of start()
+  $)
+
+
+
+
+
+
+
+
+
+
+//
+// Some general utility routines, including error handling.
+//
+
+
+
+
+
+AND error(s, a1, a2, a3, a4) BE
+  $( selectoutput(verstream)
+     writes("*NLKED: ")
+     writef(s, a1, a2, a3, a4)
+     writes(" - linking abandoned*N")
+     rcode := return.severe
+     tidy.up.and.stop()
+  $)
+
+
+
+
+
+AND warn(s, a1, a2, a3, a4) BE
+  $( LET o = output()
+     selectoutput(verstream)
+     writes("*NLKED warning: ")
+     writef(s, a1, a2, a3, a4)
+     newline()
+     selectoutput(o)
+     IF rcode = 0 THEN rcode := return.soft
+  $)
+
+
+
+
+
+AND tidy.up.and.stop() BE
+  // This routine tidies up everything, and calls 'stop'
+  $( UNTIL vector.chain = 0 DO
+       $( LET v = vector.chain
+          vector.chain := !v
+          freevec(v)
+       $)
+
+     IF fromstream \= 0 THEN
+       $( selectinput(fromstream)
+          endread()
+       $)
+
+     IF tostream \= 0 THEN
+       $( selectoutput(tostream)
+          endwrite()
+       $)
+
+     IF verstream \= 0 & verstream \= sysprint THEN
+       $( selectoutput(verstream)
+          endwrite()
+       $)
+
+     IF withstream \= 0 THEN
+       $( selectinput(withstream)
+          endread()
+       $)
+
+     IF mapstream \= 0 & mapstream \= sysprint THEN
+       $( selectoutput(mapstream)
+          endwrite()
+       $)
+
+     IF xrefstream \= 0 & xrefstream \= sysprint THEN
+       $( selectoutput(xrefstream)
+          endwrite()
+       $)
+
+     stop(rcode)
+
+  $)
+
+
+
+
+
+AND open(file, name, input) = VALOF
+  // Opens file 'file', for input or output, depending on the
+  //  third parameter. 'name' is used in the error message.
+  $( LET s = input -> findinput(file), findoutput(file)
+     IF s = 0 THEN
+       error("can't open %S file *"%S*"", name, file)
+     RESULTIS s
+  $)
+
+
+
+
+
+
+
+
+
+
+//
+// This group of routines is concerned with reading binary files.
+// The routines are called from both passes.
+//
+
+
+
+
+
+AND read.descendents(tree, ov.level, hunk.number, total.size) BE
+  // This routine reads all the 'daughters' of 'tree'.
+  // The maximum size is computed, and, if in pass2, output
+  //  file positions are remembered, and 't.break's are output.
+  $( LET d = node.daughter ! tree
+
+     TEST d = 0 THEN
+       // 'tree' is a leaf - check size.
+       // Note that the comparison is unsigned, to cope
+       //  with blocks larger that 32767 words.
+       IF unsigned.ge(total.size, max.total.size) THEN
+         max.total.size := total.size
+      ELSE
+       $( LET ord = 1
+
+          UNTIL d = 0 DO
+            $( LET count = 0
+               LET size  = total.size
+               LET hptr  = hunkliste
+
+               IF pass2 THEN
+                 $( mark.file.position(d + node.mark)
+                    output.t.table(node.hunks ! d, node.count ! d)
+                 $)
+
+               count := read.files(node.files ! d, "overlay", ov.level, ord,
+                                   hunk.number, d, @ size, @ hunkliste)
+
+               TEST pass2 THEN
+                 putword(t.break)
+                ELSE
+                 $( node.hunks ! d := !hptr
+                    node.count ! d := count
+                 $)
+
+               read.descendents(d, ov.level + 1, hunk.number + count, size)
+
+               ord := ord + 1
+               d   := node.sibling ! d
+            $)
+
+       $)
+
+  $)
+
+
+
+
+
+AND read.files(files, name, ov.level, ov.ord, hunk.number, files.node,
+               lv.size.total, lv.list.end) = VALOF
+  $( LET n = 0
+     UNTIL files = 0 DO
+       $( n := n + read.file(files + 1, hunk.number + n, ov.level, ov.ord,
+                             files.node, no, lv.size.total, lv.list.end,
+                             0, 0, name)
+          files := !files
+       $)
+     RESULTIS n
+  $)
+
+
+
+
+
+AND read.file(file, hunk.number, ov.level, ov.ord, files.node, library,
+              lv.size.total, lv.list.end, libtab, lv.index, name) = VALOF
+  //
+  // This routine reads all the hunks in a file.  If 'library' is set
+  //  in the first pass, or 'libtab' is non-zero in the second, then
+  //  some or all of the hunks will be discarded.  The routine returns
+  //  either the number of relocatable hunks read, if 'library' is
+  //  false, or the number of relocatable AND absolute hunks required
+  //  otherwise.
+  //
+  // Note the distinctions between the following variables:
+  //
+  //   hunk.number:   The number inserted into the hunk block in the list.
+  //   hunk.count:    The total number of hunks read so far.
+  //   hunks.used:    The number of both kinds of hunks actually used
+  //                   so far.  This will be different from 'hunk.count'
+  //                   for library files.
+  //
+  $( LET size       = ?
+     LET base       = ?
+     LET list       = 0
+     LET liste      = @ list
+     LET index      = (libtab = 0 -> 0, !lv.index)
+     LET hunk.count = 0
+     LET hunks.used = 0
+     LET init.num   = hunk.number
+     LET first.hunk = 0
+     LET hunk.read  = no
+     LET required   = libtab = 0
+
+     fromstream := open(file, name, yes)
+     from.file  := file
+     selectinput(fromstream)
+     replenish.input()
+
+     // Give a warning message for an empty file
+
+     IF pass1 & exhausted() THEN
+       warn("%S file *"%S*" is empty", name, file)
+
+     // Read through the hunks in the file
+
+     UNTIL exhausted() DO
+       $( LET type = getword()
+
+          SWITCHON type INTO
+
+            $( DEFAULT:
+                 error("invalid object type %N in file *"%S*"", type, file)
+
+               CASE t.block:
+               CASE t.hunk:
+
+                 // These are only allowed as the first actual
+                 //  hunk in a collection.
+
+                 IF hunk.read THEN
+                   error("end block missing in file *"%S*"", file)
+
+               CASE t.abshunk:
+
+                 $( LET abshunk = type = t.abshunk
+                    LET reltype = abshunk -> t.absreloc, t.reloc
+
+                    // Add new hunk to count.
+
+                    IF NOT hunk.read THEN
+                      hunk.count := hunk.count + 1
+
+                    // See if this hunk is in the library table.
+                    // Note that this check is only made for the
+                    // first hunk of a collection.
+
+                    IF NOT required & NOT hunk.read THEN
+                      // First see if table is finished
+                      $( LET hn = libtab ! index
+                         IF  hn = 0 THEN
+                           BREAK
+                         IF hn = hunk.count THEN
+                           $( index    := index + 1
+                              required := yes
+                           $)
+                      $)
+
+                    // Read the load address of an absolute hunk.
+
+                    IF abshunk THEN
+                      base := getword()
+
+                    size := getword()
+
+                    // Blocks which actually contain data, as opposed to
+                    //  't.block's, must be smaller than 32768 words.
+
+                    IF type \= t.block & unsigned.ge(size, 32767) THEN
+                      error("hunk too large (>= 32K) in file *"%S*"", from.file)
+
+                    // In the case of loading the overlay supervisor,
+                    //  output the t.table information here, now that
+                    //  the size is finally known.
+
+                    IF loading.overlay.supervisor THEN
+                      $( hunk.size ! overlay.hunk := size
+                         output.t.table(overlay.hunk, total.root.count)
+                      $)
+
+                    TEST required THEN
+
+                      // Read the hunk.
+                      // NOTE that 'read.hunk' is a variable routine, and
+                      //  is either 'pass1.read.hunk' or 'pass2.read.hunk'
+                      // Note also that the number of a new relocatable
+                      //  hunk will be 'hunk.number+1', while for an
+                      //  absolute hunk it will be 'hunk.number'.
+
+                      $( LET num = abshunk -> hunk.number, hunk.number + 1
+                         LET h   = read.hunk(type, reltype, size, base,
+                                             ov.level, ov.ord, first.hunk,
+                                             num, files.node, library)
+
+                         // If the first hunk, which must contain all the
+                         //  symbol definitions, is not required, then
+                         //  discard all the following abshunks, if any.
+
+                         first.hunk := h
+                         required   := pass2 | first.hunk \= 0
+
+                         IF pass1 & h \= 0 & NOT hunk.read THEN
+
+                           // Insert the new hunk block into the list.
+                           // Record the position of the hunk within the
+                           //  file in the 'gnum' field, for use in
+                           //  constructing the library table.
+                           // Also increment the number of hunks
+                           //  actually required.
+
+                           $( !liste         := h
+                               liste         := hunk.link + h
+                               hunk.gnum ! h := hunk.count
+                               hunks.used    := hunks.used + 1
+                           $)
+
+                         IF (pass1 & h \= 0) | loading.overlay.supervisor THEN
+
+                           // Increment the total size.  Note that
+                           //  this includes the size of absolute
+                           //  hunks which may overlap.
+                           // Also increase 'hunk.number' for
+                           //  relocatable hunks.
+
+                           $( !lv.size.total := !lv.size.total + size
+                              IF NOT abshunk THEN
+                                hunk.number  := hunk.number + 1
+                           $)
+
+                      $)
+                     ELSE
+
+                      // Hunk not required - can ignore it
+                      skip.hunk(type, reltype, size)
+
+                    hunk.read := yes
+
+                 $)
+                 ENDCASE
+
+               CASE t.end:
+                 IF pass2 & required THEN
+                   putword(t.end)
+                 first.hunk := 0
+                 hunk.read  := no
+                 required   := libtab = 0
+                 ENDCASE
+
+            $)
+
+       $)
+
+     // Check that the file was terminated by a 't.end'
+
+     IF hunk.read THEN
+       error("file *"%S*" terminated invalidly", file)
+
+     IF list \= 0 THEN
+       // Insert into parameter hunk list
+       //  and compute maximum level.
+       $( IF max.level < ov.level THEN
+            max.level := ov.level
+          !liste          := !(!lv.list.end)
+          !(!lv.list.end) := list
+            !lv.list.end  := liste
+       $)
+
+     // Tidy up the input
+
+     endread()
+     fromstream := 0
+
+     // Pass back a new index if there was a library table
+
+     IF libtab \= 0 THEN
+       !lv.index := index + 1
+
+     RESULTIS library -> hunks.used, hunk.number - init.num
+  $)
+
+
+
+
+
+
+
+
+
+
+//
+// This routine, called in both passes, read a 't.ext' block
+//
+
+
+
+
+
+AND read.extblock(library) = VALOF
+  // This is called after reading a 't.ext'.  It reads all the
+  //  symbols, delivering a chain of them.  If in pass2, then
+  //  only the references are read.  If 'library' is true, then
+  //  zero is returned unless the block contained at least one
+  //  definition of a previously referenced symbol.
+  $( LET chain    = 0
+     LET chaine   = @ chain
+     LET w1       = getword()
+     LET required = NOT library
+
+     // Loop through all the symbols in the block
+
+     WHILE w1 \= 0 DO
+       $( LET name  = VEC name.words - 2
+          LET value = ?
+          LET t     = w1 >> 8
+
+          // Read the rest of the name
+
+          getwords(name, name.words - 1)
+
+          // and the value......
+
+          value := getword()
+
+          IF pass2 & t = ext.common THEN
+            // Treat as simple references
+            $( value := getword()
+               t     := ext.ref
+            $)
+
+          // Only return references in pass2.
+
+          IF pass1 | t >= 128 | loading.overlay.supervisor THEN
+            $( LET s = getblk(symbol.size)
+
+               // Initialise the symbol fields
+
+               symbol.name ! s := w1
+
+               FOR j = 1 TO name.words - 1 DO
+                 (symbol.name + j) ! s := name ! (j - 1)
+
+               !chaine := s
+                chaine := s + symbol.link
+               !chaine := 0
+
+               symbol.value         ! s := 0
+               symbol.overlaynumber ! s := -1
+               symbol.reflist       ! s := 0
+
+               SWITCHON t INTO
+
+                 $( CASE ext.common:
+                      symbol.value  ! s := value
+                      value             := getword()
+
+                    CASE ext.ref:
+                      // Only keep references if they will be needed.
+                      TEST pass2 | xrefing | (overlaying & t \= ext.common) THEN
+                        $( LET refs = 0
+                           FOR j = 1 TO value DO
+                             $( LET r = getblk(ref.size)
+                                ref.offset ! r := getword()
+                                ref.link   ! r := refs
+                                refs           := r
+                             $)
+                           symbol.reflist  ! s := refs
+                        $)
+                       ELSE
+                        discard.words(value)
+                      ENDCASE
+
+                    CASE ext.defabs:
+                    CASE ext.defrel:
+                      // A 'library' check may be required.
+                      UNLESS required THEN
+                        $( LET l = lookup(s)
+                           // Set required if the symbol is an
+                           //  unresolved reference.
+                           IF l \= 0 & (symbol.name ! l >> 8) >= 128 THEN
+                             required := yes
+                        $)
+                      symbol.value ! s := value
+                      ENDCASE
+
+                    DEFAULT:
+                      error("invalid type %N for *"%O1*" in file *"%S*"",
+                            t, s, from.file)
+
+                 $)
+
+            $)
+
+          w1 := getword()
+
+       $)
+
+     // If the symbols are not required, free them.
+
+     UNLESS required THEN
+       WHILE chain \= 0 DO
+         $( LET ns = symbol.link ! chain
+            freesymbol(chain)
+            chain := ns
+         $)
+
+     RESULTIS chain
+
+  $)
+
+
+
+
+
+
+
+
+
+
+//
+// The following routines are used to manage the symbol table.
+//
+
+
+
+
+
+AND lookup(s) = VALOF
+  // Looks up symbol s in the table, returning zero if it isn't
+  //  there.
+  $( LET w1 = symbol.name  ! s & 255
+     LET t  = symbol.table ! hashval(s)
+
+     UNTIL t = 0 DO
+       $( LET v, w = symbol.name ! t & 255, w1
+          LET same = yes
+
+          // Compare names
+
+          FOR j = name.words - 1 TO 0 BY -1 DO
+            $( IF v \= w THEN
+                 $( same := no
+                    BREAK
+                 $)
+               v := (symbol.name + j) ! t
+               w := (symbol.name + j) ! s
+            $)
+
+          IF same THEN
+            // Name found
+            RESULTIS t
+
+          t := symbol.link ! t
+       $)
+
+     RESULTIS 0
+  $)
+
+
+
+
+
+AND insert(s) BE
+  $( LET a = symbol.table + hashval(s)
+     symbol.link ! s := !a
+     !a              := s
+  $)
+
+
+
+
+
+AND delete(s) BE
+  $( LET p = symbol.table + hashval(s)
+     UNTIL !p = 0 DO
+       $( IF !p = s THEN
+            $( !p              := symbol.link ! s
+               symbol.link ! s := 0
+               RETURN
+            $)
+          p := !p + symbol.link
+       $)
+  $)
+
+
+
+
+
+AND hashval(s) = VALOF
+  $( LET hash = symbol.name ! s & 255
+     FOR j = symbol.name + 1 TO symbol.name + name.words - 1 DO
+       hash := hash + s!j
+     RESULTIS ABS (hash REM symbol.table.size)
+  $)
+
+
+
+
+
+AND scan(f, a1, a2, a3) BE
+  // Calls f with arguments (symbol, a1, a2, a3) for every symbol
+  //  in the table, followed by a call with a zero first parameter.
+  $( FOR j = 0 TO symbol.table.upb DO
+       $( LET s = symbol.table ! j
+          UNTIL s = 0 DO
+            $( f(s, a1, a2, a3)
+               s := symbol.link ! s
+            $)
+       $)
+     f(0, a1, a2, a3)
+  $)
+
+
+
+
+
+AND writeoct(s, n) BE
+  // Writes out the name of a symbol.
+  // If n = 1, output is in minimum width, otherwise trailing
+  //  spaces are output.
+  $( LET v       = VEC name.words * 2 - 1
+     LET ptr     = 0
+     LET lastnsp = 0
+
+     FOR j = symbol.name TO symbol.name + name.words - 1 DO
+       $( LET w = s ! j
+          FOR i = 1 TO 2 DO
+            $( LET c = (w >> 8) & 255
+               IF c \= ' ' THEN
+                 lastnsp := ptr
+               v ! ptr := c
+               ptr     := ptr + 1
+               w       := w << 8
+            $)
+       $)
+
+     FOR j = 1 TO (n = 1 -> lastnsp, 7) DO
+       wrch(v ! j)
+  $)
+
+
+
+
+
+
+
+
+
+
+//
+// A routine to perform an unsigned comparison.
+// For example, 'unsigned.ge(#X8333, #X0001)' is TRUE.
+//
+
+
+
+
+
+AND unsigned.ge(a, b) =
+  // Use a conditional to force boolean evaluation (ANDF/ORF)
+  ( (a <  0 & (b >  0 | a >= b)) |
+    (a >= 0 & (b >= 0 & a >= b)) -> TRUE, FALSE
+  )
+
+
+
+
+
+
+
+
+
+
+//
+// The routines used for binary input and output
+//
+
+
+
+
+
+AND getword() = VALOF
+  $( input.ptr := input.ptr + 1
+     IF input.ptr < input.end THEN
+       RESULTIS input.buffer ! input.ptr
+     // Buffer empty - try to refill
+     IF NOT replenish.input() THEN
+       error("file *"%S*" ended prematurely", from.file)
+     input.ptr := 0
+     RESULTIS input.buffer ! 0
+  $)
+
+
+
+
+
+AND getoptword() = VALOF
+  // Gets the next input word, if there was one, returning
+  //  zero if file is exhausted.  This routine is only used
+  //  to read object types, and so it is safe to return zero.
+  $( input.ptr := input.ptr + 1
+     IF input.ptr < input.end THEN
+       RESULTIS input.buffer ! input.ptr
+     // Buffer empty - can it be refilled?
+     IF NOT replenish.input() THEN
+       input.buffer ! 0 := 0
+     input.ptr := 0
+     RESULTIS input.buffer ! 0
+  $)
+
+
+
+
+
+AND ungetword() BE input.ptr := input.ptr - 1
+
+
+
+
+
+AND exhausted() = VALOF
+  $( IF (input.ptr + 1) < input.end THEN
+       RESULTIS no
+     RESULTIS NOT replenish.input()
+  $)
+
+
+
+
+
+AND getwords(v, n) BE
+  $( LET got = input.end - input.ptr - 1
+     IF got > n THEN
+       got := n
+     FOR j = 0 TO got - 1 DO
+       v ! j := input.buffer ! (input.ptr + j + 1)
+     input.ptr := input.ptr + got
+     IF got < n THEN
+       $( LET left = n - got
+          IF ABS readwords(v + got, left) \= left THEN
+            error("file *"%S*" ended during input of %N words", from.file, n)
+       $)
+  $)
+
+
+
+
+
+AND replenish.input() = VALOF
+  $( input.ptr := -1
+     IF testflags(1) THEN
+       error("BREAK during %S pass", (pass2 -> "second", "first"))
+     input.end := ABS readwords(input.buffer, input.buffer.size)
+     RESULTIS input.end > 0
+  $)
+
+
+
+
+
+AND discard.words(n) BE
+  $( LET n1  = n
+     LET got = input.end - input.ptr - 1
+     IF got > n THEN
+       got := n
+     input.ptr := input.ptr + got
+     n         := n - got
+     IF n = 0 THEN RETURN
+     WHILE n > 0 DO
+       $( input.end := ABS readwords(input.buffer, input.buffer.size)
+          n         := n - input.end
+          IF input.end < input.buffer.size THEN
+            BREAK
+       $)
+     IF n > 0 THEN
+       error("file *"%S*" ended while discarding %N words", from.file, n1)
+     input.ptr := input.end + n - 1
+  $)
+
+
+
+
+
+AND putword(w) BE
+  $( IF output.ptr+1 = output.buffer.size THEN
+       deplete.output()
+     output.ptr                 := output.ptr + 1
+     output.buffer ! output.ptr := w
+  $)
+
+
+
+
+
+AND putwords(v, n) BE
+  $( LET left = output.buffer.size - output.ptr - 1
+     TEST n > left THEN
+       $( deplete.output()
+          writewords(v, n)
+       $)
+      ELSE
+       $( FOR j = 0 TO n-1 DO
+            output.buffer ! (output.ptr+j+1) := v!j
+          output.ptr := output.ptr + n
+       $)
+  $)
+
+
+
+
+
+AND deplete.output() BE
+  $( IF output.ptr >= 0 THEN
+       writewords(output.buffer, output.ptr + 1)
+     output.ptr := -1
+  $)
+
+
+
+
+
+
+
+
+
+
+//
+// These are the storage management routines.
+//
+
+
+
+
+
+AND getvector(size) = VALOF
+  $( LET v = getvec(size)
+     IF  v = 0 THEN
+       error("insufficient store during %S", pass1 -> "pass1",
+                                             pass2 -> "pass2",
+                                                      "initialisation")
+     !v           := vector.chain
+     vector.chain := v
+     RESULTIS v + 1
+  $)
+
+
+
+
+
+AND freevector(v) BE
+  $( LET c = @ vector.chain
+     v    := v - 1
+     UNTIL !c = 0 DO
+       $( IF !c = v THEN
+            $( !c := !v
+               freevec(v)
+               RETURN
+            $)
+          c := !c
+       $)
+     error("invalid argument for freevector during %S", pass1 -> "pass1",
+                                                        pass2 -> "pass2",
+                                                                 "init.")
+  $)
+
+
+
+
+
+AND getblk(size) = VALOF
+  $( IF size = ref.size & free.reference.chain \= 0 THEN
+       $( LET result = free.reference.chain
+          free.reference.chain := ref.link ! result
+          RESULTIS result
+       $)
+     IF size = symbol.size & free.symbol.chain \= 0 THEN
+       $( LET result = free.symbol.chain
+          free.symbol.chain := symbol.link ! result
+          RESULTIS result
+       $)
+     $( LET h  = heapptr
+        LET nh = heapptr + size
+        IF nh > work.vector.size THEN
+          // Current vector is exhausted
+          $( IF size > work.vector.size THEN
+               RESULTIS getvector(size)
+             work.vector := getvector(work.vector.size)
+             heapptr     := size
+             RESULTIS work.vector
+          $)
+        heapptr := nh
+        RESULTIS h + work.vector
+     $)
+  $)
+
+
+
+
+
+AND freesymbol(s) BE
+  $( freereferences(symbol.reflist ! s)
+     symbol.link ! s   := free.symbol.chain
+     free.symbol.chain := s
+  $)
+
+
+
+
+
+AND freereferences(r) BE
+  IF r \= 0 THEN
+    $( LET r1 = r
+       UNTIL ref.link ! r = 0 DO
+         r := ref.link ! r
+       ref.link ! r         := free.reference.chain
+       free.reference.chain := r1
+    $)
+
+.
+
+
+
+SECTION "LKEDINIT"
+
+
+GET "BCPL.LKED"
+
+
+
+
+//
+// This section contains the routines for initialising all the
+//  data structures, and for reading and decoding the parameters.
+//
+
+
+
+
+
+LET initialise.and.read.arguments(argv) BE
+  // Initialises the data structures, and reads arguments, both
+  //  from the command line, and from any WITH files specified.
+  $(
+
+     // First do the initialisation.
+
+     initialise()
+
+
+     // Now decode the command line parameters
+
+     IF rdargs("FROM=ROOT,TO/K,WITH/K,VER/K,LIBRARY/K,RESIDENT/K,*
+               *MAP/K,XREF/K,WIDTH/K,ADDRINC/K", argv, argsupb) = 0 THEN
+       error("invalid parameters")
+
+     // Check for VER parameter.
+
+     IF argv!args.ver \= 0 THEN
+       verstream := open(argv!args.ver, "VER", no)
+
+     selectoutput(verstream)
+
+
+     // Write out the initial message
+
+     writes("TRIPOS Linkage Editor Version 2.0*N")
+
+
+     // Now check for FROM parameter
+
+     IF argv!args.from \= 0 THEN
+       $( root.files := makefilelist(argv!args.from)
+          root.given := yes
+       $)
+
+     // TO
+
+     to.file := argv!args.to
+
+     // LIBRARY
+
+     IF argv!args.library \= 0 THEN
+       $( library.files := makefilelist(argv!args.library)
+          library.given := yes
+       $)
+
+     // RESIDENT
+
+     IF argv!args.resident \= 0 THEN
+       $( resident.files := makefilelist(argv!args.resident)
+          resident.given := yes
+       $)
+
+     // MAP
+
+     map.file := argv!args.map
+
+     // XREF
+
+     xref.file := argv!args.xref
+
+     // WIDTH
+
+     width.string := argv!args.width
+
+     IF width.string \= 0 THEN
+       width := read.number(width.string, "WIDTH",  default.width, yes)
+
+     // ADDRINC
+
+     addrinc.string := argv!args.addrinc
+
+     IF addrinc.string \= 0 THEN
+       addrinc := read.number(addrinc.string, "ADDRINC", ?, no)
+
+     // Now read the WITH files.
+
+     IF argv!args.with \= 0 THEN
+       $( LET fl = makefilelist(argv!args.with)
+          WHILE fl \= 0 DO
+            $( read.with.file(fl+1)
+               fl := !fl
+            $)
+       $)
+
+
+     // Ensure that ROOT has been given.
+
+     IF NOT root.given THEN
+       error("no primary input specified")
+
+     // Check for sensible ADDRINC value.
+
+     IF addrinc \= 1 & addrinc \= 2 THEN
+       error("invalid ADDRINC (%N)", addrinc)
+
+     // Set the flags from the parameter values
+
+     overlaying := node.daughter ! overlay.tree \= 0
+     mapping    := mapstream  \= 0 | map.file  \= 0
+     xrefing    := xrefstream \= 0 | xref.file \= 0
+
+
+     // Set the 'root' files into the tree
+
+     node.files ! overlay.tree := root.files
+
+  $)
+
+
+
+
+
+AND initialise() BE
+  // Initialises everything it can think of!
+  // First clear all the streams
+  $(
+     sysprint                     := output()
+     verstream                    := sysprint
+     fromstream                   := 0
+     tostream                     := 0
+     withstream                   := 0
+     mapstream                    := 0
+     xrefstream                   := 0
+
+     // Now the parameters which may be set
+
+     root.files                   := 0
+     library.files                := 0
+     resident.files               := 0
+     width                        := default.width
+     addrinc                      := mcaddrinc
+
+     root.given                   := no
+     library.given                := no
+     resident.given               := no
+     overlay.given                := no
+
+     vector.chain                 := 0
+
+     rcode                        := 0
+
+     heapptr                      := work.vector.size + 1
+     free.reference.chain         := 0
+     free.symbol.chain            := 0
+
+     pass1, pass2                 := no, no
+
+     hunklist, hunkliste          := 0, @ hunklist
+     library.count                := 0
+     resident.hunk.count          := 0
+     common.count                 := 0
+     max.total.size               := 0
+     max.level                    := 0
+
+     overlay.tree                 := getblk(node.size)
+     node.daughter ! overlay.tree := 0
+     node.sibling  ! overlay.tree := 0
+
+     symbol.table                 := getvector(symbol.table.size)
+     any.relocatable.symbols      := no
+     overlay.count                := -1
+     refcount                     := 0
+     symbol.table.mangled         := no
+
+     FOR j = 0 TO symbol.table.upb DO symbol.table ! j := 0
+
+     input.buffer                 := getvector(input.buffer.size)
+     input.ptr                    := -1
+     input.end                    := 0
+
+     output.buffer                := getvector(output.buffer.size)
+     output.ptr                   := -1
+
+     reading.resident.library     := no
+     loading.overlay.supervisor   := no
+
+  $)
+
+
+
+
+
+
+
+
+
+
+//
+// This group of routines is concerned with decoding the command
+//  line, and interpreting any WITH files given.
+//
+
+
+
+
+
+AND read.with.file(file) BE
+  // Reads directives from the file 'file'.
+  // The directives that can be given are as follows:
+  //
+  //  FROM files
+  //  ROOT files
+  //  TO file
+  //  LIBRARY files
+  //  RESIDENT files
+  //  MAP [file]
+  //  XREF [file]
+  //  OVERLAY
+  //  tree description
+  //  #                     (This is part of the OVERLAY directive)
+  //  WIDTH n
+  //
+  $( line.number := 1
+     with.file   := file
+     withstream  := open(file, "WITH", yes)
+     selectinput(withstream)
+
+     $( LET itemv = VEC 20       // The vector for the directive
+        LET item  = rditem(itemv, 20)
+        LET ch    = ?
+
+        // Check for end of file
+
+        IF item = 0 THEN
+          $( ch := getch(); ungetch()
+             IF ch = endstreamch THEN BREAK
+          $)
+
+        // Analyse the item
+
+        IF item \= 0 THEN
+          $( IF item \= 1 THEN
+               GOTO comerr
+
+             SWITCHON findarg(
+               "FROM=ROOT,TO,LIBRARY,RESIDENT,MAP,XREF,OVERLAY,WIDTH,ADDRINC",
+               itemv) INTO
+
+               $( DEFAULT: GOTO comerr
+
+                  CASE 0:
+                    // FROM files    or   ROOT files
+                    TEST root.given THEN
+                      makefilelist(0, yes)
+                     ELSE
+                      $( root.files := makefilelist(0, no)
+                         root.given := yes
+                      $)
+                    ENDCASE
+
+                  CASE 1:
+                    // TO file
+                    $( LET f = makefilelist(0, no)
+                       IF f = 0 | !f \= 0 THEN
+                         GOTO comerr
+                       IF to.file = 0 THEN
+                         to.file := f + 1
+                       ENDCASE
+                    $)
+
+                  CASE 2:
+                    // LIBRARY files
+                    TEST library.given THEN
+                      makefilelist(0, yes)
+                     ELSE
+                      $( library.files := makefilelist(0, no)
+                         library.given := yes
+                      $)
+                    ENDCASE
+
+                  CASE 3:
+                    // RESIDENT files
+                    TEST resident.given THEN
+                      makefilelist(0, yes)
+                     ELSE
+                      $( resident.files := makefilelist(0, no)
+                         resident.given := yes
+                      $)
+                    ENDCASE
+
+                  CASE 4:
+                    // MAP [file]
+                    $( LET f = makefilelist(0, no)
+                       IF f \= 0 & !f \= 0 THEN
+                         GOTO comerr
+                       IF map.file = 0 THEN
+                         TEST f = 0 THEN
+                           mapstream := verstream
+                          ELSE
+                           map.file := f+1
+                       ENDCASE
+                    $)
+
+                  CASE 5:
+                    // XREF [file]
+                    $( LET f = makefilelist(0, no)
+                       IF f \= 0 & !f \= 0 THEN
+                         GOTO comerr
+                       IF xref.file = 0 THEN
+                         TEST f = 0 THEN
+                           xrefstream := verstream
+                          ELSE
+                           xref.file := f+1
+                       ENDCASE
+                    $)
+
+                  CASE 6:
+                    // OVERLAY
+                    // Xfiles    X is null or is one or more *'s
+                    // .....
+                    // #         or eof.
+                    //
+                    // Eg.
+                    // OVERLAY
+                    // a
+                    // *b
+                    // *c
+                    // d
+                    // #
+                    // This specifies the structure root(a(b,c),d)
+                    //
+                    $( LET parent, last.sibling = ?, overlay.tree
+                       LET level                = -1
+
+                       // Loop starts here.  Reads a line each time round
+
+                       $( LET count, fl, node = 0, 0, 0
+
+                          // Skip to end of last line
+
+                          ch := getch() REPEATUNTIL ch = '*N' | ch = endstreamch
+
+                          // Read first character of line
+
+                          ch := getch()
+
+                          // Check for end of directive
+
+                          IF ch \= '#' & ch \= endstreamch THEN
+
+                            $( WHILE ch = '**' DO
+                                 $( count := count + 1
+                                    ch    := getch()
+                                 $)
+                               ungetch()
+
+                               // Check for valid count
+
+                               IF count > level + 1 THEN
+                                 GOTO comerr
+
+                               // Read the files
+
+                               fl := makefilelist(0, no)
+
+                               IF fl = 0 THEN LOOP
+
+                               IF overlay.given THEN
+                                 $( level := count
+                                    LOOP
+                                 $)
+
+                               // Allocate the node
+
+                               node                 := getblk(node.size)
+                               node.files    ! node := fl
+                               node.daughter ! node := 0
+                               node.sibling  ! node := 0
+                            $)
+
+                          // Check the count
+
+                          TEST count <= level THEN
+                            // Unwind to previous (or current) level
+                            // 'count' is zero during the final loop,
+                            // when the end of the directive has been
+                            // reached.
+                            $( FOR j = count+1 TO level DO
+                                 $( last.sibling := parent
+                                    parent       := node.sibling ! last.sibling
+                                    node.sibling ! last.sibling := 0
+                                 $)
+                               node.sibling ! last.sibling := node
+                            $)
+                           ELSE
+                            // Store back pointer in 'sibling'
+                            // field of new parent.
+                            $( node.sibling  ! last.sibling := parent
+                               node.daughter ! last.sibling := node
+                               parent                       := last.sibling
+                            $)
+                          last.sibling := node
+                          level        := count
+
+                       $) REPEATUNTIL last.sibling = 0
+
+                       overlay.given := yes
+                       ENDCASE
+
+                    $)
+
+                  CASE 7:
+                    // WIDTH n
+                    IF width.string = 0 THEN
+                      $( width := read.number(0, "WIDTH", default.width, yes)
+                         width.string := 1
+                      $)
+                    ENDCASE
+
+                  CASE 8:
+                    // ADDRINC n
+                    IF addrinc.string = 0 THEN
+                      $( addrinc        := read.number(0, "ADDRINC", ?, no)
+                         addrinc.string := 1
+                      $)
+                    ENDCASE
+
+               $)  // END of SWITCHON findarg.....
+
+          $)
+
+        // Skip to end of line
+
+        ch := getch() REPEATUNTIL ch = '*N' | ch = endstreamch
+
+     $) REPEAT
+
+     // Tidy up
+
+     endread()
+     withstream := 0
+     RETURN
+
+     // Here on syntax error
+
+comerr:
+     error("error in WITH file *"%S*" near line %N", file, line.number)
+  $)
+
+
+
+
+
+AND makefilelist(string, ignore) = VALOF
+  // This routine constructs a file list from the string
+  //  given as the first parameter, or if this is zero,
+  //  from the input file.  In the latter case, if the
+  //  parameter 'ignore' is true, the list is discarded.
+  // File names in the input may be separated by spaces,
+  //  commas or +'s.  The list is terminated by end of
+  //  line or ; if reading from a file, and by end of
+  //  string otherwise.  If, when reading from a file,
+  //  an asterisk is encountered, the rest of the line
+  //  is ignored, and a new line taken.  This enables
+  //  long lists to be split across several lines.
+  $( LET fvec     = VEC 127
+     LET len, ptr = 0, 0
+     LET chain    = 0
+     LET chaine   = @ chain
+     LET started  = no
+     LET finished = no
+     LET read     = string = 0
+     LET discard  = read & ignore
+
+     UNTIL finished DO
+       $( LET ch = ?
+          TEST read THEN
+            $( ch := getch()
+               IF ch = '*N' | ch = ';' THEN
+                 $( ungetch()
+                    ch := endstreamch
+                 $)
+            $)
+           ELSE
+            $( ptr := ptr + 1
+               TEST ptr > string % 0 THEN
+                 ch := endstreamch
+                ELSE
+                 ch := string % ptr
+            $)
+
+          IF ch = endstreamch THEN
+            $( ch := ','
+               finished := yes
+            $)
+
+          TEST ch = ',' | ch = '+' | ch = ' ' | (read & ch = '**') THEN
+            $( IF len \= 0 & NOT discard THEN
+                 $( LET f = getblk(len/bytesperword + 2)
+                    !chaine := f
+                     chaine := f
+                    !f      := 0
+                    FOR j = 1 TO len DO
+                      (f+1)%j := fvec % j
+                    (f+1)%0 := len
+                 $)
+               len := 0
+               IF ch = '**' THEN
+                 // Ignore rest of line
+                 ch := getch() REPEATUNTIL ch = '*N' | ch = endstreamch
+            $)
+           ELSE
+            // Character in file name
+            $( len := len + 1
+               fvec % len := ch
+            $)
+       $)
+
+     RESULTIS chain
+  $)
+
+
+
+
+
+AND read.number(string, name, default.value, warn.only) = VALOF
+  // This routines generates an integer from a string, or
+  //  from the input file if the string is zero.
+  // Spaces are ignored before and after the optional sign.
+  // The number is terminated by the first non-digit if
+  //  reading from a file, or by the end of string or space
+  //  otherwise.
+  // In the event of an error, either 'error' or 'warn' is
+  //  called, depending on the value of the fourth parameter.
+  // In the latter case, 'default.value' is returned as the result.
+  $( LET n, ptr, ch = 0, 0, 0
+     LET okay       = no
+     LET sign, neg  = no, no
+     LET started    = no
+     LET read       = string = 0
+     LET routine    = warn.only -> warn, error
+
+     $( TEST read THEN
+          $( ch := getch()
+             IF ch = '*N' | ch = ';' THEN
+               $( ch := endstreamch
+                  ungetch()
+                  BREAK
+               $)
+          $)
+         ELSE
+          $( ptr := ptr + 1
+             TEST ptr > string % 0 THEN
+               $( ch := endstreamch
+                  BREAK
+               $)
+              ELSE
+               ch := string % ptr
+          $)
+
+        IF (ch = '+' | ch = '-') & sign = 0 THEN
+          $( sign := yes
+             neg  := ch = '-'
+             LOOP
+          $)
+
+        IF ch = ' ' & NOT started THEN
+          LOOP
+
+        started := yes
+
+        TEST '0' <= ch <= '9' THEN
+          $( okay := yes
+             n    := n * 10 + ch - '0'
+          $)
+         ELSE
+          $( IF read THEN ungetch()
+             BREAK
+          $)
+     $) REPEAT
+
+     // Check for correct string termination
+
+     IF ch \= ' ' & ch \= endstreamch THEN
+       okay := no
+
+     IF okay THEN
+       RESULTIS neg -> -n, n
+
+     TEST read THEN
+       routine("invalid %S value found near line %N in file *"%S*"",
+               name, line.number, with.file)
+      ELSE
+       routine("invalid %S value (%S)", name, string)
+
+     RESULTIS default.value
+
+  $)
+
+
+
+
+
+AND getch() = VALOF
+  $( LET ch = rdch()
+     IF ch = '*N' THEN
+       line.number := line.number + 1
+     RESULTIS ch
+  $)
+
+
+
+
+
+AND ungetch() BE
+  $( unrdch()
+     IF rdch() = '*N' THEN
+       line.number := line.number - 1
+     unrdch()
+  $)
+
+.
+
+
+
+SECTION "LKEDMX"
+
+
+GET "BCPL.LKED"
+
+
+
+
+//
+// This section is concerned with the output of
+//  the link map and the cross reference table.
+//
+
+
+
+
+
+LET output.map.and.xref() BE
+  $(
+     // Output MAP if required
+
+     IF mapping THEN
+       $( IF map.file \= 0 THEN
+            $( mapstream := findoutput(map.file)
+               IF mapstream = 0 THEN
+                 warn("can't open MAP file *"%S*" - map abandoned", map.file)
+            $)
+          IF mapstream \= 0 THEN
+            // (Note that 'output.map' closes the stream)
+            output.map()
+       $)
+
+
+     // Ditto for XREF
+
+     IF xrefing THEN
+       $( IF xref.file \= 0 THEN
+            $( xrefstream := findoutput(xref.file)
+               IF xrefstream = 0 THEN
+                 warn("can't open XREF file *"%S*" - cross reference abandoned",
+                     xref.file)
+            $)
+          IF xrefstream \= 0 THEN
+            // (Stream is closed as in comment above)
+            output.xref()
+       $)
+
+
+     // Repair damage done to symbol table, if necessary
+
+     IF symbol.table.mangled THEN
+       unmangle.symbol.table()
+
+  $)
+
+
+
+
+
+AND output.map() BE
+  $( LET h           = hunklist
+     LET map.entries = width < 20 -> 1, width/20
+
+     mangle.symbol.table()
+
+     selectoutput(mapstream)
+
+     IF mapstream = verstream THEN
+       newlines(3)
+
+     // Begin loop through hunks.
+
+     UNTIL h = 0 DO
+       $( LET s = hunk.symbols ! h
+          LET c = 0
+
+          print.header(h)
+
+          IF s \= 0 THEN
+            $( FOR j = 1 TO map.entries DO
+                 writes("    Symbol    Value ")
+               newlines(2)
+
+               // Loop through symbols
+
+               UNTIL s = 0 DO
+                 $( LET t = symbol.name ! s >> 8
+                    IF c = map.entries THEN
+                      $( c := 0
+                         newline()
+                      $)
+                    writef("    %O2  %I6%C", s, symbol.value ! s,
+                      (t = ext.defabs -> 'A', ' '))
+                    c := c + 1
+                    s := symbol.hunk ! s
+                 $)
+
+               newlines(2)
+            $)
+
+          newline()
+
+          h := hunk.link ! h
+
+       $)
+
+     IF mapstream \= verstream THEN
+       $( endwrite()
+          mapstream := 0
+          selectoutput(verstream)
+       $)
+
+  $)
+
+
+
+
+
+AND print.header(h) BE
+  // Prints a header to a hunk for the map or cross reference.
+  $( LET level = hunk.level   ! h
+     LET file  = hunk.file    ! h
+     LET size  = hunk.size    ! h
+     LET sec   = hunk.section ! h
+     LET t     = hunk.type    ! h
+     LET alist = hunk.abslist ! h
+
+     writef("%I2. ", hunk.gnum ! h)
+
+     TEST t = t.abshunk THEN
+       writef("Absolute hunk  @ %U0-%U0.", sec, sec + size - 1)
+      ELSE
+       $( LET s     = t =   t.hunk   -> "Hunk.  ",
+                      t =   t.block  -> "Block. ",
+                      t = ext.common -> "COMMON.",
+                                        "BUGBUG."
+
+          writes(s)
+
+          TEST hunk.size ! h \= 0 | t \= t.block THEN
+            writef("  Size %U5.", hunk.size ! h)
+           ELSE
+            IF sec \= 0 THEN spaces(13)
+
+          IF sec \= 0 THEN
+            writef("  Section: %S.", sec)
+       $)
+
+     newline()
+
+     WHILE alist \= 0 DO
+       $( LET base = abs.base ! alist
+          writef("    Absolute hunk  @ %U0-%U0.*N", base, base+abs.size!alist-1)
+          alist := abs.link ! alist
+       $)
+
+     IF file \= 0 THEN
+       writef("    File:    %S.*N", file)
+
+     IF level \= 0 THEN
+       writef("    Overlay level %N, ordinate %N.*N", level, hunk.ordinate!h)
+
+     newline()
+
+  $)
+
+
+
+
+
+AND spaces(n) BE
+  FOR j = 1 TO n DO wrch(' ')
+
+
+
+
+
+AND newlines(n) BE
+  FOR j = 1 TO n DO wrch('*N')
+
+
+
+
+
+AND output.xref() BE
+  $( LET h            = hunklist
+     LET xref.entries = width < 27 -> 1, (width - 11)/16
+
+     UNLESS symbol.table.mangled THEN
+       mangle.symbol.table()
+
+     selectoutput(xrefstream)
+
+     IF xrefstream = verstream THEN
+       $( newlines(3)
+          IF xrefstream = mapstream THEN
+            newlines(2)
+       $)
+
+     // Loop through hunks
+
+     UNTIL h = 0 DO
+       $( LET s = hunk.symbols ! h
+
+          print.header(h)
+
+          IF s \= 0 THEN
+            $( writes("    Symbol ")
+               FOR j = 1 TO xref.entries DO
+                 writes("    Offset  Hunk")
+               newlines(2)
+
+               // Loop through symbols
+
+               UNTIL s = 0 DO
+                 $( LET r = symbol.reflist ! s
+                    LET c = 0
+
+                    writef("    %O2", s)
+
+                    // Loop through references
+
+                    UNTIL r = 0 DO
+                      $( LET n = hunk.gnum ! (ref.hunk ! r)
+                         IF c = xref.entries THEN
+                           $( newline()
+                              spaces(11)
+                              c := 0
+                           $)
+                         writef("     %U5%C ", ref.offset ! r,
+                                              (ref.absolute ! r -> 'A', ' '))
+                         TEST n < 0 THEN
+                           writes("res ")
+                          ELSE
+                           writef("%I3 ", n)
+                         c := c + 1
+                         r := ref.link ! r
+                      $)
+
+                    newline()
+                    s := symbol.hunk ! s
+
+                 $)
+
+               newline()
+
+            $)
+
+          newline()
+
+          h := hunk.link ! h
+       $)
+
+     IF xrefstream \= verstream THEN
+       $( endwrite()
+          xrefstream := 0
+          selectoutput(verstream)
+       $)
+
+  $)
+
+
+
+
+
+AND mangle.symbol.table() BE
+  // This routine first assigns 'global' numbers to each hunk in
+  //  the list (-1 for resident hunks).
+  // Then, every symbol is linked onto a chain from its parent
+  //  hunk, in ascending order of value.
+  $( LET h = completelist
+     LET r = yes
+     LET c = 0
+
+     symbol.table.mangled := yes
+
+     UNTIL h = 0 DO
+       $( hunk.symbols ! h := 0
+          IF h = hunklist THEN
+            // h is now a non-resident hunk
+            r := no
+          TEST r THEN
+            hunk.gnum ! h := -1
+           ELSE
+            $( c := c + 1
+               hunk.gnum ! h := c
+            $)
+          h := hunk.link ! h
+       $)
+
+     scan(make.symbol.lists)
+  $)
+
+
+
+
+
+AND make.symbol.lists(s) BE
+  IF s \= 0 THEN
+    $( LET h = symbol.hunk ! s
+       IF h \= 0 THEN
+         $( LET v = symbol.value ! s
+            LET c = hunk.symbols + h
+
+            UNTIL ! c = 0 | symbol.value ! (!c) >= v DO
+              c := symbol.hunk + !c
+
+            symbol.hunk ! s := !c
+            !c              :=  s
+         $)
+    $)
+
+
+
+
+
+AND unmangle.symbol.table() BE
+  // This routine restores the symbol table to its normal state.
+  $( LET h = completelist
+     UNTIL h = 0 DO
+       $( LET s = hunk.symbols ! h
+          UNTIL s = 0 DO
+            $( LET t = symbol.hunk ! s
+               symbol.hunk ! s := h
+               s               := t
+            $)
+          h := hunk.link ! h
+       $)
+  $)
+
+.
+
+
+
+SECTION "LKEDP1"
+
+
+GET "BCPL.LKED"
+
+
+
+
+//
+// This section contains all the routines used only in
+//  the first pass1.  The only entry is 'do.pass1'
+//
+
+
+
+
+
+LET do.pass1() BE
+  // This routine does the following things:
+  //
+  //  1. Read root files
+  //  2. Read descendent files
+  //  3. Read libraries
+  //  4. Generate COMMON hunks and the overlay symbol table
+  //  5. Computes the maximum hunk number
+  //
+  $( LET initial      = overlaying -> 0, -1
+     LET messageout   = no
+     LET charsprinted = 0
+     LET commonliste  = ?
+     LET increment    = ?
+     LET h            = ?
+
+     pass1 := yes; pass2 := no; read.hunk := pass1.read.hunk
+
+     // Read the root
+
+     root.hunk.count := read.files(root.files, "FROM", 0, 0, initial,
+                                   overlay.tree, @ max.total.size, @ hunkliste
+                                  ) + initial
+
+     IF hunklist = 0 THEN
+       error("empty primary input")
+
+     completelist  := hunklist
+     completeliste := @ completelist
+     rootliste     := hunkliste
+     commonliste   := rootliste
+     commonlistptr := rootliste
+
+     // Now read the rest of the tree
+
+     read.descendents(overlay.tree, 1, root.hunk.count, max.total.size)
+
+     // Now read the library
+
+     TEST refcount \= 0 THEN
+       $( pass1.read.library()
+          read.resident.library()
+       $)
+      ELSE
+       library.files := 0
+
+     IF overlaying & overlay.count < 0 THEN
+       warn("no overlay references found")
+
+     // Allocate the overlay symbol table
+
+     IF overlay.count >= 0 THEN
+       overlay.symbol.table := getblk(overlay.count + 1)
+
+     // Generate COMMON hunks, etc.
+     // Note that the exact number of resident hunks is
+     //  not yet known.
+
+     scan(tidy.after.pass1, @ messageout, @ commonliste, @ charsprinted)
+
+     // Compute the maximum hunk number (for the loader)
+
+     max.hunk.number  := root.hunk.count + common.count + resident.hunk.count
+     h                := !completeliste
+     increment        := resident.hunk.count
+     total.root.count := root.hunk.count + common.count + library.count + 1
+
+     // Scan through all the hunks after the resident library.
+     // Add the number of resident hunks to all hunk numbers,
+     //  and the number of non-resident COMMON blocks to all
+     //  hunks after the generated COMMON blocks.
+
+     UNTIL h = 0 DO
+       $( LET n = ?
+          IF h = !commonliste THEN
+            increment := increment + common.count
+          n := hunk.number ! h + increment
+          hunk.number ! h := n
+          IF n > max.hunk.number THEN
+            max.hunk.number := n
+          h := hunk.link ! h
+       $)
+
+  $)
+
+
+
+
+
+AND tidy.after.pass1(symbol, lv.messageout, lv.commonliste, lv.charsprinted) BE
+  //
+  // For each symbol in the table:
+  //
+  //  1. If it is a COMMON symbol, a t.block hunk is generated, containing
+  //       the symbol.  If the block was referenced by the resident library,
+  //       the hunk is added to the resident part of the hunk list.
+  //       Such resident COMMON blocks are not written to the load file.
+  //       Note that the 'overlaynumber' field of the symbol is used to
+  //       indicate that it was referenced in the resident library.
+  //       This is safe, because COMMON blocks are always in the overlay
+  //       root, and the overlay number is only checked for symbols that
+  //       are not of COMMON type.  A check is also made to ensure
+  //       that each resident COMMON block will be big enough for all
+  //       its references from the linked program.  This is done by
+  //       setting its value (size) field to -1 if any resident reference
+  //       is found which is big enough.
+  //       Otherwise, for non-resident COMMON blocks, the new hunk is added
+  //       to the end of the 'commonlist', which comes after the list of
+  //       root hunks.
+  //
+  //  2. If the symbol is undefined, a message is produced, and the symbol
+  //       is changed to a definition of absolute zero.
+  //
+  //  3. If the symol has an overlay reference, it is inserted in the
+  //       overlay symbol table.
+  //
+  //  'lv.messageout'   points to a boolean, initially false, which is
+  //      set true once an undefined symbol has been printed.
+  //  'lv.commonliste'  points to a variable which contains a pointer
+  //      to the end of the common list.
+  //  'lv.charsprinted' points to an integer, initially zero, which
+  //      contains the number of characters printed on the current
+  //      line of undefined symbols.
+  //
+  //  Note that 'scan' calls the routine with a zero argument as its
+  //   final action.
+  //
+  TEST symbol = 0 THEN
+    IF !lv.messageout THEN
+      // Finish off undefined symbols list.
+      writes("*N*N")
+   ELSE
+    //
+    // Check for COMMON symbol.
+    //
+    $( LET t = symbol.name ! symbol >> 8
+
+       TEST t = ext.common THEN
+         //
+         // Allocate new hunk
+         //
+         $( LET ch              = getblk(size.hunk)
+            LET resident.common = symbol.overlaynumber ! symbol = 0
+            LET hunknum         = ?
+            LET lv.liste        = ?
+
+            TEST resident.common THEN
+              // Check first that the resident COMMON block will
+              //  be large enough when it is loaded.
+
+              $( IF symbol.value ! symbol \= -1 THEN
+                   error("resident COMMON *"%O1*" will be too small", symbol)
+
+                 resident.hunk.count := resident.hunk.count + 1
+                 hunknum             := resident.hunk.count
+                 lv.liste            := @ completeliste
+              $)
+             ELSE
+              // Not a resident COMMON.
+              $( common.count := common.count + 1
+                 hunknum      := common.count + root.hunk.count
+                 lv.liste     := lv.commonliste
+              $)
+
+            hunk.link     ! ch  := ! (!lv.liste)
+            ! (!lv.liste)       := ch
+               !lv.liste        := hunk.link + ch
+            hunk.level    ! ch  := 0
+            hunk.ordinate ! ch  := 0
+            hunk.number   ! ch  := hunknum
+            hunk.size     ! ch  := symbol.value ! symbol + 3
+            hunk.type     ! ch  := ext.common
+            hunk.file     ! ch  := 0
+            hunk.node     ! ch  := 0
+            hunk.section  ! ch  := 0
+            hunk.resident ! ch  := resident.common
+            hunk.abslist  ! ch  := 0
+
+            IF NOT resident.common THEN
+              max.total.size    := max.total.size + hunk.size ! ch
+
+            symbol.name !symbol := symbol.name!symbol + [(ext.defrel-t) << 8]
+            symbol.hunk !symbol := ch
+            symbol.value!symbol := addrinc
+         $)
+        ELSE
+         //
+         // Not COMMON - check for undefined and overlay symbols.
+         //
+         $( IF t >= 128 THEN
+              // Undefined symbol
+              $( IF NOT !lv.messageout THEN
+                   $( !lv.messageout := yes
+                      writes("*NLKED: unresolved external references:*N*N")
+                   $)
+                 IF !lv.charsprinted > 71 THEN
+                   $( newline()
+                      !lv.charsprinted := 0
+                   $)
+                 writef("  %O2", symbol)
+                 !lv.charsprinted := !lv.charsprinted + 9
+                 rcode := return.hard
+                 symbol.name  ! symbol := symbol.name!symbol+[(ext.defabs-t)<<8]
+                 symbol.hunk  ! symbol := 0
+                 symbol.value ! symbol := 0
+                 freereferences(symbol.reflist!symbol)
+              $)
+            IF symbol.overlaynumber ! symbol >= 0 THEN
+              overlay.symbol.table ! (symbol.overlaynumber ! symbol) := symbol
+         $)
+    $)
+
+
+
+
+
+
+
+
+
+
+//
+// These routines are used for reading libraries in pass1.
+//
+
+
+
+
+
+AND pass1.read.library() BE
+  // This routine:
+  //
+  //   1. Reads the library files.
+  //   2. Constructs a table of which hunks are required later
+  //   3. Alters hunk numbers in the hunk list
+  //
+  $( LET lv.fl     = @ library.files
+     LET nhunks    = 0
+     LET nfiles    = 0
+     LET afterroot = !rootliste
+     LET libptr    = rootliste
+
+     UNTIL !lv.fl = 0 DO
+       $( LET file = !lv.fl + 1
+          LET nh   = read.file(file, root.hunk.count, 0,0, overlay.tree, yes,
+                               @ max.total.size, @ rootliste, 0,0, "LIBRARY")
+          TEST nh = 0 THEN
+            // Nothing required from this file
+            !lv.fl := ! (!lv.fl)
+           ELSE
+            $( nhunks := nhunks + nh
+               nfiles := nfiles + 1
+               lv.fl  := !lv.fl
+            $)
+       $)
+
+     IF nhunks > 0 THEN
+       $( LET f     = library.files + 1
+          LET index = 0
+          LET inc   = 0
+          LET count = 0
+
+          // Construct the library hunk table
+
+          libptr        := !libptr
+          library.table := getblk(nhunks + nfiles)
+
+          FOR j = 1 TO nhunks DO
+            $( library.table ! index := hunk.gnum ! libptr
+               index                 := index + 1
+
+               hunk.number ! libptr  := hunk.number ! libptr + inc
+
+               IF hunk.type ! libptr \= t.abshunk THEN
+                 count := count + 1
+
+               libptr                := hunk.link ! libptr
+
+               IF libptr = afterroot | hunk.file ! libptr \= f THEN
+                 // Indicate new file in table
+                 $( library.table ! index := 0
+                    index                 := index + 1
+                    f                     := !(f - 1) + 1
+                    inc                   := inc + count
+                    count                 := 0
+                 $)
+            $)
+
+          // Add in the number of library hunks
+
+          library.count := inc
+
+          WHILE afterroot \= 0 DO
+            $( hunk.number ! afterroot := hunk.number ! afterroot + inc
+               afterroot               := hunk.link   ! afterroot
+            $)
+
+       $)
+
+  $)
+
+
+
+
+
+AND read.resident.library() BE
+  // This routine, only called in pass1, reads the library
+  //  files which will be resident when the program is loaded.
+  $( LET dummy         = 0
+     reading.resident.library := yes
+     resident.hunk.count      := read.files(resident.files, "RESIDENT", 0, 0,
+                                            -1, overlay.tree, @ dummy,
+                                            @ completeliste)
+     reading.resident.library := no
+  $)
+
+
+
+
+
+
+
+
+
+
+//
+// This routine is used for reading hunks in the first pass.
+//
+
+
+
+
+
+AND pass1.read.hunk(type, reltype, size, base, ov.level, ov.ord,
+                    first.hunk, number, files.node, library) = VALOF
+  //
+  // This routine is called after the type, base (for an absolute hunk)
+  //  and size of a hunk (t.hunk, t.block or t.abshunk) have been read.
+  //  It reads and discards the code and relocation information, and
+  //  checks the external symbol information, if present.
+  //
+  // Note the following special parameters:
+  //
+  //  first.hunk:    Zero if this is the first hunk of a collection,
+  //                  otherwise the hunk block for the initial hunk.
+  //                  If non-zero, then new absolute hunks are added
+  //                  to the 'hunk.abslist' chain.  Note that symbol
+  //                  definitions are only allowed with the first
+  //                  hunk.
+  //
+  //  library:       This is true if the hunk is part of a library
+  //                  file.  If the first hunk is being read, then
+  //                  the hunk is only retained if it defines symbols
+  //                  which have outstanding references.  Since only
+  //                  the first hunk can contain definitions, second
+  //                  and subsequent hunks (which will be absolute)
+  //                  are always read, whatever the value of 'library'.
+  //
+  // The routine delivers:
+  //
+  //   1. Zero if the hunk was not required (library)
+  //   2. A new hunk block for the first hunk
+  //   3. The value of 'first.hunk' for subsequent hunks.
+  //
+  // Thus the result is always zero or a hunk block.
+  //
+  $( LET v        = VEC 10
+     LET secname  = 0
+     LET t        = ?
+     LET relhunk  = type = t.hunk
+     LET abshunk  = type = t.abshunk
+     LET libread  = library & first.hunk = 0
+     LET required = NOT libread
+     LET symbols  = 0
+
+     // First throw away the code if a hunk
+
+     TEST relhunk & size >= 11 THEN
+       $( getwords(v, 11)
+          // Check for SECTION name
+          IF v!1 = secword & [(v!2 >> 8) = 17 | (v!2 & 255) = 17] THEN
+            $( LET swap = (v!2 & 255) = 17
+               LET ptr  = 0
+               secname := v + 2
+               FOR j = 0 TO 8 DO
+                 $( LET b1 = secname!j >> 8
+                    LET b2 = secname!j & 255
+                    TEST swap THEN
+                      $( secname %  ptr      := b2
+                         secname % (ptr + 1) := b1
+                      $)
+                     ELSE
+                      $( secname %  ptr      := b1
+                         secname % (ptr + 1) := b2
+                      $)
+                    ptr := ptr + 2
+                 $)
+            $)
+          discard.words(size - 11)
+       $)
+      ELSE
+       IF relhunk | abshunk THEN
+         discard.words(size)
+
+      // Check for relocation block
+
+      t := getoptword()
+
+      IF t = reltype THEN
+        $( IF abshunk & (first.hunk = 0 | hunk.type!first.hunk = t.abshunk) THEN
+             error("invalid absreloc block in file *"%S*"", from.file)
+           discard.words(getword())
+           t := getoptword()
+        $)
+
+      // Check for t.ext
+
+      TEST t = t.ext THEN
+        $( symbols  := read.extblock(libread)
+           required := required | symbols \= 0
+        $)
+       ELSE
+        ungetword()
+
+     IF NOT required THEN RESULTIS 0
+
+     // Allocate and initialise the hunk
+
+     $( LET h = ?
+
+        TEST first.hunk = 0 THEN
+          // Must allocate hunk block
+          $(                 h := getblk(size.hunk)
+
+             hunk.link     ! h := 0
+             hunk.type     ! h := type
+             hunk.size     ! h := size
+             hunk.number   ! h := number
+             hunk.node     ! h := files.node
+             hunk.level    ! h := ov.level
+             hunk.ordinate ! h := ov.ord
+             hunk.file     ! h := from.file
+             hunk.section  ! h := 0
+             hunk.resident ! h := reading.resident.library
+             IF abshunk THEN
+               hunk.absbase! h := base
+             hunk.abslist  ! h := 0
+
+             IF secname \= 0 THEN
+               $( LET b = getblk(section.name.words)
+                  FOR j = 0 TO section.name.words - 1 DO
+                    b ! j := secname ! j
+                  hunk.section ! h := b
+               $)
+          $)
+
+         ELSE
+          // The hunk is an extra absolute hunk.
+          // Allocate an abs block.
+          $( LET a = getblk(size.abs)
+             LET p = hunk.abslist + first.hunk
+
+             h := first.hunk
+
+             UNTIL !p = 0 DO p := abs.link + !p
+
+             !p           := a
+
+             abs.size ! a := size
+             abs.base ! a := base
+             abs.link ! a := 0
+          $)
+
+        // Now check the symbols associated with this hunk
+
+        UNTIL symbols = 0 DO
+
+          $( LET ns = symbol.link    ! symbols
+             LET nt = symbol.name    ! symbols >> 8
+             LET r  = symbol.reflist ! symbols
+             LET l  = lookup(symbols)
+
+             // Only allow definitions in first hunk of
+             //  collection.
+
+             IF nt < 128 & first.hunk \= 0 THEN
+               error("invalid definition of *"%O1*" in file *"%S*"",
+                     symbols, from.file)
+
+             // Relocatable symbols definitions in absolute hunks
+             //  are fairly meaningless.
+
+             IF nt = ext.defrel & abshunk THEN
+               error("invalid relocation of *"%O1*" in file *"%S*"",
+                     symbols, from.file)
+
+             // Insert new hunk into references
+
+             UNTIL r = 0 DO
+               $( ref.hunk     ! r := h
+                  ref.absolute ! r := abshunk
+                  r                := ref.link ! r
+               $)
+
+             symbol.hunk ! symbols := h
+
+             // See if it was a new symbol
+
+             TEST l = 0 THEN
+               $( IF nt >= 128 & nt \= ext.common THEN
+                    refcount := refcount + 1
+                  IF nt = ext.common & reading.resident.library THEN
+                    $( symbol.overlaynumber ! symbols := 0
+                       symbol.value         ! symbols := -1
+                    $)
+                  insert(symbols)
+                  IF nt \= ext.defabs THEN
+                    any.relocatable.symbols := yes
+               $)
+              ELSE
+
+               // The symbol has already been inserted.
+               // First check the types for consistency.
+
+               $( LET ot = symbol.name ! l >> 8
+
+                  TEST ot \= nt & ot >= 128 & nt >= 128 THEN
+
+                    error("invalid use of symbol *"%O1*" in file *"%S*"",
+                          l, from.file)
+
+                   ELSE
+
+                    TEST (ot & 128) = 0 = (nt & 128) THEN
+
+                      // Both are definitions
+                      IF NOT library & NOT reading.resident.library THEN
+                        warn("multiple definition of symbol *"%O1*"*
+                             * in file *"%S*"", l, from.file)
+
+                     ELSE
+
+                      TEST ot = nt THEN
+
+                        // Both are references
+                        $( LET v = symbol.value ! symbols
+                           IF ot = ext.common THEN
+
+                             // First find larger size.
+
+                             $( IF unsigned.ge(v, symbol.value ! l) THEN
+                                  symbol.value ! l :=
+                                    reading.resident.library -> -1, v
+
+                                // If this is the first occurrence of the
+                                //  COMMON symbol in a resident library file,
+                                //  set the 'overlaynumber' field and move the
+                                //  symbol to the correct position in the
+                                //  symbol table by deleting it and inserting
+                                //  it again.
+
+                                IF reading.resident.library &
+                                   symbol.overlaynumber ! l < 0 THEN
+                                  $( symbol.overlaynumber ! l := 0
+                                     delete(l)
+                                     insert(l)
+                                  $)
+                             $)
+                           add.references(symbols, l)
+                        $)
+
+                       ELSE
+
+                        // One is a definition, the other is a reference
+                        // If the reference is to a common block, and
+                        // the definition is a relative symbol that is
+                        // far enough from the end of the hunk, then
+                        // the symbol becomes the definition.
+                        // Note also that the symbol value might be
+                        // a byte offset, while common block and
+                        // hunk sizes are in words.  In this case,
+                        // the symbol is required to be on a word
+                        // boundary for it to be a valid common
+                        // definition.
+
+                        $( LET otisref = ot >= 128
+                           LET ref     = otisref -> l, symbols
+                           LET def     = otisref -> symbols, l
+                           LET reftype = otisref -> ot, nt
+                           LET deftype = otisref -> nt, ot
+                           LET defhunk = symbol.hunk ! def
+
+                           // Check for a common definition.
+
+                           IF reftype = ext.common THEN
+                             // Check sizes and offsets
+                             $( LET o  = symbol.value ! def
+                                LET ow = o / addrinc
+                                LET ht = hunk.type    ! defhunk
+                                LET hs = hunk.size    ! defhunk
+                                LET cs = symbol.value ! ref
+
+                                IF deftype \= ext.defrel     |
+                                   ht \= t.hunk              |
+                                   (hs - ow) < cs            |
+                                   hunk.level ! defhunk \= 0 |
+                                   ow * addrinc \= o         THEN
+                                  error("invalid use of common *"%O1*" *
+                                        *in file *"%S*"", l, from.file)
+
+                             $)
+
+                           // Check for a reference from the resident
+                           //  library to a non-resident symbol.
+
+                           IF reading.resident.library &
+                              NOT hunk.resident ! defhunk THEN
+                             warn("reference from resident library file *"%S*"*
+                                  * to *"%O1*"", from.file, l)
+
+                           // Check for overlay references
+
+                           check.references(ref, def)
+
+                           // The references will not be required again if
+                           //  a cross reference is not being produced.
+
+                           TEST xrefing THEN
+                             add.references(ref, def)
+                            ELSE
+                             $( freereferences(symbol.reflist ! ref)
+                                symbol.reflist ! ref := 0
+                                symbol.reflist ! def := 0
+                             $)
+
+                           // Set the new symbol values
+
+                           IF ref = l THEN
+                             $( LET link = symbol.link ! l
+                                FOR j = 0 TO symbol.size - 1 DO
+                                  l ! j := symbols ! j
+                                symbol.link ! l := link
+                                IF ot \= ext.common THEN
+                                  refcount := refcount - 1
+                             $)
+
+                        $)
+
+                  symbol.reflist ! symbols := 0
+                  freesymbol(symbols)
+
+               $)
+
+             symbols := ns
+
+          $)
+
+        RESULTIS h
+
+     $)
+
+  $)
+
+
+
+
+
+
+
+
+
+
+//
+// These routines are concerned with symbol reference chains.
+// They are only called in the first pass.
+//
+
+
+
+
+
+AND check.references(ref, def) BE
+  // Checks for valid overlay references.
+  $( LET r    = symbol.reflist ! ref
+     LET hdef = symbol.hunk    ! def
+     LET ldef = hunk.level     ! hdef
+     LET ndef = hunk.node      ! hdef
+     LET ov   = no
+
+     IF ldef = 0 THEN
+       // Must be OK
+       RETURN
+
+     // Loop through all the references
+
+     UNTIL r = 0 DO
+       $( LET href = ref.hunk   ! r
+          LET lref = hunk.level ! href
+          LET nref = hunk.node  ! href
+
+          r := ref.link ! r
+
+          IF ndef = nref THEN
+            // OK - in the same overlay segment
+            LOOP
+
+          IF ldef < lref & descends.from(nref, ndef, lref - ldef) THEN
+            // OK - legal reference to point higher in tree
+            LOOP
+
+          IF ldef = lref + 1 & descends.from(ndef, nref, 1) THEN
+            // OK - overlay reference to next lower level
+            $( ov := yes
+               LOOP
+            $)
+
+          error("invalid overlay reference of symbol *"%O1*"", def)
+       $)
+
+     // See if symbol is an overlay reference
+
+     IF ov & symbol.overlaynumber ! def = -1 THEN
+       $( overlay.count              := overlay.count + 1
+          symbol.overlaynumber ! def := overlay.count
+       $)
+
+  $)
+
+
+
+
+
+AND descends.from(high, low, count) = VALOF
+  // Returns true if 'high' is a descendent of 'low' within
+  //  'count' generations.
+  TEST count = 0 THEN
+    RESULTIS no
+   ELSE
+    $( LET d     = node.daughter ! low
+       LET found = no
+
+       UNTIL d = 0 | found DO
+         $( IF d = high | descends.from(high, d, count - 1) THEN
+              found := yes
+            d := node.sibling ! d
+         $)
+
+       RESULTIS found
+
+    $)
+
+
+
+
+
+AND add.references(sfrom, sto) BE
+  // Adds the reference chain in 'sfrom' to that in 'sto'.
+  $( LET r1 = symbol.reflist + sto
+     UNTIL !r1 = 0 DO
+       r1 := ref.link + !r1
+     !r1 := symbol.reflist ! sfrom
+     symbol.reflist ! sfrom := 0
+  $)
+
+.
+
+
+
+SECTION "LKEDP2"
+
+
+GET "BCPL.LKED"
+
+
+
+
+//
+// This section, entered at 'do.pass2' is concerned with
+//  the second pass.
+//
+
+
+
+
+
+LET do.pass2() BE
+  // This routine:
+  //
+  //   1. Outputs the hunk size table
+  //   2. Outputs the overlay supervisor
+  //   3. Outputs the root files
+  //   4. Outputs the common blocks
+  //   5. Outputs the library hunks (if any)
+  //   6. Outputs the overlay table
+  //   7. Outputs the rest of the tree
+  //
+  $( pass1 := no; pass2 := yes; read.hunk := pass2.read.hunk
+
+     // Output the overlay supervisor.
+
+     TEST overlaying THEN
+       // NOTE that the t.table information is output by
+       //  'read.file' in this case.
+       load.overlay.supervisor()
+      ELSE
+       IF any.relocatable.symbols THEN
+         output.t.table(hunklist, total.root.count)
+
+     // Read the root files
+
+     read.files(root.files, "FROM", 0)
+
+     // Output the common hunks
+
+     IF common.count > 0 THEN
+       $( LET ch = !commonlistptr
+          FOR j = 1 TO common.count DO
+            $( putword(t.block)
+               putword(hunk.size ! ch)
+               putword(t.end)
+               ch := hunk.link ! ch
+            $)
+       $)
+
+     // Output the library hunks
+
+     pass2.read.library()
+
+     // Output the overlay information
+
+     IF overlay.count >= 0 THEN
+       $( LET optr = VEC mark.size - 1
+          LET size = (overlay.count + 1) * overlay.entry.size
+          putword(t.overlay)
+          putword(max.level + size + 1)
+          putword(max.level + 2)
+          FOR j = 1 TO max.level + 1 DO
+            putword(0)
+          mark.file.position(optr)
+          FOR j = 1 TO size DO
+            putword(0)
+
+          read.descendents(overlay.tree, 1, 0, 0)
+
+          set.file.position(optr)
+
+          // Output the overlay table information
+
+          FOR j = 0 TO overlay.count DO
+            $( LET s = overlay.symbol.table ! j
+               LET h = symbol.hunk ! s
+               LET n = hunk.node   ! h
+
+               // Output the file mark
+
+               FOR m = 0 TO mark.size - 1 DO
+                 putword((node.mark + m) ! n)
+
+               putword(hunk.level    ! h)
+               putword(hunk.ordinate ! h)
+               putword(hunk.number   ! (node.hunks ! n))
+               putword(hunk.number   ! h)
+               putword(symbol.value  ! s + 1)
+
+               // Fill up entry with zeroes
+
+               FOR j = mark.size + 6 TO overlay.entry.size DO
+                 putword(0)
+            $)
+
+       $)
+
+     deplete.output()
+
+  $)
+
+
+
+
+
+AND mark.file.position(v) BE
+  $( deplete.output()
+     note(tostream, v)
+  $)
+
+
+
+
+
+AND  set.file.position(v) BE
+  $( deplete.output()
+     point(tostream, v)
+  $)
+
+
+
+
+
+AND output.t.table(list, count) BE
+  IF count \= 0 THEN
+    $( putword(t.table)
+       putword(max.hunk.number + 1)
+       putword(hunk.number ! list)
+       putword(hunk.number ! list + count - 1)
+       FOR j = 1 TO count DO
+         $( WHILE hunk.type ! list = t.abshunk DO
+              list := hunk.link ! list
+            putword(hunk.size ! list)
+            list := hunk.link ! list
+         $)
+    $)
+
+
+
+
+
+
+
+
+
+
+//
+// This routine is used for reading the library in the second pass.
+//
+
+
+
+
+
+AND pass2.read.library() BE
+  // This routine simply reads the required hunks.
+  $( LET index = 0
+     LET fl    = library.files
+     UNTIL fl = 0 DO
+       $( read.file(fl + 1, 0, 0, 0, 0, no, 0, 0, library.table,
+                    @ index, "LIBRARY")
+          fl := !fl
+       $)
+  $)
+
+
+
+
+
+
+
+
+
+
+//
+// This routine, only called in pass2, is used to discard
+//  unwanted hunks.
+//
+
+
+
+
+
+AND skip.hunk(type, reltype, size) BE
+  // This routine, which is only called in pass2, skips the code
+  //  of a hunk, together with its relocation and external symbol
+  //  information.
+  $( IF type = t.hunk | type = t.abshunk THEN
+       discard.words(size)
+
+     type := getoptword()
+
+     IF type = reltype THEN
+       $( discard.words(getword())
+          type := getoptword()
+       $)
+
+     TEST type = t.ext THEN
+       $( LET w = getword()
+          LET t = w >> 8
+          IF w = 0 THEN
+            BREAK
+          discard.words(name.words - 1)
+          w := getword()
+          IF t = ext.common THEN
+            discard.words(getword())
+          IF t = ext.ref THEN
+            discard.words(w)
+       $) REPEAT
+
+      ELSE
+       ungetword()
+  $)
+
+
+
+
+
+
+
+
+
+
+//
+// This routine is used for reading (and outputting) hunks in the
+//  second pass.
+//
+
+
+
+
+
+AND pass2.read.hunk(type, reltype, size, base, ov.level) = VALOF
+  // This routine reads a hunk, and writes it, together
+  //  with any relocation information to the output file.
+  // It resolves external symbol references, and generates
+  //  references to the overlay supervisor symbols.
+  $( LET codevec   = 0
+     LET relocvec  = 0
+     LET relocsize = 0
+     LET t         = 0
+     LET symbols   = 0
+
+     // If a hunk, then load the code.
+
+     IF type = t.hunk | type = t.abshunk THEN
+       $( codevec := getvector(size)
+          getwords(codevec, size)
+       $)
+
+     t := getoptword()
+
+     // Check for relocation information
+
+     IF t = reltype THEN
+       $( IF type = t.block THEN
+            error("invalid block relocation in file *"%S*"", from.file)
+
+          relocsize := getword()
+          relocvec  := getvector(relocsize)
+          getwords(relocvec, relocsize)
+
+          // Check that relocation is within hunk
+
+          FOR j = 0 TO relocsize - 1 DO
+            $( LET o = relocvec ! j
+               IF type = t.abshunk THEN o := o - base
+               UNLESS 0 <= o < size THEN
+                 error("relocation outside hunk in file *"%S*"", from.file)
+            $)
+
+          t := getoptword()
+       $)
+
+     // Check for external symbol information
+
+     TEST t = t.ext THEN
+       $( LET s = read.extblock(no)
+
+          symbols := s
+
+          // Check for valid relocation
+
+          IF s \= 0 & type = t.block THEN
+            error("invalid external block relocation in file *"%S*"", from.file)
+
+          // First loop through the symbols and do the relocation in the
+          //  code vector.
+
+          UNTIL s = 0 DO
+            $( LET l    = lookup(s)
+               LET ov   = no
+               LET refs = symbol.reflist ! s
+               LET t    = 200
+               LET levl = 0
+
+               // If the overlay supervisor is being read, then
+               //  insert new symbols into the symbol table.
+
+               IF loading.overlay.supervisor THEN
+                 TEST l = 0 & (symbol.name ! s >> 8) < 128 THEN
+                   $( LET ns = symbol.link ! s
+                      symbol.hunk ! s := overlay.hunk
+                      insert(s)
+                      s := ns
+                      LOOP
+                   $)
+                  ELSE
+                   error("invalid use of overlay symbol *"%O1*"", s)
+
+               // If the symbol exists, but its hunk is zero,
+               //  it was undefined, and the level must be
+               //  zero.
+
+               IF l \= 0 THEN
+                 $( LET h = symbol.hunk ! l
+                    IF h \= 0 THEN
+                      levl := hunk.level ! h
+                 $)
+
+               // Check for overlay reference
+
+               IF l \= 0 & (symbol.name ! l >> 8) < 128 THEN
+                 IF levl > ov.level THEN
+                   $( construct.overlay.symbol(symbol.name + s,
+                                               symbol.overlaynumber ! l)
+                      l  := lookup(s)
+                      ov := yes
+                   $)
+
+               IF l \= 0 THEN
+                 t := symbol.name ! l >> 8
+
+               // Check that the symbol is defined
+
+               IF t >= 128 THEN
+                 error("bug - symbol *"%O1*" not defined in pass2", s)
+
+               // Set the hunk (zero if an absolute symbol)
+
+               symbol.hunk ! s := t = ext.defabs -> 0, symbol.hunk ! l
+
+               // Satisfy the references
+
+               UNTIL refs = 0 DO
+                 $( LET o = ref.offset ! refs
+
+                    IF type = t.abshunk THEN o := o - base
+
+                    // Check for valid overlay reference
+
+                    IF ov & codevec ! o \= 0 THEN
+                      error("non-zero overlay reference in file *"%S*"",
+                            from.file)
+
+                    // Check that relocation is in range
+
+                    UNLESS 0 <= o < size THEN
+                      error("reference to *"%O1*" out of range*
+                            * in file *"%S*"", s, from.file)
+
+                    codevec ! o := codevec ! o + symbol.value ! l
+                    refs        := ref.link ! refs
+                 $)
+
+               s := symbol.link ! s
+
+            $)
+
+          IF loading.overlay.supervisor THEN
+            symbols := 0
+
+       $)
+
+      ELSE
+       // Not t.ext - make the word available again
+       ungetword()
+
+     // Now output the hunk
+
+     putword(type)
+     IF type = t.abshunk THEN putword(base)
+     putword(size)
+
+     IF type = t.hunk | type = t.abshunk THEN
+       $( putwords(codevec, size)
+          freevector(codevec)
+       $)
+
+     // Now output the relocation information, if any.
+
+     IF relocvec \= 0 THEN
+       $( IF relocsize \= 0 THEN
+            $( putword(reltype)
+               putword(relocsize)
+               putwords(relocvec, relocsize)
+            $)
+          freevector(relocvec)
+       $)
+
+     // Now output the condensed external relocation information
+
+     IF symbols \= 0 THEN
+       $( LET started = no
+
+          // Loop through the symbols
+
+          UNTIL symbols = 0 DO
+            $( LET h = symbol.hunk ! symbols
+
+               // If absolute, or not referenced, then nothing to do
+
+               TEST h = 0 | symbol.reflist ! symbols = 0 THEN
+                 $( LET s = symbols
+                    symbols := symbol.link ! symbols
+                    freesymbol(s)
+                 $)
+
+                ELSE
+
+                 $( LET count = 0
+
+                    FOR j = 1 TO 2 DO
+                      $( LET lvs = @ symbols
+                         IF j = 2 THEN
+                           $( IF NOT started THEN
+                                $( putword(t.lkedext)
+                                   started := yes
+                                $)
+                              putword(count)
+                              putword(hunk.number ! h)
+                           $)
+                         UNTIL !lvs = 0 DO
+                           TEST symbol.hunk !(!lvs) = h THEN
+                             $( LET s    = !lvs
+                                LET refs = symbol.reflist ! s
+
+                                // Loop through references
+
+                                UNTIL refs = 0 DO
+                                  $( TEST j = 2 THEN
+                                       putword(ref.offset ! refs)
+                                      ELSE
+                                       count := count + 1
+                                     refs := ref.link ! refs
+                                  $)
+
+                                TEST j = 2 THEN
+                                  $( !lvs := symbol.link ! s
+                                     freesymbol(s)
+                                  $)
+                                 ELSE
+                                  lvs := symbol.link + s
+                             $)
+                            ELSE
+                             // Not the same hunk
+                             lvs := symbol.link + !lvs
+
+                      $)
+
+                 $)
+
+            $)
+
+          // Terminate the table
+
+          IF started THEN
+            putword(0)
+
+       $)
+
+     RESULTIS 0
+
+  $)
+
+
+
+
+
+
+
+
+
+
+//
+// These routines are concerned with overlaying
+//
+
+
+
+
+
+AND load.overlay.supervisor() BE
+//$( LET file = "OVSUP###"
+  $( LET file = "sys:l.overlay-supervisor-###"
+     LET v    = VEC 30
+     LET n    = overlay.count < 0 -> 20, (overlay.count + 20)/20 * 20
+     LET c    = ?
+
+     FOR j = file % 0 TO 1 BY -1 DO
+       $( LET c = file % j
+          IF c = '#' THEN
+            $( c := n REM 10 + '0'
+               n := n  /  10
+            $)
+          v %j := c
+       $)
+
+     v % 0 := file % 0
+
+     // Allocate the hunk for the overlay supervisor
+
+     overlay.hunk               := getblk(size.hunk)
+     hunk.number ! overlay.hunk := resident.hunk.count
+     hunk.link   ! overlay.hunk := hunklist
+
+     // Read the file
+
+     loading.overlay.supervisor := yes
+     c := read.file(v, 0,0,0,0,0, @max.total.size, 0,0,0, "overlay supervisor")
+     loading.overlay.supervisor := no
+
+     IF c \= 1 THEN
+       error("overlay supervisor file *"%S*" is invalid", v)
+
+  $)
+
+
+
+
+
+AND construct.overlay.symbol(v, n) BE
+  // Constructs an overlay reference symbol for overlay
+  //   number n in vector v.
+  $( LET str = "O###VL "
+     LET w   = 0
+     LET nam = VEC name.words - 1
+     LET ptr = 0
+
+     FOR j = 7 TO 1 BY -1 DO
+       $( LET c = str % j
+          IF c = '#' THEN
+            $( c := n REM 10 + '0'
+               n := n  /  10
+            $)
+          nam % j := c
+       $)
+
+     nam % 0 := ext.defrel
+
+     FOR j = 0 TO name.words - 1 DO
+       $( FOR i = 1 TO 2 DO
+            $( w := (w << 8) + nam % ptr
+               ptr := ptr + 1
+            $)
+          v ! j := w
+          w     := 0
+       $)
+  $)
+
+

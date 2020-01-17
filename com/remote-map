@@ -1,0 +1,209 @@
+SECTION "MAP"
+
+GET "LIBHDR"
+GET "CLIHDR"  // Just for cli.module
+GET "sys:idw.m68k.bcpl.idwhdr"
+
+
+MANIFEST $(
+         secword        = 12345
+         libword        = 23456
+         maxpri         = 32767
+         $)
+
+
+
+GLOBAL $( maxblocks     : ug $)
+
+
+LET main() BE
+$(
+    LET free, used, n   = 0, 0, 0
+    LET v               = VEC 50
+    LET largest.free    = 0
+    LET joinfree        = 0
+    LET blocksopt       = FALSE
+    LET namesopt        = FALSE
+    LET codeopt         = FALSE
+    LET mapstore        = FALSE
+    LET picopt          = FALSE
+    LET constr          = output()
+    LET outstr          = 0
+    LET blocks          = ?
+    LET rdargs.string   = "MACHINE/A,BLOCKS/S,TO/K,PIC/S"
+
+    LET blocklist       = 0
+    LET a               = 0
+    LET memsize         = 0
+    LET topofstore      = 0
+
+    IF rdargs(rdargs.string, v, 50) = 0
+    $(
+        writef("MAP: Bad args for key string *"%S*"*N", rdargs.string)
+        freevec(blocks)
+        stop(20)
+    $)
+
+    UNLESS  selectmachine( v!0 )  DO
+    $(
+        writef( "MAP:  Cannot find machine *"%S*"*N", v!0 )
+
+        stop( 20 )
+    $)
+
+    blocklist   := getword( rootnode + rtn.blklist )
+    a           := blocklist
+    memsize     := getword( rootnode + rtn.memsize )
+    topofstore  := memsize * 1024
+
+    maxblocks   := memsize <= 64 -> 512, memsize*8
+    blocks      := getvec(maxblocks-1)
+
+    IF blocks=0 $( writes("MAP: Not enough store for workspace*N"); stop(20) $)
+
+
+    UNLESS v!1 = 0 THEN blocksopt       := TRUE
+    UNLESS v!2 = 0
+    $(  outstr := findoutput(v!2)
+        IF  outstr = 0  THEN
+        $( writef("Can't open %S*N",v!2); freevec(blocks); stop(20) $)
+        selectoutput(outstr)
+    $)
+    UNLESS v!3 = 0 THEN picopt := TRUE
+
+    UNTIL getword( a ) = 0
+    $(
+      LET size = getword( a )
+      LET next = ?
+      IF  /* (a = mapstack) | (a = mapcode) | */  (a = blocks-1)
+      THEN size := size + 1 || Make it look free
+
+      blocks!n := size; n := n + 1
+      TEST (size & 1) = 0
+          $( || Used block
+          used := used + size
+          IF (joinfree >> 1) > (largest.free >> 1)
+          THEN largest.free := joinfree
+          joinfree := 0
+          $)
+      ELSE
+          $(
+          size := size-1
+          free := free + size
+          joinfree := joinfree + size
+          $)
+
+      next := a + size
+      IF ((a >> 1) >= (next >> 1)) | // Wrap around
+         ((next >> 1) > ((topofstore-1) >> 1))
+      THEN
+        $(
+        writef("******Store chain corrupt!!*NNoticed at %U0*N", a)
+        BREAK
+        $)
+      a := next
+      IF n >= maxblocks
+          $(
+          writef("*N****** Too many blocks for MAP's workspace*N*
+                 ******* Only the first %N mapped*N", maxblocks)
+          BREAK
+          $)
+      $)
+
+    IF (joinfree >> 1) > (largest.free >> 1)
+    THEN largest.free := joinfree
+
+    // Now print what we've found
+    newline()
+
+    IF blocksopt
+    $(  writes("Map of free and allocated store*N*N")
+
+        a := blocklist
+
+        FOR i = 0 TO n - 1
+        $(  LET s       = blocks!i
+            LET free    = (s&1)=1
+            IF testflags(1)     WRITES("****** Break*N") <> GOTO exit
+
+            writef("%U6: ", a)
+            TEST free
+            THEN $( writes("free ") ; s := s - 1 $)
+            ELSE    writes("alloc")
+
+            writef("%U6 words", s)
+//              IF a = mapstack writes(" (MAP's stack)")
+//              IF a = mapcode  writes(" (MAP's code)")
+//              IF a = (blocks-1) writes(" (MAP's workspace)")
+            newline()
+            a := a + s
+            $)
+
+        writef("Top of block list = %U0*N", a)
+        $)
+
+    writef("Largest contiguous free area: %U0 words*N", largest.free)
+    writef("Totals: %U0 words available, %U0 used, %U0 free*N*N",
+                used+free, used, free)
+
+    IF picopt
+    $(  // Print as a picture
+        LET chunk       = memsize/2
+        LET alloc       = TRUE
+        LET next.block  = blocklist
+        LET num         = 0
+        LET col         = 0
+        LET sample      = chunk-1
+
+        writes("     0 ")
+        $(  LET some.alloc      = alloc
+            LET some.free       = NOT alloc
+
+
+            UNLESS (sample <= (next.block >> 1)) | (num > n)
+            $(  // Move to next block
+                alloc := ((blocks!num) & 1) = 0
+                TEST alloc
+                THEN some.alloc := TRUE
+                ELSE some.free, next.block := TRUE, next.block - 1
+                next.block := next.block + blocks!num
+                num := num+1
+            $)
+
+            col := col+1
+            IF col=65 $( writef("*N%U6 ", (sample-chunk+1)*2); col := 1 $)
+            wrch (num > n -> '?',  // No info
+                        some.alloc   -> (some.free -> 'a', '@'), '.')
+            IF sample >= ((topofstore-1)>>1) THEN BREAK
+            sample := sample + chunk
+        $) REPEAT
+        newline()
+    $)
+
+exit:
+    freevec( blocks )
+    UNLESS  outstr = 0  DO  endstream( outstr )
+$)
+
+
+
+AND getword ( addr ) = VALOF
+$(
+    LET word      =  0
+    LET byteaddr  =  addr * 4
+    LET hword     =  byteaddr >> 16
+    LET lword     =  byteaddr & #XFFFF
+
+    selectpage( hword )
+
+    m68k.readbuff( @word, lword, 4 )
+
+    RESULTIS  word
+$)
+
+
+
+
+AND start()  BE  m68k.start()
+  
+

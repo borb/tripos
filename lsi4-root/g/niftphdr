@@ -1,0 +1,79 @@
+/*****************************************************************************
+**               University of Cambridge Computer Laboratory                **
+******************************************************************************
+
+##    ##  ########  ########  ########  #######   ##    ##  ######    #######
+###   ##  ########  ########  ########  ########  ##    ##  #######   ########
+####  ##     ##     ##           ##     ##    ##  ##    ##  ##    ##  ##    ##
+## ## ##     ##     ######       ##     #######   ########  ##    ##  ########
+##  ####     ##     ##           ##     ##        ##    ##  ##    ##  #######
+##  ####     ##     ##           ##     ##        ##    ##  ##    ##  ##  ##
+##   ###  ########  ##           ##     ##        ##    ##  #######   ##   ##
+##    ##  ########  ##           ##     ##        ##    ##  ######    ##    ##
+
+******************************************************************************
+**          Nick Ody                                   November 1984        **
+*****************************************************************************/
+
+
+// Header of manifests for JNT "blue book" Network Independent File Transfer
+// Protocol.
+
+MANIFEST
+$( ftp.command.sft         = #X04    // initialisation and termination commands
+   ftp.command.rpos        = #X02
+   ftp.command.rneg        = #X03
+   ftp.command.go          = #X01
+   ftp.command.stop        = #X00
+   ftp.command.stopack     = #X05
+                           
+   ftp.command.ss          = #X40    // transfer-control commands
+   ftp.command.ms          = #X41
+   ftp.command.cs          = #X42
+   ftp.command.es          = #X43
+   ftp.command.rr          = #X44
+   ftp.command.mr          = #X45
+   ftp.command.qr          = #X46
+   ftp.command.er          = #X47
+                           
+   ftp.rec.hdr.end.bit     = #B10000000   // record header format
+   ftp.rec.hdr.comp.bit    = #B01000000
+   ftp.rec.hdr.count       = #B00111111
+                           
+   ftp.attr.protocol       = #X00    // attribute identifier numbers
+   ftp.attr.mode           = #X01
+   ftp.attr.xfer.code      = #X02
+   ftp.attr.text.format    = #X03
+   ftp.attr.bin.format     = #X04
+   ftp.attr.max.rec        = #X05
+   ftp.attr.facilities     = #X0E
+   ftp.attr.state          = #X0F
+   ftp.attr.data.type      = #X20
+   ftp.attr.delim          = #X21
+   ftp.attr.store.code     = #X22
+   ftp.attr.tab            = #X23
+   ftp.attr.bin.size       = #X24
+   ftp.attr.filename       = #X40
+   ftp.attr.username       = #X42
+   ftp.attr.user.auth      = #X44
+   ftp.attr.file.auth      = #X45
+   ftp.attr.action         = #X70
+   ftp.attr.info           = #X71
+
+   ftp.attr.qual.mon.bit   = #B10000000   // attribute qualifier format
+   ftp.attr.qual.format    = #B00110000
+   ftp.attr.qual.op        = #B00000111
+
+   ftp.attr.format.unknown = #X00    // values in qualifier format field
+   ftp.attr.format.novalue = #X10
+   ftp.attr.format.16bit   = #X20
+   ftp.attr.format.string  = #X30
+
+   ftp.attr.op.eq          = #X02    // values in qualifier operator field
+   ftp.attr.op.le          = #X03
+   ftp.attr.op.ne          = #X05
+   ftp.attr.op.ge          = #X06
+   ftp.attr.op.any         = #X07
+$)
+
+

@@ -1,0 +1,116 @@
+SECTION "MSINIT"
+
+GET ":mike.dfs-stub.bcpl.cli-init"
+GET "HEADER"
+GET "TERMHDR"
+GET "BCPL.SETTERMVEC"
+
+LET get.kiddie.area() = 0
+LET start.ringhandler() BE
+$(      LET pkt             = VEC pkt.arg6
+        pkt!pkt.link    := notinuse
+        pkt!pkt.id      := task.ringhandler
+        pkt!pkt.arg1 :=
+$<68000TRIPOS
+                    -2  // Both devices
+$>68000TRIPOS
+$<LSI4TRIPOS
+                    -4 // RX device
+        pkt!pkt.arg2 := -3 // TX device
+$>LSI4TRIPOS
+        pkt!pkt.arg3 := FALSE // Not breakable
+        UNLESS qpkt(pkt)=0 THEN taskwait()
+        rhtaskid        := task.ringhandler
+$)
+LET start.filehandler() = TRUE
+LET init.assignments()  BE RETURN
+LET initialise.cli()    BE RETURN
+LET user.profile()      BE RETURN
+LET refine.access()     BE RETURN
+LET setuserpuid()       BE RETURN
+LET start.debug()       BE RETURN
+LET start.ringserv()    BE RETURN
+LET make.dir.copy()     BE RETURN               // DON'T want a copy of HOME:
+LET user.routines()     BE set.term()
+AND set.term()          BE
+$(
+    MANIFEST $( bb.ssp.bytes = bb.ssp.args * bytesperringword
+                txbuff.bytes = 40 + bb.ssp.bytes
+                rxbuff.bytes = 20 + bb.ssp.bytes
+             $)
+    LET rxbuff          = VEC rxbuff.bytes/BYTESPERWORD
+    LET OK              = ?
+    $(  LET txbuff      = VEC txbuff.bytes/BYTESPERWORD
+        LET nsvec       = VEC 3
+        LET info        = ROOTNODE ! RTN.INFO ! rtninfo.ring
+        LET machine     = info ! RI.LOADERS.NAME
+        LET sess        = info ! RI.term.no
+
+        LET hex(byte)   = VALOF
+        $( byte := (byte&15) + '0'; RESULTIS byte>'9' -> byte-'0'+'A'- 10, byte $)
+        LET add.ch(v, ch) BE
+        $( LET pos = v%0 + 1; v%pos := ch; v%0 := pos $)
+        LET add.string2(v, s) BE FOR I = 1 TO s%0 DO add.ch(V, s%i)
+        LET add.string(v, s) BE add.ch(v, s%0) <> add.string2(v, s)
+
+        txbuff%0 := bb.ssp.bytes -1
+        add.string (txbuff, "WORLD")
+        add.string (txbuff, "TERMTYPE")
+        add.ch     (txbuff, machine%0 + 2)
+        add.string2(txbuff, machine)
+        add.ch     (txbuff, '/')
+        add.ch     (txbuff, sess+'0')
+        OK := SSP("PS.MAP",     txbuff, txbuff%0/BYTESPERRINGWORD+1,
+                                rxbuff, rxbuff.bytes,                   nsvec)
+    $)
+
+    norm.input := input()       //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    writes(validroutine(@ms.checker) ->
+$<NEW'                  "Dynamic Mailserver V 1.7 (12 May 82)*N*N", $>NEW'
+$<NEW   "Dynamic Mailserver V 2.0 ( 8 July 82)", $>NEW
+                        "Dynamic Mailserver V 1.2 (testing)*N*N")
+$<SC setsc(TRUE); newline() $>SC
+    IF OK
+    $(  LET string      = VEC 40/BYTESPERWORD
+        LET First       = "Cifer2632"
+        LET Width       = 80
+        LET depth       = 24
+        LET type        = TERM.2632
+        LET t           = "Dumb"
+        LET w           = 80
+        LET depth       = 24
+        LET t           = TERM.VDU
+        LET last        = "Newbury7009"
+        LET Width       = 80
+        LET depth       = 24
+        LET type        = TERM.7009
+
+        FOR i = 0 TO rxbuff%bb.ssp.bytes
+        DO string%I := rxbuff%(bb.ssp.bytes+I)
+        FOR p = @FIRST TO @LAST BY 4
+        DO IF COMPSTRING(string, !p)=0
+        $(  LET size    = rxbuff%bb.ssp.bytes / BYTESPERWORD
+            LET v       = GETVEC(TERM.VEC.SIZE)
+            LET name    = GETVEC(TERM.MIN.STRING<size -> TERM.MIN.STRING, size)
+
+            FOR i = 0 TO TERM.VEC.SIZE  DO v!I          := 0
+            FOR I = 0 TO size           DO name!I       := STRING!I
+
+            v!TERM.STRING := name
+            v!TERM.WIDTH  := p!1
+            v!TERM.DEPTH  := p!2
+            terminal.type := p!3
+            v!TERM.NUMBER := p!3
+            settermvec(v)
+            BREAK
+        $)
+    $)
+$)
+
+AND die(arg) BE
+$(  wto.log(arg)
+    sendpkt(notinuse, task.consolehandler, act.disconnect, ?, ?, TRUE)
+    stop(0)
+$)
+
+

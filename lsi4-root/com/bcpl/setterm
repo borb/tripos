@@ -1,0 +1,303 @@
+SECTION "SETTERM"
+
+/*      SETTERM: this command sets up the terminal type information held
+                 in the console handler. The terminal type information can
+                 be obtained from the ring MAP service, or may be given on
+                 the command line.
+
+        M. A. Johnson - October 1985
+*/
+
+GET "libhdr"
+GET "termhdr"
+GET "ringhdr"
+
+GET "bcpl.ssplib"
+GET "bcpl.ringmap"
+GET "bcpl.readtermvec"
+GET "bcpl.settermvec"
+GET "bcpl.validpointer"
+GET "bcpl.string-to-number"
+
+GLOBAL
+$(
+    termvec     : ug+0
+    ssp         : ug+1
+    ssplib.ssp  : ug+2
+$)
+
+MANIFEST
+$(
+    max.ssp.try = 5
+    ssp.short.timeout = 2*tickspersecond
+$)
+
+LET scanterms(p, a) = VALOF
+$(
+/*  This is the list of terminal types:
+
+            number              long name               short name      width   depth
+
+*/
+    IF p(a, term.tty,           "TTY33",                "TTY",          72,     TERM.DEPTH.LARGE) THEN RESULTIS TRUE
+    IF p(a, term.vdu,           "Dumb",                 "VDU",          80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.7009,          "Newbury7009",          "7009",         80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.7004,          "Newbury7004",          "7004",         80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.2605,          "Cifer2605",            "2605",         80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.2632,          "Cifer2632",            "2632",         80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.ampex,         "AmpexDialogue80",      "Ampex",        80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.adm,           "ADM80a",               "ADM",          80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.3101,          "IBM3101",              "3101",         80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.vt100,         "DECVT100",             "VT100",        80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.vt52,          "DECVT52",              "VT52",         80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.vt55,          "DECVT55",              "VT55",         80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.gt101,         "GT101",                "GT101",        80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.lyme,          "Lyme5000",             "Lyme",         80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.hazel,         "HazeltineExecutive80", "HAZEL",        80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.cmc,           "CMC",                  "CMC",          80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.5670,          "SigmaT5670",           "5670",         80,     32)               THEN RESULTIS TRUE
+    IF p(a, term.mellor,        "Mellor1521A",          "MELLOR",       80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.5680,          "SigmaT5680",           "5680",         80,     32)               THEN RESULTIS TRUE
+    IF p(a, term.test,          "TEST",                 "TEST",         80,     32)               THEN RESULTIS TRUE
+    IF p(a, term.bbc,           "BBCMicro",             "BBC",          80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.bbc32,         "BBCMicro32",           "BBC32",        80,     32)               THEN RESULTIS TRUE
+    IF p(a, term.deciv,         "DECWriterIV",          "DECIV",        132,    TERM.DEPTH.LARGE) THEN RESULTIS TRUE
+    IF p(a, term.decvt125,      "DECVT125",             "VT125",        80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.2632, /*emul*/ "Amiga1000",            "Amiga",        80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.bbc,           "BBCB25",               "BBCB25",       80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.bbc32,         "BBCB32",               "BBCB32",       80,     32)               THEN RESULTIS TRUE
+    IF p(a, term.bbc,           "BBCM25",               "BBCM25",       80,     24)               THEN RESULTIS TRUE
+    IF p(a, term.bbc32,         "BBCM32",               "BBCM32",       80,     32)               THEN RESULTIS TRUE
+
+    RESULTIS FALSE
+$)
+
+LET start() BE
+$(  MANIFEST
+    $(  argv.upb        = 100
+        argv.type       = 0
+        argv.width      = 1
+        argv.depth      = 2
+        argv.ring       = 3
+        argv.clear      = 4
+        argv.verify     = 5
+    $)
+    LET argv            = VEC argv.upb
+    LET rdargs.string   = "type,width/k,depth/k,ring/s,clear/s,verify/s"
+    LET ctask           = consoletask
+    LET info            = rootnode ! rtn.info ! rtninfo.ring
+    LET done.something  = FALSE
+
+
+    IF  rdargs(rdargs.string, argv, argv.upb) = 0 THEN
+        moan("bad arguments for rdargs string '%S'", rdargs.string)
+
+    termvec := readtermvec()
+    IF  (termvec = 0) & (result2 ~= 0) THEN moan("termvec failed")
+    ssplib.ssp := ssp
+    ssp := local.ssp
+
+
+    //  If 'CLEAR' keyword is present, clear the state first.
+
+    IF  argv!argv.clear & (termvec ~= 0) THEN
+    $(  unloadseg(termvec!term.chain)
+        termvec!term.chain := 0
+        freevec(termvec!term.string)
+        termvec!term.string := 0
+        settermvec(0)
+        termvec := 0
+        done.something := TRUE
+    $)
+
+
+    //  If 'RING' keyword is present, try to set type from ring.
+
+    IF  argv!argv.ring THEN
+    $(  MANIFEST $( map.result.bytes = 32 $)
+        LET map.result = VEC map.result.bytes/bytesperword - 1
+        LET terminal    = info ! ri.loaders.name
+        LET map.ok      = ringmap(terminal, "WORLD", "TERMTYPE",
+                                  map.result, map.result.bytes)
+        IF  map.ok THEN
+        $(  IF  NOT scanterms(set, map.result) THEN
+                moan("terminal type '%S' unknown", map.result)
+            done.something := TRUE
+        $)
+    $)
+
+
+    //  If a particular value is given, try to set that (note that this
+    //  will also be used as a backstop if 'RING' fails.
+
+    IF  NOT done.something & (argv!argv.type ~= 0) THEN
+    $(  IF  NOT scanterms(set, argv!argv.type) THEN
+            moan("terminal type '%S' unknown", argv!argv.type)
+        done.something := TRUE
+    $)
+
+    //  Complain if 'RING' failed and no backstop.
+
+    IF  NOT done.something & argv!argv.ring THEN moan("failed to set terminal type")
+
+
+    //  Deal with width and depth
+
+    IF  argv!argv.width ~= 0 THEN
+    $(  TEST string.to.number(argv!argv.width) THEN
+        $(  ensuretermvec()
+            termvec!term.width := result2
+            done.something := TRUE
+        $)
+        ELSE moan("'width' parameter is not a valid number")
+    $)
+
+    IF  argv!argv.depth ~= 0 THEN
+    $(  TEST string.to.number(argv!argv.depth) THEN
+        $(  ensuretermvec()
+            termvec!term.depth := result2
+            done.something := TRUE
+        $)
+        ELSE moan("'depth' parameter is not a valid number")
+    $)
+
+
+    //  If nothing else to do then print out list of types:
+
+    IF  (NOT done.something) & (NOT argv!argv.verify) THEN
+    $(  LET first = TRUE
+        writes("Available terminal types:")
+        scanterms(printname, @first)
+        newline()
+    $)
+
+
+    //  Verify state if nothing done or if explicitly requested
+
+    IF  (NOT done.something) | argv!argv.verify
+    $(  LET valid.type = validpointer(@termvec)
+        LET valid.string = valid.type -> validpointer(termvec+term.string), FALSE
+        writef("Console task %N, type is currently set to %S",
+               consoletask,
+               valid.type -> valid.string -> termvec!term.string,
+                                             "??",
+                             "nothing"
+              )
+
+        IF  valid.type THEN
+        $(  writef(", width %N, depth %N",
+                   termvec!term.width,
+                   termvec!term.depth)
+        $)
+        newline()
+    $)
+$)
+
+AND set(name, number, longname, shortname, width, depth) = VALOF
+$(  IF  (compstring(name, longname) = 0) |
+        (compstring(name, shortname) = 0) THEN
+
+    $(  LET string = 0
+        LET stringupb = 0
+
+        ensuretermvec()
+
+        unloadseg(termvec!term.chain)
+        termvec!term.chain := 0
+        string := termvec!term.string
+
+        stringupb := longname%0/bytesperword
+
+        TEST stringupb > term.min.string THEN
+        $(  // New string longer than standard - free old one
+            IF  string ~= 0 THEN
+            $(  freevec(string)
+                string := 0
+                termvec!term.string := 0
+            $)
+        $)
+        ELSE stringupb := term.min.string
+
+        IF  string=0 THEN
+        $(  string := getvec(stringupb)
+            termvec!term.string := string
+            IF  string=0
+            $(  settermvec(0)
+                moan("GETVEC failure")
+            $)
+        $)
+
+        FOR i = 0 TO longname%0 DO string%i := longname%i
+        termvec!term.number := number
+        termvec!term.width  := width
+        termvec!term.depth  := depth
+        RESULTIS TRUE
+    $)
+
+    RESULTIS FALSE
+$)
+
+AND printname(lv.first, number, longname, shortname, width, depth) = VALOF
+$(  GET "iohdr" // for scb definitions
+    LET printwidth = termvec = 0 -> 80, termvec!term.width
+    LET pos = cos!scb.pos
+    IF  printwidth < 1 THEN printwidth := 1
+    IF  NOT !lv.first THEN wrch(',')
+    !lv.first := FALSE
+    wrch((pos > 0) & (pos + longname%0 + 3) > printwidth -> '*N', ' ')
+    writes(longname)
+    RESULTIS FALSE
+$)
+
+AND moan(s, a, b, c, d) BE
+$(  writef(s, a, b, c, d)
+    newline()
+    FINISH
+$)
+
+AND ensuretermvec() BE
+$(  IF  NOT validpointer(@termvec) THEN
+    $(  termvec := getvec(term.vec.size)
+        settermvec(termvec)
+        IF termvec=0 THEN moan("GETVEC failure")
+        FOR i = 0 TO term.vec.size DO termvec!i := 0
+    $)
+$)
+
+AND local.ssp(name, txbuff, txwords, rxbuff, rxwords, nsvec,
+              func, station, port) = VALOF
+$(
+    // This is a local write-around for the 'ssp' routine in 'ssplib'.
+    // It adds an outer loop to retry on common communications errors,
+    // with suitable backoffs.
+
+    LET res2 = ?
+    FOR try = 1 TO max.ssp.try DO
+    $(  IF ssplib.ssp(name, txbuff, txwords, rxbuff, rxwords, nsvec,
+                      func, station, port) THEN RESULTIS TRUE
+        res2 := result2
+        SWITCHON res2 INTO
+        $(
+            CASE 409:   // No reply
+                        // Nothing to do, as no backoff needed after timeout.
+                        ENDCASE
+
+            CASE 411:   // Ring error
+            CASE 412:   // Unselected on header
+            CASE 413:   // Unselected during block
+            CASE 414:   // Busy
+            CASE 417:   // Ring not working
+                        // These are all transmission errors. Unless this was
+                        // the last attempt, back off by an amount which
+                        // increases progressively.
+                        IF try ~= max.ssp.try THEN delay((try/2)*tickspersecond)
+                        ENDCASE
+
+            DEFAULT:    BREAK
+        $)
+    $)
+    result2 := res2
+    RESULTIS FALSE
+$)
+
+

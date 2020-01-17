@@ -1,0 +1,129 @@
+/*****************************************************************************\
+*                        Olivetti Research Laboratory                         *
+*******************************************************************************
+
+
+                ########   ######   ########    ####      ####   
+                ########  ########  ########   ######    ######  
+                     ##   ##    ##  ##        ##    ##  ##    ## 
+                  ###      ######   #######      #####  ##    ## 
+                 ##       ##    ##        ##        ##  ##    ## 
+                ##        ##    ##  ##    ##  ##    ##  ##    ## 
+                ########  ########   ######    ######    ######  
+                ########   ######     ####      ####      ####   
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   09/04/87             *
+\*****************************************************************************/
+
+
+
+
+SECTION "Z8530"
+
+
+
+GET "LIBHDR"
+
+
+
+MANIFEST
+$(
+    z8530  =  #X01FA0000
+$)
+
+
+
+LET start()  BE
+$(
+//  Test program for the Z8530 UART.
+
+    LET args  =  "No arguments needed"
+    LET argv  =  VEC 50
+
+    rdargs( args, argv, 20 )
+
+    prompt()
+
+    $(  //  Main command loop.
+
+        LET ch  =  capitalch( rdch() )
+
+        SWITCHON  ch  INTO
+        $(
+            CASE 'Q'  :
+            CASE endstreamch:
+                         BREAK
+
+            CASE '*E' :
+            CASE '*N' :  prompt()
+
+            CASE '*S' :
+            CASE '*T' :  ENDCASE
+            
+            CASE 'W'  :  write()  ;  ENDCASE
+            CASE 'R'  :  read()   ;  ENDCASE
+            
+            DEFAULT   :  writes( "Commands are R/W/Q*N" )
+                         skipline()
+        $)
+    $)
+    REPEAT
+$)
+
+
+
+AND prompt()  BE  writes( "Command: *E" )
+
+
+
+AND skipline()  BE
+$(
+    LET ch  =  rdch()
+
+    UNTIL  ch = '*N'  |  ch = endstreamch  DO  ch  :=  rdch()
+
+    unrdch()
+$)
+
+
+
+AND read()  BE
+$(
+//  Read a register.
+
+    LET rnum  =  readn()
+
+    skipline()
+
+    UNLESS  rnum = 0  DO  uart.write( 0, rnum )
+
+    writef( "Register %N is %X2*N", rnum, uart.read( 0 ) )
+$)
+
+
+
+AND write()  BE
+$(
+//  Write a register.
+
+    LET rnum  =  readn()
+    LET rval  =  readn()
+
+    skipline()
+
+    UNLESS  rnum = 0  DO  uart.write( 0, rnum )
+
+    uart.write( 0, rval )
+$)
+
+
+
+AND uart.read( offset )  =  0 % (z8530 + offset)
+
+
+
+AND uart.write( offset, value )  BE  0 % (z8530 + offset)  :=  value
+
+

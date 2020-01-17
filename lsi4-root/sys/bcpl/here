@@ -1,0 +1,54 @@
+SECTION "HERE"
+GET     "LIBHDR"
+GET     "IOHDR"
+
+GLOBAL   $( replenish : 1 ; close : 2 $)
+MANIFEST $( scb.arg3 = scb.arg2 + 1   $)
+
+LET replenish ( here.scb ) = VALOF
+$(
+   LET buffer   = cis ! scb.buf                 // buffer for this stream
+   LET posit    = 0
+   LET char     = ?
+
+   selectinput ( here.scb ! scb.arg1 )          // the real here stream
+
+   char := rdch ()
+
+   TEST [ char = here.scb ! scb.arg2 ] & [ here.scb ! scb.end = -1 ]
+        THEN $( here.scb ! scb.func1 := 0
+                posit                := 0
+             $)
+        ELSE $( buffer % posit       := char
+                posit                := posit + 1
+
+                IF [ char  = '*N' ] | [ char = endstreamch ] |
+                                      [ posit = 100        ] THEN BREAK
+
+                char                 := rdch ()
+             $) REPEAT
+
+   IF [ char = endstreamch ] THEN $( posit                := posit - 1
+                                     here.scb ! scb.func1 := 0
+                                  $)
+
+   here.scb ! scb.end := posit
+   here.scb ! scb.pos := 0
+
+   IF [ char = '*N' ] THEN TEST rdch () = here.scb ! scb.arg2
+                                THEN here.scb ! scb.func1 := 0
+                                ELSE unrdch ()
+
+   cis := here.scb ; result2 := 0
+
+   RESULTIS posit \= 0
+$)
+
+LET close ( scb ) BE
+$(
+   WHILE scb ! scb.func1 \= 0 DO [ scb ! scb.func1 ] ( scb )
+   unloadseg ( scb ! scb.arg3 )
+$)
+
+
+

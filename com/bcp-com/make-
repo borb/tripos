@@ -1,0 +1,106 @@
+.K v,obj,opt,opts,compiler/k
+.def v h
+.def obj B:
+.def opt -wa
+.def opts -db
+.def compiler new.bcp
+
+. Prefix N means that it is the New overlay version, i.e. all in :L.BCP-<v>-ov
+. The other one loads ERR, SYN, TRN and CG from :L.BCP-<v>-<stage>
+.
+
+echo ""
+<compiler> BCP.BCP  <obj>BCP            OPT <opt>SN
+<compiler> BCP.NBCP <obj>NBCP           OPT <opt>SN
+<compiler> BCP.MST  <obj>MST            OPT <opt>SN
+<compiler> BCP.MST  <obj>NMST           OPT <opt>SNcc:NOVL:
+
+<compiler> BCP.OVL <obj>OVL-<v>         OPT <opt>SN
+<compiler> BCP.OVL  <obj>OVL-SPARE-<v>  OPT <opt>cc:SPARE:SN
+<compiler> BCP.NOVL <obj>NOVL-<v>       OPT <opt>cc:NOVL:SN
+<compiler> BCP.NOVL <obj>NOVL-spare-<v> OPT <opt>cc:SPARE:cc:NOVL:SN
+
+. <name>-spare prints out the spare room at each overlay.
+obj:link <obj> <obj>BCP OVL-<v>       TO <obj>bcp-<v>
+obj:link <obj> <obj>BCP OVL-spare-<v> TO <obj>bcp-<v>-spare
+
+obj:link <obj> NBCP NOVL-<v>          TO <obj>nbcp-<v>
+obj:link <obj> NBCP NOVL-spare-<v>    TO <obj>nbcp-<v>-spare
+
+echo ""
+. The ERR overlay .....
+<compiler> BCP.ERR  <obj>ERR  OPT <opt>:SN
+<compiler> BCP.FAT  <obj>FAT  OPT <opt>:SN
+<compiler> BCP.SML  <obj>SML  OPT <opt>:SN
+<compiler> BCP.FEP  <obj>FEP  OPT <opt>:SN
+<compiler> BCP.NSW  <obj>NSW  OPT <opt>:SN
+<compiler> BCP.SYE  <obj>SYE  OPT <opt>:SN
+<compiler> BCP.TRE  <obj>TRE  OPT <opt>:SN
+obj:link <obj> ERR to b:bcp-<v>-err
+
+echo ""
+<compiler> BCP.SYN  <obj>SYN  OPT <opt>:SN
+<compiler> BCP.SYN1 <obj>SYN1 OPT <opt>:SN
+<compiler> BCP.SYN2 <obj>SYN2 OPT <opt>:SN
+<compiler> BCP.SYN3 <obj>SYN3 OPT <opt>:SN
+<compiler> BCP.SYN4 <obj>SYN4 OPT <opt>:SN
+<compiler> BCP.SYN5 <obj>SYN5 OPT <opt>:SN
+<compiler> BCP.SYN6 <obj>SYN6 OPT <opt>:SN
+<compiler> BCP.SYN7 <obj>SYN7 OPT <opt>:SN
+<compiler> BCP.GET  <obj>GET  OPT <opt>:SN
+obj:link <obj> SYN to b:bcp-<v>-SYN smallreloc
+
+echo ""
+<compiler> BCP.TRN  <obj>TRN  OPT <opt><opts>:SN
+<compiler> BCP.TRN1 <obj>TRN1 OPT <opt><opts>:SN
+<compiler> BCP.TRN2 <obj>TRN2 OPT <opt><opts>:SN
+<compiler> BCP.TRN3 <obj>TRN3 OPT <opt><opts>:SN
+<compiler> BCP.TRN4 <obj>TRN4 OPT <opt><opts>:SN
+<compiler> BCP.TRN5 <obj>TRN5 OPT <opt><opts>:SN:WS19000
+<compiler> BCP.TRN6 <obj>TRN6 OPT <opt><opts>:SN
+<compiler> BCP.TRN7 <obj>TRN7 OPT <opt><opts>:SN
+obj:link <obj> TRN to b:bcp-<v>-TRN smallreloc
+
+IF NOT mctype=68000; SKIP not68000
+
+echo ""
+<compiler> BCP.MCG   <obj>MCG   OPT <opt>:SN
+<compiler> BCP.MCG1  <obj>MCG1  OPT <opt>:SN
+. Sorry about this - I'm in the middle of making a basic change ....
+<compiler> BCP.SSP-1-MCG2  <obj>MCG2  OPT <opt>:SN
+<compiler> BCP.SSP-1-MCG3  <obj>MCG3  OPT <opt>:SN
+<compiler> BCP.SSP-1-MCG4  <obj>MCG4  OPT <opt>:SN
+<compiler> BCP.SSP-1-MCG5  <obj>MCG5  OPT <opt>:SN
+<compiler> BCP.MCG6  <obj>MCG6  OPT <opt>:SN
+<compiler> BCP.SSP-1-MCG7  <obj>MCG7  OPT <opt>:SN
+. Sorry about this - I'm in the middle of making a basic change ....
+<compiler> BCP.MCG8  <obj>MCG8  OPT <opt>:SN
+obj:link <obj> MCG TO b:bcp-<v>-CG ver
+
+LAB not68000
+
+IF NOT mctype=LSI4; SKIP notLSI4
+
+echo ""
+<compiler> BCP.LCG    <obj>LCG    OPT SN
+<compiler> BCP.LCG1   <obj>LCG1   OPT <opt>SN
+<compiler> BCP.LCG2   <obj>LCG2   OPT <opt>SN
+<compiler> BCP.LCG3   <obj>LCG3   OPT <opt>SN
+<compiler> BCP.LCG4   <obj>LCG4   OPT <opt>SN
+<compiler> BCP.LCG5   <obj>LCG5   OPT <opt>SN
+<compiler> BCP.LCG6   <obj>LCG6   OPT <opt>SN
+<compiler> BCP.LCG7   <obj>LCG7   OPT <opt>SN
+<compiler> BCP.LCG8   <obj>LCG8   OPT <opt>SN
+<compiler> BCP.LCG9   <obj>LCG9   OPT <opt>SN
+<compiler> BCP.LCG10  <obj>LCG10  OPT <opt>SN
+<compiler> BCP.LCG11  <obj>LCG11  OPT <opt>SN
+PBobj:link <obj> LCG TO SYS:l.bcp-<v>-CG smallreloc
+
+LAB notLSI4
+
+ECHO "Compiled OK"
+
+ASSIGN PBobj:
+ASSIGN BCPobj:
+
+

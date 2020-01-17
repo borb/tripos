@@ -1,0 +1,59 @@
+//GET     "IOHDR"
+//GET     "MANHDR"
+
+MANIFEST $( CO.SEND= 2; co.size=100 $)
+
+LET fault ( fault.no ) BE TEST (stackbase!co.send - @fault.no) > co.size
+THEN faultco ( fault.no )
+ELSE
+$( LET co = createco ( faultco, co.size )
+
+   TEST co = 0
+   THEN WRITEF("fault %X4 %N*N", fault.no, fault.no)
+   ELSE $( callco(co, fault.no); deleteco(co) $)
+$)
+
+AND faultco ( fault.no ) BE
+$(1
+ $(2
+        $(  LET f.stream = findinput ( "sys:info.faults-table" )
+            IF f.stream = 0
+                $( WRITEF("fault %X4 %N*N", fault.no, fault.no); RETURN $)
+            selectinput ( f.stream )
+        $)
+    $(4
+        LET old.in   = input ()
+        LET hashent  = ?
+        LET pos      = ?
+
+        pointto     ( fault.no & #X03FF )
+        readwords   ( @hashent, 1 )
+
+        $(  LET pos = (@hashent) %% 0
+
+            UNTIL pos = 0
+            $(  pointto ( pos )
+                $(  LET errv     = VEC 40
+                    IF readwords ( errv, 40 ) < 40 THEN $( pos := 0 ; LOOP $)
+                    IF errv %% 1 = fault.no
+                    $( FOR c = 1 TO errv%6 DO wrch(errv%(6+c)); BREAK $)
+
+                    pos := errv %% 0
+                $)
+            $)
+            IF pos=0 WRITEF("fault %X4 %N", fault.no, fault.no)
+        $)
+
+        endread () ; selectinput ( old.in )
+   $)4
+   newline ()
+ $)2
+$)1
+
+AND pointto ( pos ) BE
+$( LET pvec = VEC 2
+   pvec ! 0, pvec ! 1, pvec ! 2 := 0, pos * 2, 0
+   sendpkt(notinuse, task.filehandler, action.point, ?,?, cis!scb.arg1, pvec)
+$)
+
+

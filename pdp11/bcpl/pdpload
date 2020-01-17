@@ -1,0 +1,101 @@
+// Micro PDP loader
+
+SECTION "PDPLoad"
+
+GET "LIBHDR"
+GET "IOHDR"
+
+GLOBAL
+$(
+inputstream:ug
+$)
+
+LET start() BE
+$(  LET argv = VEC 50
+    LET rc = 0
+
+    inputstream := 0
+
+    IF rdargs("FROM", argv, 50) = 0 THEN
+     $( writes("Bad args*N")
+        rc := 20
+        GOTO exit
+     $)
+
+    inputstream := findinput(argv!0)
+    IF inputstream = 0 THEN
+     $( writef("Can*'t open %S*N", argv!0)
+        rc := 20
+        GOTO exit
+     $)
+    selectinput(inputstream)
+
+
+    $(  LET tag = word()
+        LET addr, len = ?, ?
+        SWITCHON tag INTO
+        $(
+            CASE t.hunk:        len := word()
+                                IF len = 0 THEN LOOP
+                                writes("relocatable section found*N")
+                                rc := 12
+            CASE t.end:         BREAK
+
+            CASE t.abshunk:     addr := word()
+                                len := word()
+                                esc("(")
+                                out.word(addr << 1)
+                                out.word(len << 1)
+                                FOR i = 1 TO len DO
+                                $(  LET ms = rdch()
+                                    out.byte(rdch())
+                                    out.byte(ms)
+                                $)
+                                esc(")")
+                                newline()
+                                ENDCASE
+
+            DEFAULT:            writes("format error*N")
+                                rc := 12
+                                BREAK
+        $)
+
+
+    $)  REPEAT
+/*
+    esc("(")
+    out.word(#O100) // jump addr
+    out.word(0)
+    esc(")")
+    newline()
+*/
+
+exit:
+    UNLESS inputstream=0 DO
+     $( selectinput(inputstream)
+        endread() $)
+    stop(rc)
+$)
+
+AND esc(s) BE
+$(  wrch(#X9B)
+    writes(s)
+$)
+
+AND word() = VALOF
+$(  LET msb = rdch()
+    LET lsb = rdch()
+    RESULTIS (msb << 8) | lsb
+$)
+
+AND out.word(w) BE
+$(  out.byte(w >> 8)
+    out.byte(w & #XFF)
+$)
+
+AND out.byte(b) BE
+$(  wrch ('0' + (b >> 4))
+    wrch ('0' + (b & #XF))
+$)
+
+

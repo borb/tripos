@@ -1,0 +1,269 @@
+// (C) Copyright 1980 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+// CLI-INIT for system using a fileserver pseudo high cap disc.
+// Sets up assignments for standard device and directories
+
+SECTION "FS-CLI-INIT"
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "MANHDR"
+GET "IOHDR"
+GET "RINGHDR"
+GET "FH2MANIFESTS"
+
+GLOBAL
+   $(
+   maxglob  : ug+200
+   $)
+
+MANIFEST
+    $(
+    task.ringhandler = 6
+    task.fsdriver    = 7
+    $)
+
+LET cli.init(parm.pkt) = VALOF
+ $( LET pkt = VEC pkt.arg6
+    LET prompt = "> "
+    LET initialseg = tcb!tcb.seglist!3
+    LET dummy = maxglob
+    LET machine.name    = ?
+    LET disc.envec = TABLE
+        10,     || length of table
+        256,    || block size
+        0,      || sector origin
+        5,      || number of surfaces
+        1,      || sectors per block
+        32,      || blocks per track
+        1,      || number of reserved blocks
+        8,      || pre-allocation factor
+        8,      || interleave factor
+        0,      || lower cylinder
+        199      || upper cylinder
+
+
+    pkt!pkt.link := notinuse
+    pkt!pkt.id := task.consolehandler
+    pkt!pkt.arg1 := -3
+    pkt!pkt.arg2 := -4
+    qpkt(pkt); taskwait()
+
+    initio()
+    selectinput(findinput("**"))
+    selectoutput(findoutput("**"))
+    writes("*n*nTRIPOS starting*n")
+
+    pkt!pkt.id := task.debug
+    UNLESS qpkt(pkt)=0 DO taskwait()
+
+    pkt!pkt.id := task.ringhandler
+    pkt!pkt.arg1 := -7 // RX device
+    pkt!pkt.arg2 := -6 // TX device
+    pkt!pkt.arg3 := FALSE // Not breakable
+    UNLESS qpkt(pkt)=0 THEN taskwait()
+
+    pkt!pkt.id := task.fsdriver
+    UNLESS qpkt(pkt)=0 THEN taskwait()
+
+    pkt!pkt.id := task.filehandler
+    pkt!pkt.type := 0
+    pkt!pkt.arg1 := 1 // action.startup
+    pkt!pkt.arg2 := task.fsdriver // "device number"
+    pkt!pkt.arg3 := 0 // unit number
+    pkt!pkt.arg4 := 5 // number of cache slots
+    pkt!pkt.arg5 := disc.envec
+    pkt!pkt.arg6 := FALSE // Do restart
+    UNLESS qpkt(pkt)=0 DO taskwait()
+
+    // Find out this machine's name and number from the nameserver,
+    // and set up assignments for the system disc and directories.
+
+    myname()
+
+    machine.name        := rootnode ! rtn.info ! rtninfo.ring ! ri.myname
+
+    // Make the initial assignments
+
+    make.task.assignment("FS0", task.filehandler)
+
+    make.dir.assignment("SYS", "FS0:", "", "")
+    make.dir.assignment("T", "SYS:", machine.name, ".T")
+
+    cli.background := FALSE
+    cli.standardinput := input()
+      cli.currentinput := findinput("SYS:S.INITIAL-COMMANDS")
+      IF cli.currentinput=0 DO
+       cli.currentinput := cli.standardinput
+    cli.standardoutput := output()
+    cli.currentoutput  := cli.standardoutput
+    cli.commanddir := locatedir("SYS:C")
+    returncode := 0
+    cli.returncode := 0
+    cli.faillevel  := cli.initialfaillevel
+    cli.result2 := 0
+    cli.commandfile%0 := 0
+    cli.defaultstack := cli.initialstack
+    cli.module := 0
+    FOR i = 0 TO prompt%0 DO
+       cli.prompt%i := prompt%i
+
+    tcb!tcb.seglist!3 := 0
+    start := cli.undefglobval
+    result2 := initialseg
+    RESULTIS unloadseg
+ $)
+
+
+
+
+AND make.task.assignment(name, task) BE
+    $(
+    // Make and link in an assignment node for the given name and task
+
+    LET lv.alist        = rootnode ! rtn.info + info.assignments
+    LET avec    = getvec(ass.name + name%0/bytesperword)
+    IF avec=0 THEN abort(result2)
+
+    avec ! ass.link    := !lv.alist
+    avec ! ass.task    := task
+    avec ! ass.dir     := 0
+    avec ! ass.type    := dt.disc
+    FOR i=0 TO name%0 DO (avec+ass.name)%i := name%i
+
+    !lv.alist           := avec
+    $)
+
+
+AND make.dir.assignment(name, s1, s2, s3) BE
+    $(
+
+    LET total.len       = s1%0 + s2%0 + s3%0
+    LET string          = VEC 15
+    LET pos             = 0
+    LET lock            = ?
+    LET avec            = ?
+    LET lv.assignments  = rootnode ! rtn.info + info.assignments
+
+    IF total.len > 30
+    THEN $( writef("assignment string too long*n"); RETURN $)
+
+    // Make up full string
+
+    FOR i=1 TO s1%0
+    DO $( pos := pos + 1; string%pos := s1%i $)
+
+    FOR i=1 TO s2%0
+    DO $( pos := pos + 1; string%pos := s2%i $)
+
+    FOR i=1 TO s3%0
+    DO $( pos := pos + 1; string%pos := s3%i $)
+
+    string%0 := pos
+
+    lock        := locatedir(string)
+
+    If lock=0
+    THEN $( writef("Can't find *"%s*"*n", string); RETURN $)
+
+    avec        := getvec(ass.name + name%0/bytesperword)
+    IF avec=0 THEN abort(result2)
+
+    avec ! ass.link     := !lv.assignments
+    avec ! ass.task     := lock ! lock.task
+    avec ! ass.dir      := lock
+    FOR i=0 TO name%0 DO (avec+ass.name)%i := name%i
+    !lv.assignments     := avec  // Link into the chain
+    $)
+
+
+AND myname() BE
+    $(
+    LET info.vec = rootnode ! rtn.info ! rtninfo.ring
+    LET rhtaskid = info.vec ! ri.rhtaskid
+    LET oldname  = info.vec ! ri.myname
+    LET newname = ?
+    LET len = ?
+    LET r = ?
+    LET replyport = ?
+    LET tx.block = VEC bb.ssp.args
+    LET rx.pkt = TABLE notinuse, 0, act.rx.bb, 0, 0,
+                       0, 64, id.nameserver, 0, tickspersecond
+    LET rx.buff = VEC 64
+
+
+    IF rhtaskid = 0
+    THEN $( writes("Ring handler not loaded*n"); result2 := 400; stop(20) $)
+
+
+    replyport := sendpkt(notinuse, rhtaskid, act.findfreeport)
+
+    // Construct request block
+    tx.block ! bb.ssp.type := code.sspreq
+    tx.block ! bb.ssp.replyport := replyport
+    tx.block ! bb.ssp.func      := 0
+
+    // Issue reception request
+    pkt.id   ! rx.pkt := rhtaskid
+    rhpkt.buff ! rx.pkt := rx.buff
+    rhpkt.port ! rx.pkt := replyport
+    qpkt(rx.pkt)
+
+    r := sendpkt(notinuse,
+                rhtaskid,
+                act.tx,
+                0, 0,
+                tx.block,
+                bb.ssp.args ,
+                id.nameserver,
+                4)  // Port number for own name
+
+    // Wait for response
+    taskwait()
+
+    IF r \= txst.accepted
+    THEN $( result2 := r; GOTO ns.problem $)
+
+    IF rx.pkt!pkt.res1=0
+    THEN $( result2 := 441; GOTO ns.problem $)
+
+    // Name server has replied
+    result2     := rx.buff ! bb.ssp.rc
+    IF result2 \= 0 THEN GOTO ns.problem
+
+    // All OK
+    sendpkt(notinuse, rhtaskid, act.releaseport, 0, 0, replyport)
+
+    len := byteget(rx.buff+bb.ssp.arg1, 0)
+    newname := getvec(len/bytesperword)  // Small, so won't fail (!)
+    FOR i=0 TO len DO newname%i := byteget(rx.buff+bb.ssp.arg1, i)
+
+    freevec(oldname)
+    info.vec ! ri.myname := newname
+
+//  //  Now do a forward lookup to get our device number.  (Ugh!)
+//
+//    $(  LET nsvec=VEC 3
+//        callseg("sys:l.nameserver-lookup",newname,nsvec)
+//        info.vec!ri.myaddr:=nsv.machine.id!nsvec
+//    $)
+
+    RETURN
+
+ns.problem:
+    // Failed to use name server, or it doesn't know the name.
+    // Don't reset name in store
+    writes("MyName failed*n")
+    sendpkt(notinuse, rhtaskid, act.releaseport, 0, 0, replyport)
+    $) REPEAT
+
+
+AND byteget(v, b) =
+    // Like GETBYTE, but gets bytes in a machine
+    // independent order
+    // Assumes bytesperword = 2
+    [v ! (b/2) >> (1-(b&1))*8] & #XFF
+
+

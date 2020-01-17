@@ -1,0 +1,1016 @@
+SECTION "MSINIT"
+
+GET "HEADER"
+GET "TERMHDR"
+GET "CLIHDR"
+GET "BCPL.SETTERMVEC"
+//GET ":mike.dfs-stub.bcpl.cli-init"
+GLOBAL  $(      vt.connected:   126
+                max.time:       127
+                replug.expected:128
+                rmssp:          129
+                connect.terminal:130
+                cli.undefglobval:135
+$)
+MANIFEST
+$(
+   task.ringhandler = 5
+   task.bsphandler  = 6
+   task.ringserv    = 7
+
+   act.connect                 = 800
+   act.disconnect              = 801
+   act.start.rm.refresh        = 802            // packet type to RMVTHAND
+
+   bb.ssp.arg4         = bb.ssp.arg3 + 1
+
+   rmssp.reply.size    = 80                  // dibytes
+   open.block.upb      = bb.ssp.args + 20    // Block for BSP OPEN
+   initial.rm.timeout  =  2                  // minutes
+   max.name.chars      = 30                  // longest service name we allowed
+   ringdat.reply.size  = 20                  // words
+   max.logon.wait      = tickspersecond*60*3 // time user has to reply
+   err.suffix.too.long = 425
+   cli.init.stacksize  = 400    // stack for CLI.INIT coroutine
+$)
+LET  W.log(string, s, a,b,c,d,e,f) BE RETURN
+//$(    LET V   = VEC 80/bytesperword;LET len=string%0;LET x=s;LET addr=@s;LET hex(ch)=ch>9->'A'+ch-10,('0'+ch)
+//FOR i=1 TO len v%i:=string%i;UNTIL !addr=-99 $( x:=!addr;v%(len+1):=':';v%(len+2):=' '
+//FOR i=0 TO 7 v%(len+3+i):=hex((x>>(4*(7-i)))&#XF);len+:=10;addr+:=1 $) v%0:=len;WTO.LOG(v) $)
+LET cli.init (parm.pkt) = VALOF
+$(
+   // Run the initialisation in a coroutine since the main CLI will only
+   // need a small stack when it is running : CLI-INIT however needs a lot.
+   // Also get the kiddies/DEBUG68 area when running on a 68000 machine
+
+   LET initialseg  = tcb!tcb.seglist!3
+   LET cli.init.co = createco (cli.init.main, cli.init.stacksize)
+
+   callco   (cli.init.co, parm.pkt)             // assume that createco works
+   deleteco (cli.init.co  )                     // ditch the coroutine after
+   tcb!tcb.seglist!3 := 0                       // clear out the segment list
+   start             := cli.undefglobval        // start not initialised
+   result2           := initialseg              // return this segment for ...
+   RESULTIS             unloadseg               // ... the CLI to unload
+$)
+
+AND cli.init.main (parm.pkt) BE
+$(
+   LET initm            = "*NTRIPOS starting*N" // initial message to the world
+   LET dummy            = maxglob               // for the compiler to use it!!
+
+   start.ringhandler    ()              // everything depends on this
+   start.bsphandler     ()              // also pretty important to life
+   start.VThandler      ()              // communicate with the world
+   initio       ()                      // open the standard CLI streams
+   selectinput  (findinput ("**"))
+   selectoutput (findoutput("**"))
+   // Contact the Resource Manager to find out how long we've got.
+   // If there is a terminal available, then connect to it.
+   vt.connected := rmssp () -> connect.terminal (), FALSE
+
+//   writes             (initm)         // say hello to the world
+   allocation.time      ()              // time allocated to this session
+   myname               ()              // find out which machine we are
+//$( LET debugpkt = TABLE notinuse, 2
+//   IF qpkt(debugpkt)~=0 pktwait()
+//$)
+   ringdat              ()              // find out the date and time (quietly)
+   find.user            ()              // authenticate the user if any
+   //user.routines      ()
+   cowait               ()              // return back towards the CLI
+$)
+
+
+/*******************************************************************************
+*                                                                              *
+* RINGDAT : find out the time and date from the ring DAT service               *
+*           This routine is lifted directly from the RINGDAT command           *
+*                                                                              *
+*******************************************************************************/
+
+AND ringdat () BE
+$(
+   LET word                                  = ?
+   LET years.since.1978, month, day.of.month = ?, ?, ?
+   LET hour, min, sec                        = ?, ?, ?
+   LET ns.vec                                = VEC 3
+   LET rx.block                              = VEC ringdat.reply.size-1
+   LET tx.block                              = VEC 3
+
+   UNLESS ssp   ("DAT", tx.block, 3, rx.block, ringdat.reply.size, ns.vec)
+       $( writes("****** Call to DAT service failed !! *N")
+          RETURN
+       $)
+
+   word                 := rx.block%%bb.ssp.args
+   years.since.1978     := (word >> 8) - 78
+   month                := word & #XFF
+   word                 := rx.block %% (bb.ssp.args+1)
+   day.of.month         := word >> 8
+   hour                 := word & #XFF
+   word                 := rx.block %% (bb.ssp.args+2)
+   min                  := word >> 8
+   sec                  := word & #XFF
+   word                 := rx.block %% (bb.ssp.args+4)
+   time.zone            := word >> 8            // Well, Where IS it ??
+   IF time.zone > 128 THEN time.zone -:= 256    // SIGNED !!
+
+   $( // Set the system date and time from these values
+
+      LET leap.year = ((years.since.1978+2) REM 4) = 0
+      LET days      = 365*years.since.1978 + (years.since.1978 + 1)/4
+      LET mtab      = leap.year ->
+                           [TABLE 0,0,31,60,91,121,152,182,213,244,274,305,335],
+                           [TABLE 0,0,31,59,90,120,151,181,212,243,273,304,334]
+      LET datvec    = VEC 14
+      LET ticks     = sec*tickspersecond
+
+      rootnode ! rtn.days  := days + mtab!month + day.of.month - 1
+      rootnode ! rtn.mins  := 60*hour + min
+      rootnode ! rtn.ticks := ticks
+   $)
+
+   // This is HERE so that the terminal type is known BEFORE anything is read
+   set.term()
+   Terminal.data        := readtermvec()
+   Terminal.type        := (Terminal.data=0) -> TERM.UNSET,
+                                                   Terminal.data ! TERM.NUMBER
+   SETSC(NOT Terminal.remote)
+
+$)
+
+/*******************************************************************************
+*                                                                              *
+* myname : find out the ring name of this machine                              *
+*                                                                              *
+*******************************************************************************/
+
+AND myname() BE
+$(
+   LET info.vec = rootnode ! rtn.info ! rtninfo.ring
+   LET oldname  = info.vec ! ri.myname
+   LET newname  = ?
+   LET len      = ?
+   LET tx.buff  = VEC bb.ssp.args
+   LET rx.buff  = VEC 20
+   LET nsvec    = VEC 3
+
+   UNTIL ssp    ( "ownname", tx.buff, 3, rx.buff, 21, nsvec, 0, id.nameserver )
+      DO writes ( "MyName failed*N")
+
+   len     := byteget(rx.buff,bb.ssp.arg1*bytesperringword+0)
+   newname := getvec (len/bytesperword)
+
+   FOR i = 0 TO len DO
+                newname%i := byteget(rx.buff,bb.ssp.arg1*bytesperringword+i)
+
+   lookup.name(newname,nsvec)                   // find out our station number
+   freevec    (oldname)                         // ditch the syslinked name
+
+   info.vec!ri.myname := newname                // install the new name
+   info.vec!ri.myaddr := nsv.machine.id!nsvec   // install in the ring vector
+
+$)
+
+/*******************************************************************************
+*                                                                              *
+* wto.log : send a message to the logger                                       *
+*                                                                              *
+*******************************************************************************/
+
+AND wto.log(message) = VALOF
+$(
+   LET txbuff  = VEC 30
+   LET rxbuff  = VEC 2
+   LET nsvec   = VEC 3
+   LET len     = message%0
+   FOR i=0 TO len DO byteput(txbuff, bb.ssp.args*bytesperringword+i, message%i)
+   RESULTIS ssp ("wto-log", txbuff, bb.ssp.args+1+len/bytesperringword,
+                                                             rxbuff, 3, nsvec)
+$)
+
+AND allocation.time() BE
+$(
+   LET days      = max.time/1440
+   LET hours     = ?
+
+   max.time     := max.time REM 1440
+   hours        := max.time / 60
+
+   IF [ days < 1 ] & [ hours < 1 ] & [(max.time REM 60) < 58]
+   $( writes ( "****** You have only " )
+      IF hours \= 0 THEN writef ( "%N hours ", hours )
+      writef ( "%N minutes ...*N", max.time REM 60 )
+   $)
+$)
+
+AND start.BSPhandler () = starttask(task.BSPhandler,0)
+AND start.VThandler  () = starttask(task.consolehandler,0)
+AND starttask (task,func,a1,a2,a3,a4,a5,a6) =
+    rootnode!rtn.tasktab!task \= 0 ->
+                sendpkt(notinuse,task,func,?,?,a1,a2,a3,a4,a5,a6),
+                FALSE
+
+AND find.user() BE if vt.connected
+$(
+MANIFEST $( priv.needed=0; trippriv=0 $)
+   IF user.find.and.set.up = cli.undefglobval THEN
+   $(
+      writes ("****** USER.FIND.AND.SET.UP routine missing*N")
+      sendpkt(notinuse, task.consolehandler, act.disconnect, ?, ?, TRUE)
+   $)
+
+   $( // Install a new PKTWAIT for the duration of the logon sequence.
+      // If it times out waiting for something to be typed, it will
+      // disconnect the virtual terminal and give the machine back to RM.
+
+      LET blib.pktwait        = pktwait
+      LET privs.obtained      = ?
+
+      pktwait             := timed.pktwait
+      privs.obtained      := user.find.and.set.up(-1, priv.needed)
+      pktwait             := blib.pktwait
+   $)
+$)
+
+AND timed.pktwait(dest, pkt) = VALOF
+$(
+   // Replaces BLIB PKTWAIT function: If any packet does not return within a
+   // timeout period, it returns the machine to the resource manager.
+
+   LET timer.pkt = TABLE notinuse, -1, 0, 0, 0, max.logon.wait
+
+   qpkt(timer.pkt)
+
+   $( LET pkt.received        = taskwait()
+
+      TEST pkt.received = timer.pkt
+           THEN sendpkt(notinuse, task.consolehandler, act.disconnect,
+                                                                 ?, ?, TRUE)
+           ELSE $( dqpkt(-1, timer.pkt)
+                   RESULTIS pkt.received
+                $)
+   $) REPEAT
+$)
+
+//******************************************************************************
+// END OF CLI-INIT *************************************************************
+//******************************************************************************
+
+//N LET get.kiddie.area() = 0
+AND start.ringhandler() BE
+$(      LET pkt             = VEC pkt.arg6
+        pkt!pkt.link    := notinuse
+        pkt!pkt.id      := task.ringhandler
+        pkt!pkt.arg1 :=
+$<68000TRIPOS
+                    -2  // Both devices
+$>68000TRIPOS
+$<LSI4TRIPOS
+                    -4 // RX device
+        pkt!pkt.arg2 := -3 // TX device
+$>LSI4TRIPOS
+        pkt!pkt.arg3 := FALSE // Not breakable
+        UNLESS qpkt(pkt)=0 THEN taskwait()
+        rhtaskid        := task.ringhandler
+$)
+//N LET start.filehandler() = TRUE
+//N LET init.assignments()      BE RETURN
+//N LET initialise.cli()        BE RETURN
+//N LET user.profile()  BE RETURN
+//N LET refine.access() BE RETURN
+//N LET setuserpuid()   BE RETURN
+//N LET start.debug()   BE RETURN
+//N LET start.ringserv()        BE RETURN
+//N LET make.dir.copy() BE RETURN               // DON'T want a copy of HOME:
+//N AND user.routines() BE RETURN       //set.term()
+AND set.term()          BE
+$(
+    MANIFEST $( bb.ssp.bytes = bb.ssp.args * bytesperringword
+                txbuff.bytes = 40 + bb.ssp.bytes
+                rxbuff.bytes = 20 + bb.ssp.bytes
+             $)
+    LET rxbuff          = VEC rxbuff.bytes/BYTESPERWORD
+    LET OK              = ?
+    $(  LET txbuff      = VEC txbuff.bytes/BYTESPERWORD
+        LET nsvec       = VEC 3
+        LET info        = ROOTNODE ! RTN.INFO ! rtninfo.ring
+        LET machine     = info ! RI.LOADERS.NAME
+        LET sess        = info ! RI.term.no
+
+        LET hex(byte)   = VALOF
+        $( byte := (byte&15) + '0'; RESULTIS byte>'9' -> byte-'0'+'A'- 10, byte $)
+        LET add.ch(v, ch) BE
+        $( LET pos = v%0 + 1; v%pos := ch; v%0 := pos $)
+        LET add.string2(v, s) BE FOR I = 1 TO s%0 DO add.ch(V, s%i)
+        LET add.string(v, s) BE add.ch(v, s%0) <> add.string2(v, s)
+
+        txbuff%0 := bb.ssp.bytes -1
+        add.string (txbuff, "WORLD")
+        add.string (txbuff, "TERMTYPE")
+        add.string (txbuff, machine)
+        OK := ssp("PS.MAP",     txbuff, txbuff%0/BYTESPERRINGWORD+1,
+                                rxbuff, rxbuff.bytes,                   nsvec)
+    $)
+
+    TEST OK
+    $(  LET string      = VEC 40/BYTESPERWORD
+        LET First       = "Cifer2632"
+        LET Width       = 80
+        LET depth       = 24
+        LET type        = TERM.2632
+        LET t           = "Dumb"
+        LET w           = 80
+        LET depth       = 24
+        LET t           = TERM.VDU
+        LET last        = "Newbury7009"
+        LET Width       = 80
+        LET depth       = 24
+        LET type        = TERM.7009
+
+        terminal.remote := FALSE
+
+        FOR i = 0 TO rxbuff%bb.ssp.bytes
+        DO string%I := rxbuff%(bb.ssp.bytes+I)
+        FOR p = @FIRST TO @LAST BY 4
+        DO IF COMPSTRING(string, !p)=0
+        $(  LET size    = rxbuff%bb.ssp.bytes / BYTESPERWORD
+            LET v       = GETVEC(TERM.VEC.SIZE)
+            LET name    = GETVEC(TERM.MIN.STRING<size -> TERM.MIN.STRING, size)
+
+            FOR i = 0 TO TERM.VEC.SIZE  DO v!I          := 0
+            FOR I = 0 TO size           DO name!I       := STRING!I
+
+            v!TERM.STRING := name
+            v!TERM.WIDTH  := p!1
+            v!TERM.DEPTH  := p!2
+            terminal.type := p!3
+            v!TERM.NUMBER := p!3
+            settermvec(v)
+            BREAK
+        $)
+    $)
+    ELSE terminal.remote := (RESULT2 = #Xdfea)  // Unknown location.
+$)
+
+AND die(arg) BE
+$(  wto.log(arg)
+    sendpkt(notinuse, task.consolehandler, act.disconnect, ?, ?, TRUE)
+    stop(0)
+$)
+
+.
+SECTION "MSINIT-2"
+
+GET "HEADER"
+GET "TERMHDR"
+    GET "FILEHDR"
+    GET "CLIHDR"
+    GET "MANHDR"
+    GET "RINGHDR"
+    GET "IOHDR"
+GLOBAL  $(      vt.connected:   126
+                max.time:       127
+                replug.expected:128
+                rmssp:          129
+                connect.terminal:130
+$)
+MANIFEST
+$(
+   task.ringhandler = 5
+   task.bsphandler  = 6
+   task.ringserv    = 7
+
+   act.connect                 = 800
+   act.disconnect              = 801
+   act.start.rm.refresh        = 802            // packet type to RMVTHAND
+
+   bb.ssp.arg4         = bb.ssp.arg3 + 1
+
+   rmssp.reply.size    = 80                  // dibytes
+   open.block.upb      = bb.ssp.args + 20    // Block for BSP OPEN
+   initial.rm.timeout  =  2                  // minutes
+   max.name.chars      = 30                  // longest service name we allowed
+   ringdat.reply.size  = 20                  // words
+   max.logon.wait      = tickspersecond*60*3 // time user has to reply
+   err.suffix.too.long = 425
+   cli.init.stacksize  = 400    // stack for CLI.INIT coroutine
+$)
+
+    GET ":G.BCPL.RMSSPLIB"
+/*******************************************************************************
+*                                                                              *
+* RMSSP : Communicate with the resource manager to find out how we were loaded,*
+*         what the maximum allocation time is, who loaded us, and the info     *
+*         necessary for connecting to the terminal.                            *
+*       : Returns TRUE iff it is worthwhile to call CONNECT.TERMINAL           *
+*       : Sets up various items in the root node ring info vector.             *
+*                                                                              *
+*******************************************************************************/
+
+AND rmssp () = VALOF
+    $(
+    LET txbuff          = VEC 4                 // transmission buffer
+    LET rxbuff          = VEC (rmssp.reply.size*2)/bytesperword // reception
+    LET reply.size      = ?
+    LET nsvec           = VEC 3                 // nameserver info
+    LET r2              = 0
+    LET res             = ?
+    LET allocation.mode = 0                     // Way in which loaded
+    LET revconn.name            = 0             // Vector to hold name string
+    LET revconn.name.offset     = 0             // Offset in reply block
+    LET revconn.name.len        = 0             // Name length
+    LET ringinfo                = rootnode ! rtn.info ! info.ringinfo
+
+    // Set up transmission buffer with the initial timeout period
+
+    put2bytes(txbuff, bb.ssp.args, [2 << 8] | 2) // Param code + length
+    put2bytes(txbuff, bb.ssp.args+1, initial.rm.timeout)
+
+
+    UNLESS ssp("rmssp", txbuff, 5, rxbuff, rmssp.reply.size,
+                       nsvec, 10 /* info service */)
+        DO $( LET faultcode = result2
+              wto.log ( "RMSSP failed:" )
+              wto.log ( fault.mess (faultcode, rxbuff) )
+              RESULTIS FALSE
+           $)
+    reply.size  := result2      // Dibytes in received reply
+//FOR i = 0 TO (reply.size> 40) -> 20, reply.size/2 BY 4 DO w.log("cont: ",
+//      rxbuff!(i+0), rxbuff!(i+1), rxbuff!(i+2), rxbuff!(i+3), -99 )
+
+    //wto.log ("RMSSP worked")
+
+    // Pick up (a) the mode of allocation
+    //         (b) the station name of the owner (loader)
+    //         (c) terminal number on the loader (if present)
+    //         (d) allocation time left in minutes
+    //         (e) service name to which a reverse connection should be
+    //             established.
+    //         (f) auxiliary data (normally a uidset to be presented in
+    //             the reverse connection OPEN block)
+
+    // Get the allocation mode
+
+    UNLESS rmssp.get.int.param(rxbuff, reply.size, 2 /* allocation mode */)
+    THEN $( wto.log("Allocation mode missing"); RESULTIS FALSE $)
+
+    allocation.mode     := result2
+
+    // Get the time left in minutes
+
+    TEST rmssp.get.int.param(rxbuff, reply.size, 5 /* allocation time */)
+    THEN max.time := result2
+    ELSE $( wto.log("Allocation time missing"); max.time := 0 $)
+
+    // Get the terminal number on the loader (if present)
+    ringinfo ! ri.term.no := rmssp.get.int.param(rxbuff, reply.size, 4) ->
+                        result2, 0                      // Not present
+
+    // Find out the station name of the owner (loader) and record it
+    // in the root node.
+    TEST rmssp.find.string.param(rxbuff, reply.size, 3 /* owner's name */)
+    THEN
+      $( // It's there - install it in the root node
+      LET name.offset   = result2
+      LET name.bytes    = byteget(rxbuff, name.offset)
+      LET name.vec      = getvec(name.bytes/bytesperword) // If this fails,
+                          // there's no hope for the rest of the system!
+
+      FOR i=0 TO name.bytes DO name.vec%i := byteget(rxbuff, name.offset+i)
+      freevec(ringinfo ! ri.loaders.name)            // Free SYSLINKed name
+      ringinfo ! ri.loaders.name        := name.vec  // Install correct one
+      $)
+    ELSE wto.log("Loader's name missing")
+
+
+    // Get the auxiliary data provided in the load command, and install
+    // it in the root node.
+    TEST rmssp.find.param(rxbuff, reply.size, 7 /* auxiliary data */)
+    THEN
+      $(
+      LET dibyte.offset = result2
+      LET header        = get2bytes(rxbuff, dibyte.offset)
+      LET num.dibytes   = [header & #X00FF] - 1  // Extract parameter size
+      LET data.vec      = getvec( [num.dibytes+1]*2/bytesperword )
+
+      put2bytes(data.vec, 0, num.dibytes)  // Put size in first dibyte
+      FOR i=1 TO num.dibytes
+      DO put2bytes(data.vec, i, get2bytes[rxbuff, dibyte.offset+i] )
+
+      // Install vector in root node
+
+      freevec(ringinfo ! ri.load.data)          // Free SYSLINKed stuff
+      ringinfo ! ri.load.data   := data.vec     // Install new one
+      $)
+    ELSE wto.log("No load data")
+
+
+    // The action to be taken next depends on the mode of allocation.
+    // The codes are as follows:
+    // 0 - booted by SSP to RM, so no terminal to connect to
+    // 1 - booted via SM, so there is a terminal
+    // 2 - booted in 'sub service' mode
+
+
+    UNLESS allocation.mode = 1
+      $(
+      TEST allocation.mode=0
+      THEN wto.log("loaded by SSP")
+      ELSE
+      TEST allocation.mode=2
+      THEN wto.log("loaded in 'sub service' mode")
+      ELSE wto.log("loaded with invalid allocation mode")
+
+      sendpkt(notinuse, task.consolehandler, act.start.rm.refresh)
+      RESULTIS FALSE  // I.e. no terminal available
+      $)
+
+    // We were loaded via SM, so we should establish a stream to the terminal.
+
+    // First, find the service name.
+
+    UNLESS rmssp.find.string.param(rxbuff, reply.size, 6 /* rev. conn. name */)
+    THEN $( wto.log("Reverse connection name missing"); RESULTIS FALSE $)
+
+    revconn.name.offset := result2
+    revconn.name.len    := byteget(rxbuff, revconn.name.offset)
+    revconn.name        := getvec( revconn.name.len/bytesperword ) // Must work!
+    FOR i=0 TO revconn.name.len
+    DO revconn.name%i := byteget(rxbuff, revconn.name.offset+i)
+
+    // And install the name in the root node.
+    freevec( ringinfo ! ri.term.revconn.name ) // Free SYSLINKed name
+    ringinfo ! ri.term.revconn.name     := revconn.name
+
+    // **** TEMPORARY - set a flag saying whether a replug is expected
+    replug.expected := compstring( revconn.name, "replug-SM") = 0
+
+    RESULTIS TRUE  // Everything essential is present
+$)
+
+/*******************************************************************************
+*                                                                              *
+* CONNECT.TERMINAL: Use the reverse connection name and load data to open a    *
+*                   byte stream pair to the terminal.                          *
+*                                                                              *
+*******************************************************************************/
+
+AND connect.terminal() = VALOF
+$(
+   LET ringinfo         = rootnode ! rtn.info ! info.ringinfo
+   LET input.bs        = authbsp.find.stream.pair(ringinfo!ri.term.revconn.name)
+   LET output.bs       = result2
+
+   IF input.bs = 0 THEN $( LET string.vec    = VEC 30
+                           wto.log("Reverse connection to terminal failed:")
+                           wto.log( fault.mess (output.bs, string.vec) )
+                           RESULTIS FALSE
+                        $)
+
+   output.bs ! scb.type  := - (output.bs ! scb.type)
+
+   IF replug.expected
+   $( LET save.input    = input()
+      LET save.output   = output()
+      LET ch            = 0
+
+      // wait for the initial replug and make the output stream interactive
+      selectinput (input.bs)
+      selectoutput(output.bs)
+
+      // ***** This will not be needed when true reverse connection exists ***
+      IF replug.expected
+      $(        ch := rdch() REPEATUNTIL bsp.test.reset(cis) | ch=endstreamch
+                wrch      (131)                         // deny replug
+      $)
+      selectinput (save.input)                  // restore our streams ....
+      selectoutput(save.output)                 // .... terminal streams
+
+      IF ch=endstreamch THEN $( wto.log("no replug") ; RESULTIS FALSE $)
+   $)
+        
+   // Tell the virtual terminal handler.
+   sendpkt(notinuse, task.consolehandler, act.connect, ?, ?,
+                                   input.bs, output.bs, 1,
+                                   0, // station number not available
+                                   ringinfo ! ri.term.no)
+      RESULTIS TRUE
+$)
+/*******************************************************************************
+*                                                                              *
+* AUTHBSP.FIND.BYTE.STREAM.PAIR : find a byte stream pair (for VThand)         *
+*                                 (Reverse connection to terminal)             *
+*                                                                              *
+*******************************************************************************/
+
+$<JUNK'
+
+AND authbsp.find.stream.pair(service.name) = VALOF
+    $(
+    // Sends off a BSP open block with an authorization message in
+    // the user data part.  The format of the block is as follows:
+    //
+    //       +---------------+
+    //       |    #X6A02     |  BSP OPEN code
+    //       |---------------|
+    //       |  REPLY PORT   |
+    //       |---------------|
+    //       |  FUNC CODE    |
+    //       |---------------|
+    //       |       2       |  Number of BSP parms
+    //       |---------------|
+    //       | MAX RX BLKSIZE|
+    //       |---------------|
+    //       | MAX TX BLKSIZE|
+    //       |---------------|
+    //       |  64   | N+128 | Mess type; No. of octets, last fragment
+    //       |---------------|
+    //       |               |
+    //       |--           --|
+    //       |               |
+    //       |--    N/2    --|
+    //       |    dibytes    |
+    //       |--           --|
+    //       |               |
+    //       |--           --|
+    //       |               |
+    //       |---------------|
+    //       |  16   |  128  |  Mess type; called
+    //       |---------------|
+    //       | N+128 |  N    |  Calling
+    //       |-------+--   --|
+    //       | bytes of data |
+    //       |-------+-------|
+    //       |  128  |  128  |  quality; expalanation
+    //       |-------+-------|
+    //       |   0   |       |  End of messages
+    //       +---------------+
+    //
+    // The authorization information is taken from the data which RM passes
+    // on from the load command.  There should normally be 12 dibytes of data.
+
+    LET ringinfo        = rootnode ! rtn.info ! rtninfo.ring
+    LET rhtaskid        = ringinfo ! ri.rhtaskid
+    LET load.data       = ringinfo ! ri.load.data
+    LET load.data.dibytes=get2bytes(load.data, 0) // Size of load data
+    LET nsvec           = VEC 3
+    LET instr           = ?
+    LET bsp.handler     = ?
+    LET tx.block        = VEC open.block.upb
+    LET rx.block        = VEC bb.ssp.arg3
+    LET num.bsp.parms   = ?
+    LET rx.pkt          = TABLE notinuse, 0, act.rx.bb,
+                          0, 0, 0, bb.ssp.arg3+1, 0, 0, short.timeout
+    LET rx.port         = 0
+    LET tx.port         = ?
+    LET machine.id      = ?
+    LET max.tx.blocksize= pref.blocksize
+    LET max.rx.blocksize= pref.blocksize
+    LET rhtcb           = ?
+    LET status          = ?
+    LET suffix.len      = ?
+    LET flags           = ?
+    LET tx.len          = (bb.ssp.arg4+load.data.dibytes)*bytesperringword +1
+
+    IF rhtaskid=0
+    THEN $( result2 := 400; RESULTIS 0 $) // No ring handler
+
+    UNLESS lookup.name(service.name, nsvec) THEN RESULTIS 0
+
+    // Test that this really is a BSP service
+    flags := nsv.flags ! nsvec
+    IF (flags & nsv.flags.pmask) \= nsv.flags.bsp
+    THEN $( result2 := 422; RESULTIS 0 $)
+
+    rx.port    := sendpkt(notinuse, rhtaskid, act.findfreeport)
+    tx.port    := nsvec ! nsv.port
+    machine.id := nsvec ! nsv.machine.id
+
+    pkt.id     ! rx.pkt      := rhtaskid
+    rhpkt.buff ! rx.pkt      := rx.block
+    rhpkt.port ! rx.pkt      := rx.port
+    rhpkt.station   ! rx.pkt := machine.id
+    IF (flags & nsv.flags.slow) \= 0
+    THEN rhpkt.lifetime ! rx.pkt := long.timeout // Slow machine
+
+    FOR i=0 TO open.block.upb DO tx.block!i := 0
+
+    put2bytes(tx.block, bb.ssp.type,      code.open | #X02)
+    put2bytes(tx.block, bb.ssp.replyport, rx.port)
+    put2bytes(tx.block, bb.ssp.func,      nsvec ! nsv.func)
+    put2bytes(tx.block, bb.ssp.arg1,      2)      // Bsp parameters
+    put2bytes(tx.block, bb.ssp.arg2,      pref.blocksize)
+    put2bytes(tx.block, bb.ssp.arg3,      pref.blocksize)
+
+    // Put in the authentication information as a user data message
+    // Message type = 64; last parameter marked by 128 bit.
+
+    put2bytes( tx.block, bb.ssp.arg4 , (64 << 8) | load.data.dibytes*2 | 128 )
+
+    FOR i=1 TO load.data.dibytes
+    DO put2bytes(tx.block, bb.ssp.arg4+i, get2bytes[load.data, i] )
+    byteput(tx.block, tx.len,  16); tx.len +:= 1        // connect
+    byteput(tx.block, tx.len, 128); tx.len +:= 1        // Called
+    $(  LET name        = ringinfo! ri.loaders.name
+        LET first       = name%0 +1
+        FOR i = 1 TO name%0 IF name%i = '/' THEN first := i+1 <> BREAK
+        byteput(tx.block, tx.len, 128 | name%0-first+1); tx.len +:= 1
+        FOR i = first TO name%0 DO
+        $( byteput(tx.block, tx.len, name%i); tx.len +:= 1      $)
+    $)
+
+    byteput(tx.block, tx.len, 128); tx.len +:= 1        // Quality of service
+    byteput(tx.block, tx.len, 128); tx.len +:= 1        // Explanation text
+    byteput(tx.block, tx.len,   0); tx.len +:= 1
+
+    qpkt(rx.pkt)
+    status := sendpkt(notinuse, rhtaskid, act.tx,
+                      0, 0, tx.block, (tx.len-2)/BYTESPERRINGWORD +1,
+                      machine.id, tx.port)
+    IF status \= txst.accepted THEN $( result2 := status; GOTO failed $)
+
+    taskwait() // For rx.pkt
+
+    IF rx.pkt!pkt.res1=0
+    THEN $( result2:=409; GOTO failed $) // No reply
+
+    IF [get2bytes(rx.block, bb.ssp.type) & #XFF00] \= code.openack
+    THEN $(     LET buf = VEC 40
+                wto.log("MS: BSP open failed")
+                wto.log( fault.mess(get2bytes(rx.block, bb.ssp.type), buf))
+                result2 := 424; GOTO failed $) // Invalid OPENACK block
+
+    result2 := get2bytes(rx.block, bb.ssp.rc)
+    IF result2 \= 0 THEN GOTO failed
+
+    // Engage in a 'who wants the smallest blocks' competition
+
+    num.bsp.parms := get2bytes(rx.block, bb.ssp.arg1)
+    IF num.bsp.parms >= 1
+    THEN IF get2bytes(rx.block, bb.ssp.arg2) < max.tx.blocksize
+         THEN max.tx.blocksize := get2bytes(rx.block, bb.ssp.arg2)
+
+    IF num.bsp.parms >= 2
+    THEN IF get2bytes(rx.block, bb.ssp.arg3) < max.rx.blocksize
+         THEN max.rx.blocksize := get2bytes(rx.block, bb.ssp.arg3)
+
+    tx.port := get2bytes(rx.block, bb.ssp.replyport)
+
+    // Find out task id of BSP handler, loading it if necessary.
+
+    bsp.handler := task.bsphandler
+    IF bsp.handler = 0 THEN GOTO failed
+
+    instr := sendpkt(notinuse, bsp.handler, act.make.bytestreampair,
+                     0, 0,
+                     machine.id, tx.port, rx.port,
+                     max.tx.blocksize, max.rx.blocksize)
+
+    RESULTIS instr // Result2 is outstr
+
+failed:
+      $(
+      LET r2 = result2
+      sendpkt(notinuse, rhtaskid, act.releaseport, 0, 0, rx.port)
+      result2 := r2
+      $)
+    RESULTIS 0
+    $)
+
+
+AND put.octet( buff, lv.byte.offset, b ) BE
+    $( // Install the given octet in the buffer and step the pointer
+    byteput( buff, !lv.byte.offset, b )
+    !lv.byte.offset     := !lv.byte.offset + 1
+    $)
+
+$>JUNK'
+$<JUNK
+AND authbsp.find.stream.pair(service.name) = VALOF
+    $(
+    // Sends off a BSP open block with an authorization message in
+    // the user data part.  The format of the block is as follows:
+    //
+    //       +---------------+
+    //       |    #X6A02     |  BSP OPEN code
+    //       |---------------|
+    //       |  REPLY PORT   |
+    //       |---------------|
+    //       |  FUNC CODE    |
+    //       |---------------|
+    //       |       2       |  Number of BSP parms
+    //       |---------------|
+    //       | MAX RX BLKSIZE|
+    //       |---------------|
+    //       | MAX TX BLKSIZE|
+    //       |---------------|
+    //       |  64   | N+128 | Mess type; No. of octets, last fragment
+    //       |---------------|
+    //       |               |
+    //       |--           --|
+    //       |               |
+    //       |--    N/2    --|
+    //       |    dibytes    |
+    //       |--           --|
+    //       |               |
+    //       |--           --|
+    //       |               |
+    //       |---------------|
+    //       |  16   |  128  |  Mess type; called
+    //       |---------------|
+    //       | N+128 |  N    |  Calling
+    //       |-------+--   --|
+    //       | bytes of data |
+    //       |-------+-------|
+    //       |  128  |  128  |  quality; expalanation
+    //       |-------+-------|
+    //       |   0   |       |  End of messages
+    //       +---------------+
+    //
+    // The authorization information is taken from the data which RM passes
+    // on from the load command.  There should normally be 12 dibytes of data.
+
+    LET ringinfo        = rootnode ! rtn.info ! rtninfo.ring
+    LET rhtaskid        = ringinfo ! ri.rhtaskid
+    LET load.data       = ringinfo ! ri.load.data
+    LET load.data.dibytes=get2bytes(load.data, 0) // Size of load data
+    LET nsvec           = VEC 3
+    LET instr           = ?
+    LET bsp.handler     = ?
+    LET tx.block        = VEC open.block.upb
+    LET rx.block        = VEC bb.ssp.arg3
+    LET num.bsp.parms   = ?
+    LET rx.pkt          = TABLE notinuse, 0, act.rx.bb,
+                          0, 0, 0, bb.ssp.arg3+1, 0, 0, short.timeout
+    LET rx.port         = 0
+    LET tx.port         = ?
+    LET machine.id      = ?
+    LET max.tx.blocksize= pref.blocksize
+    LET max.rx.blocksize= pref.blocksize
+    LET rhtcb           = ?
+    LET status          = ?
+    LET suffix.len      = ?
+    LET flags           = ?
+    LET tx.len          = (bb.ssp.arg4+load.data.dibytes)*bytesperringword +1
+
+    IF rhtaskid=0
+    THEN $( result2 := 400; RESULTIS 0 $) // No ring handler
+
+    UNLESS lookup.name(service.name, nsvec) THEN RESULTIS 0
+
+    // Test that this really is a BSP service
+    flags := nsv.flags ! nsvec
+    IF (flags & nsv.flags.pmask) \= nsv.flags.bsp
+    THEN $( result2 := 422; RESULTIS 0 $)
+
+    rx.port    := sendpkt(notinuse, rhtaskid, act.findfreeport)
+    tx.port    := nsvec ! nsv.port
+    machine.id := nsvec ! nsv.machine.id
+
+    pkt.id     ! rx.pkt      := rhtaskid
+    rhpkt.buff ! rx.pkt      := rx.block
+    rhpkt.port ! rx.pkt      := rx.port
+    rhpkt.station   ! rx.pkt := machine.id
+    IF (flags & nsv.flags.slow) \= 0
+    THEN rhpkt.lifetime ! rx.pkt := long.timeout // Slow machine
+
+    FOR i=0 TO open.block.upb DO tx.block!i := 0
+
+    put2bytes(tx.block, bb.ssp.type,      code.open | #X02)
+    put2bytes(tx.block, bb.ssp.replyport, rx.port)
+    put2bytes(tx.block, bb.ssp.func,      nsvec ! nsv.func)
+    put2bytes(tx.block, bb.ssp.arg1,      2)      // Bsp parameters
+    put2bytes(tx.block, bb.ssp.arg2,      pref.blocksize)
+    put2bytes(tx.block, bb.ssp.arg3,      pref.blocksize)
+
+    // Put in the authentication information as a user data message
+    // Message type = 64; last parameter marked by 128 bit.
+
+    put2bytes( tx.block, bb.ssp.arg4 , (64 << 8) | load.data.dibytes*2 | 128 )
+
+    FOR i=1 TO load.data.dibytes
+    DO put2bytes(tx.block, bb.ssp.arg4+i, get2bytes[load.data, i] )
+    byteput(tx.block, tx.len,  16); tx.len +:= 1        // connect
+    byteput(tx.block, tx.len, 128); tx.len +:= 1        // Called
+    $(  LET name        = ringinfo! ri.loaders.name
+        LET first       = name%0 +1
+        FOR i = 1 TO name%0 IF name%i = '/' THEN first := i+1 <> BREAK
+        byteput(tx.block, tx.len, 128 | name%0-first+1); tx.len +:= 1
+        FOR i = first TO name%0 DO
+        $( byteput(tx.block, tx.len, name%i); tx.len +:= 1      $)
+    $)
+
+    byteput(tx.block, tx.len, 128); tx.len +:= 1        // Quality of service
+    byteput(tx.block, tx.len, 128); tx.len +:= 1        // Explanation text
+    byteput(tx.block, tx.len,   0); tx.len +:= 1
+
+    qpkt(rx.pkt)
+    status := sendpkt(notinuse, rhtaskid, act.tx,
+                      0, 0, tx.block, (tx.len-2)/BYTESPERRINGWORD +1,
+                      machine.id, tx.port)
+    IF status \= txst.accepted THEN $( result2 := status; GOTO failed $)
+
+    taskwait() // For rx.pkt
+
+    IF rx.pkt!pkt.res1=0
+    THEN $( result2:=409; GOTO failed $) // No reply
+
+    IF get2bytes(rx.block, bb.ssp.type) \= code.openack
+    THEN $( result2 := 424; GOTO failed $) // Invalid OPENACK block
+
+    result2 := get2bytes(rx.block, bb.ssp.rc)
+    IF result2 \= 0 THEN GOTO failed
+
+    // Engage in a 'who wants the smallest blocks' competition
+
+    num.bsp.parms := get2bytes(rx.block, bb.ssp.arg1)
+    IF num.bsp.parms >= 1
+    THEN IF get2bytes(rx.block, bb.ssp.arg2) < max.tx.blocksize
+         THEN max.tx.blocksize := get2bytes(rx.block, bb.ssp.arg2)
+
+    IF num.bsp.parms >= 2
+    THEN IF get2bytes(rx.block, bb.ssp.arg3) < max.rx.blocksize
+         THEN max.rx.blocksize := get2bytes(rx.block, bb.ssp.arg3)
+
+    tx.port := get2bytes(rx.block, bb.ssp.replyport)
+
+    // Find out task id of BSP handler, loading it if necessary.
+
+    bsp.handler := task.bsphandler
+    IF bsp.handler = 0 THEN GOTO failed
+
+    instr := sendpkt(notinuse, bsp.handler, act.make.bytestreampair,
+                     0, 0,
+                     machine.id, tx.port, rx.port,
+                     max.tx.blocksize, max.rx.blocksize)
+
+    RESULTIS instr // Result2 is outstr
+
+failed:
+      $(
+      LET r2 = result2
+      sendpkt(notinuse, rhtaskid, act.releaseport, 0, 0, rx.port)
+      result2 := r2
+      $)
+    RESULTIS 0
+    $)
+$>JUNK
+
+AND wto.log(message) = VALOF
+$(
+   LET txbuff  = VEC 30
+   LET rxbuff  = VEC 2
+   LET nsvec   = VEC 3
+   LET len     = message%0
+   FOR i=0 TO len DO byteput(txbuff, bb.ssp.args*bytesperringword+i, message%i)
+   RESULTIS ssp ("wto-log", txbuff, bb.ssp.args+1+len/bytesperringword,
+                                                             rxbuff, 3, nsvec)
+$)
+
+/*******************************************************************************
+*                                                                              *
+* FAULT.MESS : Generate a fault message into a given vector                    *
+*                                                                              *
+*******************************************************************************/
+
+AND fault.mess(n, v) = VALOF
+$(
+   STATIC $( string = 0 $)
+
+   LET string.wrch(ch) BE $( // Puts ch in next position in string
+                             LET i = string%0 + 1
+                             string%i := ch
+                             string%0 := i
+                          $)
+
+   LET old.wrch = wrch                  // remember the normal wrch routine
+
+   string   := v                        // set the string for special wrch
+   string%0 := 0                        // zero the string length
+   wrch     := string.wrch              // swap over character write routine
+
+   localfault(n)                        // get the fault message for the code
+
+   wrch     := old.wrch                 // back to the normal wrch routine
+   string%0 := string%0 - 1             // remove '*N'
+   RESULTIS string                      // returns the string as the result
+$)
+
+
+AND localfault(code) BE writef("Fault %N (#X%X4) occurred*N", code, code)
+.
+SECTION "MSINIT"
+
+GET "HEADER"
+//    GET "FILEHDR"
+//    GET "CLIHDR"
+//    GET "MANHDR"
+GET "RINGHDR"
+GET "IOHDR"
+GET ":G.BCPL.SSPLIB"
+GET ":g.BCPL.BSPLIB"
+
+
+

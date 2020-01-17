@@ -1,0 +1,199 @@
+|| Standard BCPL header for TRIPOS on the pdp-11
+
+GLOBAL
+$(
+globsize:0
+start:1        ||        start(pkt)
+stop:2         ||        stop(code)
+|| globals 3 to 9 are machine dependent.
+||     g3        is used for stack checking
+||     g4 - g7   software mul, div/rem, lshift, rshift
+result2:10
+returncode:11
+stackbase:12
+tcb:13
+taskid:14
+getbyte:15     || ch  := getbyte(v, i)
+putbyte:16     ||        putbyte(v, i, ch)
+level:17       || p   := level()
+longjump:18    ||        longjump(p, l)
+muldiv:19      || res := muldiv(a, b, c)
+aptovec:20     || res := aptovec(fn, upb)
+sardch:21      || ch  := sardch()
+sawrch:22      ||        sawrch(ch)
+createco:23    || co  := createco(fn, stsize)
+deleteco:24    ||        deleteco(co)
+callco:25      || arg := callco(co, arg)
+cowait:26      || arg := cowait(arg)
+resumeco:27    || arg := resumeco(co, arg)
+globin:28      || res := globin(seg)
+getvec:29      || v   := getvec(upb)
+freevec:30     ||        freevec(v)
+createdev:31   || id  := createdev(dcb)
+deletedev:32   || dcb := deletedev(id)
+createtask:33  || id  := createtask(seglist, stsize, pri)
+deletetask:34  || res := deletetask(id)
+changepri:35   || res := changepri(id, pri)
+setflags:36    || res := setflags(id, flags)
+testflags:37   || res := testflags(flags)
+abort:38       ||        abort(code, arg)
+hold:39        || res := hold(id)
+release:40     || res := release(id)
+taskwait:41    || pkt := taskwait()
+qpkt:42        || res := qpkt(pkt)
+dqpkt:43       || res := dqpkt(id, pkt)
+packstring:44  || res := packstring(v, s)
+unpackstring:45||        unpackstring(s, v)
+endtask:46     ||        endtask(seg)
+delay:47       || res := delay(ticks)
+sendpkt:48     || res := sendpkt(link, id, type, res1, res2, ... args)
+returnpkt:49   || res := returnpkt(pkt, res1, res2)
+initio:50      ||        initio()
+currentdir:51
+cis:52
+cos:53
+rdch:54        || ch  := rdch()
+unrdch:55      || res := unrdch()
+wrch:56        ||        wrch(ch)
+readwords:57   || res := readwords(v, n)
+writewords:58  ||        writewords(v, n)
+findinput:59   || scb := findinput(name)
+findoutput:60  || scb := findoutput(name)
+selectinput:61 ||        selectinput(scb)
+selectoutput:62||        selectoutput(scb)
+endread:63     ||        endread()
+endwrite:64    ||        endwrite()
+input:65       || scb := input()
+output:66      || scb := output()
+readn:67       || n   := readn()
+newline:68     ||        newline()
+writed:69      ||        writed(n, d)
+writen:70      ||        writen(n)
+writehex:71    ||        writehex(n, d)
+writeoct:72    ||        writeoct(n, d)
+writes:73      ||        writes(string)
+writef:74      ||        writef(format, ..args..)
+capitalch:75   || ch  := capitalch(ch)
+compch:76      || res := compch(ch1, ch2)
+compstring:77  || res := compstring(s1, s2)
+rdargs:78      || res := rdargs(keys, v, upb)
+rditem:79      || res := rditem(v, upb)
+findarg:80     || res := findarg(keys, item)
+loadseg:81     || seg := loadseg(name)
+unloadseg:82   ||        unloadseg(seg)
+callseg:83     || res := callseg(name,  ... args)
+tidyup:84      || User redefinable task tidy up routine
+datstring:85   || v   := datstring(v)
+datstamp:86    || v   := datstamp(v)
+deleteobj:90   || res := deleteobj(name)
+renameobj:91   || res := renameobj(name1, name2)
+     deletefile:90; renamefile:91
+findupdate:92  || scb := findupdate(name)
+endstream:93   ||        endstream(scb)
+pktwait:100    || pkt := pktwait(dest, pkt)
+devicetask:102
+//devicename:103
+fault:104
+consoletask:105
+splitname:107
+locateobj:108
+freeobj:109    ||        freedir(dir)
+findobj:112
+copydir:113    || res := copyobj ( obj )
+note:114       || res := note(scb, v)
+point:115      || res := point(scb, v)
+locatedir:123  || dir := locatedir(name)
+createdir:125  || res := createdir(name)
+
+|| Globals 126-132 reserved for linking loader
+
+|| Globals 133-149 defined in CLIHDR
+$)
+MANIFEST
+$(
+endstreamch=-1
+notinuse=-1
+bytesperword=2
+bitsperword=16
+bitsperbyte=8
+maxint=32767
+minint=-32768
+tickspersecond=50
+mcaddrinc=2
+rootnode=#450>>1
+ug=150
+$)
+
+MANIFEST
+$(
+|| Standard task numbers
+task.cli            =     1
+task.debug          =     2
+task.consolehandler =     3
+task.filehandler    =     4
+|| States and flags
+state.pkt           =     1
+state.hold          =     2
+state.wait          =     4
+state.int           =   #10
+state.dead          =   #14
+flag.break          =     1
+|| Standard packet offsets
+pkt.link            =     0
+pkt.id              =     1
+pkt.devtaskid       =     1
+pkt.taskid          =     1
+pkt.devid           =     1
+pkt.type            =     2
+pkt.res1            =     3
+pkt.res2            =     4
+pkt.arg1            =     5
+pkt.arg2            =     6
+pkt.arg3            =     7
+pkt.arg4            =     8
+pkt.arg5            =     9
+pkt.arg6            =    10
+|| LSI-4 rootnode offsets
+rtn.tasktab         =     0
+rtn.devtab          =     1
+rtn.tcblist         =     2
+rtn.crntask         =     3
+rtn.blklist         =     4
+rtn.debtask         =     5
+rtn.days            =     6
+rtn.mins            =     7
+rtn.ticks           =     8
+rtn.clwkq           =     9
+rtn.memsize         =    10
+rtn.info            =    11
+rtn.kstart          =    12
+||  devmvp          =    13
+||  devint          =    14
+||  devret          =    15
+||  devsav          =    16
+rtn.upb             =    16
+
+|| Rootnode info field
+info.mctype         =     0
+info.assignments    =     1
+info.devices        =     2
+info.handlers       =     3
+
+|| LSI-4 TCB offsets
+tcb.link            =     0
+tcb.taskid          =     1
+tcb.pri             =     2
+tcb.wkq             =     3
+tcb.state           =     4
+tcb.flags           =     5
+tcb.stsiz           =     6
+tcb.seglist         =     7
+tcb.gbase           =     8
+tcb.sbase           =     9
+tcb.upb             =    17
+|| DCB offsets
+dcb.devid           =     1
+dcb.wkq             =     2
+$)
+
+

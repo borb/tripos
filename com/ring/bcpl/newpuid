@@ -1,0 +1,123 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+      ##    ##  ########  ##    ##  #######   ##    ##  ########  ######   
+      ###   ##  ########  ##    ##  ########  ##    ##  ########  #######  
+      ####  ##  ##        ##    ##  ##    ##  ##    ##     ##     ##    ## 
+      ## ## ##  ######    ##    ##  #######   ##    ##     ##     ##    ## 
+      ##  ####  ##        ## ## ##  ##        ##    ##     ##     ##    ## 
+      ##  ####  ##        ########  ##        ##    ##     ##     ##    ## 
+      ##   ###  ########  ###  ###  ##        ########  ########  #######  
+      ##    ##  ########  ##    ##  ##         ######   ########  ######   
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   15/04             *
+\*****************************************************************************/
+
+
+
+
+SECTION "NEWPUID"
+
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+
+
+
+MANIFEST
+$(
+    txsize  =  3
+    rxsize  =  8
+$)
+
+
+
+LET start()  BE
+$(
+//  Trivially simple program which just calls the "NEWPUID" service, and
+//  prints out the result.
+
+    LET args     =  "TO/K"
+    LET argv     =  VEC 50
+    
+    LET tfile    =  0
+    LET tstream  =  0
+
+    LET txblock  =  VEC txsize/ringwordsperword
+    LET rxblock  =  VEC rxsize/ringwordsperword
+    LET nsv      =  VEC nsv.upb
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** Bad arguments for *"%S*"*N", args )
+        
+        stop( 20 )
+    $)
+
+    tfile  :=  argv!0
+    
+    UNLESS  tfile = 0  DO
+    $(
+        tstream  :=  findoutput( tfile )
+        
+        IF  tstream = 0  THEN
+        $(
+            writef( "****** Cannot open TO file *"%S*"*N", tfile )
+            
+            stop( 20 )
+        $)
+    $)
+
+    FOR  i = 1  TO  5  DO
+
+        //  Try to contact the "newpuid" service.
+        
+        IF  ssp( "NEWPUID", txblock, txsize, rxblock, rxsize, nsv )  THEN
+        $(
+            //  Contact succeeded, so print out the new puid.  Write it to
+            //  the file given if possible, otherwise write it to the
+            //  terminal.
+            
+            LET o  =  output()
+            
+            TEST  tstream = 0  THEN
+            
+                writef( "New PUID is:  %X4%X4%X4%X4*N", get2bytes( rxblock, bb.ssp.args+0 ),
+                                                        get2bytes( rxblock, bb.ssp.args+1 ),
+                                                        get2bytes( rxblock, bb.ssp.args+2 ),
+                                                        get2bytes( rxblock, bb.ssp.args+3 ) )
+
+            ELSE
+            $(
+                selectoutput( tstream )
+                
+                writef( "%X4%X4%X4%X4*N", get2bytes( rxblock, bb.ssp.args+0 ),
+                                          get2bytes( rxblock, bb.ssp.args+1 ),
+                                          get2bytes( rxblock, bb.ssp.args+2 ),
+                                          get2bytes( rxblock, bb.ssp.args+3 ) )
+                                          
+                selectoutput( o )
+            $)
+            
+            UNLESS  tstream = 0  DO  endstream( tstream )
+
+            stop( 0 )
+        $)
+
+    //  If we drop out of that loop, then we have failed to contact
+    //  the New Puid service, and so cannot allocate the new puid.
+    
+    writes( "Cannot contact NEWPUID service*N" )
+
+    UNLESS  tstream = 0  DO  endstream( tstream )
+    
+    stop( 20 )
+$)
+
+

@@ -1,0 +1,38 @@
+section "STATUS370"
+
+get "libhdr"
+get "iohdr"
+get "ringhdr"
+get ":ring.bcpl.bsplib"  // For bsp.forceout()
+
+let start() be
+$( let argv = vec 20
+   let cons.in, cons.out = input(), output()
+   let bs.in, bs.out = ?, ?
+
+   if rdargs("USER/A", argv, 20) = 0 then
+   $( writes("Bad arguments*N")
+      stop(20)
+   $)
+
+   bs.in := findinput("BSP:STATUS-CS")
+   if bs.in = 0 then
+   $( writes("Problem contacting 370*N")
+      stop(20)
+   $)
+   bs.out := result2
+
+   selectoutput(bs.out)
+   writef("%S*N",!argv)
+   bsp.forceout(bs.out)    // force transmission
+   selectoutput(cons.out)
+   selectinput(bs.in)
+   $( let ch=rdch()
+      if bsp.test.reset( bs.in ) then $( writes("****** Error*N"); loop $)
+      if ch=endstreamch break
+      wrch(ch)
+   $) repeat
+   selectinput(cons.in)
+$)
+
+

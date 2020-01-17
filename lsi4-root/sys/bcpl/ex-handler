@@ -1,0 +1,763 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+                          ########  #      #
+                          ########  ##    ##
+                          ##         ##  ##
+                          ######       ##        ##
+                          ##          #  #       ##
+                          ##         ##  ##
+                          ########  ##    ##     ##
+                          ########  #      #     ##
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   19/09/85             *
+\*****************************************************************************/
+
+
+SECTION "EX:"
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+GET "PATTERN"
+GET "BCPL.OBJINFO"
+
+
+GLOBAL
+$(
+    veclist           :  ug + 0
+    pktlist           :  ug + 1
+    rootname          :  ug + 2
+    patternstring     :  ug + 3
+    patternwork       :  ug + 4
+    scb               :  ug + 5
+    exall             :  ug + 6
+    finished          :  ug + 7
+    inputbuff         :  ug + 8
+    inputbuffp        :  ug + 9
+    inputbuffe        :  ug + 10
+    examineco         :  ug + 11
+$)
+
+
+
+MANIFEST
+$(
+    act.replenish     =  1000
+    act.endread       =  1001
+
+    exco.stacksize    =  500
+    wordbuffsize      =  100
+    bytebuffsize      =  wordbuffsize * bytesperword
+
+    size.exinfo       =  dirent.size + file.header.size - 1
+    exinfo.name       =  dirent.name
+$)
+
+
+
+LET start( initpkt )  BE
+$(
+//  Main routine of the "EX:" handler.  Take the arguments given in the
+//  startup packet (directory name, scb and flags), and perform an examination
+//  on it, returning as the result of a "replenish", the names of the files
+//  within this directory.
+
+    veclist   :=  0
+    pktlist   :=  notinuse
+    finished  :=  FALSE
+
+    initio()
+    selectoutput( findoutput( "**" ) )
+
+    patternstring  :=  gvec( 256 / bytesperword )
+    patternwork    :=  gvec( 256 / bytesperword )
+    rootname       :=  gvec( 256 / bytesperword )
+
+    constructpattern( initpkt!pkt.arg2, rootname, patternstring )
+
+    currentdir     :=  initpkt!pkt.arg1
+    scb            :=  initpkt!pkt.arg3
+    exall          :=  initpkt!pkt.arg4
+
+    //  Check to make sure than we can get a lock on the root directory.  If
+    //  not then there is no point in going any further.
+
+    examineco  :=  exists( rootname )  ->  createco( examinename, exco.stacksize ),
+                                           0
+
+    TEST  examineco = 0  THEN  returnpkt( initpkt, FALSE, result2 )
+    ELSE
+    $(
+        //  Fill in the essential fields of the SCB, and then return it to
+        //  the caller to indicate success.
+
+        scb!scb.type   :=  taskid
+        scb!scb.func1  :=  ex.replenish
+        scb!scb.func2  :=  0
+        scb!scb.func3  :=  ex.endread
+        scb!scb.buf    :=  gvec( wordbuffsize )
+        scb!scb.pos    :=  bytebuffsize + 1
+        scb!scb.end    :=  bytebuffsize
+
+        returnpkt( initpkt, scb, 0 )
+
+        inputbuff      :=  nextname( rootname )
+        inputbuffp     :=  0
+        inputbuffe     :=  inputbuff % 0
+
+        //  Now enter a loop, waiting for "replenish" requests, from the
+        //  client, and then filling the relevant buffer with filenames.
+
+        UNTIL  finished  DO
+        $(
+            LET pkt   =  nextpkt()
+            LET type  =  pkt!pkt.type
+            LET scb   =  pkt!pkt.arg1
+
+            SWITCHON  type  INTO
+            $(
+                CASE act.replenish :  do.replenish( pkt, scb )  ;  ENDCASE
+                CASE act.endread   :  do.endread( pkt, scb )    ;  ENDCASE
+
+                DEFAULT            :  qpkt( pkt )
+            $)
+        $)
+
+        //  Give the coroutines a chance to clean themselves up.
+
+        UNTIL  inputbuff = 0  DO
+        $(
+            fvec( inputbuff )
+
+            inputbuff  :=  nextname()
+        $)
+
+        //  Delete the examine coroutine, and delete all other things which
+        //  we have collected during our existence.
+
+        deleteco( examineco )
+    $)
+
+    freeobj( currentdir )
+    fvec( patternstring )
+    fvec( patternwork )
+    fvec( rootname )
+    fvectors()
+    endwrite()
+
+    endtask( tcb!tcb.seglist!3 )
+$)
+
+
+
+AND nextpkt()  =  pktlist = notinuse  ->  taskwait(),
+                                          lookinpktqueue( 0, pktlist )
+
+
+
+AND ex.replenish( scb )  =
+    sendpkt( notinuse, ABS (scb!scb.type), act.replenish, 0, 0, scb )
+
+
+
+AND ex.endread( scb )  =
+    sendpkt( notinuse, ABS (scb!scb.type), act.endread, 0, 0, scb )
+
+
+
+AND do.replenish( pkt, scb )  BE
+$(
+//  Replenish the buffer given to us in the SCB.  We call the examine coroutine
+//  to give us the characters to put in the buffer, and return it when it is
+//  full.
+
+    LET buff  =  scb!scb.buf
+    LET end   =  bytebuffsize
+    LET pos   =  0
+
+    UNTIL  pos = end  DO
+    $(
+        LET ch  =  rdch()
+
+        //  Look to see if we have hit "end of stream".  If we have then
+        //  fill the partial buffer, and return.
+
+        IF  ch = endstreamch  THEN  BREAK
+
+        buff % pos  :=  ch
+        pos         :=  pos + 1
+        
+        IF  ch = '*N'  THEN  BREAK
+    $)
+
+    scb!scb.end  :=  pos
+
+    returnpkt( pkt, (pos \= 0), 0 )
+$)
+
+
+
+AND do.endread( pkt, scb )  BE
+$(
+//  Close the stream.  This implies freeing the buffer, and setting our
+//  internal flag to tell us to stop.
+
+    fvec( scb!scb.buf )
+
+    finished  :=  TRUE
+
+    returnpkt( pkt, TRUE, 0 )
+$)
+
+
+
+AND rdch()  =  VALOF
+$(
+//  Routine to perform a pseudo stream function for the examine coroutines.
+//  It waits for characters to be demanded, and then calls "examine" in order
+//  to get the characters to be returned.  Lines are separated by "*N"s.
+
+    IF  inputbuff = 0  THEN  RESULTIS  endstreamch
+
+    TEST  inputbuffp < inputbuffe  THEN
+    $(
+        inputbuffp  :=  inputbuffp + 1
+
+        RESULTIS  inputbuff % inputbuffp
+    $)
+    ELSE
+    $(
+        fvec( inputbuff )
+
+        inputbuff   :=  nextname()
+        inputbuffp  :=  0
+        inputbuffe  :=  inputbuff % 0
+
+        RESULTIS  '*N'
+    $)
+$)
+
+
+
+AND examinename( directory )  =  VALOF
+$(
+//  Coroutine to handle the examining of a particular directory.
+//  When called, it creates an entry info table for the directory,
+//  and examines the first entry of the directory.  From then on,
+//  it calls the "examine next" operation, until no more entries
+//  exist.
+
+    LET length     =  directory % 0
+    LET lock       =  length = 0  ->  copydir( currentdir ),
+                                      locateobj( directory )
+
+    LET entryinfo  =  VEC size.exinfo
+    LET fhtask     =  0
+    LET exco       =  0
+    LET type       =  0
+
+    //  Check to see that the object really does exist...
+
+    IF  lock = 0  THEN
+    $(
+        writef( "****** Unable to get lock on *"%S*":  ", directory )
+        fault( result2 )
+
+        RESULTIS  0
+    $)
+
+    fhtask  :=  lock!lock.task
+
+    //  Get an "examine object" of the first entry in the directory.
+
+    UNLESS  examine.obj( fhtask, lock, entryinfo )  DO
+    $(
+        writef( "****** Cannot examine *"%S*": ", directory )
+        fault( result2 )
+        freeobj( lock )
+
+        RESULTIS  0
+    $)
+
+    objinfo.ex( objinfo.type, lock, entryinfo, @type )
+
+    UNLESS  type = type.dir  DO
+    $(
+        //  If this is a FILE, then we must treat it as a directory,
+        //  and return back its name.  Unfortunately its name is what
+        //  we are calling the directory name, and so the FILE name is null.
+
+        cowait( "" )
+        freeobj( lock )
+
+        RESULTIS  0
+    $)
+
+
+    //  Ok.  We can now start the main loop of the coroutine, returning
+    //  information about the current directory.
+
+    UNTIL  finished  DO
+    $(
+        UNLESS  examine.nextobj( fhtask, lock, entryinfo )  DO  BREAK
+
+        //  This must be a file for the examine to be meaningful, so
+        //  check this.
+
+        objinfo.ex( objinfo.type, lock, entryinfo, @type )
+
+        IF  type = type.dir  THEN
+        $(
+            //  This is a sub-directory, which we must also archive.
+
+            LET name  =  entryinfo+exinfo.name
+            LET buff  =  0
+            LET file  =  0
+        
+            //  Only if we examining all the entries do we want to call
+            //  ourselves recursively.
+        
+            UNLESS  exall  DO  LOOP
+
+            exco  :=  createco( examinename, exco.stacksize )
+
+            IF  exco = 0  THEN
+            $(
+                writes( "****** Cannot create EXAMINE coroutine*N" )
+                LOOP
+            $)
+
+            buff  :=  joinnames( directory, name )
+            file  :=  callco( exco, buff )
+
+            UNTIL  file = 0  DO
+            $(
+                LET fullname  =  joinnames( name, file )
+
+                cowait( fullname )
+                fvec( fullname )
+
+                file  :=  callco( exco )
+            $)
+
+            deleteco( exco )
+            fvec( buff )
+
+            LOOP
+        $)
+
+        //  Otherwise, this is a perfectly good file, and so we should
+        //  have a go at examining it.
+
+        cowait( entryinfo+exinfo.name )
+    $)
+
+    freeobj( lock )
+
+    RESULTIS  0
+$)
+
+
+
+AND nextname( argument )  =  VALOF
+$(
+//  Get the next name from the input coroutine.  We must check that this 
+//  name matches the original pattern we were given.
+
+    LET result    =  callco( examineco, argument )
+    LET fullname  =  result = 0  ->  0,  joinnames( rootname, result )
+
+    IF  fullname = 0  THEN  RESULTIS  0
+
+    //  Otherwise, we must check the validity of the filename brought back,
+    //  to make sure that it matches the pattern we have been given
+
+    IF  match( patternstring, patternwork, fullname )  THEN  RESULTIS  fullname
+
+    //  If not, then free the rejected name, and try again.
+
+    fvec( fullname )
+$)
+REPEAT
+
+
+
+AND examine.obj( fhtask, lock, entryinfo )  =
+    sendpkt( notinuse, fhtask, action.examineobject, ?, ?, lock, entryinfo, FALSE )
+
+
+
+AND examine.nextobj( fhtask, lock, entryinfo )  =  VALOF
+$(
+    LET ok  =  sendpkt( notinuse, fhtask, action.examinenext, ?, ?, lock, entryinfo, FALSE )
+
+    UNLESS  ok  DO
+    $(
+        IF  result2 = error.nomoreentries  THEN  RESULTIS  FALSE
+
+        //  Otherwise, print out a message, and try again.
+
+        writef( "****** Error in entry *"%S*":  ", entryinfo+exinfo.name )
+        fault( result2 )
+
+        LOOP
+    $)
+
+    RESULTIS  ok
+$)
+REPEAT
+
+
+
+AND copystring( string )  =  VALOF
+$(
+//  Make a copy of a string from Static memory to Heap memory.
+
+    LET length  =  string % 0
+    LET copy    =  gvec( length / bytesperword )
+
+    FOR  i = 0  TO  length  DO  copy % i  :=  string % i
+
+    RESULTIS  copy
+$)
+
+
+
+AND joinnames( name1, name2 )  =  VALOF
+$(
+//  Join the two halves of a filename together to make one.  A dot is the
+//  separator, unless:
+//
+//        a)  name1 is a device name of the form  DEV:
+//        b)  name1 or name2 are the null string.
+
+    LET lname1  =  name1 % 0
+    LET lname2  =  name2 % 0
+    LET nodot   =  (name1 % 0) = 0  |  (name2 % 0) = 0  |  (name1 % lname1) = ':'
+
+    LET buffer  =  gvec( (lname1 + lname2 + 1) / bytesperword )
+    LET length  =  0
+
+    FOR  i = 1  TO  lname1  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  name1 % i
+    $)
+
+    UNLESS  nodot  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  '.'
+    $)
+
+    FOR  i = 1  TO  lname2  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  name2 % i
+    $)
+
+    buffer % 0  :=  length
+
+    RESULTIS  buffer
+$)
+
+
+
+AND gvec( vecsize )  =  VALOF
+$(
+//  Add a new vector to the list of those "got" already.
+
+    LET node   =  getvec( 2 )
+    LET space  =  getvec( vecsize )
+
+    TEST  node = 0  |  space = 0  THEN
+    $(
+        //  Cannot get either the main space, or the node space.
+        //  Free whichever one was successful, and flag an error.
+
+        UNLESS  node   = 0  DO  freevec( node )
+        UNLESS  space  = 0  DO  freevec( space )
+
+        error( "Cannot get vector of size %U5", vecsize )
+    $)
+    ELSE
+    $(
+        //  We have got the vector successfully, so add it to the
+        //  chain of allocated vectors.
+
+        node!0  :=  veclist
+        node!1  :=  space
+        veclist :=  node
+
+        RESULTIS  space
+    $)
+$)
+
+
+
+AND fvec( vector )  BE
+$(
+//  Free the vector pointed to by "vector".  Look in the allocated space chain
+//  to find this vector, and when found, de-allocate the space.
+
+    LET node  =  veclist
+    LET ptr   =  @veclist
+
+    UNTIL  node = 0  DO
+    $(
+        IF  node!1 = vector  THEN
+        $(
+            //  We have found the vector to deallocate.  Remove this node from
+            //  the list, and deallocate the space involved.
+
+            !ptr   :=  node!0
+
+             freevec( vector )
+             freevec( node )
+
+             RETURN
+        $)
+
+        ptr   :=  node
+        node  :=  node!0
+    $)
+
+    error( "Cannot free vector %N", vector )
+$)
+
+
+
+AND fvectors()  BE
+$(
+//  Free all the vectors pointed to by the list "veclist"
+
+    UNTIL veclist = 0  DO
+    $(
+        LET nlist  =  veclist!0
+        LET space  =  veclist!1
+
+        freevec( space )
+        freevec( veclist  )
+
+        veclist  :=  nlist
+    $)
+$)
+
+
+
+AND pktwait( id, pkt )  =  VALOF
+$(
+//  Wait for the packet "pkt", which should be arriving from task "id".
+//  Any other packets which arrive in the meantime are queued onto "pktlist",
+//  and dequeued when requested.
+
+    LET p  =  lookinpktqueue( id, pkt )
+
+    UNLESS  p = notinuse  DO  RESULTIS  p
+
+    //  If it was not in the packet queue, then we must wait until the
+    //  packet arrives.
+
+    $(  //  Loop to wait for packets
+
+        p  :=  taskwait()
+
+        IF  p = pkt  THEN  RESULTIS  p
+
+        //  Oh, boring!  This was STILL not the one wanted, so queue it,
+        //  and wait some more.
+
+        addtopktqueue( p )
+    $)
+    REPEAT  //  Until the correct packet arrives.
+$)
+
+
+
+AND lookinpktqueue( id, pkt )  =  VALOF
+$(
+    LET ptr  =  @pktlist
+
+    UNTIL  !ptr = notinuse  DO
+    $(
+        IF  !ptr = pkt  THEN
+        $(
+            //  This is our packet.  Dequeue it, and send it back again.
+
+            LET packet  =  !ptr
+
+            !ptr     :=  !packet
+            !packet  :=  notinuse
+
+            RESULTIS  packet
+        $)
+
+        //  Otherwise, we carry on down the chain, looking as we go
+
+        ptr  :=  !ptr
+    $)
+
+    RESULTIS  notinuse
+$)
+
+
+
+AND addtopktqueue( pkt )  BE
+$(
+    !pkt     :=  pktlist
+    pktlist  :=  pkt
+$)
+
+
+
+AND exists( name )  =  VALOF
+$(
+//  Look to see whether the object in question is part of the filing system.
+
+    LET lock  =  locateobj( name )
+
+    UNLESS  lock = 0  DO  freeobj( lock )
+
+    RESULTIS  lock \= 0
+$)
+
+
+
+AND constructpattern( username, rootname, patternstring )  BE
+$(
+//  Construct an MR type pattern out of the CPM/UNIX type pattern.  The
+//  transformations we do are as follows:
+//
+//       *     ->    #?
+//       '     ->    ''
+//       #     ->    '#
+//       (     ->    '(
+//       )     ->    ')
+//       %     ->    '%
+//       /     ->    '/
+//
+//  The pattern string is a direct transformation of the pattern given to us.
+//  The rootname is the leftmost part of the user name which is unambiguous.
+
+    LET userlength  =  username % 0
+    LET rootptr     =  1
+
+    patternstring % 0  :=  0
+    patternwork % 0    :=  0
+
+    FOR  i = 1  TO  userlength  DO
+    $(
+        LET ch  =  username % i
+        
+        SWITCHON  ch  INTO
+        $(
+            CASE '**' :  concatenate( patternstring, "#?" )  ;  ENDCASE
+            CASE '*'' :  concatenate( patternstring, "''" )  ;  ENDCASE
+            CASE '#'  :  concatenate( patternstring, "'#" )  ;  ENDCASE
+            CASE '('  :  concatenate( patternstring, "'(" )  ;  ENDCASE
+            CASE ')'  :  concatenate( patternstring, "')" )  ;  ENDCASE
+            CASE '%'  :  concatenate( patternstring, "'%" )  ;  ENDCASE
+            CASE '/'  :  concatenate( patternstring, "'/" )  ;  ENDCASE
+
+            DEFAULT   :  addtostring( patternstring, ch )    ;  ENDCASE
+        $)
+    $)
+
+    //  Having constructed the first part of the pattern, we must concatenate
+    //  the final part of the pattern to make sure that we pick up all
+    //  members of directories etc.
+
+    TEST  nullstring( patternstring )  THEN
+          concatenate( patternstring, "#?" )
+    ELSE
+
+    TEST  endswithcolon( patternstring )  THEN
+          concatenate( patternstring, "((#?)/%)" )
+
+    ELSE  concatenate( patternstring, "((.#?)/%)" )
+
+    //  And compile the pattern for good measure!
+
+    cmplpat( patternstring, patternwork )
+
+    //  Now search along the user string until a "*" or a "?" is found.  Then,
+    //  search backwards for the end of the previous component path name.
+
+    UNTIL  rootptr > userlength  DO
+    $(
+        LET ch  =  username % rootptr
+        
+        IF  ch = '**'  |  ch = '?'  THEN  BREAK
+
+        rootptr  :=  rootptr + 1
+    $)
+
+    //  If we hit the end of the string without finding an ambiguity, then
+    //  this is the root name.  Otherwise, search backwards for the beginning
+    //  of the path name.
+
+    TEST  rootptr > userlength  THEN  rootptr  :=  userlength
+    ELSE
+    
+    UNTIL  rootptr = 0  DO
+    $(
+        LET ch  =  0
+
+        rootptr  :=  rootptr - 1
+        ch       :=  username % rootptr
+
+        IF  ch = ':'  THEN  BREAK
+        IF  ch = '.'  THEN  $(  rootptr  :=  rootptr - 1 ;  BREAK  $)
+    $)
+
+    FOR  i = 1  TO  rootptr  DO  rootname % i  :=  username % i
+
+    rootname % 0  :=  rootptr
+$)
+
+
+
+AND nullstring( string )  =  string % 0  =  0
+
+
+
+AND endswithcolon( string )  =  string % (string % 0)  =  ':'
+
+
+
+AND concatenate( mainstring, substring )  BE
+    FOR  i = 1  TO  substring % 0  DO
+        addtostring( mainstring, substring % i )
+
+
+
+AND addtostring( string, ch )  BE
+$(
+    LET length  =  string % 0
+
+    IF  length = 255  THEN  error( "Pattern string too long" )
+
+    length           :=  length + 1
+    string % length  :=  ch
+    string % 0       :=  length
+$)
+
+
+
+AND error( format, arg1, arg2 )  BE
+$(
+    writes( "****** EX:  " )
+    writef( format, arg1, arg2 )
+    newline()
+
+    abort( 9999 )
+$)
+
+

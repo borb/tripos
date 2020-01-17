@@ -1,0 +1,215 @@
+SECTION "LCG5"
+
+GET "LCGHDR"
+
+LET loadt(k, n) BE
+// load item (K, N) onto the simulated stack
+$(  cgpendingop()
+    arg2 := arg1
+    arg1 := arg1+3
+    IF arg1=tempt DO cgerror(20, "IN LOADT")
+    h1!arg1, h2!arg1, h3!arg1 := k, n, ssp
+    ssp := ssp+1
+    IF maxssp<ssp DO maxssp := ssp
+$)
+
+AND lose1(r) BE $( stack(ssp-1); h1!arg1, h2!arg1 := k.reg, r $)
+// replace top two items of simulated stack by contents of register R
+
+AND regusedby(t) = h1!t=k.reg -> h2!t, h1!t=k.ry -> r.y, -1
+
+AND isfree(r) = VALOF
+$(  IF r=r.x | reg.locked!r THEN RESULTIS no
+    FOR t = tempv TO arg1 BY 3 IF regusedby(t)=r RESULTIS no
+    RESULTIS yes
+$)
+
+AND storei() BE
+// Compile indirect assignment
+$(  LET k, r, m = findoffset(), 0, 0
+    store(0, ssp-3)
+    r := movetoaq(arg2)
+    TEST h1 ! arg1 = k.numb THEN k := k + h2 ! arg1
+     ELSE
+      $( movetor(arg1, r.y); m := m.y $)
+    gensore(f.st, f.ste, r, m, k)
+    forgetallvars()
+    // an indirect assignment may alter any word of store
+    // - in particular the word corresponding to item
+    // ARG1. reluctantly, therefore, we must not
+    // remember that Y corresponds to the value of
+    // item ARG1
+    stack(ssp-2)
+$)
+
+AND findoffset() = VALOF  // used by STOREI and CGRV
+$(  IF pendingop=s.minus & h1!arg1=k.numb
+    THEN pendingop, h2!arg1 := s.plus, -h2!arg1
+    IF pendingop=s.plus DO
+    $(  LET k, n, a = k.none, 0, 0
+        IF h1 ! arg2 = k.numb THEN k, n, a := h1!arg1, h2!arg1, h2!arg2
+        IF h1 ! arg1 = k.numb THEN k, n, a := h1!arg2, h2!arg2, h2!arg1
+        UNLESS k=k.none DO
+        $(  stack(ssp-1); h1!arg1,h2!arg1:=k,n; pendingop:=s.none; RESULTIS a $)
+    $)
+    cgpendingop()
+    RESULTIS 0
+$)
+
+AND storein(k, n) BE
+// compile assignment to a simple variable (K, N)
+// the only operations that can be optimised
+// are S+:=1, S-:=1
+$(  LET b = (h1!arg1=k & h2!arg1=n) -> 1, (h1!arg2=k & h2!arg2=n) -> 2, 0
+    LET r, addr = 0, 0
+    LET rand1, rand2 = arg1, arg2
+    IF b=1 DO rand1, rand2 := arg2, arg1
+
+    UNLESS b=0 SWITCHON pendingop INTO
+    $(
+    CASE s.none:IF b=1 DO $(  stack(ssp-1); RETURN $)  // case X := X
+                ENDCASE
+    CASE s.minus:
+                IF b=1 ENDCASE  // reverse subtract!
+                UNLESS h1!rand1=k.numb ENDCASE
+                // case X := X-k
+                pendingop := s.plus
+                h2!rand1 := -h2!rand1
+
+    CASE s.plus:IF h1!rand1=k.numb THEN
+                $(3 LET m = h2!rand1
+                    UNLESS -1<=m<=1 ENDCASE
+                    UNLESS m=0 DO
+                    $( chkrefs(4)
+                       TEST m > 0 genm(f.ims, f.imse, 0, k, n, 0)
+                       ELSE       genm(0,     f.dmse, 0, k, n, 0)
+                       code(f.nop, 0)
+                       forgetvar(k, n)
+                    $)
+                    pendingop := s.none
+                    stack(ssp-2)
+                    RETURN
+                $)3
+    $)
+    cgpendingop()
+
+
+    r := (k=k.glob) -> movetoaq(arg1), movetoaqy(arg1)
+    genm(f.st, f.ste, r, k, n, 0)
+    forgetvar(k, n)
+    remem(r, k, n)
+    stack(ssp-1)
+$)
+
+
+AND cglab(n, len) BE            // Sets label 'n' for data of length 'len'
+$( UNLESS incode THEN
+   $( LET nref = 0
+      $( LET p = krefv
+         WHILE p \= krefp DO TEST (h2!p=k.lab|h2!p=k.jlab) & h3!p=n
+                THEN $( IF nref = 0 THEN nref := p; p := p + 3 $)
+                ELSE BREAK
+             // 'p' is for a label other than 'n'
+         IF refinrange(p, len) THEN BREAK
+         IF nref \= 0 & h1!nref <= stvp THEN
+               $( dealwithkref(nref); nref := 0; LOOP $)
+         dealwithkref(p)
+      $) REPEAT
+   $)
+   setlabel(n)
+$)
+
+AND cgrv() BE
+// Make top stack item addressable by Y
+$( LET n = findoffset()
+   TEST h1!arg1 = k.numb THEN h1!arg1, h2!arg1 := k.abs, h2!arg1 + n
+   ELSE $( movetor(arg1, r.y); h1!arg1, h2!arg1 := k.ry, n $)
+$)
+
+AND cgmult() BE
+  $( LET a1, a2 = arg1, arg2
+
+     IF h1!a2 = k.numb THEN $( a1 := arg2; a2 := arg1 $)
+
+     movetor(a2,r.q)
+
+     IF h1 ! a1 = k.numb
+     $( LET n  = h2 ! a1
+        LET an = ABS n
+        IF [an & (an - 1)] = 0
+        $( TEST an = 0 THEN setrtok(r.q, 0)
+           ELSE IF an \= 1 THEN gensh(f.sll,r.q,bitpos(an))
+           IF n < 0 THEN genrr(f.neg,r.q,r.q)
+           GOTO mul.done
+        $)
+     $)
+
+     IF h1!a1=k.lvlab | h1!a1=k.lvloc | h1!a1=k.reg | h1!a1=k.lvglob  storet(a1)
+
+     freereg(r.a)
+     setrtok(r.a, 0)
+
+     genm(0, f.mul, r.q, h1!a1, h2!a1, 0)
+     forgetreg(r.a)
+
+mul.done:
+     forgetreg(r.q)
+     lose1(r.q)
+  $)
+
+
+AND cgdiv(remainder) BE
+$( IF h1!arg1=k.reg | h1!arg1=k.lvloc | h1!arg1=k.lvlab | h1!arg1=k.lvglob
+   THEN storet(arg1)
+
+   movetor(arg2,r.a)
+   freereg(r.q)
+   gensh(f.srda,r.q,16)
+   genm(0, f.div, r.q, h1!arg1, h2!arg1, 0)
+   forgetreg(r.a)
+   forgetreg(r.q)
+   lose1(remainder -> r.a, r.q)
+$)
+
+
+AND cgshift(left) BE
+$( LET r = ?
+   TEST h1 ! arg1 = k.numb
+   $( LET n = h2 ! arg1
+      r := movetoaqy(arg2)
+      TEST 0 <= n <= 16
+      THEN UNLESS n = 0 $( gensh((left -> f.sll,f.srl),r,n); forgetreg(r) $)
+      ELSE setrtok(r, 0)
+   $)
+   ELSE
+   $( movetor(arg1,r.q)
+      movetor(arg2,r.a)
+      freereg(r.y)
+      gens(f.jst,0,(left -> a.lshift, a.rshift))
+      forgetall()
+      r := r.a
+   $)
+   lose1(r)
+$)
+
+
+AND cggetbyte() BE
+  $( movetor(arg1,r.q)
+     movetor(arg2,r.y)
+     freereg(r.a)
+     gens(f.jst,0,a.gbyte)
+     forgetall()
+     lose1(r.a)
+  $)
+
+
+AND cgputbyte() BE
+  $( movetor(arg1,r.q)
+     loadarg(ssp-3,h3!tempv,r.a)
+     movetor(arg2,r.y)
+     gens(f.jst,0,a.pbyte)
+     forgetall()
+     stack(ssp-3)
+  $)
+
+

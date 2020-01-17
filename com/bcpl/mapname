@@ -1,0 +1,134 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+      ##    ##    ####    #######   ##    ##    ####    ##    ##  ######## 
+      ###  ###   ######   ########  ###   ##   ######   ###  ###  ######## 
+      ########  ##    ##  ##    ##  ####  ##  ##    ##  ########  ##       
+      ## ## ##  ########  #######   ## ## ##  ########  ## ## ##  ######   
+      ##    ##  ##    ##  ##        ##  ####  ##    ##  ##    ##  ##       
+      ##    ##  ##    ##  ##        ##  ####  ##    ##  ##    ##  ##       
+      ##    ##  ##    ##  ##        ##   ###  ##    ##  ##    ##  ######## 
+      ##    ##  ##    ##  ##        ##    ##  ##    ##  ##    ##  ######## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   30/09/85             *
+\*****************************************************************************/
+
+
+
+SECTION "MAPNAME"
+
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+GET "BCPL.RINGMAP"
+
+
+
+MANIFEST
+$(
+    resultbytes    =   max.ssp.size * bytesperringword
+    resultwords    =   resultbytes/bytesperword
+
+    bytesperpuid   =  8
+    wordsperpuid   =  bytesperpuid / bytesperword
+    offset.tuid    =  1
+    offset.tpuid   =  offset.tuid    +  wordsperpuid
+    offset.authy   =  offset.tpuid   +  wordsperpuid
+    offset.puid    =  offset.authy   +  wordsperpuid
+$)
+
+
+
+LET start()  BE
+$(
+    LET args     =  "NAME,FROM=FROMDOMAIN,TO=TODOMAIN"
+    LET argv     =  VEC 100
+
+    LET puid     =  VEC wordsperpuid * 2
+    LET result   =  VEC resultwords
+
+    LET rc       =  0
+    LET name     =  0
+    LET fdomain  =  0
+    LET tdomain  =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** MAPNAME:  Bad arguments for string *"%S*"*N", args )
+        
+        stop( 20 )
+    $)
+
+    name     :=  argv!0
+    fdomain  :=  argv!1
+    tdomain  :=  argv!2
+
+    IF  name = 0  THEN
+    $(
+        //  No name given, so we should pick up the user's PUID from low memory
+        //  and make it into a string, and pass that across instead.
+        
+        LET uid  =  rootnode!rtn.info!rtninfo.ring!ri.uidset + offset.puid
+
+        puid % 0  :=  bytesperpuid * 2
+
+        FOR  i = 0  TO  bytesperpuid-1  DO
+        $(
+            LET offset  =  i * 2
+            LET byte    =  uid % i
+            LET hb      =  (byte >> 4)  &  #X0F
+            LET lb      =  (byte     )  &  #X0F
+
+            puid % (offset + 1)  :=  hexchar( hb )
+            puid % (offset + 2)  :=  hexchar( lb )
+        $)
+        
+        name  :=  puid
+    $)
+
+    IF  fdomain = 0  THEN  fdomain  :=  "ANY"
+    IF  tdomain = 0  THEN  tdomain  :=  "WORLD"
+
+    TEST  ringmap( name, fdomain, tdomain, result, resultbytes )  THEN
+          writef( "Mapping *"%S*" from %S to %S gave *"%S*"*N", 
+                   name, fdomain, tdomain, result )
+
+    ELSE
+    $(
+        //  The map failed in some way.  Look to see if the return code is
+        //  one of those passed back by the map service, and if so, interpret
+        //  it.  Otherwise, call "fault" in an attempt to give a helpful
+        //  message.
+        
+        rc  :=  result2
+        
+        writef( "Mapping *"%S*" from %S to %S failed:  ", name, fdomain, tdomain )
+        
+        SWITCHON  rc  INTO
+        $(
+            CASE #XA001 :  writes( "Argument/Result string too long*N" )       ;  ENDCASE
+            CASE #XC002 :  writes( "Unknown SSP function*N" )                  ;  ENDCASE
+            CASE #XC00B :  writes( "SSP request block too small*N" )           ;  ENDCASE
+            CASE #XDFE8 :  writes( "Unknown source domain*N" )                 ;  ENDCASE
+            CASE #XDFE9 :  writes( "Unknown destination domain*N" )            ;  ENDCASE
+            CASE #XDFEA :  writes( "Name not known in source domain*N" )       ;  ENDCASE
+            CASE #XDFEB :  writes( "Name not known in destination domain*N" )  ;  ENDCASE
+
+            DEFAULT     :  fault( rc )
+        $)
+    $)
+
+    stop( rc )
+$)
+
+
+
+AND hexchar( value )  =  "0123456789ABCDEF" % (value + 1)
+
+

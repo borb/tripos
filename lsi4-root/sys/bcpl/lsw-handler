@@ -1,0 +1,394 @@
+/*****************************************************************************\
+*                        Olivetti Research Laboratory                         *
+*******************************************************************************
+
+
+                          ##         ######   ##    ## 
+                          ##        ########  ##    ## 
+                          ##        ##        ##    ## 
+                          ##        #######   ##    ## 
+                          ##              ##  ## ## ## 
+                          ##              ##  ######## 
+                          ########  ########  ###  ### 
+                          ########   ######   ##    ## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   27/04/87             *
+\*****************************************************************************/
+
+
+
+SECTION "LSW"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+
+
+
+GLOBAL
+$(
+    active                          :  ug + 0
+    device.in                       :  ug + 1
+    device.out                      :  ug + 2
+    readco                          :  ug + 3
+    readpkt                         :  ug + 4
+    readbuffer                      :  ug + 5
+    readbuffere                     :  ug + 6
+    readbufferp                     :  ug + 7
+    transmitting                    :  ug + 8
+    writeco                         :  ug + 9
+    writepkt                        :  ug + 10
+$)
+
+
+
+MANIFEST
+$(
+    action.findoutput               =  act.findoutput
+    action.writewords               =  'W'
+
+    ch.ctrld                        =  'D' - '@'
+    ch.ctrls                        =  'S' - '@'
+    ch.ctrlq                        =  'Q' - '@'
+
+    rxpackets                       =  10
+
+    stacksize.read                  =  500
+    stacksize.write                 =  500
+
+    wordsperbuffer                  =  1000
+    bytesperbuffer                  =  wordsperbuffer * bytesperword
+$)
+
+
+
+LET start( initpkt )  BE
+$(
+//  Main routine of the laser writer handler task.  We handle one stream
+//  at once only, and that is an output stream.  We handle XON/XOFF protocol
+//  from the laser writer, and print out any error messages which the printer
+//  gives to us.
+
+    device.in   :=  devicetask( "ttyin:" )
+    device.out  :=  devicetask( "ttyout:" )
+
+    IF  device.in = 0  |  device.out = 0  THEN
+    $(
+        //  One or both of the devices does not exist, so we cannot do a lot
+        //  about this!
+        
+        returnpkt( initpkt, FALSE, error.device.not.mounted )
+        
+        deletetask( taskid )
+    $)
+
+    //  Otherwise, we have the devices, so it is safe to continue working.
+
+    active  :=  FALSE
+
+    initio()
+    selectoutput( findoutput( "**" ) )
+
+    //  The handler is arranged as two coroutines.  The first takes input from
+    //  the laser writer, and prints it out to the console.  It also handles
+    //  the XON/XOFF protocol.  The second repeatedly empties user buffers
+    //  sending the contents to the laser writer.  
+
+    readco      :=  createco( read, stacksize.read )
+    writeco     :=  createco( write, stacksize.write )
+
+    readbuffer  :=  getvec( wordsperbuffer )
+
+    IF  readco = 0  |  writeco = 0  |  readbuffer = 0  THEN
+    $(
+        //  Failed to create the coroutines, so we should return now with an
+        //  error.
+        
+        UNLESS  readco = 0      DO  deleteco( readco )
+        UNLESS  writeco = 0     DO  deleteco( writeco )
+
+        UNLESS  readbuffer = 0  DO  freevec( readbuffer )
+        
+        returnpkt( initpkt, FALSE, error.getvecfailure )
+        
+        deletetask( taskid )
+    $)
+
+    //  We can now return the initialisation packet to the caller, and enter
+    //  the main loop waiting for something to do.
+
+    returnpkt( initpkt, TRUE )
+
+    //  Set up the pointers into the circular reception buffer, and then
+    //  enqueue the "rx" packets to the receive device.
+
+    readbufferp  :=  0
+    readbuffere  :=  0
+
+    FOR  i = 1  TO  rxpackets  DO
+    $(
+        LET pkt  =  getvec( pkt.arg1 )
+        
+        IF  pkt = 0  THEN  BREAK
+        
+        pkt!pkt.link  :=  notinuse
+        pkt!pkt.id    :=  device.in
+
+        qpkt( pkt )
+    $)
+
+    //  Having created the coroutines, we should start them up so that we
+    //  can then return to the caller.
+
+    pktwait   :=  copktwait
+
+    readpkt   :=  callco( readco )
+    writepkt  :=  callco( writeco )
+
+    $(  //  Loop to wait for packets to be sent to us.  When they arrive, we
+        //  dispatch them to the relevant coroutine.
+        
+        LET pkt  =  taskwait()
+        LET id   =  pkt!pkt.id
+
+        //  Is it a character from the serial device?  If so, then we should
+        //  add it to the circular buffer to be written out.
+        
+        TEST  id = device.in  THEN  handlerx( pkt )
+        ELSE
+        
+        //  Is it the read packet returned?  If so, then we should kick
+        //  the read coroutine.
+        
+        TEST  pkt = readpkt  THEN  readpkt  :=  callco( readco, pkt )
+        ELSE
+        
+        //  Is it the write packet come home to roost?  If so, then we
+        //  should pass it on to the write coroutine.
+
+        TEST  pkt = writepkt  THEN  writepkt  :=  callco( writeco, pkt )
+        ELSE
+        
+        //  Is it a user packet which can be handled, since the write
+        //  coroutine is currently idle?
+
+        TEST  writepkt = 0  THEN  writepkt  :=  callco( writeco, pkt )
+        ELSE
+        
+        //  We cannot handle it, since the write coroutine claims to
+        //  be busy with something else.
+            
+        returnpkt( pkt, FALSE, error.objectinuse )
+    $)
+    REPEAT
+$)
+
+
+
+AND copktwait( id, pkt )  =  cowait( pkt )
+
+
+
+AND handlerx( pkt )  BE
+$(
+//  Read coroutine which gets characters from the laser writer and print
+//  them out.
+
+    LET ch  =  pkt!pkt.res1
+
+    TEST  ch = ch.ctrls  THEN  transmitting  :=  FALSE  
+    ELSE
+
+    TEST  ch = ch.ctrlq  THEN  transmitting  :=  TRUE   
+    ELSE
+    $(
+        //  Not an interesting character, so add it to the circular buffer
+        //  to be printed out later.
+        
+        readbuffer % readbuffere  :=  ch
+        readbuffere               :=  (readbuffere + 1) REM bytesperbuffer
+    $)
+
+    qpkt( pkt )
+$)
+
+
+
+AND read()  BE
+$(
+//  Read coroutine.  Wait until there are characters in the reception
+//  buffer, and then write them out.
+
+    WHILE  readbufferp = readbuffere  DO  delay( tickspersecond/5 )
+
+    wrch( readbuffer % readbufferp )
+
+    readbufferp  :=  (readbufferp + 1) REM bytesperbuffer
+$)
+REPEAT
+
+
+
+AND write()  BE
+$(
+//  Write coroutine which takes characters from the user and sends them to
+//  the laser printer.  Before we send each file to the laser printer, we
+//  send a "control d" to reset the beast.
+
+    transmitting  :=  TRUE
+
+    lsw.wrch( ch.ctrld )
+
+    $(  //  Loop to get packets from the user, and send the data therein to
+        //  the laser writer.
+        
+        LET pkt  =  cowait( 0 )
+
+        SWITCHON  pkt!pkt.type  INTO
+        $(  
+            CASE action.findoutput  :  do.findoutput( pkt )   ;  ENDCASE
+            CASE action.write       :  do.write( pkt )        ;  ENDCASE
+            CASE action.writewords  :  do.writewords( pkt )   ;  ENDCASE
+            CASE action.closeoutput :  do.closeoutput( pkt )  ;  BREAK
+
+            DEFAULT                 :  returnpkt( pkt, 0, error.actionnotknown )
+        $)
+    $)
+    REPEAT
+$)
+REPEAT
+
+
+
+AND do.findoutput( pkt )  BE
+$(
+//  Attempt to open a stream to the laser writer.  We disallow this is we
+//  are already active.
+
+    TEST  active  THEN
+        returnpkt( pkt, 0, error.objectinuse )
+
+    ELSE
+    $(
+        //  We can perform then open.  Fill in the SCB, and then set the
+        //  active flag.
+        
+        LET buf  =  getvec( wordsperbuffer )
+        
+        TEST  buf = 0  THEN
+            returnpkt( pkt, 0, error.getvecfailure )
+            
+        ELSE
+        $(
+            LET scb  =  pkt!pkt.arg1
+
+            scb!scb.type   :=  taskid
+            scb!scb.buf    :=  buf
+            scb!scb.pos    :=  0
+            scb!scb.end    :=  bytesperbuffer
+            scb!scb.func1  :=  0
+            scb!scb.func2  :=  lsw.deplete
+            scb!scb.func3  :=  lsw.endwrite
+            scb!scb.arg1   :=  scb
+            
+            active         :=  TRUE
+
+            returnpkt( pkt, scb )
+        $)
+    $)
+$)
+
+
+
+AND do.closeoutput( pkt )  BE
+$(
+//  Close the current output stream.  Free the data buffer associated with
+//  it, and flush any characters which are held in it.
+
+    LET scb  =  pkt!pkt.arg1
+    LET buf  =  scb!scb.buf
+    LET pos  =  scb!scb.pos
+
+    flushoutput( buf, pos )
+    freevec( buf )
+
+    returnpkt( pkt, TRUE )
+
+    active  :=  FALSE
+$)
+
+
+
+AND do.write( pkt )  BE
+$(
+//  Flush the current output stream.
+
+    LET scb  =  pkt!pkt.arg1
+    LET buf  =  scb!scb.buf
+    LET pos  =  scb!scb.pos
+
+    flushoutput( buf, pos )
+
+    scb!scb.pos  :=  0
+
+    returnpkt( pkt, TRUE )
+$)
+
+
+
+AND do.writewords( pkt )  BE
+$(
+//  Silly operation for a laser printer, but we may as well support it!.
+
+    LET scb  =  pkt!pkt.arg1
+    LET buf  =  pkt!pkt.arg2
+    LET pos  =  pkt!pkt.arg3 * bytesperword
+
+    flushoutput( buf, pos )
+
+    returnpkt( pkt, TRUE )
+$)
+
+
+
+AND flushoutput( buf, pos )  BE
+
+//  Write the characters in the buffer given.
+
+    FOR  i = 0  TO  pos-1  DO  lsw.wrch( buf % i )
+
+
+
+AND lsw.rdch()  =  sendpkt( notinuse, device.in )
+
+
+
+AND lsw.wrch( ch )  BE
+$(
+//  We must wait for the XON/OFF protocol before we can transmit.
+
+    UNTIL  transmitting  DO  delay( tickspersecond/5 )
+
+    sendpkt( notinuse, device.out, 0, 0, 0, ch )
+$)
+
+
+
+//  The following routines are called from the user's task whenever something
+//  needs doing to the SCB.  
+
+
+
+AND lsw.deplete( scb )  =
+    sendpkt( notinuse, ABS (scb!scb.type), action.write, 0, 0, scb )
+
+
+
+AND lsw.endwrite( scb )  =  VALOF
+    sendpkt( notinuse, ABS (scb!scb.type), action.closeoutput, 0, 0, scb )
+
+

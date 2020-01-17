@@ -1,0 +1,291 @@
+SECTION "SYN6"
+
+GET "SYNHDR"
+
+LET rbexp() = VALOF
+$(1 LET a, op = 0, symb
+
+    SWITCHON symb INTO
+
+ $( DEFAULT: synreport(32, symb)
+
+    CASE s.query:
+        nextsymb()
+        RESULTIS list1(s.query)
+
+    CASE s.true:
+    CASE s.false:
+    CASE s.name:
+        a := wordnode
+Rres:   nextsymb()
+        RESULTIS a
+
+    CASE s.string:
+     $( LET wordsize = wordv%0/bytesperword
+        a := newvec(wordsize+1)
+        a!0 := s.string
+        FOR i = 0 TO wordsize DO a!(i+1) := wordv!i
+        GOTO Rres
+//        nextsymb()
+//        RESULTIS a
+     $)
+
+    CASE s.globnumber:
+        nextsymb()
+        RESULTIS list2(s.globnumber, rname())
+//      $( LET a = rname()
+//         WRITEF("GOT %X4-%N: %X4 %X4 %X4=%S*N", a, a, a!0, a!1, a!2, a+2)
+//         RESULTIS list2(s.globnumber, a)
+//      $)
+
+    CASE s.number:
+     $( LET k = decval
+        nextsymb()
+        IF k=0 RESULTIS zeronode
+        IF smallnumber(k) RESULTIS k
+        RESULTIS list2(s.number, k)
+     $)
+
+    CASE s.lparen:
+        nextsymb()
+        a := rexp(0)
+        checkfor(s.rparen, 15)
+        RESULTIS a
+
+    CASE s.valof:
+        nextsymb()
+//com   RESULTIS list2(s.valof, rcom())
+        $( LET a = list2(s.valof)
+           rcom(a+h2)
+           RESULTIS a
+        $)
+
+    CASE s.vecap: op := s.rv
+    CASE s.lv:
+    CASE s.rv:    nextsymb()
+                  RESULTIS list2(op, rexp(37))
+
+    CASE s.plus:  nextsymb()
+                  RESULTIS rexp(34)
+
+    CASE s.minus: nextsymb()
+                  a := rexp(34)
+                  IF smallnumber(a) RESULTIS list2(s.number, -a)
+                  RESULTIS list2(s.neg, a)
+
+    CASE s.not:   nextsymb()
+                  RESULTIS list2(s.not, rexp(24))
+
+    CASE s.err:   nextsymb()
+                  RESULTIS list2(s.err, rexp(30))       // same as 0 <= x
+
+    CASE s.abs:   nextsymb()
+                  RESULTIS list2(s.abs, rexp(35))
+
+    CASE s.table: nextsymb()
+                  RESULTIS list2(s.table, rexplist())
+
+$<SLCT
+    CASE s.slct:  $( STATIC $( zero = S.FALSE $)
+                     LET b,c = -1, -1
+                     nextsymb(); a:= rexp(0)
+                     IF symb = s.colon
+                     $( nextsymb(); b := rexp(0)
+                        IF symb = s.colon $( nextsymb(); c := rexp(0) $)
+                     $)
+                     IF c = -1 THEN c := list2(s.number, 0)
+                     IF b = -1 THEN b := c      // -> c was -1
+                     RESULTIS list4(s.slct, a, b, c)
+                   $)
+$>SLCT
+$)
+$)1
+
+
+AND rexp(n) = VALOF
+$(1 LET a = rbexp()
+
+    LET b, c, p, q = 0, 0, 0, 0
+
+$(2 LET op = symb
+
+    IF nlpending RESULTIS a
+
+    SWITCHON op INTO
+
+$(s DEFAULT: RESULTIS a
+
+    CASE s.lparen: nextsymb()
+                   b := 0
+                   UNLESS symb=s.rparen DO b := rexplist()
+                   checkfor(s.rparen, 19)
+                   a := list3(s.fnap, a, b)
+                   LOOP
+$<SLCT CASE s.slctap: $>SLCT
+    CASE s.vecap:  p := 40; GOTO lassoc
+
+
+    CASE s.halfwordap: p := 37; GOTO lassoc
+
+
+    CASE s.byteap: p := 36; GOTO lassoc
+
+    CASE s.rem:CASE s.mult:CASE s.div:
+                   p := 35; GOTO lassoc
+
+    CASE s.plus:CASE s.minus:
+                   p := 34;
+$<EE
+                   UNLESS earlyeval = 0
+                   $( q := p
+                      IF n >= p RESULTIS a
+                      nextsymb()
+                      $( LET c = CH
+                         RCH()
+                         SWITCHON C INTO
+                         $( DEFALT:     UNRDCH(); CH := C
+                            DEFAULT:    GOTO list3res
+                            CASE ' ': CASE '*T':                        LOOP
+                            CASE ';': CASE '*N': CASE ')':
+                            OK:         UNRDCH(); CH := C;              BREAK
+                            CASE '/': GOTO (CH='/' -> OK, DEFALT)
+                            CASE '$': GOTO (CH=')' -> OK, DEFALT)
+                         $)
+                      $) REPEAT
+                      $( LET V1 = MANEVAL(a)
+                         LET V2 = symb=s.number -> decval, MANEVAL(WORDNODE)
+                                DEB("[%N%C%N] ", V1, op=s.plus -> '+', '-', V2)
+                         IF V1=eval.def | V2=eval.def GOTO list3res
+                         nextsymb()
+                         a := op=s.plus -> V1 + V2, V1 - V2
+//*/
+                         RESULTIS smallnumber(a) -> a, list2(s.number, a)
+/*/
+DEB("=%N", a)
+$( LET r =smallnumber(a) -> a, list2(s.number, a); DEB("->%N]", r)
+                         RESULTIS r
+$)
+//*/
+                      $)
+                   $)
+$>EE
+                   GOTO lassoc
+
+    CASE s.eq:CASE s.ne:
+    CASE s.le:CASE s.ge:
+    CASE s.ls:CASE s.gr:
+           IF n>=30 RESULTIS a
+
+           $(r nextsymb()
+               b := rexp(30)
+               a := list3(op, a, b)
+               TEST c=0 THEN c :=  a
+                        ELSE c := list3(s.logand, c, a)
+               a, op := b, symb
+           $)r REPEATWHILE s.eq<=op<=s.ge
+
+           a := c
+           LOOP
+
+    CASE s.lshift:CASE s.rshift:
+                   p, q := 25, 30; GOTO dyadic
+
+    CASE s.logand: p := 23; GOTO lassoc
+
+    CASE s.logor:  p := 22; GOTO lassoc
+
+    CASE s.eqv:CASE s.neqv:
+                   p := 21; GOTO lassoc
+
+    CASE s.cond:
+            IF n>=13 RESULTIS a
+            nextsymb()
+            b := rexp(0)
+            checkfor(s.comma, 30)
+            a := list4(s.cond, a, b, rexp(0))
+            LOOP
+
+    lassoc: q := p
+
+    dyadic: IF n>=p RESULTIS a
+            nextsymb()
+    list3res: a := list3(op, a, rexp(q))
+            LOOP
+$)s
+$)2 REPEAT
+$)1
+
+$<EE
+AND MANEVAL(x) = VALOF $( LET r = Smallnumber(x) -> x, VALOF
+$( FOR I=DECVEC TO DECPTR+3 BY -3 IF !I = x
+//DEB("[%N:%S %N %N]", !I, (!I)+2, I!(-1), i!(-2)) <>
+      RESULTIS
+       I!(-1) ~= S.MANIFEST     -> eval.def,
+       Smallnumber(I!(-2))      -> I!(-2),
+       h1!(I!(-2)) = s.number   -> h2!(I!(-2)),
+                                   eval.def
+//DEB("[nf]")
+   RESULTIS eval.def
+$) ; DEB("[M(%N)=%N]", x, r); RESULTIS R $)
+$>EE
+
+AND rexplist() = VALOF
+$( LET a = 0
+   LET n = 0
+   LET q = treeq
+
+   $( !treeq := rexp(0)
+      treeq, n := treeq-1, n+1
+      UNLESS symb=s.comma BREAK
+      nextsymb()
+   $) REPEAT
+
+   treeq := q
+   IF N=1 RESULTIS q!0
+   IF n=2 RESULTIS list3(s.comma, q!0, q!(-1))
+   RESULTIS makelist(s.commalist, n)
+$)
+
+
+AND rdef() = VALOF
+$(1 LET n = rnamelist()
+
+    SWITCHON symb INTO
+
+ $( CASE s.lparen:
+      $( LET a, l, s = 0, Linecount, Source.name
+         nextsymb()
+         UNLESS h1!n=s.name DO synreport(40)
+         IF symb=s.name DO a := rnamelist()
+         checkfor(s.rparen, 41)
+
+         IF symb=s.be DO
+           $( LET res = ?
+              nextsymb()
+//com         RESULTIS listn(-7, s.rtdef, n, a, rcom(), 0, l, s) $)
+              res := listn(-7, s.rtdef, n, a, ?, 0, l, s)
+              rcom(res+h4)
+              RESULTIS res
+         $)
+
+         IF symb=s.eq DO
+           $( nextsymb()
+              RESULTIS listn(-7, s.fndef, n, a, rexp(0), 0, l, s) $)
+
+         synreport(42)  $)
+
+    DEFAULT:
+         synreport(44)
+
+    CASE s.eq:
+         nextsymb()
+         IF symb=s.vec DO
+           $( nextsymb()
+              UNLESS h1!n=s.name DO synreport(43)
+              RESULTIS list3(s.vecdef, n, rexp(0)) $)
+
+         RESULTIS list3(s.valdef, n, rexplist())
+$)
+$)1
+
+

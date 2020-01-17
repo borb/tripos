@@ -1,0 +1,99 @@
+SECTION "TRN7"
+
+GET "TRNHDR"
+MANIFEST $( maxocount = 62 $)
+
+// This is all the OCODE junk: The various flags are
+
+// SLOW         -> Store OCODE ONLY in file
+// FILEOCODE    -> Store OCODE      in file
+// NUMERICOCODE -> Store NUMERIC OCODE          ELSE binary OCODE
+// OCODEFILE=0 | OCODEFILE%0=0  -> No OCODE file!
+
+// IGNORE       - Do nothing, cos ocode not wanted!
+// STORE        - Stores an ocode element IN MEMORY
+// FILE         - Writes an ocode element TO FILE       (May be FWRBYTENUMERIC)
+// OUT1         - Efficiency hack - Does one or both of above.
+
+LET complab     (l)     BE out2(s.lab, l)
+AND compdatalab (l)     BE out2(s.datalab, l)
+AND compjump    (l)     BE out2(s.jump, l)
+AND OUT2        (X, Y)  BE $( OUT1(x); OUT1(Y) $)
+AND OUT3        (X,Y,Z) BE $( OUT1(X); OUT1(Y); OUT1(Z) $)
+AND OUTC        (c)     BE OUT1(((CGFLAGS & cgf.TRANSCHARS) ~= 0) -> charcode!c, c)
+AND OUTSTRING   (S)     BE $( LET N= S%0; OUT1(N); FOR I=1 TO N DO OUTC(S%I) $)
+//AND WRITEOP   (X)     BE PUTBYTES(X); AND WRN (N)     BE PUTBYTES(N)
+AND ENDOCODE    ()      BE $( UNLESS SLOW DO store(0)
+                              IF OCODE~=0 & NUMERICOCODE
+                                $( NEWLINE(); Ocount:=0 $)
+                           $)
+AND compentry(n, l)     BE
+$( LET s=@n!2; LET t=s%0; out3(s.entry, t, l); FOR I=1 TO T DO outc(s%i) $)
+
+AND CHECKOCODE()        BE
+$(1     //IF numericocode FILE := FILENUMERIC   // M68000 doesn't allow this ...
+   TEST FILEOCODE
+   THEN IF SLOW THEN OUT1 := NUMERICOCODE -> FILENUMERIC, FILE
+                                                // Slow -> JUST file, else BOTH
+   ELSE OUT1 := SLOW -> NUMERICOCODE -> FILENUMERIC, FILE, STORE
+                                                // Slow -> JUST FILE, ELSE STORE
+   IF OCODE=0 & (OUT1 = FILENUMERIC | OUT1=FILE) THEN OUT1 := IGNORE
+$)1
+
+AND FINDOCODE()         BE
+$(1 // Handles the opening and selecting of the ocode output stream
+    IF (SLOW | FILEOCODE) & NOT VALID.POINTER(@OCODE) DO
+    $(  OCODE := FINDOUTPUT(OCODEFILE);
+$<TRIPOS
+        IF OCODE=0 & NOT (OCODEFILE=0 | OCODEFILE%0=0)
+        THEN TRANSREPORT(0, RESULT2,    OCODEFILE)
+$>TRIPOS
+        $<PDPRSX  IF OCODE<0 DO TRANSREPORT(0, OCODE,   OCODEFILE) $>PDPRSX
+    $)
+    UNLESS OCODE=0 DO SELECTOUTPUT(OCODE)
+$)1
+
+AND IGNORE() BE RETURN
+
+AND FILE(N) BE $( LET K=N>>7
+   TEST K=0 THEN BINWRCH(N) ELSE $( BINWRCH((N & 127) + 128); FILE(K) $) $)
+
+AND FILENUMERIC(N) BE
+$( LET WRC(c) BE
+   $( Ocount := Ocount+1;
+      IF ocount > maxocount & c=' ' THEN ocount, c := 0, '*N'
+      WRCH(c)
+   $)
+   LET OUTNUM(N) BE
+   $( IF n>9 DO OUTNUM(n/10); WRC(N REM 10 + '0') $)    // WRCH('|')
+   IF N<0
+   $( WRC('-'); n := -n         // simple neg number!
+      IF n < 0                  // Looks like MININT!!
+      $( LET ndiv10 = (N>>1)/5; OUTNUM(ndiv10); n := n-ndiv10*10 $)
+   $)
+   OUTNUM(n);
+   WRC(' ')
+$)
+
+AND STORE(N) BE
+$( LET K=N>>7
+   LET STORE.(N) BE
+   $( LET free  = trnspace - dvece+ (obufp-OBUF.byte.offset)/BYTESPERWORD
+//deb("%N-%N + %N=%N    *C",
+//trnspace, dvece, (obufp-OBUF.byte.offset)/BYTESPERWORD, free)
+      IF free < free.trnspace THEN free.trnspace := free
+      IF free <= 0
+      THEN TRANSREPORT(-146, OBUF.byte.offset - Obufp, trnspace, dvece)
+
+      OBUF%OBUFP        := N;           // On WORD addressed MC, OBUFP must be
+                                        // POSITIVE, so OBUF is offset .........
+      OBUFP             := OBUFP - 1
+   $)
+   TEST K=0 THEN STORE.(N)
+   ELSE $( STORE.((n&127) + 128); STORE(K) $)
+$)
+
+AND OUT1(N) BE $( STORE(N); (NUMERICOCODE -> FILENUMERIC, FILE)(N) $)
+.
+
+

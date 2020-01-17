@@ -1,0 +1,242 @@
+SECTION "SYN4"
+
+GET "SYNHDR"
+$<PDPRSX GLOBAL $( FINDFREE:125 $) $>PDPRSX
+
+LET formtree(treevec, treesize) =  VALOF
+$(1 LET a = ?   // was  0
+$<PDPRSX
+    extraheap   := (FINDFREE()>>1)+ 2
+    $( LET B = (RESULT2>>1) - extraheap - 2
+                        //DEB("%O6-%O6-", EXTRAHEAP<<1, RESULT2)
+       TEST B > 0
+       THEN !extraheap := B
+       ELSE extraheap := 0
+    $)
+                        //DEB(">%O6, %N*N", EXTRAHEAP, !EXTRAHEAP)
+//    !extraheap        := #55270/2-extraheap
+//    !extraheap        := #100000/2-extraheap
+//    !extraheap        := 0
+$>PDPRSX
+$<TRIPOS
+    UNLESS QUIET | (stflags & stf.nowarn) ~= 0
+    DO TASKWRITEF("Tree space %N words%C", Treesize, PRSOURCE->'*N', ' ')
+$>TRIPOS
+    getp        := 0
+    skipping    := FALSE
+    printing    := PRSOURCE ~= 0
+    chcount     := 0
+    treep       := treevec + nametablesize + 64 + wordmax + getmax
+    treeq       := treevec + treesize
+    zeronode    := list2(s.number, 0)
+    FOR i = 0 TO nametablesize+63 DO treevec!i := 0
+    nametable   := treevec
+    chbuf       := treevec + nametablesize
+    wordv       := chbuf + 64
+    getv        := wordv + wordmax
+    getv!get.name:=Sourcefile                                           //PB====
+    Source.name := Sourcefile                                           //PB====
+$<EE
+    decvec      := treeq-TREESIZE/5                                     //PB====
+    decptr      := DECVEC                                               //PB====
+    earlyeval   := TRUE                                                 //PB====
+$>EE
+    declsyswords()
+    rch()
+    IF ch=endstreamch $( ENDREAD(); SOURCESTREAM := 0; RESULTIS 0 $)
+    rec.p, rec.l := level(), l
+
+l:  nextsymb()
+    rprog(@a)
+    UNLESS symb=s.end DO synreport(99)
+
+    // Allow a '.' at the end (with format chars)
+    WHILE ch='*S' | ch='*N' | ch='*T' DO rch()
+    TEST ch=ENDSTREAMCH $( SOURCESTREAM := 0; lastsect:=TRUE; endread() $)
+    ELSE unrdch()
+$<PROD'
+//    FOR I = 0 TO nametablesize-1 DO
+//    $( LET base = nametable!I
+//       LET len=0
+//       WRITEF("%I2: ", I)
+//       UNTIL base=0 $( WRITEF("%S ", Base+2); base := base!1; len:=len+1 $)
+//       WRITEF(":%N*N", len)
+//    $)
+$>PROD'
+    RESULTIS a
+$)1
+
+/*
+AND RSPROG(N) = VALOF
+$( LET A = ?;NEXTSYMB();A := RBEXP()
+$<TRIPOS IF N=S.SECTION & (NOT QUIET) & (NOT PRSOURCE) & (stflags & stf.nowarn)=0
+         WRITEF(" Section %S", H2+A)
+$>TRIPOS
+TEST H1!A = S.STRING THEN SETDOLLARNAME(H2+A, TRUE) ELSE synreport(89);
+RESULTIS LIST3(N, A, RPROG()) $)
+AND RPROG() = SYMB=S.DOLLARNAME -> RPROG(RDOLLARCOM()),SYMB=S.SECTION->
+RSPROG(S.SECTION), SYMB=S.NEEDS         -> RSPROG(S.NEEDS),
+$<PDPRSX   RDBLOCKBODY()        $>PDPRSX
+  $<TRIPOS VALOF $( UNLESS QUIET | PRSOURCE NEWLINE(); RESULTIS RDBLOCKBODY() $)
+  $>TRIPOS
+*/
+
+AND RPROG(addr) BE
+$(      TEST SYMB = S.DOLLARNAME
+        $( RDOLLARCOM(); LOOP $)
+        ELSE TEST SYMB=S.SECTION | SYMB=S.NEEDS
+        THEN
+        $( LET A = ?
+           LET N = SYMB
+           NEXTSYMB()
+           A := RBEXP()
+        $<TRIPOS
+           IF N=S.SECTION & (~QUIET) & (~PRSOURCE) & (STFLAGS & stf.nowarn)=0
+           THEN WRITEF(" Section %S", H2+A)
+        $>TRIPOS
+           TEST H1!A = S.STRING THEN SETDOLLARNAME(H2+A, TRUE)
+           ELSE synreport(89)
+           !addr := LIST3(N, A)
+           addr := !addr + h3
+           LOOP
+        $)
+        ELSE
+        $(  $<TRIPOS UNLESS QUIET | PRSOURCE | (STFLAGS & stf.nowarn) ~= 0
+                     DO NEWLINE()
+            $>TRIPOS
+            !addr := RDBLOCKBODY()
+            RETURN
+        $)
+$) REPEAT
+
+AND RDOLLARCOM() = VALOF
+$( LET NODE     = WORDNODE
+   LET skipval  = skipping      // This WAS always TRUE
+   AND VALUE=?
+
+   NEXTSYMB()
+   CHECKFOR(S.ASS, 68)
+   VALUE := RDOLLARVAL()
+   // set the result for the case where there are no & or \/ connectors,
+   // and the next symbol is the one we are trying to define!
+   H1!NODE := VALUE -> -S.NAME, S.NAME
+   NEXTSYMB()
+
+   WHILE SYMB=S.LOGAND \/ SYMB=S.LOGOR DO
+   $( LET S, V =SYMB, ?
+      NEXTSYMB()
+      V := RDOLLARVAL()
+      VALUE := S=S.LOGAND -> VALUE&V, VALUE \/ V
+      NEXTSYMB()
+   $)
+   H1!NODE := VALUE -> -S.NAME, S.NAME
+   UNLESS SYMB=S.DOLLARNAME
+   $( SKIPPING := FALSE         //skipval???????
+      IF PRSOURCE>0 THEN WRITE.LAST.SYMB(SYMB)
+   $)
+$)
+
+AND RDOLLARVAL() = VALOF
+$(
+   SWITCHON SYMB INTO
+   $( CASE S.NOT:       NEXTSYMB(); RESULTIS NOT RDOLLARVAL()
+      CASE S.TRUE:      RESULTIS TRUE
+      CASE S.FALSE:     RESULTIS FALSE
+      CASE S.DOLLARNAME:RESULTIS DECVAL
+      DEFAULT: SKIPPING := FALSE; synreport(31); RESULTIS FALSE
+   $)
+$)
+
+AND newvec(n) = VALOF
+$<PDPRSX
+$( LET len = !extraheap
+   LET newvec.(n) = VALOF
+$>PDPRSX
+   $( LET p=treep
+      treep := treep + n + 1
+      IF treeq-treep<0 DO synreport(-98)
+      RESULTIS p
+   $)
+$<PDPRSX
+   IF extraheap=0 | len < 3 THEN newvec := newvec.
+   IF extraheap>0 & len > n
+   $( LET was = extraheap
+      extraheap := extraheap+n+1
+      !extraheap := len - n - 1
+      RESULTIS was
+   $)
+   RESULTIS newvec.(n)
+$)
+$>PDPRSX
+
+AND list1(x) = VALOF
+    $( LET p = newvec(0)
+       p!0 := x
+       RESULTIS p  $)
+
+AND list2(x, y) = VALOF
+    $( LET p = newvec(1)
+       p!0, p!1 := x, y
+       RESULTIS p   $)
+
+AND list3(x, y, z) = VALOF
+    $( LET p = newvec(2)
+       p!0, p!1, p!2 := x, y, z
+       RESULTIS p     $)
+
+AND list4(x, y, z, t) = VALOF
+    $( LET p = newvec(3)
+       p!0, p!1, p!2, p!3 := x, y, z, t
+       RESULTIS p   $)
+
+AND list5(x, y, z, t, u) = VALOF
+    $( LET p = newvec(4)
+       p!0, p!1, p!2, p!3, p!4 := x, y, z, t, u
+       RESULTIS p   $)
+
+AND list6(x, y, z, t, u, v) = VALOF
+    $( LET p = newvec(5)
+       p!0, p!1, p!2, p!3, p!4, p!5 := x, y, z, t, u, v
+       RESULTIS p  $)
+
+AND listn(signed, x, y, z, q, r, s, t, u, v, w) = VALOF
+$(  STATIC $( Last.name=0 $)
+    LET swap = FALSE
+    LET n, p = ?, ?
+    IF signed < 0 & NOT line.info THEN signed := -signed-2
+
+    n := signed<0 -> Source.name=Last.name -> -signed-1, VALOF
+    $(  $<DEBUG DEB("<<Noticed on size %N", signed) FOR I = 1 TO ABS signed
+        DO DEB(", %N", (@signed)!I) $>DEBUG
+        swap := TRUE;
+        Last.name := (@signed)!(-signed);
+        RESULTIS -signed
+    $) , signed
+    p := newvec(n-1)
+    FOR I = 0 TO n-1 DO p!I := (@x)!I
+                //      $<DEBUG IF SWAP THEN DEB(" giving %N>>", p) $>DEBUG
+    IF swap THEN p!(n-2) := -((@x)!(n-2))       //let them know!!
+    RESULTIS p
+$)
+
+AND makelist(k, n) = valof
+$( let q = treeq
+   let p = treep
+   IF treeq-treep<2+n do synreport(-98) //======================================
+   h1!treep, h2!treep := k, n
+   treep := treep + 2
+// UNTIL q=treeq-n DO $( !treep:=!q; q, treep := q-1, treep+1 $)
+   FOR I = 0 TO N-1 treep!I := q!(-I)
+   treep := treep + N
+   resultis p
+$)
+
+AND synreport(n, a, b) BE
+$( callsynreport(n, a, b)
+   UNTIL symb=s.lsect | symb=s.rsect |
+         symb=s.let | symb=s.and |
+         symb=s.end | nlpending DO nextsymb()
+   longjump(rec.p, rec.l)
+$)
+
+

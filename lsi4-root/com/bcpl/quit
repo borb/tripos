@@ -1,0 +1,53 @@
+SECTION "Quit"
+GET     "libhdr"
+GET     "clihdr"
+
+LET charstonum(s) = VALOF
+ $( LET n,i,m = 0,1,s % 0
+    LET neg   = FALSE
+
+    IF s=0 THEN RESULTIS 0
+
+    WHILE s % i = ' ' DO i := i + 1
+
+    IF (s % i = '+') | (s % i = '-') THEN $( neg := s % i = '-'
+                                             i   := i + 1
+                                          $)
+
+    TEST ('0'<=s%i<='9') THEN WHILE ('0' <= s % i <= '9') & (i <= m) DO
+                                 $( n := n * 10 + (s % i - '0')
+                                    i := i + 1
+                                 $)
+                         ELSE result2 := 20
+
+    RESULTIS (neg -> -n,n)
+ $)
+
+
+LET start() BE
+ $(
+    LET argv   = VEC 50
+    LET failed = (rdargs("RC,RESULT2", argv, 50) = 0)
+    LET rc     = 0
+
+    result2   := 0
+
+    IF failed THEN $( writes ("QUIT: Bad args*N") ; GOTO exit $)
+
+    $( LET a0 = charstonum(argv!0)
+       LET a1 = charstonum(argv!1)
+
+       IF result2 ~= 0 THEN $( result2 := 0
+                               writes ("QUIT: Bad args*N")
+                               GOTO exit
+                            $)
+
+       rc, result2 := a0, a1
+    $)
+
+    UNLESS cli.interactive DO UNTIL rdch () = endstreamch DO LOOP
+
+    exit : stop(rc)
+$)
+
+

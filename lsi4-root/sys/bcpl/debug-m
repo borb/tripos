@@ -1,0 +1,261 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "DEBUG-M"
+
+GET "LIBHDR"
+
+GLOBAL
+$(
+rbexp:155
+bexp:156
+adr:158
+printadd:161
+printval:162
+selectask:166
+error:167
+testbreak:168
+rch:169
+wch:170
+
+rec:171
+wwrch:172
+
+add:175
+tch:176
+salev:178
+lev:179
+currtcb:180
+globv:181
+regs:182
+standalone:186
+wrflag:191
+ch:193
+rdflag:194
+
+currtask:199
+$)
+
+
+MANIFEST
+$(
+libword=23456
+
+instr.entry=#XE27E
+$)
+
+
+LET start(pkt) = VALOF
+ $( LET mode = pkt!0
+    AND task = pkt!1
+    AND code = pkt!2
+    AND arg  = pkt!3
+
+    LET opened = FALSE
+
+    TEST mode=-1 THEN    // startup
+    $( lev := level()
+       standalone := FALSE
+       wwrch := wrch
+       wrch := wch
+       add := 0
+       tch := 0
+    $)
+    ELSE                 // standalone entry
+    $( standalone := TRUE
+       salev := level()
+
+       IF mode=0 DO      // standalone restart
+          pkt!1 := 0
+
+       IF mode=1 DO      // abort
+       $( writef("*N!!T%N ABORT %N: ",task,code)
+          IF code=0 DO
+          $( task := arg
+             writef("BREAK T") $)
+          writef("%N M", arg)
+       $)
+
+       writes("** ")
+       regs := pkt+4
+    $)
+
+    UNLESS task=0 DO selectask(task)
+    rch()
+
+    // REPEAT loop to get commands
+    $( LET v = 0
+
+       rdflag := FALSE
+       SWITCHON ch INTO
+
+       $( CASE 'A': CASE 'G': CASE 'R':
+          CASE 'W':
+             tch := ch
+             add := bexp()
+             ENDCASE
+
+          CASE 'N':
+             IF tch=0 DO error()
+             add := add+1
+             printadd()
+          CASE '/':
+             IF tch=0 DO error()
+             opened := TRUE
+             printval()
+          CASE '*E': CASE '*S':
+             rch()
+             LOOP
+
+          CASE 'T':
+             IF tch=0 DO error()
+             FOR i=0 TO rbexp()-1 DO
+             $( IF i REM 5 = 0 DO printadd()
+                printval()
+                add := add+1
+                testbreak()
+             $)
+             newline()
+             ENDCASE
+
+          CASE 'U':
+             UNLESS opened DO error()
+             !adr(add) := rbexp()
+             LOOP
+
+          CASE 'C':
+             IF standalone DO
+             $( task := 0
+                GOTO cnt
+             $)
+             release(currtask)
+             GOTO nxt
+
+          CASE 'H':
+             IF standalone GOTO cnt
+             hold(currtask)
+             GOTO nxt
+
+          CASE 'S':
+             selectask(rbexp())
+             ENDCASE
+
+          DEFAULT:
+             error()
+
+          CASE '*N': CASE endstreamch:
+             UNLESS standalone DO
+             $( unrdch()
+                wrch := wwrch
+                RESULTIS -1 $)
+nxt:         rch()
+       $)
+rec:   opened := FALSE
+
+    $) REPEAT
+
+cnt:newline()            // continue
+    standalone := FALSE
+    RESULTIS task        // non-zero => HOLD
+ $)
+
+
+AND rbexp() = VALOF
+ $( LET n = 0
+ l: rch()
+    SWITCHON ch INTO
+    $( CASE '+': CASE '*S':
+          GOTO l
+
+       CASE '-':
+          RESULTIS -rbexp()
+
+       DEFAULT:
+          $( LET d = '0'<=ch<='9' -> ch-'0', VALOF BREAK
+             n := n*10+d
+             rch()
+          $) REPEAT
+          RESULTIS n
+    $)
+ $)
+
+
+AND adr(a) = VALOF
+ $( a := a + VALOF SWITCHON tch INTO
+       $( CASE 'A': RESULTIS 0
+          CASE 'G': RESULTIS globv
+          CASE 'R': RESULTIS regs
+          CASE 'W': RESULTIS currtcb
+       $)
+    IF (a>>10)>=rootnode!rtn.memsize DO error()
+    RESULTIS a
+ $)
+
+
+AND printadd() BE
+    writef("*N%C%U2/ ",tch,add)
+
+
+AND print(n) BE
+ $( LET v = !adr(add)
+    LET f = v>>1
+    TEST (f+1>>10)<rootnode!rtn.memsize & (f-5>>10)<rootnode!rtn.memsize &
+         (f-4)%0=7 & (f!1=instr.entry | f!-5=libword)
+    THEN
+       writef(" %S ",f-4)
+    ELSE
+       writef("  %I6 ",v)
+ $)
+
+
+AND selectask(n) BE
+ $( LET t = rootnode!rtn.tasktab
+    UNLESS 0<n<=t!0 DO error()
+    t := t!n
+    IF t=0 DO error()
+    currtask := n
+    currtcb := t
+    globv := t!tcb.gbase
+ $)
+
+
+AND error() BE
+ $( writes("??*N")
+    UNLESS rdflag DO rch()
+    longjump(standalone->salev,lev, rec)
+ $)
+
+
+AND testbreak() BE UNLESS standalone DO
+    IF testflags(1) DO error()
+
+
+AND rch() BE
+ $( TEST standalone THEN
+    $( ch := sardch()
+       IF ch=#177 DO error()
+     $)
+    ELSE
+    $( IF wrflag DO wrch('*E')
+       wrflag := FALSE
+       testbreak()
+       ch := rdch()
+       testflags(1)
+    $)
+    ch := capitalch(ch)
+    rdflag := TRUE
+ $)
+
+
+AND wch(c) BE
+ $( c := c&#377
+    TEST standalone THEN
+       sawrch(c)
+    ELSE
+    $( wrflag := TRUE
+       wwrch(c)
+    $)
+ $)
+
+

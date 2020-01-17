@@ -1,0 +1,121 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+        ####    #######    ######   ##         ######     ####    ######   
+       ######   ########  ########  ##        ########   ######   #######  
+      ##    ##  ##    ##  ##        ##        ##    ##  ##    ##  ##    ## 
+      ########  #######   #######   ##        ##    ##  ########  ##    ## 
+      ##    ##  ##    ##        ##  ##        ##    ##  ##    ##  ##    ## 
+      ##    ##  ##    ##        ##  ##        ##    ##  ##    ##  ##    ## 
+      ##    ##  ########  ########  ########  ########  ##    ##  #######  
+      ##    ##  #######    ######   ########   ######   ##    ##  ######   
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   29/07/85             *
+\*****************************************************************************/
+
+
+
+SECTION "ABSLOAD"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+
+
+
+LET start()  BE
+$(
+//  ABSLOAD - the program!  Specially commissioned by DLT to allow him to load
+//  absolute code into random parts of VME machines.  This loader ONLY
+//  understands absolute hunks with no relocation information.
+
+    LET args    =  "FROM/A"
+    LET argv    =  VEC 50
+    LET file    =  0
+    LET stream  =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** ABSLOAD:  Bad arguments for *"%S*"*N", args )
+        
+        stop( 20 )
+    $)
+
+    file    :=  argv!0
+    stream  :=  findinput( file )
+    
+    IF  stream = 0  THEN
+    $(
+        writef( "****** ABSLOAD:  Cannot open *"%S*"*N", file )
+        
+        stop( 20 )
+    $)
+    
+    //  OK.  We have opened the file, and so we can get on with the loading
+    //  process.
+    
+    selectinput( stream )
+    
+    $(  //  Loop to load the file into memory.
+    
+        LET type     =  0
+        LET address  =  0
+        LET length   =  0
+
+        IF  readwords( @type, 1 ) = 0  THEN  BREAK
+
+        //  We have read the type field, and so we should check to see if it
+        //  is what we are expecting.
+        
+        SWITCHON  type  INTO
+        $(
+            CASE t.abshunk :  ENDCASE
+            CASE t.end     :  LOOP
+            
+            DEFAULT        :  writef( "****** ABSLOAD:  Bad ABSHUNK #X%X8*N", type )
+                              BREAK
+        $)
+
+        IF  readwords( @address, 1 ) = 0  THEN
+        $(
+            //  Oh dear - premature end of file!  We should complain about
+            //  this and stop.
+            
+            writes( "****** ABSLOAD:  Premature end of file (no address)*N" )
+            
+            BREAK
+        $)
+
+        IF  readwords( @length, 1 ) = 0  THEN
+        $(
+            //  Oh dear - premature end of file!  We should complain about
+            //  this and stop.
+            
+            writes( "****** ABSLOAD:  Premature end of file (no length)*N" )
+            
+            BREAK
+        $)
+
+        //  Having read the address and length values, we can load the file
+        //  into memory easily.
+        
+        UNLESS  readwords( address, length ) = length  DO
+        $(
+            //  Oh dear.  We have not been given enough data to load.
+            
+            writes( "****** ABSLOAD:  Premature end of file (no data)*N" )
+            
+            BREAK
+        $)
+    $)
+    REPEAT  //  Until we hit end of file or an error
+
+    endread()
+$)
+
+

@@ -1,0 +1,135 @@
+SECTION "TRE"
+
+GET "ERRHDR"
+GET "STHDR"
+GLOBAL $( g0:0 $)
+
+LET OVTRANSREPORT(N,X,Y,Z,A,B) BE
+$( LET Out = Output()
+   REPORTCOUNT := REPORTCOUNT + 1
+   SELECTOUTPUT(LISTOUT)
+   TEST N=1 | N=-2 | N=4
+   THEN TASKWRITEF("")
+   ELSE
+   $( TEST line.info
+      $(  TASKWRITEF("Trans err. Line %N", LINECOUNT)
+          UNLESS Source.name=Sourcefile & VALID.POINTER(Source.name)
+          DO WRITEF("  in '%S'", Source.name)
+      $)
+      ELSE TASKWRITEF("Trans err. (-LN specified)")
+      WRITES(": ")
+   $)
+   SWITCHON ABS N INTO
+   $(
+        CASE 123: REPORTCOUNT := REPORTCOUNT-1
+        CASE 115:
+        CASE 116:
+        CASE 119:
+        CASE 120:
+        CASE 121:
+        CASE 122:
+        CASE 142:
+        CASE 144:
+            TRNMESSAGE(N, x+2, Y,Z,A,B)
+            ENDCASE
+
+        CASE  3:
+        CASE  4:
+        CASE 80:
+        CASE 89:
+        CASE 90:
+        CASE 91:
+        CASE 92:
+        CASE 107:               // Really ok ???
+        CASE 148:
+        CASE 149:
+        CASE 150:
+                REPORTCOUNT := REPORTCOUNT-1
+        DEFAULT:
+            TRNMESSAGE(N, x, y, z, a, b)
+            ENDCASE
+   $)
+   NEWLINE()
+   $<TRIPOS IF testflags(1) $( REPORTCOUNT := REPORTMAX; WRITES("******BREAK*N") $)
+   $>TRIPOS
+   IF REPORTCOUNT >= REPORTMAX DO
+   $(
+$<PDPRSX        // On TRIPOS Tidyup does this
+//      DELETEOUTPUT()
+      SELECTOUTPUT(ocode)
+      ENDWRITE()   // any OCODE file
+      SELECTOUTPUT(CODEOUT)
+//      DELETEOUTPUT()
+      ENDWRITE()   // will be open if multi-segment file
+$>PDPRSX
+      FATAL.ERROR()
+   $)
+   SELECTOUTPUT(Out)
+$)
+
+AND TRNMESSAGE(N, A, B, C, D, E) BE WRITEF(VALOF
+$(1
+   IF N<=0 DO $( REPORTCOUNT:=REPORTMAX; N := -N $)
+
+   SWITCHON ABS N INTO
+   $( DEFAULT:A := N;  RESULTIS "Trn Compiler error %N"
+
+        CASE 0:  UNLESS B=OCODEFILE
+                $( DEB("B was %N, not %N", B, OCODEFILE);B := OCODEFILE $)
+$<TRIPOS         RESULTIS "IOerror %N on '%S'"                  $>TRIPOS
+$<PDPRSX         RESULTIS IOERROR(A)                            $>PDPRSX
+$<TRIPOS
+        CASE   1: RESULTIS "******BREAK in BCP"
+        CASE   2: RESULTIS "Bad args for *"%S*""
+        CASE   4: RESULTIS "****** Warning: Only %N words of stack. Use STACK 1000 command"
+$>TRIPOS
+        CASE   3: RESULTIS "****** Info: %S"
+        CASE  80: RESULTIS "****** Warning: IF %N THEN ... found"
+        CASE  89: RESULTIS "****** Warning: Result of VALOF block may be undefined"
+        CASE  90: RESULTIS "****** Warning: VALOF used in op:="
+        CASE  91: RESULTIS "****** Warning: function used in op:="
+        CASE  92: RESULTIS "****** Warning: '?' unsed in constant expr"
+        CASE  98: RESULTIS "Unexpected tree Operator %N"
+        CASE  99: RESULTIS     "CASE used without a SWITCHON section"
+        CASE 100: RESULTIS  "DEFAULT used without a SWITCHON section"
+        CASE 101: RESULTIS     "Two DEFAULTs in one SWITCHON section"
+        CASE 102: RESULTIS     "LOOP used without a repeat section"
+        CASE 103: RESULTIS    "BREAK used without a repeat section"
+        CASE 104: RESULTIS "RESULTIS used without a VALOF section"
+        CASE 105: RESULTIS  "ENDCASE used without a SWICHON scetion"
+        CASE 106: RESULTIS "Two cases with same constant: %N"
+        CASE 107: RESULTIS "Attempt to divide %N by 0"
+        CASE 108: RESULTIS "Attempt to REM %N with %N"
+        CASE 110: RESULTIS
+      "Different number of arguments of the two sides of LET or AND declaration"
+        CASE 112: RESULTIS "error 112 - Lhs, rhs don't match"
+        CASE 109:CASE 113:
+                 RESULTIS "Ltype expression expected"
+        CASE 114: RESULTIS "Invalid selector %N : %N : %N*N"
+        CASE 115: RESULTIS "Name '%S' not declared"
+        CASE 116: RESULTIS "Dynamic free variable '%S' used"
+        CASE 117: RESULTIS "Error in constant expression, null node"
+        CASE 118: RESULTIS "Illegal operator used in constant expression (%N)"
+        CASE 119: RESULTIS "MANIFEST name '%S' not declared"
+        CASE 120: RESULTIS "Variable name '%S' used in constant expression"
+        CASE 121: RESULTIS "GLOBAL name '%S' not declared"
+        CASE 122: RESULTIS "Undeclared GLOBAL '%S' used in constant expression"
+        CASE 123: RESULTIS "'%S' redefines GLOBAL %N"
+        CASE 141: RESULTIS "Too many CASEs (>%n). Use OPT=SW<n>"
+        CASE 142: RESULTIS "Name '%S' declared twice"
+        CASE 144: RESULTIS "Too many globals at '%S'. Only %N allowed"
+        CASE 145: RESULTIS "Program too large"
+        CASE 146: RESULTIS a=0 ->
+                "Program too large*N*
+*           only %$%n words of trnspace for names",
+                "Program too large*N*
+*           %n bytes of ocode buffered and %$%N words of names"
+        CASE 147: RESULTIS "Error in expression (%N op=%N)"
+        CASE 148: RESULTIS "Error in expression (Zero Tree) (previous error?)"
+        CASE 149: RESULTIS "Internal error: Unexpected eval.mode (%N). Please tell pb22"
+        CASE 150: RESULTIS "Internal error: Invalid arg to eval.if.const (%N). Please tell pb22"
+   $)
+$)1 , A, B, C, D, E)
+.
+
+

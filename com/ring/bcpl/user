@@ -1,0 +1,281 @@
+SECTION "User"
+GET "LIBHDR"
+GET "IOHDR"
+GET "RINGHDR"
+GET "CLIHDR"
+GET "BCPL.ringhdr"
+GET "BCPL.ring"
+GET "BCPL.ringSSP"
+// GET "BCPL.killfridge"
+// GET "BCPL.useruidset"
+GET "BCPL.useruidset"
+GET "BCPL.synfind"
+GET "BCPL.gethex"
+GET "BCPL.uidtostring"
+
+
+
+
+MANIFEST
+$(  rc.baduidset = #XDFD0
+$)
+
+
+
+
+LET start() BE
+$(  LET arg = VEC 20
+    MANIFEST
+    $(  a.puid= 0
+        a.auty= 1
+        a.all = 2
+        a.priv= 3
+        a.kill= 4
+    $)
+    result2 := 0
+    TEST 0=rdargs("PUID,AUTY,*
+                  *ALL/s,PRIVS/s,KILL=LOGOFF=DELETE/s",arg,20) THEN
+        message("Bad argument*N") ELSE
+    TEST (arg!a.auty~=0 | arg!a.puid~=0) & arg!a.kill=0 THEN
+        message("Illegal combination of arguments*N") ELSE
+    TEST dr.rctype(dr.initialise())~=0 THEN
+        message("Ring handler not loaded!*N") ELSE
+    $(  LET fridge.tag = consoletask
+        LET uidset = useruidset(fridge.tag)
+        LET user = uidset+cap.puid
+        TEST uidset=0 THEN message("No one logged on*N") ELSE
+        $(  LET username = synfind(user, to.info.domain, "Unknown user")
+            LET directory = synfind(user, to.dir.domain, "")
+            LET privilege = VEC uidsize-1
+            LET logoff = (arg!a.kill~=0 & arg!a.puid=0 & arg!a.auty=0)
+            LET uidsetlist = rootnode!rtn.info!rtninfo.ring + ri.uidset
+            LET p = ?
+            LET n = 40 // safty limit!
+            gethex("FF02DFBBEBF7B5D8", privilege, uidsize)
+            writef("%S %Slogged on", username, (logoff -> "was ", ""))
+            UNLESS directory%0=0 THEN
+            writef(" (home directory is '%S')",directory)
+            newline()
+            IF arg!a.all~=0 THEN print.uidset(uidset)
+            UNLESS verify.uidset(uidset) THEN
+            writef("UID set %S not valid*N",
+                   (logoff -> "was", "is currently"))
+            IF arg!a.priv~=0 THEN
+            $(  p := (!uidsetlist)!0
+                WHILE p~=0 & n>0 & ~testflags(1) DO
+                $(  LET ok         = verify.uidset(p+1)  // uidset is at p+1
+                    LET privilege  = puid.name((p+1)+cap.puid)
+                    LET authentity = puid.name((p+1)+cap.auty)
+                    writef("Representation for %S\%S available*
+                           *%S with tag %N*N",
+                           puid.name((p+1)+cap.auty),
+                           puid.name((p+1)+cap.puid),
+                           (ok -> "", " (but not valid)"),
+                           (p+1)!cap.usertag)
+                    IF arg!a.all~=0 THEN print.uidset(p+1)
+                    n := n-1
+                    p := !p
+                $)
+            $)
+            IF arg!a.kill~=0 THEN
+            TEST arg!a.auty~=0 | arg!a.puid~=0 THEN
+            $(  LET priv = VEC uidsize-1
+                LET auty = (arg!a.auty=0 -> priv,
+                            synfind(arg!a.auty, from.name.domain, 0))
+                LET puid = (arg!a.puid=0 -> uidset+cap.puid,
+                            synfind(arg!a.puid, from.name.domain, 0))
+                gethex("FF02DFBBEBF7B5D8", priv, uidsize)
+                TEST auty=0 THEN
+                    writef("Unknown AUTY - '%S'*N", arg!a.auty) ELSE
+                TEST puid=0 THEN
+                    writef("Unknown PUID - '%S'*N", arg!a.puid) ELSE
+                IF ~delete.uidset(puid, auty,
+                                  fridge.tag, uidsetlist) THEN
+                writef("Can't delete %S\%S from Fridge*N",
+                       (arg!a.auty=0 -> "PRIVILEGE", arg!a.auty),
+                       puid.name(puid))
+            $) ELSE
+            $(  killfridge(fridge.tag)
+                dr.result2:=0
+            $)
+        $)
+        dr.terminate()
+    $)
+    synfind(0)   // clear cache blocks!
+    stop(result2=0->0,10)
+$)
+
+
+
+
+
+
+AND print.uidset(uidset) BE
+$(  LET puid = uidset+cap.puid
+    LET tuid = uidset+cap.tuid
+    LET tpuid = uidset+cap.tpuid
+    LET auty = uidset+cap.auty
+    LET tag = uidset!cap.usertag
+    LET printuid(uid) BE
+    FOR i=0 TO 3 DO writef("%X4", get2bytes(uid, i))
+    writes("     PUID "); printuid(puid); newline()
+    writes("     AUTY "); printuid(auty); newline()
+    writes("     TUID "); printuid(tuid); newline()
+    writes("    TPUID "); printuid(tpuid); newline()
+    writef("      TAG %n*N", tag)
+$)
+
+
+
+
+
+AND verify.uidset(uidset) = VALOF
+$(  LET aot = find.aot(uidset)
+    LET uidset.ok = FALSE
+    IF aot\=0 THEN
+    TEST 0=verify(aot, uidset) THEN uidset.ok := TRUE ELSE
+    UNLESS dr.result2=rc.baduidset THEN
+    $(  LET r2 = result2
+        LET dr2 = dr.result2
+        message("Verifying UIDset for %S\%S failed - ",
+                 puid.name(uidset+cap.auty), puid.name(uidset+cap.puid))
+        result2 := r2
+        dr.result2 := dr2
+    $)
+    RESULTIS uidset.ok
+$)
+
+
+
+
+
+AND find.aot(uidset) = VALOF
+$(  LET aot = TABLE 0,0,0,0,0
+    LET aot.name = "AOT-x"
+    LET tuid = uidset+cap.tuid
+    LET aot.no = (get2bytes(tuid, 0) & #XFF00) >> 8
+    LET uid.gen = (get2bytes(tuid, 0) & #XFF)
+    LET result.aot = 0
+//  writef("TUID!0 = %X4 TUID!3 = %X4*N",
+//         get2bytes(tuid, 0), get2bytes(tuid, 3))
+//  writef("AOT.NO = %X4*N", aot.no)
+    aot.name%(aot.name%0) := "0123456789ABCDEF"%(1+(aot.no & #XF))
+    UNLESS uid.gen=0 THEN
+    TEST aot.no>9 THEN
+        message("Corrupt TUID found for %S\%S*N",
+                 puid.name(uidset+cap.auty), puid.name(uidset+cap.puid)) ELSE
+    TEST 0=dr.lookup(aot.name, aot) THEN
+        message("UIDset for %S\%S comes from an unknown AOT - *"%S*"*N",
+                 puid.name(uidset+cap.auty), puid.name(uidset+cap.puid),
+                 aot.name) ELSE result.aot := aot
+    RESULTIS result.aot
+$)
+
+
+
+
+AND delete.uidset(puid, auty, tag, uid.list.root) = VALOF
+$(  // searches list of UID sets 'uid.list.root' for the first
+    // UID set for the object with PUID 'puid' and AUTHENTITY 'auty'
+    // and the tag TAG. If it is found it is deleted.  A boolean result
+    // is returned indicating whether or not a UID set was found.
+    // This operation must be done indivisably.
+    // IGNORES Tag for the moment
+    LET old.pri = tcb!tcb.pri
+    LET p=!uid.list.root
+    LET n=100                 // safty limit
+    LET old.uidset=0
+    changepri(taskid, maxint) // maximum priority : cannot be interrupted
+    WHILE !p~=0 & n>0 & ~(equal(puid, (!p+1)+cap.puid, uidsize) &
+        equal(auty, (!p+1)+cap.auty, uidsize)) DO
+    $(  p:=!p
+        n:=n-1
+    $)
+    UNLESS !p=0 | n<=0 THEN
+    $(  old.uidset := !p
+        !p := !!p             // delete UID set from the list
+    $)
+    WHILE 0=changepri(taskid, old.pri) DO old.pri := old.pri + 1
+    UNLESS old.uidset=0 THEN
+    $(  LET aot = find.aot(old.uidset+1)
+        IF aot\=0 THEN delete(aot, old.uidset+1)
+        freevec(old.uidset)
+    $)
+    RESULTIS old.uidset~=0
+$)
+
+
+
+
+
+AND equal(v1, v2, size) = VALOF
+$(  LET i=0
+    WHILE i<size & v1!i = v2!i DO i:=i+1
+    RESULTIS i=size
+$)
+
+
+
+
+AND killfridge(for.usertag) BE
+// deletes all the UIDSETs for the usertag task FOR.usertag in the fridge
+$(  LET uidsetlist = rootnode ! rtn.info ! rtninfo.ring + ri.uidset
+    LET uidset = get.uidset(uidsetlist, for.usertag)
+    IF 0=dr.rctype(dr.initialise()) THEN
+    $(  WHILE uidset ~= 0 DO
+        $(  LET aot = find.aot(uidset+1)
+            UNLESS aot=0 THEN delete(aot, uidset+1)
+            freevec(uidset)
+            uidset := get.uidset(uidsetlist, for.usertag)
+        $)
+        dr.terminate()
+    $)
+$)
+
+
+
+AND get.uidset(list, for.usertag) = VALOF
+// finds this usertag tasks next UIDSET in the fridge
+// assumes that LIST is not 0
+$(  LET ans = ?
+    LET old.pri = tcb!tcb.pri
+    changepri(taskid, maxint)
+    ans := list
+    WHILE (!ans \= 0) & (!ans+1)!cap.usertag \= for.usertag DO ans := !ans
+    UNLESS !ans=0 THEN !ans := !!ans
+    WHILE 0=changepri(taskid, old.pri) DO old.pri := old.pri+1
+    RESULTIS !ans
+$)
+
+
+
+
+AND puid.name(puid) = synfind(puid, to.name.domain, uidtostring(puid))
+
+
+
+
+AND message(string, a1, a2, a3, a4, a5) BE
+$(  writes("USER: ")
+    writef(string, a1, a2, a3, a4, a5)
+$)
+
+.
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.ringhdr"
+GET "BCPL.writeerror"
+GET "BCPL.verify"
+
+
+
+LET writeerror(entry.name, rc, service) BE result2 := 411 // hopeless
+
+
+
+GET "BCPL.refresh"
+GET "BCPL.delete"
+
+

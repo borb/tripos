@@ -1,0 +1,461 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+ ##    ##    ####    #######    ######   ########   ######   #######   ######## 
+ ###  ###   ######   ########  ########  ########  ########  ########  ######## 
+ ########  ##    ##  ##    ##  ##           ##     ##    ##  ##    ##  ##       
+ ## ## ##  ########  #######   #######      ##     ##    ##  ########  ######   
+ ##    ##  ##    ##  ##              ##     ##     ##    ##  #######   ##       
+ ##    ##  ##    ##  ##              ##     ##     ##    ##  ##  ##    ##       
+ ##    ##  ##    ##  ##        ########     ##     ########  ##   ##   ######## 
+ ##    ##  ##    ##  ##         ######      ##      ######   ##    ##  ######## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   06/06/85             *
+\*****************************************************************************/
+
+
+
+SECTION "MAPSTORE"
+
+
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "idw:bcpl.idwhdr"
+
+
+
+MANIFEST
+$(
+    blockcount  =  1000
+$)
+
+
+
+LET start()  BE  m68k.start()
+
+
+
+AND local.getword( addr )  =  !addr
+
+
+
+AND remote.getword( addr )  =  VALOF
+$(
+    LET word      =  0
+    LET byteaddr  =  addr     << 2
+    LET hword     =  byteaddr >> 16
+    LET lword     =  byteaddr & #XFFFF
+
+    selectpage( hword )
+
+    m68k.readbuff( @word, lword, 4 )
+
+    RESULTIS  word
+$)
+
+
+
+AND main()  BE
+$(
+//  Program to take a snapshot of the store of machine, and print  out
+//  statistics of the block sizes etc.
+
+    LET args       =  "MACHINE,SEARCH/S,COUNT/S,RESTARTS/S"
+    LET argv       =  VEC 50
+    LET machine    =  0
+    LET search     =  0
+    LET count      =  0
+    LET restarts   =  0
+    
+    LET sysout     =  output()
+    LET blocksize  =  getvec( blockcount )
+    LET mapstack   =  stackbase
+    LET mapcode    =  cli.module
+    LET getword    =  0
+    LET addr       =  0
+    LET size       =  0
+    LET blocks     =  0
+    LET used       =  0
+    LET free       =  0
+    
+    LET priority   =  tcb!tcb.pri
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** MAPSTORE:  Bad arguments for *"%S*"*N", args )
+        
+        GOTO  mapstore.error
+    $)
+
+    machine   :=  argv!0
+    search    :=  argv!1
+    count     :=  argv!2
+    restarts  :=  argv!3
+
+    IF  blocksize = 0  THEN
+    $(
+        writes( "****** MAPSTORE:  No store for block vector*N" )
+        
+        GOTO  mapstore.error
+    $)
+
+    writes( "*PMAPSTORE  Version 1.02*N*N" )
+
+    TEST  machine = 0  THEN  getword  :=  local.getword
+    ELSE
+    $(
+        getword  :=  remote.getword
+        
+        UNLESS  selectmachine( machine )  DO
+        $(
+            writef( "****** MAPSTORE:  Cannot find machine *"%S*"*N", machine )
+
+            GOTO  mapstore.error
+        $)
+        
+        writef( "Mapping machine *"%S*"*N*N", machine )
+    $)
+
+    addr  :=  getword( rootnode + rtn.blklist )
+    size  :=  getword( rootnode + rtn.memsize ) * 1024
+
+    IF  machine = 0  THEN  changepri( taskid, maxint )
+    
+    UNTIL  blocks = blockcount  DO
+    $(
+        LET length  =  getword( addr )
+        
+        IF  length = 0  THEN  BREAK
+
+        IF  machine = 0  THEN
+
+            IF  (addr = mapstack)  |  (addr = mapcode)  |  (addr = blocksize-1)  THEN
+            
+                //  This is something which we ourselves have allocated, and so
+                //  we can assume that it would be free.
+
+                length  :=  length + 1 
+
+        blocks            :=  blocks + 1
+        blocksize!blocks  :=  length
+
+        TEST  (length & 1)  =  0  THEN
+        
+            //  This block is in use, and so we can add it into the "used"
+            //  count.
+
+            used  :=  used + length
+
+        ELSE
+        $(
+            //  This block is free, and so we should add it onto the "free"
+            //  count.
+            
+            length  :=  length - 1
+            free    :=  free + length
+        $)
+        
+        addr  :=  addr + length
+    $)
+
+    blocksize!0  :=  blocks
+    
+    //  When we drop out of that loop, we can set our priority back to the
+    //  old value.
+
+    IF  machine = 0  THEN  changepri( taskid, priority )
+    
+    IF  blocks = blockcount  THEN
+    $(
+        //  Overflow.  Oh dear!
+        
+        writes( "****** MAPSTORE:  Too many blocks*N" )
+        
+        GOTO  mapstore.error
+    $)
+    
+    //  Having got this far, we can now do some calculations on the numbers
+    //  we have gathered.
+    
+    writef( "Memory size: %N,  Blocks: %N,  Used: %N,  Free: %N*N",
+             size, blocks, used, free )
+
+    IF  restarts  THEN  writef( "*NRestarts: %N*N*N", getword( #XD0 >> 2 ) )
+
+    IF  search  THEN    
+    $(
+        countsearches( blocksize, 1 )
+        countsearches( blocksize, 2 )
+        countsearches( blocksize, 4 )
+        countsearches( blocksize, 8 )
+        countsearches( blocksize, 16 )
+        countsearches( blocksize, 32 )
+        countsearches( blocksize, 64 )
+        countsearches( blocksize, 128 )
+        countsearches( blocksize, 256 )
+        countsearches( blocksize, 512 )
+        countsearches( blocksize, 1024 )
+        countsearches( blocksize, 2048 )
+        countsearches( blocksize, 4096 )
+    $)
+
+    writef( "*NTotal blocks:  Before compaction = %N,  ", blocksize!0 )
+
+    alloc( blocksize, 12345678 )   //  Do a compaction
+    
+    writef( "After compaction = %N*N", blocksize!0 )
+
+    IF  count  THEN
+    $(
+        LET alloc   =  VEC 12
+        LET free    =  VEC 12
+        
+        LET blocks  =  0
+
+        FOR  i = 1  TO  12  DO
+        $(
+            LET size  =  1 << i
+            
+            alloc!i  :=  countblocks( blocksize, 0, size )
+            free!i   :=  countblocks( blocksize, 1, size )
+        $)
+
+        writes( "*NAllocated blocks:*N*N" )
+        
+        blocks  :=  countblocks( blocksize, 0, 0 )
+
+        FOR  i = 1  TO  12  DO
+        $(
+            LET size  =  1 << i
+            LET cum   =  alloc!i
+            LET act   =  i = 12  ->  cum,  (cum - alloc!(i+1))
+        
+            writef( "%I4 ->      Cum: %I3, %I3%%      Act: %I3, %I3%%*N",
+                     size, cum, (cum*100)/blocks,
+                           act, (act*100)/blocks )
+        $)
+        
+        writes( "*NFree blocks:*N*N" )
+
+        blocks  :=  countblocks( blocksize, 1, 0 )
+
+        FOR  i = 1  TO  12  DO
+        $(
+            LET size  =  1 << i
+            LET cum   =  free!i
+            LET act   =  i = 12  ->  cum,  (cum - free!(i+1))
+        
+            writef( "%I4 ->      Cum: %I3, %I3%%      Act: %I3, %I3%%*N",
+                     size, cum, (cum*100)/blocks,
+                           act, (act*100)/blocks )
+        $)
+    $)
+    
+mapstore.error:
+
+    UNLESS  blocksize = 0  DO  freevec( blocksize )
+$)
+
+
+
+AND countsearches( blocksize, vecsize )  BE
+$(
+//  Procedure to calculate how many false comparisons would be done when
+//  allocating 1, 10 or 100 blocks of size "vecsize".
+
+    LET blocks   =  blocksize!0
+    LET comp1    =  0
+    LET fail1    =  0
+    LET comp10   =  0
+    LET fail10   =  0
+    LET comp100  =  0
+    LET fail100  =  0
+    
+    LET buffer   =  getvec( blocks + 100 )
+    
+    IF  buffer = 0  THEN
+    $(
+        writes( "****** MAPSTORE:  Cannot get search buffer*N" )
+        
+        RETURN
+    $)
+
+    FOR  i = 0  TO  blocks  DO  buffer!i  :=  blocksize!i
+
+    comp1  :=  alloc( buffer, vecsize )
+    
+    IF  result2  THEN  fail1  :=  fail1 + 1
+    
+    FOR  i = 2  TO  10  DO  
+    $(
+        comp10  :=  comp10 + alloc( buffer, vecsize )
+        
+        IF  result2  THEN  fail10  :=  fail10 + 1
+    $)
+
+    FOR  i = 11  TO  100  DO  
+    $(
+        comp100  :=  comp100 + alloc( buffer, vecsize )
+        
+        IF  result2  THEN  fail100  :=  fail100 + 1
+    $)
+        
+    comp10   :=  comp10   +  comp1
+    comp100  :=  comp100  +  comp10
+    
+    fail10   :=  fail10   +  fail1
+    fail100  :=  fail100  +  fail10
+
+||      printbuffer( buffer, "after", vecsize )
+
+    freevec( buffer )
+
+    writef( "*NAllocating block size %N:*N*N*
+            *    Comparisons for   1: %I5  (%N)*N*
+            *    Comparisons for  10: %I5  (%N)*N*
+            *    Comparisons for 100: %I5  (%N)*N",
+            vecsize, comp1, fail1, comp10, fail10, comp100, fail100 )
+$)
+
+
+
+AND countblocks( blocksize, flag, vecsize )  =  VALOF
+$(
+//  Return the number of blocks which are >= vecsize.
+
+    LET total  =  0
+
+    FOR  i = 1  TO  blocksize!0  DO
+    $(
+        LET entry  =  blocksize!i
+        LET eflag  =  (entry & 1)
+        LET esize  =  (entry & (NOT 1))
+        
+        IF  eflag = flag  &  esize >= vecsize  THEN  total  :=  total + 1
+    $)
+
+    RESULTIS  total
+$)
+        
+
+
+AND printbuffer( buffer, comment, size )  BE
+$(
+//  State of the store before/after doing the allocation.
+
+    LET blocks  =  buffer!0
+    
+    writef( "State of store %S allocating blocks of size %N:*N*N", comment, size )
+
+    FOR  i = 1 TO  blocks  DO
+    $(
+        LET length  =  buffer!i
+        LET state   =  (length & 1)
+        LET len     =  (length & (NOT 1))
+        
+        writef( "%I6%C ", len, state = 0 -> 'a', 'f' )
+        
+        IF  i REM 10  =  0  THEN  newline()
+    $)
+
+    writes( "*N*N" )
+$)
+
+
+
+AND alloc( blocksize, vecsize )  =  VALOF
+$(
+//  Return the number of comparisons necessary in order to allocate a block
+//  of length "vecsize".
+
+    LET required  =  (vecsize | 1)  +  1
+    LET blocks    =  blocksize!0
+    LET block     =  1
+    LET compares  =  0
+    
+    UNTIL  block > blocks  DO
+    $(
+        LET length  =  blocksize!block
+        
+        compares  :=  compares + 1
+        
+        IF  (length & 1)  =  1  THEN
+        $(
+            //  This block is free, but is it big enough?
+            
+            length  :=  length - 1
+            
+            IF  length < required  THEN
+            $(
+                //  No joy here, so we had better look at the next item,
+                //  and see if we can merge some free blocks togther.
+                
+                LET next  =  block + 1
+                
+                UNTIL  next > blocks  DO
+                $(
+                    LET nlength  =  blocksize!next
+                    
+                    compares  :=  compares + 1
+                    
+                    TEST  (nlength & 1)  =  1  THEN
+                    $(
+                        //  Magic!  The blocks can be merged, so do that!
+                        
+                        nlength          :=  nlength - 1
+                        length           :=  length + nlength
+                        blocksize!block  :=  length + 1
+                        
+                        FOR  i = next+1  TO  blocks  DO
+                            blocksize!(i - 1)  :=  blocksize!i
+                            
+                        blocks           :=  blocks - 1
+                    $)
+                    ELSE  BREAK
+                $)
+            $)
+            
+            IF  length > required  THEN
+            $(
+                //  We have a fit, plus some left over.
+                
+                FOR  i = blocks  TO  block+1  BY  -1  DO
+                    blocksize!(i + 1)  :=  blocksize!i
+                    
+                blocksize!(block+1)  :=  length - required + 1
+                blocks               :=  blocks + 1
+
+                blocksize!0          :=  blocks
+            $)
+            
+            UNLESS  length < required  DO
+            $(
+                blocksize!0      :=  blocks
+                blocksize!block  :=  required
+                
+                result2          :=  FALSE
+                
+                RESULTIS  compares
+            $)
+        $)
+        
+        //  If we drop through here, then we have had no fit, and so we should
+        //  go onto the next item in the list.
+        
+        block  :=  block + 1
+    $)
+
+    //  If we drop through here, then we have failed to allocate at all.
+
+    blocksize!0  :=  blocks
+    result2      :=  TRUE
+
+    RESULTIS  compares
+$)
+
+

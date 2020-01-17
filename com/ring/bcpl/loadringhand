@@ -1,0 +1,124 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+       ##         ######     ####    ######    #######   ##    ##
+       ##        ########   ######   #######   ########  ##    ##
+       ##        ##    ##  ##    ##  ##    ##  ##    ##  ##    ##
+       ##        ##    ##  ########  ##    ##  ########  ########
+       ##        ##    ##  ##    ##  ##    ##  #######   ##    ##
+       ##        ##    ##  ##    ##  ##    ##  ##  ##    ##    ##
+       ########  ########  ##    ##  #######   ##   ##   ##    ##
+       ########   ######   ##    ##  ######    ##    ##  ##    ##
+
+************************************************************************
+**    Author:   Brian Knight                      September 1979      **
+***********************************************************************/
+
+
+// Command to load the ring receiver and transmitter devices
+// and the ring handler task.
+//
+// It expects the following files to contain object modules:
+//
+// :D.RINGRX-DEV          Receiver DCB and driver
+// :D.RINGTX-DEV          Transmitter DCB and driver
+// :L.RING-HANDLER        Ring handler task
+
+
+SECTION "Loadringhand"
+GET "LIBHDR"
+GET "RINGHDR"
+
+
+MANIFEST
+    $(
+    ringhand.stsize = 100
+    ringhand.pri    = 5000
+    $)
+
+
+GLOBAL
+    $(
+    rx.dcb          : ug
+    rx.id           : ug + 1
+    tx.dcb          : ug + 2
+    tx.id           : ug + 3
+    handler.seg     : ug + 4
+    handler.task    : ug + 5
+    $)
+
+
+
+LET start() BE
+    $(
+    LET rxfilename       = "sys:D.ringrx-dev"
+    LET txfilename       = "sys:D.ringtx-dev"
+    LET handler.filename = "sys:L.ring-handler"
+    LET pri              = ringhand.pri
+    LET seglist          = tcb ! tcb.seglist
+    LET newseglist       = VEC 3
+    LET rhtask           = rootnode ! rtn.info ! rtninfo.ring ! ri.rhtaskid
+
+    IF rhtask \= 0
+    THEN $( writes("Ring handler was already loaded*n"); FINISH $)
+
+    rx.dcb       := loadseg(rxfilename)
+    tx.dcb       := loadseg(txfilename)
+    handler.seg  := loadseg(handler.filename)
+    rx.id        := 0
+    tx.id        := 0
+    handler.task := 0
+
+    IF rx.dcb = 0 THEN error("Failed to load %s*N", rxfilename)
+
+    rx.id := createdev(rx.dcb)
+    IF rx.id = 0 THEN error("failed to create receiver device*N")
+
+    IF tx.dcb = 0 THEN error("Failed to load %s*N", txfilename)
+
+    tx.id := createdev(tx.dcb)
+    IF tx.id = 0 THEN error("failed to create transmitter device*N")
+
+    IF handler.seg = 0 THEN error("failed to load %s*N", handler.filename)
+
+    newseglist ! 0 := 3
+    newseglist ! 1 := seglist ! 1
+    newseglist ! 2 := seglist ! 2
+    newseglist ! 3 := handler.seg
+
+      $( // Loop to change priority if necessary
+      handler.task := createtask(newseglist, ringhand.stsize, pri)
+
+      UNLESS (handler.task=0) & (result2=102) THEN BREAK
+
+      // Failed due to unavailable priority: try again
+      pri := pri+1
+      $) REPEAT
+
+    IF HANDLER.TASK = 0
+    THEN error("failed to create ring handler task*n")
+
+    // Start up handler
+    // The information passed in the first packet is:
+    //     Ring rx device id
+    //     Ring tx device id
+    //     Flag which is TRUE iff the handler is to be breakable.
+    //       (When the handler is loaded by LOADRINGHAND then it
+    //        should be breakable; when resident, it shouldn't).
+
+    sendpkt(notinuse, handler.task, ?, ?, ?, rx.id, tx.id, TRUE)
+    $)
+
+
+AND error(f,a,b,c) BE
+    $(
+    writef(f,a,b,c)
+    deletedev(rx.id); unloadseg(rx.dcb)
+    deletedev(tx.id); unloadseg(tx.dcb)
+    deletetask(handler.task); unloadseg(handler.seg)
+    stop(20)
+    $)
+
+

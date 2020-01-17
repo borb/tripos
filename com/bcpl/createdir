@@ -1,0 +1,279 @@
+/****************************************************************************\
+*                           Systems Research Group                           *
+******************************************************************************
+
+
+  #####   #######   ########    ####    ########  ########  ######    ########
+ #######  ########  ########   ######   ########  ########  #######   ########
+##        ##    ##  ##        ##    ##     ##     ##        ##    ##     ##
+##        ########  ######    ########     ##     ######    ##    ##     ##
+##        #######   ##        ##    ##     ##     ##        ##    ##     ##
+##        ##  ##    ##        ##    ##     ##     ##        ##    ##     ##
+ #######  ##   ##   ########  ##    ##     ##     ########  #######   ########
+  #####   ##    ##  ########  ##    ##     ##     ########  ######    ########
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   18/07/86            *
+\****************************************************************************/
+
+
+
+SECTION "CREATEDIR"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+GET "BCPL.OBJINFO"
+
+
+
+LET start()  BE
+$(
+//  New version of the CREATEDIR command to incorporate the Topexpress
+//  changes in spec into the more modern type of Tripos filing system.
+
+    LET args     =  "DIR/A,FOR/S,QUIET/S"
+    LET argv     =  VEC 150
+
+    LET a.dir    =  0
+    LET a.for    =  0
+    LET a.quiet  =  0
+
+    UNLESS  rdargs( args, argv, 150 )  DO
+    $(
+        writef( "******  Bad arguments for *"%S*"*N", args )
+
+        stop( 20 )
+    $)
+
+    a.dir    :=  argv!0
+    a.for    :=  argv!1
+    a.quiet  :=  argv!2
+
+    //  Check the syntax of the directory name.  We throw it out if it starts
+    //  or ends in a dot, or if it is a null name.
+
+    UNLESS  validname( a.dir )  DO
+    $(
+        LET type  =  a.for  ->  "file", "directory"
+
+        writef( "******  Invalid %S name: *"%S*"*N", type, a.dir )
+
+        stop( 20 )
+    $)
+
+    //  If the user has asked for the "FOR" option, then we should remove
+    //  the final file name from the directory.
+
+    IF  a.for  THEN
+
+        UNLESS  stripname( a.dir )  DO
+        $(
+            writef( "******  No directory to create for *"%S*"*N", a.dir )
+
+            stop( 20 )
+        $)
+
+    //  If we have got this far, then we should start creating directories.
+    //  Attempt to create the directory itself, and if that fails, attempt
+    //  to create the subdirectories for it.
+
+    stop( createdirectory( a.dir, a.quiet )  ->  0,  20 )
+$)
+
+
+
+AND createdirectory( dirname, quiet )  =  VALOF
+$(
+//  Attempt to create the directory given.  There are several possibilities
+//  as to what might arise:
+//
+//      a)  The object exists as a directory
+//      b)  The object exists as a file
+//      c)  The creation succeeds
+//      d)  The creation fails
+//
+//  With case "d", we look to see if the reason might be that we have not
+//  yet created all the necessary subdirectories.
+
+    LET lock  =  locateobj( dirname )
+
+    UNLESS  lock = 0  DO
+    $(
+        //  The object already exists, so look at its type to see if it
+        //  is what we want.
+
+        LET type  =  checktype( lock )
+
+        freeobj( lock )
+
+        IF  type = type.file  THEN
+            writef( "******  *"%S*" already exists as a file*N", dirname )
+
+        IF  type = type.dir  &  NOT quiet  THEN
+            writef( "******  Directory *"%S*" already exists*N", dirname )
+
+        result2  :=  0
+
+        RESULTIS  type = type.dir
+    $)
+
+    //  Otherwise, the object does not exist, so we attempt to create it.
+
+    lock  :=  createdir( dirname )
+
+    UNLESS  lock = 0  DO
+    $(
+        //  The creation has succeeded, so we should free the lock, and return
+        //  immediately to the caller.
+
+        freeobj( lock )
+
+        RESULTIS  TRUE
+    $)
+
+    //  If we drop through here, then we have failed to create the directory,
+    //  but that may be because the subdirectory does not exist.
+
+    IF  createsubdirectory( dirname, quiet )  THEN
+    $(
+        //  We have created the subdirectory necessary, so we should try
+        //  again to create the main directory.
+
+        lock  :=  createdir( dirname )
+
+        UNLESS  lock = 0  DO
+        $(
+            //  We have finally succeeded.  Free the lock, and return
+            //  the successful result.
+
+            freeobj( lock )
+
+            RESULTIS  TRUE
+        $)
+    $)
+
+    //  If we drop through here, then we genuinely have failed to create
+    //  the directory, so we should complain.
+
+    writef( "******  Failed to create directory *"%S*"", dirname )
+
+    TEST  result2 = 0  THEN  newline()
+    ELSE
+    $(
+        writes( "  -  " )
+
+        fault( result2 )
+
+        result2  :=  0
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND validname( name )  =  VALOF
+$(
+//  Return TRUE iff the name given is valid.  To be this, it must:
+//
+//      a)  Not be null
+//      b)  Not start with a "."
+//      c)  Not end with a "."
+
+    LET length  =  name % 0
+
+    IF  length = 0             THEN  RESULTIS  FALSE
+    IF  name % 1  =  '.'       THEN  RESULTIS  FALSE
+    IF  name % length  =  '.'  THEN  RESULTIS  FALSE
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND stripname( name )  =  VALOF
+$(
+//  Scan from the right hand part of the name, until the first "." is found.
+//  The string length is then updated to take account of this.
+
+    FOR  i  =  name % 0  TO  1  BY  -1  DO
+
+        //  Look so see if there is a "." in the current position, and if so,
+        //  strip the rest of the name.
+
+        IF  name % i  =  '.'  THEN
+        $(
+            name % 0  :=  i - 1
+
+            RESULTIS  TRUE
+        $)
+
+    //  Otherwise, if we drop through here, then the strip failed, and
+    //  we should return "false".
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND createsubdirectory( dirname, quiet )  =  VALOF
+$(
+//  Attempt to create a subdirectory for the directory name given.
+
+    LET name    =  copystring( dirname )
+    LET result  =  FALSE
+
+    IF  stripname( name )  THEN
+        TEST  validname( name )
+            THEN  result  :=  createdirectory( name, quiet )
+            ELSE  writef( "******  Invalid directory name:  *"%S*"*N", name )
+
+    freevec( name )
+
+    RESULTIS  result
+$)
+
+
+
+AND copystring( string )  =  VALOF
+$(
+//  Make a copy of the string in heap memory.
+
+    LET length  =  string % 0
+    LET store   =  getvec( length/bytesperword )
+
+    IF  store = 0  THEN  abort( error.getvecfailure )
+
+    FOR  i = 0  TO  length  DO  store % i  :=  string % i
+
+    RESULTIS  store
+$)
+
+
+
+AND checktype( lock )  =  VALOF
+$(
+//  Examine the object given, and return its type.
+
+    LET info  =  VEC  dirent.size + file.header.size - 1
+    LET type  =  0
+
+    examineobj( lock!lock.task, lock, info )
+
+    objinfo.ex( objinfo.type, lock, info, @type )
+
+    RESULTIS  type
+$)
+
+
+
+AND examineobj( task, lock, info )  BE
+    sendpkt( notinuse, task, action.examineobject, 0, 0, lock, info )
+
+
+

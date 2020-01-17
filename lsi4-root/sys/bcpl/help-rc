@@ -1,0 +1,65 @@
+GET "LIBHDR"
+GET "BCPL.gethex"
+GET "string-to-number"
+
+
+
+
+LET start(vect, n, all) = VALOF
+$(  // CALLSEG'd code for implementing HELP PUID <puid1> <puid2> ...
+    LET matched = vect!0
+    LET arg = (vect+1)
+    LET found.any = FALSE
+    FOR i=0 TO n-1 DO
+    IF 0=((1<<i)&matched) THEN
+    $(  // only look at keys that have not yet been matched
+        LET dec.rc.valid = string.to.number(arg!i)
+        LET dec.rc = result2
+        LET hex.rc = ?
+        LET hex.rc.valid = ?
+        LET match = FALSE
+        IF arg!i%1='#' THEN
+        $(  LET back = (capitalch(arg!i%2)='X' -> 2, 1)
+            FOR ch=back+1 TO arg!i%0 DO arg!i%(ch-back) := arg!i%ch
+            arg!i%0 := arg!i%0-back
+        $)
+        hex.rc.valid := gethex(arg!i, @hex.rc, 1) & (arg!i%0 <= 4)
+        IF hex.rc.valid THEN
+            TEST get.ringrc(hex.rc) THEN match:=TRUE ELSE
+            IF ~dec.rc.valid & get.sysrc(hex.rc) THEN match:=TRUE
+        IF dec.rc.valid THEN
+            TEST get.ringrc(dec.rc) THEN match := TRUE ELSE
+            IF get.sysrc(dec.rc) THEN match := TRUE
+        IF match THEN
+        $(  // set this key as having been matched in map in arg!0
+            arg!0 := arg!0 | (1<<i)
+            found.any := TRUE
+        $)
+    $)
+    result2 := found.any
+    RESULTIS result2
+$)
+
+
+AND get.sysrc(rc) = isringrc( rc ) -> FALSE, VALOF
+$(  writef("System RC %N (#X%X4) is ", rc, rc)
+    fault(rc)
+    RESULTIS TRUE
+$)
+
+
+
+AND isringrc( rc )  =  (rc & #X8000) \= 0
+
+
+
+AND get.ringrc(rc) = VALOF
+$(  LET string = VEC 60/bytesperword
+    LET level = callseg("SYS:L.RINGERROR", rc, string, 60/bytesperword)
+    LET ans = (level<2)
+    IF ans THEN
+    writef("Ring RC %N (#X%X4) is %S*N", rc, rc, string)
+    RESULTIS ans
+$)
+
+

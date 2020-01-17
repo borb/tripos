@@ -1,0 +1,427 @@
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*************************************************************************
+*  (C) Copyright 1979  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*                   8 0 8 0     A S S E M B L E R                       *
+*                                                                       *
+*************************************************************************
+**   Dave   Matthews      COMPUTER LAB,  CAMBRIDGE           25.07.79  **
+*************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*/
+
+
+
+
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+/*<TRIPOS:
+GET "libhdr"
+GET "SYS:Grasm.NEW.BCPL.asmhdr"
+/*TRIPOS>*/
+
+
+//*<LYNX
+GET "libhdr"
+GET "asmhdr"
+/*LYNX>*/
+
+
+
+
+
+
+
+
+
+
+//
+//                     Error  messages
+//
+
+
+MANIFEST $(
+   e.stack    =  e.e + 0
+   e.double   =  e.e + 1
+   e.badreg   =  e.e + 2
+$)
+
+
+LET errormess(rc) = VALOF
+SWITCHON rc INTO
+$(  CASE e.stack:     RESULTIS "Not allowed in PUSH or POP"
+    CASE e.double:    RESULTIS "Not a register pair"
+    CASE e.badreg:    RESULTIS "Register expected"
+    DEFAULT:          RESULTIS "unknown return code given"
+$)
+
+
+
+
+
+//
+//                    Register  Discriptions
+//
+
+
+
+
+MANIFEST $(
+  r.bad       =  0            // bad register
+  r.stk       =  #X08         // may be used in PUSH or POP
+  r.dble      =  #X10         // may be used as a double reg.
+  r.b         =  0 + r.stk + r.dble
+  r.c         =  1
+  r.d         =  2 + r.stk + r.dble
+  r.e         =  3
+  r.h         =  4 + r.stk + r.dble
+  r.l         =  5
+  r.m         =  6
+  r.a         =  7
+  r.psw       =  6 + r.stk
+  r.sp        =  6         + r.dble
+$)
+
+
+
+
+LET initsyms() BE
+$(  reg.put("B",r.b)
+    reg.put("C",r.c)
+    reg.put("D",r.d)
+    reg.put("E",r.e)
+    reg.put("H",r.h)
+    reg.put("L",r.l)
+    reg.put("SP",r.sp)
+    reg.put("PSW",r.psw)
+    reg.put("A",r.a)
+    reg.put("M",r.m)
+$)
+
+
+
+
+
+//
+//                    Code   for   Opcode   Formats
+//
+
+
+
+GLOBAL $(
+  f.1   :  ag + 0   //
+  f.2   :  ag + 1   //
+  f.3   :  ag + 2
+
+
+$)
+
+
+
+LET getsym(sym) = VALOF
+$(  LET ans=(item.type=i.iden)
+    IF ans THEN ans:=(sym=getreg(item.info))
+    IF ans THEN getitem()
+    RESULTIS ans
+$)
+
+
+
+
+LET putaddress(n) BE
+$(  LET sign=n&~#XFFFF
+    putword(n&255)
+    putword( (n&(255<<8)) >> 8)
+    UNLESS sign=(-1&~#XFFFF) | sign=0 THEN error(e.badbyte)
+$)
+
+
+
+
+LET fmt0(lab) BE get.and.declare(lab)
+
+
+AND waddr(lab) BE
+$(  LET spec=VEC spec.size
+    get.and.declare(lab)
+    label.expression(spec)
+    putlabelspec(spec)
+$)
+
+AND stk(lab) BE
+$( LET r = VALOF $( get.and.declare(lab); RESULTIS getreg(item.info) $)
+   TEST r = r.bad THEN error(e.badreg)
+   ELSE TEST (r & r.stk) = 0 THEN error(e.stack)
+   ELSE putwordf((r & 7)>>1, f.3)
+$)
+
+AND res(lab) BE
+$( LET i=?
+   get.and.declare(lab)
+   i := expression()
+   TEST 0 <= i < 8 THEN putwordf(i,f.2) ELSE error(e.ftoosmall,i)
+$)
+
+AND mov(lab) BE
+$( fmt2(lab)
+   getitem()
+   scan(i.comma)
+   fmt1(0)
+   read.reg()
+$)
+
+AND fmt1(lab) BE
+$(  get.and.declare(lab)
+    read.reg()
+$)
+
+
+AND read.reg() BE
+$( LET i=?
+   i := getreg(item.info)
+   TEST (i = r.sp) | (i = r.psw) | (i = r.bad) THEN error(e.badreg)
+   ELSE putwordf((i & 7), f.1)
+$)
+
+AND fmt2(lab) BE
+$( LET i=?
+   get.and.declare(lab)
+   i := getreg(item.info)
+   TEST (i = r.sp) | (i = r.psw) | (i = r.bad) THEN error(e.badreg)
+   ELSE putwordf((i & 7), f.2)
+$)
+
+AND fmt3(lab) BE
+$( LET i=?
+   get.and.declare(lab)
+   i := getreg(item.info)
+   TEST i = r.bad THEN error(e.badreg)
+   ELSE TEST (i & r.dble) = 0 THEN error(e.double)
+   ELSE putwordf((i & 7)>>1, f.3)
+$)
+
+
+AND xifm(lab) BE
+$( LET spec = VEC spec.size
+   fmt3(lab)
+   getitem()
+   scan(i.comma)
+   putlabelspec(label.expression(spec))
+$)
+
+
+AND axfm(lab) BE
+$( LET i = ?
+   get.and.declare(lab)
+   i := getreg(item.info)
+   TEST (i = r.b) | (i = r.d) THEN putwordf((i & 7)>>1, f.3)
+   ELSE error(e.badreg)
+$)
+
+
+AND ifmt(lab) BE
+$( get.and.declare(lab)
+   putword(expression())
+$)
+
+
+AND mvi(lab) BE
+$( fmt2(lab)
+   getitem()
+   scan(i.comma)
+   putword(expression())
+$)
+
+
+AND dwproc(lab) BE
+$(  LET spec=VEC spec.size
+    get.and.declare(lab)
+    putlabelspec(label.expression(spec)) REPEATWHILE scan(i.comma)
+$)
+
+
+AND nolistproc(lab) BE
+$(  get.and.declare(lab)
+    list:=list-1  // listing variable
+$)
+
+
+LET initcodes() BE
+$(  code.put("DB",dataproc,0)
+    code.put("DEFB",dataproc,0)
+    code.put("DW",dwproc,0)
+    code.put("DEFW",dwproc,0)
+    code.put("DEFM",dataproc,0)
+    code.put("DS",storeproc,0)
+    code.put("DEFS",storeproc,0)
+    code.put("EQU",equproc,0)
+    code.put("DEF",defproc,0)
+    code.put("REF",refproc,0)
+    code.put("WREF",wrefproc,0)
+    code.put("NEEDS",needsproc,0)
+    code.put("PRAG",pragproc,0)
+    code.put("SET",setproc,0)
+    code.put("TEXT",textproc,0)
+    code.put("TITLE",titlproc,0)
+    code.put("ORG",orgproc,0)
+    code.put("ABS",absproc,0)
+    code.put("REL",relproc,0)
+    code.put("GET",getproc,0)
+    code.put("LIST",listproc,0)
+    code.put("NOLIST",nolistproc,0)
+    code.put("END",endproc,0)
+    code.put("PAGE",ejectproc,0)
+    code.put("SPACE",spaceproc,0)
+    code.put("NOP",fmt0,1,#X00)
+    code.put("RLC",fmt0,1,#X07)
+    code.put("RRC",fmt0,1,#X0F)
+    code.put("RAL",fmt0,1,#X17)
+    code.put("RAR",fmt0,1,#X1F)
+    code.put("DAA",fmt0,1,#X27)
+    code.put("CMA",fmt0,1,#X2F)
+    code.put("STC",fmt0,1,#X37)
+    code.put("CMC",fmt0,1,#X3F)
+    code.put("HLT",fmt0,1,#X76)
+    code.put("RNZ",fmt0,1,#XC0)
+    code.put("RZ" ,fmt0,1,#XC8)
+    code.put("RET",fmt0,1,#XC9)
+    code.put("RNC",fmt0,1,#XD0)
+    code.put("RC" ,fmt0,1,#XD8)
+    code.put("RPO",fmt0,1,#XE0)
+    code.put("XTHL",fmt0,1,#XE3)
+    code.put("RPE",fmt0,1,#XE8)
+    code.put("PCHL",fmt0,1,#XE9)
+    code.put("XCHG",fmt0,1,#XEB)
+    code.put("RP" ,fmt0,1,#XF0)
+    code.put("DI" ,fmt0,1,#XF3)
+    code.put("RM" ,fmt0,1,#XF8)
+    code.put("SPHL",fmt0,1,#XF9)
+    code.put("EI" ,fmt0,1,#XFB)
+    code.put("ADD",fmt1,1,#X80)
+    code.put("ADC",fmt1,1,#X88)
+    code.put("SUB",fmt1,1,#X90)
+    code.put("SBB",fmt1,1,#X98)
+    code.put("ANA",fmt1,1,#XA0)
+    code.put("XRA",fmt1,1,#XA8)
+    code.put("ORA",fmt1,1,#XB0)
+    code.put("CMP",fmt1,1,#XB8)
+    code.put("INR",fmt2,1,#X04)
+    code.put("DCR",fmt2,1,#X05)
+    code.put("INX",fmt3,1,#X03)
+    code.put("DAD",fmt3,1,#X09)
+    code.put("DCX",fmt3,1,#X0B)
+    code.put("ADI",ifmt,1,#XC6)
+    code.put("ACI",ifmt,1,#XCE)
+    code.put("SUI",ifmt,1,#XD6)
+    code.put("SBI",ifmt,1,#XDE)
+    code.put("ANI",ifmt,1,#XE6)
+    code.put("XRI",ifmt,1,#XEE)
+    code.put("ORI",ifmt,1,#XF6)
+    code.put("CPI",ifmt,1,#XFE)
+    code.put("LXI",xifm,1,#X01)
+    code.put("STAX",axfm,1,#X02)
+    code.put("LDAX",axfm,1,#X0A)
+    code.put("MVI",mvi,1,#X06)
+    code.put("SHLD",waddr,1,#X22)
+    code.put("LHLD",waddr,1,#X2A)
+    code.put("STA",waddr,1,#X32)
+    code.put("LDA",waddr,1,#X3A)
+    code.put("MOV",mov,1,#X40)
+    code.put("JNZ",waddr,1,#XC2)
+    code.put("JMP",waddr,1,#XC3)
+    code.put("CNZ",waddr,1,#XC4)
+    code.put("JZ" ,waddr,1,#XCA)
+    code.put("CZ" ,waddr,1,#XCC)
+    code.put("CALL",waddr,1,#XCD)
+    code.put("JNC",waddr,1,#XD2)
+    code.put("CNC",waddr,1,#XD4)
+    code.put("JC" ,waddr,1,#XDA)
+    code.put("CC" ,waddr,1,#XDC)
+    code.put("JPO",waddr,1,#XE2)
+    code.put("CPO",waddr,1,#XE4)
+    code.put("JPE",waddr,1,#XEA)
+    code.put("CPE",waddr,1,#XEC)
+    code.put("JP" ,waddr,1,#XF2)
+    code.put("CP" ,waddr,1,#XF4)
+    code.put("JM" ,waddr,1,#XFA)
+    code.put("CM" ,waddr,1,#XFC)
+    code.put("RST",res  ,1,#XC7)
+    code.put("POP",stk  ,1,#XC1)
+    code.put("PUSH",stk ,1,#XC5)
+    code.put("OUT",ifmt,1,#XD3)
+    code.put("IN", ifmt,1,#XDB)
+$)
+
+
+//
+//                        Initialisation
+//
+
+
+
+LET startasm(version) = (version/1000)\=3 -> "Version 3.047 28-Apr-81", VALOF
+$(  name:="8080"
+    comntcheck := TRUE
+    f.1 := newf(0,3)
+    f.2 := newf(3,3)
+    f.3 := newf(4,2)
+    RESULTIS 0
+$)
+
+
+
+
+

@@ -1,0 +1,177 @@
+//    GCODE to PostScript program
+//    (C) 1985 Gray Girling
+//    Subsequently much hacked by Philip Hazel
+//    Then tinkered with by Piete Brooks
+
+// ---------  Header File ---------
+
+//     Version log:
+//     0.0   19-Sep-85  CGG      First installed on MINOS for testing
+//     0.1   19-Sep-85  CGG      Output file written only when needed now
+//     0.2   20-Sep-85  CGG      First PANOS version
+//     0.3   23-Sep-85  CGG      Application comments decoded
+//                      CGG      Font bindings always written to postscript
+//                      CGG      Concatinated GCODE files supported
+//     0.4   27-Sep-85  CGG      APC delimiter changed to semi-colong
+//                      CGG      missing font binding escape bug fixed
+//     0.5   01-Oct-85  CGG      horizontal movement optimized using spaces
+//     0.6   07-Oct-85  CGG      formfeed bugs fixed
+//     0.7   10-Oct-85  CGG      BBC graphics relevent APC's added
+//     0.8   11-Oct-85  CGG      long lines eliminated from postscript output
+//     0.9   14-Oct-85  CGG      GET files use "-post" default on PANOS
+//     0.10  15-Oct-85  CGG      FONT application comment added
+//     0.11  17-Oct-85  CGG      Bug in Request string fixed
+//     0.12  24-Oct-85  RDE+CGG  New Panos/IBM argument handling
+//                      CGG      Multiple input files catered for
+//                      CGG      Panos Escape handling installed
+//     0.13  25-Oct-85  PH       Ascii dependencies removed
+//           07-Nov-85  PH       Ascii dependency for \n/ removed
+//     1.00  13-Jan-86  PH       MVS OPT processing and general
+//                               tidying. Incorrect 'emboldening' removed.
+//     1.01  15-Jan-86  PH       removal of unnecessary REQUEST features
+//                               save/restore round GET
+//     1.02  17-Jan-86  PH       interpretation of \ in DCS strings
+//     1.3   21-Jan-86  PH       interpret DCS even when skipping pages
+//     1.4   28-Jan-86  PH       remvoval of EOTs
+//     1.5   29-Jan-86  PH       Correct # of pages in PostScript
+//     1.6    4-Feb-86  PB       Set up for UNIX BSD4.2 (VAXUNIX) & TRIPOS
+//     2.0   20-Feb-86  PH       A5, argument extensions
+//     2.0   21-Feb-86  PH       Split into two because the IBM compiler
+//                               couldn't handle it.
+//     2.02  22-Feb-86  PB       A5, pages & argument extension -> TRIPOS/UNIX
+
+MANIFEST
+$(  major.version = 2
+    minor.version = 2
+$)
+
+$<MVS
+MANIFEST $( minchar = ' '; maxchar = '9' $)
+$>MVS
+
+$<MVS'
+MANIFEST $( minchar = ' '; maxchar = '~' $)
+$>MVS'
+
+$<VAXUNIX
+MANIFEST $( UG = firstfreeglobal; BITSPERBYTE = BITSPERWORD / BYTESPERWORD $)
+$>VAXUNIX
+
+
+MANIFEST
+$(  // character values for GCODE operations
+gc.nul   = 256     // ignore
+gc.ff    = 257     // begin new page
+gc.dcs   = 258     // begin/end device control string
+gc.nl    = 259     // begin new line
+gc.bs    = 260     // backspace one character (leave code #X08 for ID)
+gc.apc   = 261     // begin/end GTYPE control string
+gc.bft   = 262     // bind font
+gc.fdl   = 263     // font delimiter
+gc.vsi   = 264     // vertical space increment
+gc.ssu   = 265     // set scale unit 1=72 point/in 2=72.27 point/in
+gc.rpr   = 266     // move right relative
+gc.lpr   = 267     // move left relative
+gc.dpr   = 268     // move down relative
+gc.upr   = 269     // move up relative
+gc.sgr   = 270     // set graphical representation
+gc.fnt   = 271     // select font number
+gc.chr   = 272     // printing character
+gc.gdpr  = 273     // move down global
+gc.gupr  = 274     // move up global
+// terminators for variable length control sequences
+gct.bft  = '='     // bind font
+gct.fdl  = '"'     // font delimiter
+gct.vsi  = '!'     // vertical space increment
+gct.ssu  = '#'     // set scale unit 1=72 point/in 2=72.27 point/in
+gct.rpr  = '>'     // move right relative
+gct.lpr  = '<'     // move left relative
+gct.dpr  = '$'     // move down relative
+gct.upr  = '%'     // move up relative
+gct.sgr  = '_'     // set graphical representation
+gct.fnt  = '\'     // select font number
+gct.chr  = '/'     // printing character
+gct.gdpr = ')'     // move down global
+gct.gupr = '('     // move up global
+// limits
+max.copies = 50    // maximum number of copies allowed
+post.rmargin = 70  // ragged right hand margin minimum length
+// GCODE argument information
+gcode.id = '*B'    // first byte of a true GCODE file (backspace!)
+gcode.argsize = 256// characters to read number string into
+apc.argsize = 50   // characters to read each APC part into
+chseq.strlen = 256 // max characters allowed in GTYPE control string
+spacewidth.len = 30// max characters allowed in horizonatal move number
+$)
+
+
+
+
+GLOBAL
+$(  // verification stream:
+ver.stream       : ug+0   // output stream for errors and messages
+// output to the postscript file:
+in.postscript    : ug+5   // TRUE when output is to the Postscript
+                          // command interpreter and FALSE when output
+                          // is part of a text string to be output
+close.newlines   : ug+6   // number of consecutive newlines
+newpage          : ug+7   // TRUE when next text is on a NEW PAGE
+pages.output     : ug+8   // number of pages sent to LaserWriter
+syswrch          : ug+9   // the real system wrch procedure
+// input from the GCODE file:
+gcode.file.name  : ug+15  // name of the file being compiled
+line.number      : ug+16  // line number in the gcode file
+gcode.argument   : ug+17  // buffer holding gcode control argument
+space.width      : ug+18  // string holding last space horizontal movement
+space.mismatch   : ug+19  // no. of times horizontal move \= space.width
+ignore.newpage   : ug+20  // TRUE when next newpage to be ignored
+// POSTSCRIPT output globals:
+post.colno       : ug+24  // column reached in postscript output
+post.stream      : ug+25  // postscript output stream, 0 until opened
+post.stream.name : ug+26  // name of the postscript stream
+post.hdr.name : ug+27  // name of the postscript hdr stream
+post.initial.apc : ug+28  // application comment set on command line
+// PSGCODE configuration dependent globals:
+command.name     : ug+30  // for use when printing errors etc.
+device.name      : ug+31  // for use when decoding APC strings
+parmstring       : ug+32  // argument string
+chatty           : ug+33  // is TRUE if chatty messages are expected
+escape.pressed   : ug+34  // GLOBAL for PANOS private use
+interrupt        : ug+35  // returns TRUE is execution is to be halted
+eqstring         : ug+36  // returns TRUE if strings are equal (case eqn)
+get.day          : ug+37  // gives default or day using supplied vector
+get.date         : ug+38  // gives default or date using supplied vector
+get.time         : ug+39  // gives default or time using supplied vector
+findgetin        : ug+40  // returns SCB for named GET file
+findmainout      : ug+41  // returns SCB for named output file
+findmaininput    : ug+42  // returns SCB for named output file
+// PSGCODE argument globals:
+even             : ug+45  // print the even pages
+odd              : ug+46  // print the odd pages
+min.page         : ug+47  // smallest page number to consider printing
+max.page         : ug+48  // largest page number to consider printing
+bitmask          : ug+49  // for page selection bits
+A5onA4           : ug+50  // A5 on A4 option
+page.map         : ug+51  // page selection bit map
+//Communication between the two parts
+error            : ug+52
+init.ver         : ug+53
+end.ver          : ug+54
+init.gcode       : ug+55
+end.gcode        : ug+56
+init.laserwriter : ug+57
+end.laserwriter  : ug+58
+read.gcode       : ug+59
+report           : ug+60
+get.vec          : ug+61
+free.vec         : ug+62
+tidyup           : ug+63
+// System specific:
+$<TRIPOS
+getvec.chain     : ug+64
+$>TRIPOS
+$)
+
+// End of Header
+
+

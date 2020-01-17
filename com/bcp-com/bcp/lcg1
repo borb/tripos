@@ -1,0 +1,272 @@
+SECTION "LCG1"
+
+GET "LCGHDR"
+
+LET cgstart(workbase, worktop) = VALOF  // Use WORKTOP-WORKSPACE
+$(   err.p, err.l := level(), stop.label
+     SELECTOUTPUT(SYSOUT)
+     UNLESS quiet | (stflags & stf.nowarn) ~= 0 taskwritef(SLOW ->
+                        "LSI4 CG (March 1982), Workspace %N, Slow*N",
+                        "LSI4 CG (March 1982), Workspace %N, %N of OCODE*N",
+                worktop-workbase, (OBUF.byte.offset-OBUFP)/BYTESPERWORD)
+     switchspace, tempfile := 0,0
+     profcounting := FALSE
+//   progsize, maxused := 0, 0
+
+     IF SLOW
+     $( UNLESS OCODE=0 $( DEB("Ocode was %N. ", ocode); ENDSTREAM(OCODE) $)
+        OCODE := findinput(ocodefile)
+        IF OCODE = 0 cgerror(-20, "can't open '%S' %N", ocodefile, RESULT2)
+        selectinput(OCODE)
+     $)
+     IF workbase=0 | (worktop>>1) <= (workbase>>1)<=0
+     THEN cgerror(-20, "No workspace(%N,%N) (%N,%N)",
+                                workbase, worktop, workbase>>1, worktop>>1)
+     OBUFP := OBUF.byte.offset
+     rdn := slow -> numeric -> Nsrdn., srdn., rdn.
+
+     op := rdn()
+
+     cgsects(workbase, worktop)
+     collapse(0)
+
+stop.label:
+     RESULTIS Switchspace=0 -> 1, 0
+  $)
+
+AND collapse(n) BE
+$( UNLESS switchspace = 0 THEN freevec(switchspace)
+   Switchspace := n                                                     // RC!
+   longjump(err.p, err.l)
+$)
+
+AND cgsects(workvec, worktop) BE UNTIL op <= 0
+$(  LET p               = workvec
+    LET section.name    = FALSE
+
+    //                   A     Q     Y     X     L     P
+    registers := TABLE #B000,#B100,#B110,#B010,#B101,#B001
+
+    namesection := p; p := p+4 // section name string
+    tempv       := p; p := p+3*100
+    tempt       := p
+    maxssp, maxgn := 0, 0
+    initstack(2)
+
+    krefv, krefp := p, p; p := p+3*128
+    kreft := p
+
+    kcmpv, kcmpp := p, p; p := p+3*32
+    kcmpt := p
+
+    initdatalists()
+
+    reg.locked := p; p := p + 4
+    reg.k      := p; p := p + 4
+    reg.n      := p; p := p + 4
+    forgetall()
+
+    procstkp, procstkt := 0, 2*10
+    procstk := p; p := p+procstkt
+
+    dp := worktop
+    freelist := 0
+
+    labv := p; p := p+(dp-p)/10+10
+    labt := p
+    paramnumber := labt-labv
+    FOR lp = labv TO labt-1 DO !lp := -1
+
+    skiplab     :=  0
+    countflag   := no
+//  any.globals := no
+    incode      := no
+    needslist   :=  0
+
+    stv, stvp := p, 0
+
+    IF (stv-dp) > 0  cgerror(-20, "Insufficient workspace(%N,%N) (%N,%N)",
+        Workvec, worktop,  workvec>>1, worktop>>1)
+
+    code(0, 0)
+    code(sectionword, 0)
+    $( LET v            = VEC 17
+
+       TEST op = s.section THEN
+       $( LET n = rdn() // Actual length of SECTION name
+          FOR i = 1 TO n DO $( LET k = rdn(); IF i <= 7 THEN v!i := k $)
+          IF n>7 THEN n := 7
+          putbyte(namesection, 0, n)
+          FOR i = 1 TO n DO putbyte(namesection, i, v!i)
+          FOR i = n + 1 TO 7 DO v!i := #40
+          section.name := TRUE
+          op := rdn()
+       $)
+       ELSE $( FOR i = 0 TO 7 DO v!i := "**************"%i; namesection:=0 $)
+       V ! 8 := #X2E            // .
+       UNLESS (CGFLAGS & cgf.Sectnaming) = 0
+       $( LET datevec   = VEC 15
+          LET mydatstring(datv, datestr) = VALOF
+          $(
+            LET days,  mins,  ticks = datv!0, datv!1, datv!2
+            LET year            = 78 // Base year
+            LET month           = 1
+            LET monthtab        = TABLE 0,31,59,90,120,151,181,212,243,273,304,334,365
+            LET leapmonthtab    = TABLE 0,31,60,91,121,152,182,213,244,274,305,335,366
+            LET mchars = "JanFebMarAprMayJunJulAugSepOctNovDec"
+            LET mcharbase = ?
+            LET mtable = ?
+
+            UNLESS (days>0) & (0<=mins<1440) & (0<=ticks) //<tickspersecond*60)
+            RESULTIS "<Unknown>"
+            days := days + 1
+            FOR j=0 TO 9 DO datestr%j := "DD-MMM-YY"%j
+            $( // Loop to get year
+                LET yearlen = (year REM 4)=0 -> 366, 365
+                IF (days > 0) & (days <= yearlen) THEN BREAK
+                days, year := days - yearlen, year + 1
+            $) REPEAT
+
+            IF year > 99 THEN year := year - 100
+            datestr%8 := year/10 + '0'
+            datestr%9 := year REM 10 + '0'
+
+        // Find month
+            mtable := (year REM 4)=0 -> leapmonthtab, monthtab
+
+            UNTIL days <= mtable ! month  DO  month := month + 1
+
+            mcharbase := month*3 - 2
+            FOR j=0 TO 2 DO datestr%(4+j) := mchars % (mcharbase + j)
+            days := days - mtable ! (month - 1)
+            datestr%1 := days/10 + '0'
+            datestr%2 := days REM 10 + '0'
+            RESULTIS datestr
+          $)
+          datstamp(datevec)
+          mydatstring(datevec, datevec)
+          //DATSTRING(datevec)
+          FOR i = 9 TO 17 DO v!i := DATEVEC%(i-8)
+          v!0 := 17 // string length
+          FOR i=0 TO 16 BY 2 DO code((v!i<<8)+v!(i+1), 0)
+       $)
+    $)
+    scan()
+    op := rdn()
+
+    stv!0 := stvp
+
+    outputsection(op <= 0, Section.name)
+
+   dp := worktop-workvec + 1 - dp + stvp + stv
+   IF dp > maxused THEN maxused := dp
+$)
+
+AND initdatalists() BE
+$(  reflist := 0
+    ereflist := 0
+    refliste := @reflist
+    nlabrefs := 0
+    dlist := 0
+    dliste := @dlist
+$)
+
+AND Nsrdn.() = VALOF
+// Read in OCODE operator or argument
+// Argument may be of form Ln
+$(  LET a, sign = 0, '+'
+    LET ch = 0
+    ch := rdch() REPEATWHILE ch='*S' \/ ch='*N' \/ ch='L'
+    IF ch=endstreamch RESULTIS 0
+    IF ch='-' DO $( sign := '-'; ch := rdch() $)
+    WHILE '0'<=ch<='9' DO $( a := 10*a+ch-'0'; ch := rdch() $)
+
+    RESULTIS sign='-' -> -a, a
+$)
+
+AND Srdn.() = VALOF
+$( LET B = RDCH();
+   RESULTIS B=ENDSTREAMCH -> 0, B<128 -> B, (Srdn.()<<7) + B - 128
+$)
+
+AND rdn.() = VALOF
+$( LET B = OBUF%OBUFP
+   OBUFP := OBUFP - 1
+   RESULTIS B<128 -> B, (Rdn.()<<7) + B - 128
+$)
+
+/* AND rdl.() = VALOF $( IF numeric
+  $( LET C=?; c:=rdch() repeatwhile c='*S' \/ c='*N'; UNLESS c='L' unrdch() $)
+  $( LET l = rdn.()//IF maxlab<l $( maxlab := l; checkparam() $) RESULTIS l $)
+  $) RESULTIS SLOW -> Rdl.(), rdn.() */
+
+AND rdl() = rdn()       // read in OCODE label
+
+AND rdgn() = VALOF      // read in global number
+$( LET g = rdn(); IF maxgn<g THEN maxgn := g; RESULTIS g $)
+
+AND nextparam() = VALOF // yields next available compiler generated label
+$( paramnumber := paramnumber-1; RESULTIS paramnumber $)
+
+AND initstack(n) BE
+  // Initialise simulated stack
+  $( arg2, arg1 := tempv, tempv+3
+     ssp := n
+     pendingop := s.none
+     h1!arg2, h2!arg2, h3!arg2 := k.loc, ssp-2, ssp-2
+     h1!arg1, h2!arg1, h3!arg1 := k.loc, ssp-1, ssp-1
+     IF maxssp<ssp THEN maxssp := ssp
+  $)
+
+AND cgerror(RC, s,a,b,c,d) BE UNLESS rc=0 & (stflags & stf.nowarn)~=0
+$( LET o        = output()
+   LET fatal    = RC > 10 | RC < 0
+   SELECTOUTPUT(SYSOUT)
+   taskwritef(rc=0->"Cg WARNING: ", fatal->"CG HARD ERROR: ", "Cg soft error: ");
+   writef(s,a,b,c,d); newline()
+   selectoutput(o)
+   IF fatal $( REPORTCOUNT := REPORTMAX; COLLAPSE(ABS RC) $)
+   UNLESS RC=0 REPORTCOUNT +:= 1
+$)
+
+AND stack(n) BE
+// Move simulated stack pointer (SSP) to N
+$(  IF maxssp<n DO maxssp := n
+    IF n>=ssp+4 DO $( store(0, ssp-1); initstack(n); RETURN $)
+
+    WHILE n>ssp DO loadt(k.loc, ssp)
+
+    UNTIL n=ssp DO
+    $(  IF arg2=tempv DO
+        $(  TEST n=ssp-1
+            $(  ssp := n
+                h1!arg1 := h1!arg2
+                h2!arg1 := h2!arg2
+                h3!arg1 := ssp-1
+                h1!arg2 := k.loc
+                h2!arg2 := ssp-2
+                h3!arg2 := ssp-2
+            $)
+            ELSE initstack(n)
+            RETURN
+        $)
+
+        arg1, arg2 := arg1-3, arg2-3
+        ssp := ssp-1
+    $)
+$)
+
+AND store(a, b) BE
+$(  FOR p = tempv TO arg1 BY 3 DO
+    $(  LET s=h3!p
+        IF s>b BREAK
+        IF s>=a & (h1!p=k.reg \/ h1!p=k.ry) DO storet(p)
+    $)
+    FOR p = tempv TO arg1 BY 3 DO
+    $(  LET s=h3!p
+        IF s>b BREAK
+        IF s>=a DO storet(p)
+    $)
+$)
+
+

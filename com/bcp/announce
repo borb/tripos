@@ -1,0 +1,263 @@
+SECTION "Announce"
+
+// PB 1981 ?
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "bcpl.ssplib"
+GET "bcpl.uid"
+GET "bcpl.Readstring"
+GET "bcpl.Forceout"
+GET "bcpl.map"
+GET "bcpl.validpointer"
+
+MANIFEST
+$(      max.len=50; break.rc=10;
+        Reply.bytes     = 40
+        A.file=0;
+        A.term=A.file+1;
+        A.wto=A.term+1
+$)
+
+STATIC // GLOBAL
+$( SYSIN        = 0     // UG
+   SYSOUT       = 0     // UG+1
+   Tfile        = 0     // UG+2
+   Tout         = 0     // UG+3
+   Newin        = 0     // UG+4
+   Rename.failed= 0     // UG+5
+   Add.file     = 0     // UG+6
+   Wto          = 0     // UG+7
+$)
+
+LET START() BE
+$( LET len      = ?
+   LET argv     = VEC 80
+   LET string   = VEC 80                // Big enough?
+   LET arg.string="File,term/k,wto/s"
+   LET help.new = ":HELP.NEW"
+   LET pname    = VEC Reply.bytes/BYTESPERWORD
+   LET puid     = VEC 17/BYTESPERWORD
+
+   Sysin        := INPUT()
+   Sysout       := OUTPUT()
+   Tfile        := "t:Announce" // "-T??" ?
+   Tout         := FINDOUTPUT(tfile)
+   Newin        := FINDINPUT(help.new)
+   Rename.failed:= FALSE
+
+   IF RDARGS(arg.string, argv, 80)=0
+   $( WRITEF("Bad args for '%S'*N", arg.string); tidyup(20) $)
+
+   IF argv!A.term = 0 THEN argv!A.term := "/**"
+
+   TEST argv!A.file = 0
+   THEN add.file := 0
+   ELSE
+   $( add.file := FINDINPUT(argv!A.file)
+      IF add.file=0
+      $( WRITEF("Failed to find '%S' for input, %N*N", argv!A.file, RESULT2)
+         tidyup(20)
+      $)
+   $)
+
+   IF tout=0
+   $( WRITEF("Failed to find '%S' for output, %N*N", tfile, RESULT2);
+      tidyup(20)
+   $)
+
+   IF newin=0
+   $( WRITEF("Failed to find '%S' for input, %N*N", help.new, RESULT2);
+      tidyup(20)
+   $)
+
+   $( prompt("Type brief description ")
+      len := readstring(String, '*N')
+      IF testflags(1) tidyup(break.rc)
+      UNRDCH()
+      IF RDCH() = ENDSTREAMCH THEN tidyup(20)
+      TEST len > max.len
+      THEN WRITEF("Too long by %N character%S - try again*N",
+                                        len-max.len, len=max.len+1 -> "", "s")
+      ELSE TEST len =0
+      THEN WRITEF("Give SOMETHING!!!!*N")
+      ELSE BREAK
+   $) REPEAT
+
+   IF testflags(1) tidyup(break.rc)
+   SELECTINPUT(Newin)
+   SELECTOUTPUT(Tout)
+
+   $( LET line  = VEC 80
+      LET len   = readstring(line, '*N')
+      LET term  = ?
+      IF testflags(1) tidyup(break.rc)
+      UNRDCH()
+      term := RDCH()
+      WRITES(line)
+      IF term=ENDSTREAMCH $( UNLESS len=0 DO NEWLINE(); BREAK $)
+      WRCH(term)
+      IF COMPSTRING("+LAST", line)=0 THEN BREAK
+   $) REPEAT
+
+   SELECTINPUT(sysin)
+   IF testflags(1) tidyup(break.rc)
+   prompt("Keywords ")
+   IF testflags(1) tidyup(break.rc)
+   WRITES("+ALL*N")
+   $( LET key   = VEC 40
+      LET len   = readstring(key, ' ')
+      LET term  = ?
+      UNRDCH()
+      IF testflags(1) tidyup(break.rc)
+      term := RDCH()
+      UNLESS len=0 WRITEF("+%S*N", key)
+      IF term='*N' | term=ENDSTREAMCH BREAK
+   $) REPEAT
+
+   TEST Add.file=0
+   THEN prompt("Now the body of the text*N")
+   ELSE SELECTINPUT(Add.file)
+
+   $(   MANIFEST
+        $(
+                Timeout         = 3*tickspersecond
+                Retries         = 3
+                Backoff         = 3*tickspersecond
+        $)
+
+        LET hex(n)      = n + ((n<10) -> '0', ('A'-10))
+        LET datv        = VEC 15
+        LET uids        = uid() + PUID.offset
+
+        datstring(datv)
+        puid%0  := 16
+        FOR i = 0 TO 7 DO
+        $(  puid % (i*2+1)      := hex(uids%i >> 4)
+            puid % (i*2+2)      := hex(uids%i & 15)
+        $)
+        IF map(0, "PUID", "PNAME", puid, pname, Reply.bytes,
+                                                timeout, retries, backoff) = 0
+        THEN pname := puid
+        WRITEF("+%S*N+%S*N%S %S: %S*N",
+                        pname,
+                        datv,
+                        datv, pname, string)
+   $)
+
+   $( LET line  = VEC 80
+      LET len   = readstring(line, '*N')
+      LET term  = ?
+   IF testflags(1) tidyup(break.rc)
+
+      IF COMPSTRING(argv!1, line)=0 THEN BREAK
+      UNRDCH()
+      term := RDCH()
+      WRITES(line)
+      IF term=ENDSTREAMCH $( UNLESS len=0 DO NEWLINE(); BREAK $)
+      WRCH(term)
+   $) REPEAT
+   FOR i = 1 TO 79 DO WRCH('-')
+   NEWLINE()
+
+   prompt("Wait.")
+   IF testflags(1) tidyup(break.rc)
+   SELECTINPUT(newin)
+
+   $( LET line  = VEC 80
+      LET len   = readstring(line, '*N')
+      LET term  = ?
+      UNRDCH()
+      term := RDCH()
+      IF testflags(1) tidyup(break.rc)
+      WRITES(line)
+      IF term=ENDSTREAMCH $( UNLESS len=0 DO NEWLINE(); BREAK $)
+      WRCH(term)
+   $) REPEAT
+
+   ENDREAD()
+   ENDWRITE()
+   SELECTOUTPUT(SYSOUT)
+   newin, tout := 0,0
+
+   prompt(".")
+   IF testflags(1) tidyup(break.rc)
+   IF renameobj(Tfile, help.new)=0
+   $( rename.failed := TRUE
+      WRITEF("Failed to rename '%S' as '%S' %N*N", Tfile, help.new, RESULT2)
+      tidyup(20)
+   $)
+
+   prompt(".")
+   IF testflags(1) tidyup(break.rc)
+   UNLESS argv!A.wto=0
+   $( wto := LOADSEG(":L.WTO")
+      TEST wto=0 | globin(wto)=0
+      THEN prompt("No WTOs")
+      ELSE
+      $( LET a = "ALPHA"
+         LET b = "BRAVO"
+         LET b = "CHARLIE"
+         LET b = "DELTA"
+         LET b = "ECHO"
+         LET b = "FOXTROT"
+         LET b = "GOLF"
+         LET p = "ANNOUNCE - "
+         LET l = p%0
+
+         FOR I = string%0       TO 1 BY -1 DO string%(i+l) := string%i
+         FOR I = 1              TO l       DO string%i     := p     %i
+         string%0 := string%0+l
+
+         FOR i = @a TO @b // UNLESS compstring(!I, ROOTNODE!... ring.. miname)=0
+         $( start(!I, string); IF testflags(1) tidyup(break.rc) $)
+      $)
+   $)
+
+   prompt(".")
+   IF testflags(1) tidyup(break.rc)
+   CALLSEG("SYS:c.send", "TRIPOS", "nil:", 0, String)
+
+   prompt(".")
+   IF testflags(1) tidyup(break.rc)
+   $(   LET t           = tidyup
+        LET first       = "TRIPOS"
+        LET file        = 0
+        LET term        = 0
+        LET subj        = string
+        LET immed       = 0
+        LET cc          = "TRIPOS-MAN"
+        LET bcc         = 0
+        LET replyto     = 0
+        LET bits        = 4
+        LET a           = -1
+                CALLSEG("SYS:L.RSEND",  2, @first)
+        tidyup := t
+    $)
+   prompt("*N")
+   tidyup(0)
+$)
+
+AND prompt(string) BE
+$( LET o = output()
+   SELECTOUTPUT(sysout)
+   writes(string)
+   forceout()
+   SELECTOUTPUT(o)
+$)
+
+LET TIDYUP(n) BE
+$(
+   IF validpointer(@tout)       ENDSTREAM(tout)
+   IF validpointer(@Newin)      ENDSTREAM(newin)
+   IF validpointer(@Add.file)   ENDSTREAM(Add.file)
+   IF validpointer(@wto)        UNLOADSEG(wto)
+   UNLESS rename.failed         DELETEOBJ(tfile)
+   UNLESS n=0
+   $( SELECTOUTPUT(SYSOUT)
+      WRITEF("*N%SAnnounce failed *N", n=break.rc -> "****** BREAK: ", "")
+   $)
+   STOP(n)
+$)
+
+

@@ -1,0 +1,351 @@
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*************************************************************************
+*  (C) Copyright 1980  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*               G E N E R A L     A S S E M B L E R                     *
+*                                                                       *
+*                        S E C T I O N S                                *
+*                                                                       *
+*************************************************************************
+**  C  Gray  Girling      COMPUTER LAB,  CAMBRIDGE           26.02.80  **
+*************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*/
+
+
+
+
+//  LOG OF CHANGES:
+//  ===============
+//
+//  Log entry is <Version number> <date> <initials> <change>
+//
+//  3.000  26.02.80  CGG   Relocation and externals added
+//  3.006  21.03.80  CGG   Bug in external refs fixed
+//  3.008  24.03.80  CGG   Machine type CHEX record produced
+//  3.009  03.04.80  CGG   Obscure pagination bug fixed
+//  3.011  11.04.80  CGG   Default for S option increased to 3000
+//                         Forward references for EQU vars allowed
+//  3.012  12.04.80  CGG   Fault in REF chains fixed
+//                         Fewer zero length CHEX data records produced
+//  3.013  15.04.80  CGG   NEEDS directive added
+//  3.016  29.04.80  CGG   Outputs CHEX record type 12
+//  3.017  01.05.80  CGG   Random store reads fixed
+//  3.020  09.05.80  CGG   Stack & global vector requirements reduced
+//  3.021  13.05.80  CGG   Listing bug fixed
+//  3.022  16.05.80  CGG   Strings in dictionary tree lose pointer 8% S saved
+//  3.023  21.05.80  CGG   CHEX generalized for 8X300
+//  3.024  28.05.80  CGG   TITLE directive uses label for CHEX module name
+//  3.026  05.06.80  CGG   Memory requirements reduced for PDP11
+//  3.027  06.06.80  CGG   ~ or \ (not) allowed in expressions
+//  3.028  11.07.80  CGG   NEEDS extended to pass option into CHEX output
+//                         WREF added - generates new CHEX record
+//  3.029  17.07.80  CGG   END <entrypoint> implemented
+//  3.031  04.08.80  CGG   Gets text after last END right (and missing ENDs)
+//  3.034  22.08.80  CGG   DEF <expression> feature added
+//                         PRAG directive installed and CHEX generated
+//  3.037  10.10.80  CGG   DAT-A pragmat generated
+//                         Procedure for finding time installed in m/c
+//                         dependent part of code
+//                         File handling and looking up rationalized
+//  3.043  11.11.80  CGG   Restriction on number of GET files removed
+//  3.045  14.01.81  CGG   Bug in TEXT variables fixed
+//  3.046  14.02.81  CGG   Dynamic DD names + GETLIB library installed for IBM
+//  3.054  16.10.82  NJO   Dictionary tree section (ASM2) completely
+//                         replaced by HASH TABLE mechanism with 60%
+//                         increase in speed
+//  3.056  12.01.82  CGG   New CHEX machine type record generated
+//  3.057  26.01.82  CGG   TEXT variable stack changed to accomodate MACROs
+//  3.058  27.01.82  CGG   RCH changed to fill macro text areas
+//                         Macro creation added
+//                         Repeat text command added
+//  3.059  29.01.82  CGG   Conditional assembly added
+//                         String expressions added
+//  3.060  01.02.82  CGG   FLAG.TEMP variables added
+//                         Parameter substitution added to macros
+//                         GET bug (extra new line) finally fixed
+//  3.061  03.02.82  CGG   Paramter substitution bug fixed
+//                         READ.MACRO.BODY bug fixed
+//                         TEMPVEC store management added
+//  3.062  04.02.82  CGG   Random symbol generator added
+//  3.063  05.02.82  CGG   Expanded Text symbol layout improved
+//  3.064  08.02.82  CGG   Condtional assembly given parsing options
+//                         Assembler variables added to Numeric Expressions
+//                         Option changing mnemonic added
+//  3.065  29.06.82  CGG   Bug in SET - picks up forward refs now
+//  3.066  23.08.82  CGG   Bug in hashing function corrected
+//  3.067  21.09.82  CGG   Bug in tab handling fixed (at last)
+//  3.068  25.10.82  CGG   Bug in layout PROCs when not listing fixed
+//  3.069  27.01.83  CGG   Proper findinput used in CAP GETASMIN routine
+
+
+
+
+// [* denotes a change to the assembler which diverges it from the standard
+//    versions produced at Cambridge University Computer Laboratory ]
+
+
+
+
+
+
+SECTION "asm1"
+
+
+
+
+/*<RSX
+NEEDS "TITLE"
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+
+/*  These globals kept for their comments - in asmhdr now
+GLOBAL $( // dontknow              // set after looking for a label
+             memsize               // size of label memory
+             binfile               // binary file stream pointer (output)
+          // out                   // standard output file
+          // error                 // error routine
+          // pass                  // set to 'first' or 'second'
+             lineno                // number of current line
+             outpos                // page and line number of output
+             errorlabel            // label to go to in the event of an error
+             errorlevel            // dynamic level at which error occurs
+          // name                  // name of this program
+             throws                // TRUE if page throws are included in o/p
+          // list                  // level at which listing takes place
+             realbinary            // TRUE when binary & not intel hex produced
+             fatal                 // TRUE when error stops second pass starting
+             warning               // TRUE when a warning message is outstanding
+             warn1                 // 1st error argument in a warning
+             warn2                 // 2nd    "            "
+             warn3                 // 3rd    "            "
+             warn4                 // 4th    "            "
+             warnpos               // character position at warning
+             short                 // TRUE if listing to be compact
+             allsyms               // TRUE if all symbols are to be printed in
+                                   // the dictionary printout
+             errcount              // number of errors in this parse
+             sectno                // current sectno number
+             envfile               // file for dumping environment into
+             restartpage           // TRUE when page throw needed before output
+             iden.valid            // TRUE when type has been checked correct
+$)
+*/
+
+
+
+
+
+//
+//                       ERROR  MANAGER
+//
+
+
+
+
+
+
+LET geterror(rc) = VALOF
+SWITCHON rc INTO
+$(  CASE e.memfull:     RESULTIS "assembler storage exhausted - try S option"
+    CASE e.nocodes:     RESULTIS "mnemonic tables not initialised"
+    CASE e.nospace:     RESULTIS "not enough space for execution"
+    CASE e.fullstring:  RESULTIS "string is longer than 255 characters"
+    CASE e.badsym:      RESULTIS "unrecognisable item"
+    CASE e.nolab:       RESULTIS "label expected"
+    CASE e.badcode:     RESULTIS "illegal mnemonic"
+    CASE e.badnum:      RESULTIS "number expected"
+    CASE e.badbyte:     RESULTIS "value too large for machine's word length"
+    CASE e.doublelab:   RESULTIS "label is doubly defined"
+    CASE e.interror:    RESULTIS "internal error number %N"
+    CASE e.badfile:     RESULTIS "can*'t open file %S"
+    CASE e.badbase:     RESULTIS "bad numeric base char - '%C'"
+    CASE e.badlab:      RESULTIS "label is undefined"
+    CASE e.titledone:   RESULTIS "title already given"
+    CASE e.mtbuf:       RESULTIS "internal error - bad access to binary buffer"
+    CASE e.expected:    RESULTIS "'%C' expected"
+    CASE e.ftoosmall:   RESULTIS "number (%N) too large for field"
+    CASE e.divzero:     RESULTIS "divide by zero"
+    CASE e.notlab:      RESULTIS "symbol is not a label"
+    CASE e.badform:     RESULTIS "mnemonic illegal in this format"
+    CASE e.nostr:       RESULTIS "string expected"
+    CASE e.filexs:      RESULTIS "too many files"
+    CASE e.posnum:      RESULTIS "positive number expected"
+    CASE e.noname:      RESULTIS "name expected"
+    CASE e.badtype:     RESULTIS "wrong sort of name"
+    CASE e.nobkt:       RESULTIS "missing bracket"
+    CASE e.nocomnt:     RESULTIS "comment does not begin '%C'"
+    CASE e.badtext:     RESULTIS "recursive text expansion illegal"
+    CASE e.forward:     RESULTIS "illegal forwards reference"
+    CASE e.binfull:     RESULTIS "too much binary generated on this line"
+    CASE e.badrel:      RESULTIS "relocatable or external illegal here"
+    CASE e.badext:      RESULTIS "external variable must appear on its own"
+    CASE e.relsection:  RESULTIS "only one relocatable section allowed"
+    CASE e.baddef:      RESULTIS "symbol never defined"
+    CASE e.modeset:     RESULTIS "mode is already set"
+    CASE e.newentry:    RESULTIS "entry point already given"
+    CASE e.badloaddir:  RESULTIS "facility not available in loader format"
+    CASE e.overflow:    RESULTIS "run out of address space"
+    CASE e.macstack:    RESULTIS "more than %N recursive expansions"
+    CASE e.nomacterm:   RESULTIS "no terminator for macro"
+    CASE e.bigmacro:    RESULTIS "macro too long"
+    CASE e.noif:        RESULTIS "no conditional assembly in progress"
+    CASE e.nomacro:     RESULTIS "no macro expansion in progress"
+    DEFAULT:            RESULTIS errormess(rc)
+$)
+
+
+AND errormess(rc) = "bad error code given!!"
+
+
+
+
+
+
+
+
+//
+//                      Undefined Library Functions
+//
+
+
+
+
+
+
+/*      The following are generally useful procedures some of which may be
+    available on particular machines
+*/
+
+
+
+
+LET tempgetvec(n) = VALOF
+// MACROS - in a later section assume the way this procedure works
+// Reclamation of symbol space at the end of each pass assumes that
+//    storage can be recovered by resetting MEMORY!0
+// 28.01.82
+$(  LET ans = null
+    UNLESS memory!0+n+1 > memory!memsize THEN
+    $(  ans := @memory!(memory!0)
+        memory!0 := memory!0+n+1
+        IF memory!0 > max.temp.used THEN max.temp.used := memory!0
+//      writef("TEMPGETVEC(%N): pointer incremented from %X4 to %X4*N",
+//             n, ans - memory, memory!0)
+    $)
+    RESULTIS ans
+$)
+
+
+
+LET simplegetvec(n) = VALOF
+// MACROS - in a later section assume the way this procedure works
+// Reclamation of symbol space at the end of each pass assumes that
+//    storage can be recovered by resetting MEMORY!MEMSIZE
+// 03.02.82
+$(  LET ans = null
+    TEST memory!0 > memory!memsize-(n+1) THEN error(e.memfull) ELSE
+    $(  ans := @memory!(memory!memsize-(n+1))
+        memory!memsize := memory!memsize - (n+1)
+//      writef("SIMPLEGETVEC(%N): pointer decremented from %X4 to %X4*N",
+//             n, memory!memsize, ans - memory)
+    $)
+    RESULTIS ans
+$)
+
+
+
+LET capitalch(ch) = ('a'<=ch<='z'->ch+'A'-'a',ch)
+
+
+
+LET compstring(s1, s2) = VALOF
+$(  /*    If you are interested in the speed of this assembler you might like
+       to know that it spends up to 25% of its time in this routine.
+          This is due to its use within the dictionary to look up symbols -
+       a hash table dictionary might yield a significant improvement.
+          26.02.80
+    */
+    LET d=(s1%0-s2%0)
+    LET n=(d>0 -> s2%0, s1%0)
+    LET i=1
+    WHILE i<=n & s1%i=s2%i DO i:=i+1
+    RESULTIS (i>n-> d, (s1%i - s2%i))
+$)
+
+
+
+LET getstr(string, memproc) = VALOF
+$(  LET len=string%0/bytesperword
+    LET s = memproc(len)
+    TEST s=null THEN error(e.memfull) ELSE
+    FOR i=0 TO len DO s!i:=string!i
+    RESULTIS s
+$)
+
+
+
+
+
+
+
+

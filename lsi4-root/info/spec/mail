@@ -1,0 +1,497 @@
+This is simply a concatination of all the HELP files for the mailserver.
+As such seeing a command here does not imply that it is released, available to
+the public, supported, etc., etc..
+
+Please pass on useful comments about spelling (no, I mean spelling corrections!)
+content, etc..
+
+Feel free to anotate this document (:INFO.SPEC.MAIL) starting all such lines
+with // followed by your ID, e.g.
+//PB    This is an example comment.
+and then let me (PB) know.
+
+Any such annotations will be examined and may be acted upon, and the initiator
+told.
+--------------------------------------------------------------------------------
+HELP command                                                  Tries to give help
+
+        If it fails, please mail PB with suggestions!
+--------------------------------------------------------------------------------
+HELP knows about the following commands:
+        DELETE          <files>
+        HELP            subject
+        GROUP           ........
+        FINISH  = QUIT
+        LOOKAT          user                    // TESTING SYSTEM ONLY
+        MAIL                                    // reformat header & collect new
+        NEXT                                    // Select next item
+        PRINT           <files>,titanroom=default/s,mond/s
+        REPLY           message,about/k,cc/k,bcc/k,....
+        SEND            user,about/k,cc/k,bc/k,....
+        SELECT          number
+        TERMINAL        type,width/K
+        TYPE            <files>
+        UNDELETE                                // Not to be relied on!
+
+ and has infomation on
+        NEW                             // Changes
+        SYNTAX                          // General syntax of a command.
+
+ and the testing versions have information on
+        FULLSCREEN                      // Info on TESTING fullscreen mode.
+        TESTING                         // Help on TESTING version.
+
+For a brief summary type
+
+        HELP <subject>
+
+For more details contact PB
+--------------------------------------------------------------------------------
+SEND USER=USERS=INITIALS,CC/K,BCC/KABOUT=SUBJECT/K[,from=file/k]
+                                                    Send mail to a list of users
+
+ = NEW =        SEND USER=USERS=INITIALS,(from=stream|/k),CC/K,BCC/K,    = NEW =
+ = NEW =                ABOUT=SUBJECT/K,NONE/S[,file/k]                  = NEW =
+
+        The user argument is a list of recipients, separated by spaces or commas
+Each recipient may be the initials of a user known by the MAP service, or a
+distribution list. MAP is tried first, but if that fails, then the sender's own
+distribution list and the system disitribution list are scanned.
+
+    If no user list is given, then the sender is prompted for the various
+possible headers, and then types the body of the message.
+
+    CC and BCC are Carbon Copies and Blind Carbon Copies.
+
+    If no subject field is given, the user will be prompted until a string is
+given. If this consists of spaces, it will be discarded.
+
+    NONE tells the program not to read from the terminal even if no file is
+given.
+
+    The TRIPOS COMMAND version allows a file title to be specified, in which
+case that file is sent.  [ The testing vesrions allow pasing the file by puid or
+passing a stream, i.e. a stream is read into a file, and the file sent by puid ]
+Note that as immutable files are not yet implemented, the file should be deleted
+or not modified.
+
+    Note that users may not see the mail immediately as the MAILSERVER caches
+the master tables.
+--------------------------------------------------------------------------------
+DELETE number,,,,,,,,,ALL/s                                          Delete mail
+
+        Deletes out the specified mail items.
+        If no argument is given, and an item is selected, that item is deleted.
+        If only the flag ALL is quoted, then all items are deleted
+        Otherwise the selected items are deleted. Each selection may be a single
+    number, or m-n which will delete items m to n.
+--------------------------------------------------------------------------------
+MAIL                                                    Looks for new mail
+
+        This command looks for new mail, and removes deleted mail.
+--------------------------------------------------------------------------------
+TYPE number,,,,,,,,,ALL/s       = READ                                 Type mail
+
+        Types out the specified mail items.
+        If no argument is given, and an item is selected, that item is typed.
+        If only the flag ALL is quoted, then all items are typed
+        Otherwise the selected items are typed. Each selection may be a single
+    number, or m-n which will type items m to n.
+--------------------------------------------------------------------------------
+FINISH  = QUIT = Q                                          Leave the Mailserver
+
+        This command terminates the current session.
+--------------------------------------------------------------------------------
+This is the Dynamic Mailserver, running under TRIPOS.
+
+For help on 'command' type
+
+        HELP command
+
+After each command the current items of mail are displayed.  Any of them may be
+selected by its item number, the leftmost digit.  HELP ALL will list all the
+available commands.  The main commands are
+
+SEND    user,subject/k          Send a mail item
+TYPE    item/a                  Type a mail item
+DELETE  item/a                  Delete a mail item
+FINISH                          Leave the mail system
+HELP SYNTAX                     General syntax of commands
+HELP NEW                        See if the system has changed under your feet!
+--------------------------------------------------------------------------------
+TERMINAL type,depth/k                                          Set terminal type
+
+        Set up the terminal to be a <type> with depth of <depth>
+        Type may be one of:
+
+                Newbury7009
+                Cifer2632
+                Cifer2605
+                Dumb
+--------------------------------------------------------------------------------
+PRINT number,,,,,,,,,ALL/s                                            Print mail
+
+        Prints out the specified mail items.
+        If no argument is given, and an item is selected, that item is printed.
+        If only the flag ALL is quoted, then all items are printed
+        Otherwise the selected items are printed. Each selection may be a single
+    number, or m-n which will print items m to n.
+--------------------------------------------------------------------------------
+UNDELETE                                                  Recover from deletions
+
+        The DELETE command marks the specified item as 'due for deletion', but
+the item is still there until the COMPRESS demon next runs.     It is therefore
+possible to recapitulate before the demon is started.   As the demon runs
+asynchronously there is no assurance that the item has not been purged, so do
+NOT rely on this facility  --  however it will often work.
+        As there is no way of indicating which deleted item is to be
+resurrected, all deleted mail is returned.
+--------------------------------------------------------------------------------
+REPLY   ITEM[/A],ABOUT=SUBJECT/K[,from=file/k]              Reply to a mail item
+
+        This is similar to send, except that the recipient is the sender of the
+specified mail item, and the subject defaults to that of the received item.
+If a current message is selected, then ITEM defaults to that value.
+
+        Note that users may not see the mail immediately as the MAILSERVER
+caches the master tables.
+--------------------------------------------------------------------------------
+GROUP [edit|create|delete|list|help] "group,system/s"
+                                                   Manipulate Distibution Groups
+
+        This command may only be used from the Dynamic Mailserver
+
+        The GROUP identifier can only be omitted with the LIST command, which
+    means give a list of names of the distribution groups.
+
+        SYSTEM indicates that the system groups should be inspected, rather than
+    the user's private list.
+
+        CREATE and DELETE add and remove a distribution list.  The name must be
+    less than 13 characters long.
+
+        LIST with a group name will list the members of a group.
+
+        EDIT will allow editing of a single group. It has its own HELP facility.
+--------------------------------------------------------------------------------
+For help on the testing system see HELP TESTING using the TRIPOS command
+TEST.MAIL or SYSDESC TESTMAIL.
+
+Changes to the Mailserver:
+V1.7:   12 April
+        NEXT now takes a command line.
+        Subject must be supplied in SEND - a space will force no subject field.
+
+V1.6:    6 April
+        'Q' as synonym for FINISH.
+
+V1.5:   Bug fixes wrt TYPE 10 etc.. Item Zero initially selected, backgrounded.
+        HELP SYNTAX added.
+
+V1.4:   TYPE, PRINT and DELETE may take a list of numbers or number ranges, or
+        the flag ALL. A number range is m-n where m is less than n.
+        Group Edit tells you if it's a System list.
+        SELECT and NEXT commands and selected marker in header.
+        TYPE, PRINT, DELETE and REPLY default to selected item
+
+V1.3:   System Distribution groups may be maintained by the owner of the group
+
+V1.2:   Input read after "Type return to continue ..." treated as input
+        The header indicates the number of messages whose headers are displayed
+
+V1.1:   Give an error if extra items found
+
+V1.0:   First release
+--------------------------------------------------------------------------------
+NEXT [command line]                                             Select next item
+
+        Move selection onto the next item. It obeys the rest of the command line
+    after moving.
+
+        See HELP SELECT.
+--------------------------------------------------------------------------------
+SELECT ITEM/A                                                 Select a mail item
+
+        Make an item current.  It is marked in the headers with <> between the
+date ane time.  This allows TYPE, PRINT, DELETE and REPLY to take no argument.
+--------------------------------------------------------------------------------
+Each command is described by a string specifying what is expected.
+This can be displayed by ending the input line with a '?', when the program will
+give the string as a prompt. All previous input is retained.  To investigate a
+command, type '<command> ?' and then give an invalid response once the string
+has been displayed. The single character '=' is always invalid.
+
+The string represents a set of attributed items, separated by commas, with
+possible aliases indicated by '='.  Items may be matched by position, or by
+quoting the keyword, then an optional '=', and then the value.
+
+To insert an item value that is the same as one of the keywords, or contains
+spaces, then it should be enclosed in double quotes, e.g. "The subject matter".
+
+The attributes are:
+        /A      This item must be supplied
+        /K      This item must be keyed if it occurs
+        /S      This item is a switch, that is there is no associated value
+
+Thus item/a,to,subject=about/K will match any of
+        1 fred subject wombats
+        1 to fred about wombats
+        about wombats to=fred item = 1
+--------------------------------------------------------------------------------
+LOOKAT user     ------- TESTING ONLY -------        Lookat mail for another user
+
+
+        If user is specified, look at the mail that has been sent BY YOU to that
+    user.
+        Otherwise, revert to looking at your own mail.
+
+        Only available via the Dynamic Mailserver.
+--------------------------------------------------------------------------------
+TESTING CODE:   Use SYS TESTMAIL, SYSDESC TESTMAIL or TRIPOS command TEST.MAIL.
+                Also MAILSERVER on 68000s.
+
+(Due to finger troubles, a testing version of the mail system has been installed
+ on the 68000s. Due to disc shortage, all old version were deleted, so I cannot
+ regenerate the code for the ancilla.  As soon as the TRIPOS SOFTWARE REALSE
+ document comes out, I intend to announce that this system will become NEW.MAIL
+ to become MAIL ASAP.  As LSI4s are usually free, the new code should not
+ normally be loaded by typing C MAIL, but if it is, and anyone is confused, I
+ appologise profoundly. The changes concerned are those up to 10:00 on 7 June.
+)
+
+This is list of diferences between the standard and testing versions.
+The order is approximately chronological, but some differnces have changed.
+
+Items labeled * available on both systems, T only on TRIPOS and D only available
+on the Dynamic Mailserver.
+
+V1.7+:
+Extra commands:
+D LOOKAT [user] allows anyone to look at mail items SENT BY THEMSELVES to any
+  other user, and any that have been marked by the recipient as PUBLIC.
+  No argument returns to the logged in user
+
+* Keeps track of TYPEd items, and selects the last unread item. If all have been
+  read, then it selects the first item. Indicates untyped items by half
+  intensity off on Cifer2632s; on other terminals, marked with 'n' (new)
+
+
+13:00 15 Apr 82
+  SEND/REPLY has extra arguments
+*       none/S          to mean 'no file'
+*       from=stream     to indicate a stream to be copied. On the mailserver,
+                        this is a service, e.g. READ-TRIPOS/filename
+                        (READ-TRIPOS not available yet)
+T       file/K          to indicate a file to be passed by PUID.
+                        THIS FILE IS LOGICALLY MADE IMMUTABLE SO MUST NOT BE
+                        CHANGED.
+
+13:00 17 May 82
+* Single character mode vesrion: see HELP FULLSCREEN.
+  The command loop reads a character, and if it is 'data', then it reads a line
+  of text. Otherwise it reads special charcters (e.g. cursor movement, function
+  keys) until a data character is read. It then selects the item currently
+  pointed at and SELECTs it. Then a command line is read.
+
+10:30 28 May 82
+* SEND/REPLY uses a form for input.  See HELP FULLSCREEN for valid non-data keys
+
+09:30  1 June 82
+* Insert mode turned off when not wanted.
+  PRINT now takes a keyword SERVICE=TO which will send the items to the
+  specified service, e.g. WRITE-TRIPOS/:pb.message-3. (( WRITE-TRIPOS not yet
+                                                         avaialable ))
+  The versions are now:
+  Tripos                Dynamic
+  MAIL                  SYS MAIL = SYSDESC MAILSERVER  Old one
+  NEW.MAIL              (none)                         Dieing out ...
+  TEST.MAIL             SYSDESC TESTMAIL               Testing version. Safe (?)
+  TEST.NEW.MAIL         SYSDESC NEWESTMAILSERVER       Latest vesrion. Unsafe ..
+
+18:00  5 June 82
+* There is a new item in the send/reply form 'Reply to'.  If this is present in
+  an item to which a user replies, then instead of sending it to the original
+  sender, it is sent instead to the 'Reply to' field.
+
+  I propose to make any action on an item select it as the current item. Thus
+
+        SELECT 1
+        TYPE 3
+        DELETE
+
+  will delete item 3.   Likewise TYPE ALL, DELETE should delete all?  Comments ?
+
+10:00  6 June 82
+* There is now a local HELP facility in FORM and INPUT mode. Use ESC ?.
+
+As automatic selection seems popular, I propose a further development whereby
+multiple items may be selected and remain current.  Some operations (such as
+REPLY) may complain if there are more than one item. E.g. TYPE ALL then DELETE
+would delete all mail.
+
+How should picking work using the cursor keys ?
+At any point there is a logical => position (although it may not be visible),
+and it would be possible to have another marker (-> ?) saying that this item is
+also selected. A key could be hit to mean 'add this position to the selected
+list even after the => has moved off thismposition'. Thus when an operation is
+to be  performed, all those items with ->s and the one with => are all selected.
+(maybe this key will automatically move the => onto the next item?)
+
+Would people be happy if delete automatically moved the selected item to the
+next available item ?
+
+10:00  7 June 82
+* New commands PUBLIC and PRIVATE. PUBLIC items may be read by any user using
+  LOOKAT command
+
+  Suggestions please.
+
+11:30  9 June 82
+* SEND/REPLY now have the switches PUBLIC and PRIVATE (default) which set bits
+  to indicate whether people other than the sender and recipient may read the
+  mail item (using LOOKAT).  There are also commands PUBLIC and PRIVATE that
+  allow the recipient to manipulate these bits.
+  Eventually it will also be possible for a user to stipulate whether incoming
+  items that are not marked as either as set as PUBLIC or PRIVATE.
+  Alternatively mail will be public unless it was sent as PRIVATE, or the
+  recipient has instructed that all incoming mail is private.
+  Public items currently marked with a 'P' just after the date in header -
+  alternatives welcome !!!!!!!
+
+* By popular request, against my wishes, I have installed a temporary mechanism
+  for inspecting many mail items. MAIL now takes an option argument specifying
+  how many items to skip before creating the header.
+  ( 'You have %N items ..' ignore skipped items)
+
+Thoughts of 11 june 82:
+-----------------------
+With the advent of PUBLIC mail, it is now possible to have junk TRIPOS mail, as
+the current TRIPOS message system already has.  If all mail sent to it is marked
+PUBLIC then anyone can LOOKAT it. This still needs the much awaited timeout
+mechanism to discrd it.
+
+I have also introduced the idea of a MBOX which is an object of the same
+structure as each user's mail directory.  These may be stored in a user's mail
+directory, and there are commands MOVE and COPY to manipulate mail between
+mboxes.  Thus all mail relating to a certain subject may be dumped to a relevant
+mbox.  The MBOX command may then be used to enter manipulate that collection of
+mail items.
+
+There is also the idea of a WEAK REFRENCE to a mail item or mbox, which means
+that the user has a pointer to it, but it is NOT retained in any index of his,
+and so may disappear.   If it is a mbox it is unlikely to disappear, and it is
+possible to give another user a weak refrence to your mail directory.
+
+In particular, users may have weak refrences to the TRIPOS mail directory, and
+some user(s) may have a strong refrence, and thus be able to control it.
+
+My main current concern is where to put the mboxes - they have been built so
+that the user has to supply the PUID of the directory, and the INDEX for that
+directory if full refrences are to be kept, so that it is not my problem when
+the fileserver fills up with the inevitable old mail.
+It would be trivial for me to create the directory and index for the mboxes, but
+I would then get stamped on for allowing rubbish to accumulate.
+
+
+11:30 21 June 82
+
+  *******************************************************************
+  ***** NOW USE ONLY  TRIPOS    MAIL            or TEST.MAIL    *****
+  *****               Dynamic   SYS MAIL        or SYS TESTMAIL *****
+  *******************************************************************
+
+* Bug fixes only:
+  After LOOKAT <junk> the header remains unchanged.
+  TYPE/PRINT found to run out of heap on LSI4s.
+  PLEASE REPORT ANY ERROR MESSAGES DUE TO SHORTAGE OF HEAP.
+  SEND/REPLY now clear the screen if not typed after the header has been
+   displayed.
+
+
+Comments welcome.
+
+Known bugs:
+        ESC ? in insert mode (?) ...
+--------------------------------------------------------------------------------
+The testing version of MAIL has a full screen interface.  It is partly a
+testing ground for full screen interfaces, so it is liable to change.
+
+It currently has Three modes:
+  1)    At the start of a line it will accept UP and DOWN to change the current
+        item OR
+  2)    A data charecter will tell the program to read a line.
+        This enters a subroutine that performs (limited) line editing.
+        The recognised keys are currently:
+         DEL    delete previous character
+         CTRL/X delete whole line
+        When a complete line is deleted by either of the above, then type 1)
+        keystrokes may be read.
+
+  3)    While reading a form, form mode is used. Valid non data keys are:
+
+             DEL        Delete previous character
+             CTRL/X     Delete line
+             DEL LINE   Ditto
+             Keypad 3   Form completed
+             UP         Previous item
+             DOWN       Next item
+             RETURN     Next item, unless last when it means Form completed.
+             HELP       Describe key bindings
+
+  4)    While reading the body of a message, full screen input is used.
+        This allows cursor moivements to select the current location, and
+        further editing funtions. These are:
+
+         DEL            delete character to LEFT  of cursor.
+         DEL CHAR       delete character to RIGHT of cursor.
+         DEL LINE       delete complete line.
+         INSRT CHAR     insert a blank to the right of the cursor, but do not
+                        move the cursor.
+         SKIP           skip to start of next 'word'.
+         CTRL/SKIP      skip to end of previous 'word'.
+         HOME           got to top LH corner if it is part of the text.
+         CLEAR SCRN     Redraw the current state of the screen.
+         Keypad 1       sets overstrike mode. Any previous contents of the
+                        current location is lost.
+                        // It may soon TOGGLE the mode....
+         Keypad 3       sets insert mode. The previous contents of the current
+                        location is moved to the right.
+         HELP           Describe key bindings
+
+        In the case of reading text for a SEND/REPLY command, Keypad 7 may be
+        used to alter the header.
+
+On terminals without explicit keys, the logical characters may be generated as:
+
+        ABANDON         ESC a           // Same as BREAK B but in data stream
+        SKIP BACK       ESC b
+        CLEAR SCREEN    ESC c
+        DOWN            ESC d
+        INSRT CHAR      ESC i
+        HOME            ESC h
+        LEFT            ESC l
+        RIGHT           ESC r
+        SKIP            ESC s
+        UP              ESC u
+        HELP            ESC ?           // give key bindings.
+
+On terminals that cannot position the cursor other than on the bottom line,
+if the cursor is moved upwards, it puts the character '^' at the start of the
+current line, and then moves onto the previous line.
+CLEAR SCREEN will draw a line of '-'s with the number of logical cursor
+movements indicated by the number of '^'s.
+--------------------------------------------------------------------------------
+PUBLIC number,,,,,,,,,ALL/s                        Make items readable by anyone
+
+    The selected mail items are made so that anyone can LOOKAT (qv.) them.
+    Each selection may be a single number, or m-n which will type items m to n.
+--------------------------------------------------------------------------------
+PRIVATE number,,,,,,,,,ALL/s    Make items readable only by sender and recipient
+
+    The selected mail items are made so that only the sender and recipient can
+LOOKAT (qv.) them.
+
+    Each selection may be a single number, or m-n which will type items m to n.
+--------------------------------------------------------------------------------
+
+

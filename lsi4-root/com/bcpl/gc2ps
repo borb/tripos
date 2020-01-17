@@ -1,0 +1,1877 @@
+SECTION "PSgtype"
+
+//    GCODE to PostScript program
+//    (C) 1985 Gray Girling
+
+
+//     Version log:
+//     0.0   19-Sep-85  CGG      First installed on MINOS for testing
+//     0.1   19-Sep-85  CGG      Output file written only when needed now
+//     0.2   20-Sep-85  CGG      First PANOS version
+//     0.3   23-Sep-85  CGG      Application comments decoded
+//                      CGG      Font bindings always written to postscript
+//                      CGG      Concatinated GCODE files supported
+//     0.4   27-Sep-85  CGG      APC delimiter changed to semi-colong
+//                      CGG      missing font binding escape bug fixed
+//     0.5   01-Oct-85  CGG      horizontal movement optimized using spaces
+//     0.6   07-Oct-85  CGG      formfeed bugs fixed
+//     0.7   10-Oct-85  CGG      BBC graphics relevent APC's added
+//     0.8   11-Oct-85  CGG      long lines eliminated from postscript output
+//     0.9   14-Oct-85  CGG      GET files use "-post" default on PANOS
+//     0.10  15-Oct-85  CGG      FONT application comment added
+//     0.11  17-Oct-85  CGG      Bug in Request string fixed
+//     0.12  24-Oct-85  RDE+CGG  New Panos/IBM argument handling
+//                      CGG      Multiple input files catered for
+//                      CGG      Panos Escape handling installed
+//     0.13  25-Oct-85  PH       Ascii dependencies removed
+//           07-Nov-85  PH       Ascii dependency for \n/ removed
+//     1.00  13-Jan-86  PH       MVS OPT processing and general
+//                               tidying. Incorrect 'emboldening' removed.
+//     1.01  15-Jan-86  PH       removal of unnecessary REQUEST features
+//                               save/restore round GET
+//     1.02  17-Jan-86  PH       interpretation of \ in DCS strings
+//     1.3   21-Jan-86  PH       interpret DCS even when skipping pages
+//     1.4   24-Jan-86  PB       Set up for BSD4.2
+
+
+GET "Libhdr"
+$<TRIPOS
+GET "string-to-number"
+$>TRIPOS
+
+MANIFEST
+$(  major.version = 1
+    minor.version = 4
+$<VAXUNIX
+    UG            = firstfreeglobal
+$>VAXUNIX
+$)
+
+$<MVS
+MANIFEST $( minchar = ' '; maxchar = '9' $)
+$>MVS
+
+$<MVS'
+MANIFEST $( minchar = ' '; maxchar = '~' $)
+$>MVS'
+
+
+MANIFEST
+$(  // character values for GCODE operations
+gc.nul   = 256     // ignore
+gc.ff    = 257     // begin new page
+gc.dcs   = 258     // begin/end device control string
+gc.nl    = 259     // begin new line
+gc.bs    = 260     // backspace one character (leave code #X08 for ID)
+gc.apc   = 261     // begin/end GTYPE control string
+gc.bft   = 262     // bind font
+gc.fdl   = 263     // font delimiter
+gc.vsi   = 264     // vertical space increment
+gc.ssu   = 265     // set scale unit 1=72 point/in 2=72.27 point/in
+gc.rpr   = 266     // move right relative
+gc.lpr   = 267     // move left relative
+gc.dpr   = 268     // move down relative
+gc.upr   = 269     // move up relative
+gc.sgr   = 270     // set graphical representation
+gc.fnt   = 271     // select font number
+gc.chr   = 272     // printing character
+gc.gdpr  = 273     // move down global
+gc.gupr  = 274     // move up global
+// terminators for variable length control sequences
+gct.bft  = '='     // bind font
+gct.fdl  = '"'     // font delimiter
+gct.vsi  = '!'     // vertical space increment
+gct.ssu  = '#'     // set scale unit 1=72 point/in 2=72.27 point/in
+gct.rpr  = '>'     // move right relative
+gct.lpr  = '<'     // move left relative
+gct.dpr  = '$'     // move down relative
+gct.upr  = '%'     // move up relative
+gct.sgr  = '_'     // set graphical representation
+gct.fnt  = '\'     // select font number
+gct.chr  = '/'     // printing character
+gct.gdpr = ')'     // move down global
+gct.gupr = '('     // move up global
+// limits
+max.copies = 50    // maximum number of copies allowed
+post.rmargin = 70  // ragged right hand margin minimum length
+// GCODE argument information
+gcode.id = '*B'    // first byte of a true GCODE file (backspace!)
+gcode.argsize = 256// characters to read number string into
+apc.argsize = 50   // characters to read each APC part into
+chseq.strlen = 256 // max characters allowed in GTYPE control string
+spacewidth.len = 30// max characters allowed in horizonatal move number
+$)
+
+
+
+
+GLOBAL
+$(  // verification stream:
+ver.stream       : ug+0   // output stream for errors and messages
+// output to the postscript file:
+in.postscript    : ug+5   // TRUE when output is to the Postscript
+                          // command interpreter and FALSE when output
+                          // is part of a text string to be output
+close.newlines   : ug+6   // number of consecutive newlines
+newpage          : ug+7   // TRUE when next text is on a NEW PAGE
+pages.output     : ug+8   // number of pages sent to LaserWriter
+syswrch          : ug+9   // the real system wrch procedure
+// input from the GCODE file:
+gcode.file.name  : ug+15  // name of the file being compiled
+line.number      : ug+16  // line number in the gcode file
+gcode.argument   : ug+17  // buffer holding gcode control argument
+space.width      : ug+18  // string holding last space horizontal movement
+space.mismatch   : ug+19  // no. of times horizontal move \= space.width
+ignore.newpage   : ug+20  // TRUE when next newpage to be ignored
+// POSTSCRIPT output globals:
+post.colno       : ug+24  // column reached in postscript output
+post.stream      : ug+25  // postscript output stream, 0 until opened
+post.stream.name : ug+26  // name of the postscript stream
+post.hdr.name : ug+27  // name of the postscript hdr stream
+post.initial.apc : ug+28  // application comment set on command line
+// PSGCODE configuration dependent globals:
+command.name     : ug+30  // for use when printing errors etc.
+device.name      : ug+31  // for use when decoding APC strings
+parmstring       : ug+32  // argument string
+chatty           : ug+33  // is TRUE if chatty messages are expected
+escape.pressed   : ug+34  // GLOBAL for PANOS private use
+interrupt        : ug+35  // returns TRUE is execution is to be halted
+eqstring         : ug+36  // returns TRUE if strings are equal (case eqn)
+get.day          : ug+37  // gives default or day using supplied vector
+get.date         : ug+38  // gives default or date using supplied vector
+get.time         : ug+39  // gives default or time using supplied vector
+findgetin        : ug+40  // returns SCB for named GET file
+findmainout      : ug+41  // returns SCB for named output file
+findmaininput    : ug+42  // returns SCB for named output file
+// PSGCODE argument globals:
+even             : ug+45  // print the even pages
+odd              : ug+46  // print the odd pages
+min.page         : ug+47  // smallest page number to consider printing
+max.page         : ug+48  // largest page number to consider printing
+$)
+
+
+
+//
+//                     Verification  Output
+//                     --------------------
+
+
+LET init.ver() BE ver.stream := output()
+
+
+LET print(string, a1, a2, a3, a4) BE
+$(  LET saveout = output()
+    selectoutput(ver.stream)
+    writef(string, a1, a2, a3, a4)
+    selectoutput(saveout)
+$)
+
+
+LET end.ver() BE RETURN
+
+
+
+//
+//                  GCODE  Input  Routines
+//                  ----------------------
+
+
+LET init.grdch(input.file.name) = VALOF
+$(
+LET number.string = getvec(gcode.argsize/bytesperword)
+LET gcode.stream = 0
+line.number := 1
+gcode.argument := number.string
+gcode.file.name := input.file.name   // for error messages
+IF number.string\=0 THEN
+$(  gcode.stream := findmaininput(input.file.name)
+    IF gcode.stream=0 THEN freevec(number.string)
+$)
+RESULTIS gcode.stream
+$)
+
+
+LET end.grdch() BE IF gcode.argument\=0 THEN
+$(  freevec(gcode.argument)
+gcode.argument := 0
+$)
+
+
+LET report(string, a1, a2, a3, a4) BE
+$(  print("%S: ", command.name)
+print(string, a1, a2, a3, a4)
+$)
+
+
+LET error(string, a1, a2, a3, a4) BE
+$(  report("line %N - ", line.number)
+print(string, a1, a2, a3, a4)
+$)
+
+LET lnrdch() = VALOF
+$(  LET ch = ?
+LET valok = ?
+$(rpt
+ch := rdch()
+valok := (minchar <= ch <= maxchar | ch=endstreamch | ch=gcode.id)
+IF NOT valok THEN
+   TEST ch='*N' THEN line.number := line.number+1 ELSE
+       error("illegal character value #X%X2*N", ch)
+$)rpt REPEATUNTIL valok
+RESULTIS ch
+$)
+
+
+
+AND grdch() = VALOF
+$(
+LET ch = lnrdch()
+TEST ch\='\' THEN RESULTIS ch ELSE
+    $(1
+    ch := lnrdch()
+    SWITCHON ch INTO
+        $(2
+        CASE '\': CASE endstreamch:  RESULTIS ch
+        CASE 'P': CASE 'p':          RESULTIS gc.nul
+        CASE 'F': CASE 'f':          RESULTIS gc.ff
+        CASE 'D': CASE 'd':          RESULTIS gc.dcs
+        CASE 'N': CASE 'n':          RESULTIS gc.nl
+        CASE 'B': CASE 'b':          RESULTIS gc.bs
+        CASE 'A': CASE 'a':          RESULTIS gc.apc
+        CASE '0': CASE '1': CASE '2':
+        CASE '3': CASE '4': CASE '5':
+        CASE '6': CASE '7': CASE '8':
+        CASE '9': CASE '.':
+        $(  LET i=1
+            $(rpt
+                IF i<=gcode.argsize THEN
+                $(  gcode.argument%i := ch
+                    i := i+1
+                $)
+                ch := lnrdch()
+            $)rpt REPEATUNTIL ch=endstreamch |
+                              NOT (ch='.' | '0'<=ch<='9')
+            gcode.argument%0 := i-1
+            IF i>gcode.argsize THEN
+            error("control number too long *"%S...*"*N", gcode.argument)
+            SWITCHON ch INTO
+            $(  CASE endstreamch:  RESULTIS ch
+                CASE gct.bft:      RESULTIS gc.bft
+                CASE gct.fdl:      RESULTIS gc.fdl
+                CASE gct.vsi:      RESULTIS gc.vsi
+                CASE gct.ssu:      RESULTIS gc.ssu
+                CASE gct.rpr:      RESULTIS gc.rpr
+                CASE gct.lpr:      RESULTIS gc.lpr
+                CASE gct.dpr:      RESULTIS gc.dpr
+                CASE gct.upr:      RESULTIS gc.upr
+                CASE gct.sgr:      RESULTIS gc.sgr
+                CASE gct.fnt:      RESULTIS gc.fnt
+                CASE gct.chr:      RESULTIS gc.chr
+                CASE gct.gdpr:     RESULTIS gc.gdpr
+                CASE gct.gupr:     RESULTIS gc.gupr
+                DEFAULT:
+                    error("unknown escape sequence *"\%S%C*"*N",
+                          gcode.argument, ch)
+                    RESULTIS ch
+            $)
+        $)
+        DEFAULT:
+            error("unknown escape sequence *"\%C*"*N", ch)
+            RESULTIS ch
+        $)2
+    $)1
+$)
+
+
+AND substringtonum(v, start) = VALOF
+// Convert the decimal number held as a BCPL string
+// in vector V to a numeric value.
+// the result is true if a valid number, with the
+// value left in result2.
+$(  MANIFEST
+    $( maxint.div.10 = maxint  /  10
+       maxint.rem.10 = maxint REM 10
+    $)
+LET n       = 0
+LET i       = start
+LET ch, len = ?, v%0 - start + 1
+IF len=0 RESULTIS 0
+ch  := v%1
+WHILE i<=len
+DO $(  ch := v%i-'0'
+       UNLESS (0 <= ch <= 9) &
+              (n <= maxint.div.10 |
+               (n = maxint.div.10 & i = len &
+                ch <= maxint.rem.10))
+       DO
+       $(  result2 := n
+           RESULTIS i
+       $)
+       i, n := i+1, n*10 + ch
+   $)
+result2 := n
+RESULTIS i
+$)
+
+
+
+AND stringtonum(string) = (substringtonum(string, 1)=string%0+1)
+
+
+
+AND grdarg.integer() = VALOF
+$(  LET argval = 0
+TEST stringtonum(gcode.argument) THEN argval := result2 ELSE
+error("integer expected at *"%S*"*N", gcode.argument)
+RESULTIS argval
+$)
+
+
+
+//
+//                   PostScript Output
+//                   -----------------
+
+
+LET init.laserwriter(postscript.file.name, hdr.file.name) BE
+$(  in.postscript := TRUE
+newpage := TRUE
+pages.output := 0
+close.newlines := 0     // havn't had any yet!
+syswrch := wrch
+post.stream := 0
+post.stream.name := postscript.file.name
+post.hdr.name := hdr.file.name
+$)
+
+
+LET ps.local.wrch(ch) BE
+$(  syswrch(ch)
+TEST ch='*N' | ch='*C' | ch='*P' THEN
+post.colno := 0 ELSE post.colno := post.colno + 1
+$)
+
+
+
+
+
+LET open.laserwriter(document.title) = VALOF
+$(  // This procedure is responsible for initialising the laserwriter with
+// an initial chunk of "Postscript" code which defines the functions and
+// variables that we are going to use later on.  The %% lines are
+// Postscript comments in a standard format.
+LET dat = VEC 14
+LET day = "DAY"
+LET date = "DATE"
+LET time = "TIME"
+LET hdr = findmaininput(post.hdr.name)
+TEST hdr=0 THEN
+error("can't open hdr file *"%S*" for input*N", post.hdr.name) ELSE
+$(  LET savein = input()
+    post.stream := findmainout(post.stream.name)
+    TEST post.stream=0 THEN
+    $(  selectinput(hdr)
+        endread()
+        selectinput(savein)
+        hdr := 0
+    $) ELSE
+    $(  LET ch = ?
+        selectoutput(post.stream)
+        day := get.day(dat, day)
+        date := get.date(dat, date)
+        time := get.time(dat, time)
+        IF day%0>3 THEN day%0 := 3
+        $<MVS wrch(#X37) $>MVS
+        writef("%%!*N*
+               *%%%%Title: %S*N", document.title)
+    $<MINOS
+        writef("%%%%Creator: ")
+        who.is(auth.address+0)
+        newline()
+    $>MINOS
+        writef("%%%%CreationDate: %S %S %S*N*
+               *%%%%Pages: (atend)*N*
+               *%%%%Endcomments*N", day, date, time)
+        // Copy hdr file into the begining of this document
+        selectinput(hdr)
+        ch := rdch()
+        WHILE ch\=endstreamch DO
+        $(  wrch(ch)
+            ch := rdch()
+        $)
+        endread()
+        selectinput(savein)
+        writes("%%EndHeader*N")
+    $)
+$)
+RESULTIS hdr\=0
+$)
+
+
+AND ps.text.wrch(ch) = VALOF
+TEST ch<minchar THEN RESULTIS ps.output.ctrl(ch) ELSE
+$(  // Makes appropriate syntactic changes to ensure that output will be
+// interpreted as a Postscript text string
+LET ok = dump.newlines()
+IF ok THEN
+$(  IF in.postscript THEN
+    $(  ps.local.wrch('*N')
+        ps.local.wrch('(')
+        in.postscript := FALSE
+    $)
+    TEST ch <=maxchar THEN
+    $(  IF ch='(' | ch='\' | ch=')' THEN ps.local.wrch('\')
+        ps.local.wrch(ch)
+    $) ELSE
+
+    $(  LET d1 = ch REM 8
+        LET d2 = (ch / 8) REM 8
+        LET d3 = (ch / 64) REM 4
+        ps.local.wrch('\')
+        ps.local.wrch('0'+d3)
+        ps.local.wrch('0'+d2)
+        ps.local.wrch('0'+d1)
+    $)
+$)
+RESULTIS ok
+$)
+
+
+
+AND ps.cmd.wrch(ch) = VALOF
+$(  // Makes appropriate syntactic changes to ensure that output will be
+// interpreted as Postscript commands and will terminate any existing
+// text string
+LET ok = TRUE
+TEST NOT dump.newlines() THEN ok := FALSE ELSE
+$(  IF ch='*S' & post.colno > post.rmargin THEN ch := '*N'
+    TEST NOT in.postscript THEN
+    $(  ps.local.wrch(')')
+        ps.local.wrch('p')
+        ps.local.wrch(' ')
+        ps.local.wrch(ch)
+        in.postscript := TRUE
+    $) ELSE ps.local.wrch(ch)
+$)
+RESULTIS ok
+$)
+
+
+AND ps.cmd.writef(string, a1, a2, a3, a4) = (dump.newlines() -> VALOF
+$(  LET savewrch = wrch
+wrch := ps.cmd.wrch
+writef(string, a1, a2, a3, a4)
+wrch := savewrch
+RESULTIS TRUE
+$), FALSE)
+
+
+AND ps.output.ctrl(ch) = VALOF
+$(  LET ok = TRUE
+SWITCHON ch INTO
+$(  CASE '*N': close.newlines := close.newlines+1; ENDCASE
+    CASE '*C': dump.newlines()
+               ok := ps.cmd.writef("cr ")
+               ENDCASE
+    CASE '*P': close.newlines := 0
+               ok := ps.cmd.writef("nextpage*N")
+               pages.output := pages.output+1
+               newpage := TRUE      // Causes %%Page comment if something
+               ENDCASE              // is printed on the next page
+    DEFAULT:   ok := dump.newlines()
+               error("internal errror, bad POSTSCRIPT byte: #X%X2*N", ch)
+               IF ok THEN ps.text.wrch('?')
+$)
+RESULTIS ok
+$)
+
+
+AND dump.newlines() = VALOF
+$(  LET nl = close.newlines
+LET ok = TRUE
+close.newlines := 0
+IF post.stream=0 THEN
+$(  ok := open.laserwriter(gcode.file.name)
+    IF ok THEN ok := init.postscript()
+$)
+IF ok THEN
+$(  IF newpage THEN
+    $(  newpage := FALSE
+        ps.cmd.writef("home*N%%%%Page: %N ?*N", pages.output+1)
+    $)
+    IF nl>0 THEN
+    $(  // This routine is called to dispatch a number of
+        // accumulated newline
+        // commands - it calls ps.cmd.wrch, possibly recursively.
+        TEST nl=1 THEN
+            ps.cmd.writef("n ") ELSE
+            ps.cmd.writef("%N nl ", nl)
+    $)
+$)
+RESULTIS ok
+$)
+
+
+AND end.laserwriter() BE
+$(  // This routine just tidies up any mess that the laserwriter routines are
+// responsible for.
+IF post.stream\=0 THEN
+    $(
+    LET ok = TRUE
+    IF NOT newpage THEN ok := ps.cmd.writef("nextpage*N")
+    IF ok THEN ps.cmd.writef("%%%%Trailer*N*
+                              *%%%%Pages: %N*N", pages.output+1)
+    $<MVS wrch(#X37) $>MVS
+    endwrite()
+    post.stream := 0
+    $)
+$)
+
+
+$<MINOS
+AND who.is (puid) BE
+$( LET v = VEC (2*username.limit+1)/bytesperword
+   LET rc = ssp(user.database.manager,func.udm.find.userid,
+        puid,size.uid, v,2*username.limit+2,0)
+   TEST rc=0
+   THEN $( LET l1 = v%2
+   FOR j=1    TO l1 DO wrch(v%(j+2))
+   // pad to at least 8 characters:
+   FOR j=l1+1 TO  8 DO wrch('*S')
+   // writes(" (")
+   // FOR j=1 TO v%(l1+3) DO wrch(v%(j+l1+3))
+   // wrch(')')
+$)
+   ELSE writes (" an unknown user")
+$)
+$>MINOS
+
+
+
+//
+//                   GCODE  File  Processing
+//                   -----------------------
+
+
+
+
+
+AND init.gcode() = VALOF
+$(  LET space.space = getvec(spacewidth.len/bytesperword)
+space.width := 0
+space.mismatch := 0       // no mismatches yet!
+ignore.newpage := TRUE    // never print first new page - wast of a page
+TEST space.space=0 THEN
+    report("not enough memory (%N bytes needed)*N", spacewidth.len) ELSE
+$(  space.space%0 := 0    // initialise space width to unknown
+    space.width := space.space
+$)
+RESULTIS space.width\=0
+$)
+
+
+
+AND end.gcode() BE
+IF space.width\=0 THEN
+$(  freevec(space.width)
+    space.width := 0
+$)
+
+
+
+AND read.gcode(file.name, start.page,
+       print.page.proc, last.page.proc) = VALOF
+$(  LET stream = init.grdch(file.name)
+LET next.page = -1
+TEST stream=0 THEN
+report("can't open GCODE file *"%S*" for input*N", file.name) ELSE
+$(  LET savein = input()
+LET ch = ?
+    selectinput(stream)
+    ch := rdch()
+    TEST ch \= gcode.id THEN
+        report("*"%S*" is not a GCODE file*N", file.name) ELSE
+    $(  LET version = rdch()
+        LET lastch = ' '
+        ch := rdch()
+        // print out the header comment in the file
+        WHILE ch\='\' & ch\=endstreamch DO
+        $(  IF chatty THEN
+              $(
+              IF ch = '*N' THEN ch := ' '
+              UNLESS (lastch = ' ') & (ch=' ') DO  print("%C", ch)
+              lastch := ch
+              $)
+            ch := rdch()
+        $)
+        unrdch()
+        IF chatty THEN newline()
+        // report("debugging - Title printed!*N")
+        TEST ch=endstreamch THEN
+           report("file is empty*N") ELSE
+           next.page := read.gcode.pages(start.page,
+                                         print.page.proc,
+                                         last.page.proc)
+    $)
+    endread()
+    selectinput(savein)
+    end.grdch()
+$)
+RESULTIS next.page
+$)
+
+
+AND read.gcode.pages(initial.page, print.page.proc, last.page.proc) = VALOF
+$(  // The arguments allow an arbitrary sequence of pages to be printed
+// from the GCODE.FILE.NAME.  PRINT.PAGE.PROC(page.no) should return TRUE
+// for those pages which are to be printed and FALSE otherwise.
+// LAST.PAGE.PROC(page.no) should return TRUE if given the number of
+// the last page to print - the source read no further once the last
+// page has been reached.
+LET page.no = initial.page
+LET pages.printed = 0
+LET page.just.done = ?
+LET newpage.needed = FALSE
+LET ch = ?
+$(rpt
+    page.just.done := page.no
+    TEST interrupt() THEN
+    $(  error("interrupted*N")
+        page.no := -1            // signal that a fatal error has occured
+        ch := endstreamch        // pretend we have reached end of file
+    $) ELSE
+    TEST print.page.proc(page.no) THEN
+    $(  ch := do.gcode.page(page.no)
+        pages.printed := pages.printed + 1
+    $) ELSE
+    $(  // skip the next page:
+        $(rpt1
+            ch := grdch()
+            IF ch=gc.bft THEN ch := bind.font()       // even if skipping
+            IF ch=gcode.id THEN ch := catenate.data() // even if skipping
+            IF ch=gc.dcs THEN                         // even if skipping
+              $(
+              // DCS <device control string> DCS
+              // copy string to hdr file until next DCS
+              ch := rdargchar(gc.dcs)
+              WHILE ch\=endstreamch & ch\=gc.dcs DO
+                $(
+                IF ch = '\' THEN
+                  $(
+                  ch := rdargchar(gc.dcs)
+                  SWITCHON ch INTO
+                    $(
+                    CASE 's': CASE 'S': ch := '*S'; ENDCASE
+                    CASE 'n': CASE 'N': ch := '*N'; ENDCASE
+                    DEFAULT:
+                    $)
+                  $)
+                ps.cmd.wrch(ch)
+                ch := rdargchar(gc.dcs)
+                $)
+              $)
+            IF ch=gc.ff & ignore.newpage THEN
+            $(  ignore.newpage := FALSE
+                ch := '*S'
+            $)
+        $)rpt1 REPEATUNTIL ch=endstreamch | ch=gc.ff
+    $)
+    IF ch=gc.ff THEN page.no := page.no+1
+$)rpt REPEATUNTIL ch=endstreamch | last.page.proc(page.just.done)
+IF chatty THEN
+report("%N page%S from *"%S*" converted to PostScript*N",
+       pages.printed, (pages.printed=1 -> "", "s"), gcode.file.name)
+RESULTIS page.no
+$)
+
+
+
+AND do.gcode.page(page.no) = VALOF
+$(  // This procedure reads upto the end of the next output page performing
+// the relevent actions for each of the control codes encontered.
+LET ch = 0
+LET end.of.page = FALSE
+LET ok = TRUE
+WHILE ch\=endstreamch & ok & NOT end.of.page DO
+$(  ch := grdch()
+    TEST minchar <= ch <= maxchar THEN ok := ps.text.wrch(ch) ELSE
+    SWITCHON ch INTO
+    $(  CASE gcode.id:
+            // a concatenated GCODE file has been found
+            ch := catenate.data()
+            ENDCASE
+        CASE endstreamch:
+            // character will terminate loop later
+        CASE gc.nul :
+            ENDCASE
+        CASE gc.ff  :
+            TEST ignore.newpage THEN
+                ok := ps.cmd.writef("home ") ELSE
+            $(  ok := ps.output.ctrl('*P')
+                end.of.page := TRUE
+            $)
+            ignore.newpage := FALSE
+            ENDCASE
+        CASE gc.dcs :
+            // DCS <device control string> DCS
+            // copy string to hdr file until next DCS
+            ch := rdargchar(gc.dcs)
+            WHILE ch\=endstreamch & ch\=gc.dcs DO
+              $(
+              IF ch = '\' THEN
+                $(
+                ch := rdargchar(gc.dcs)
+                SWITCHON ch INTO
+                  $(
+                  CASE 's': CASE 'S': ch := '*S'; ENDCASE
+                  CASE 'n': CASE 'N': ch := '*N'; ENDCASE
+                  DEFAULT:
+                  $)
+                $)
+              ok := ps.cmd.wrch(ch)
+              ch := rdargchar(gc.dcs)
+              $)
+            ENDCASE
+        CASE gc.nl  :
+            ok := ps.output.ctrl('*N')
+            ENDCASE
+        CASE gc.bs  :
+            // use BS to effect a back space
+            ok := ps.cmd.writef("bs ")
+            ENDCASE
+        CASE gc.apc :
+            // APC <PSGTYPE command characters> APC
+            // put characters into string and call DO.APC
+            $(  LET cmd.string = VEC chseq.strlen/bytesperword
+                ch := scan.string(cmd.string, chseq.strlen,
+                                  gc.apc, "GCODE command")
+                IF cmd.string%0 > 0 THEN do.apc(cmd.string)
+            $)
+            ENDCASE
+        CASE gc.bft:
+            ch := bind.font()
+            ENDCASE
+        CASE gc.fdl :
+            error("font delimiter (%C) found unexpectedly*N", ch)
+            ENDCASE
+        CASE gc.vsi :
+            // use l to set line height
+            ok := ps.cmd.writef("%S l ", gcode.argument)
+            ENDCASE
+        CASE gc.ssu :
+            $(  LET point.indicator = grdarg.integer()
+                TEST 1 <= point.indicator <= 2 THEN
+                  IF point.indicator=2 THEN
+                    ok := ps.cmd.writef("*N72 72.27 div dup scale*N")
+                 ELSE error("illegal point size indicator *"%S*"*N",
+                      gcode.argument)
+            $)
+            ENDCASE
+        CASE gc.rpr :
+           // use h to move horizontally, or use SPACE if possible
+            TEST eqstring(space.width, gcode.argument) THEN
+                space.mismatch := 0 ELSE
+                space.mismatch := space.mismatch+1
+            IF space.mismatch>1 & gcode.argument%0<spacewidth.len THEN
+            $(  ok := ps.cmd.writef("%S C ", gcode.argument)
+                FOR i=0 TO gcode.argument%0 DO
+                    space.width%i := gcode.argument%i
+                space.mismatch := 0
+            $)
+            IF ok THEN
+            TEST space.mismatch = 0 THEN
+            ok := ps.text.wrch('*S') ELSE
+            ok := ps.cmd.writef("%S h ", gcode.argument)
+            ENDCASE
+        CASE gc.lpr :
+            // use h to move horizontally
+            ok := ps.cmd.writef("-%S h ", gcode.argument)
+            ENDCASE
+        CASE gc.dpr :
+            // use v to move vertically
+            ok := ps.cmd.writef("-%S v ", gcode.argument)
+            ENDCASE
+        CASE gc.upr :
+            // use v to move vertically
+            ok := ps.cmd.writef("%S v ", gcode.argument)
+            ENDCASE
+        CASE gc.sgr :
+            $(  // uses s to set the printing style
+                LET style = grdarg.integer()
+                IF NOT 0 <= style <= 3 THEN
+                $(  error("illegal character style indicator: %N*N",
+                          style)
+                    style := 0
+                $)
+                ok := ps.cmd.writef("%N s ", style)
+            $)
+            ENDCASE
+        CASE gc.fnt :
+            $(  // use f to select new font
+                LET fontno = grdarg.integer()
+                IF NOT 0 <= fontno <= 254 THEN
+                $(  error("illegal font number to bind: %N*N", fontno)
+                    fontno := 0
+                $)
+                ok := ps.cmd.writef("%N f ", fontno)
+            $)
+            ENDCASE
+        CASE gc.chr :
+            ok := ps.text.wrch(grdarg.integer()+256)
+            ENDCASE
+        CASE gc.gdpr:
+            // use gv to move vertically
+            ok := ps.cmd.writef("-%S gv ", gcode.argument)
+            ENDCASE
+        CASE gc.gupr:
+            // use gv to move vertically
+            ok := ps.cmd.writef("%S gv ", gcode.argument)
+            ENDCASE
+        DEFAULT:
+            error("internal error, unknown GCODE read: #X%X2*N", ch)
+    $)
+$)
+RESULTIS (ok -> ch, endstreamch)
+$)
+
+
+AND init.postscript() = VALOF
+$(  LET ok = ps.cmd.writef("reset ")
+IF ok & post.initial.apc\=0 THEN
+$(  LET apc = post.initial.apc
+    post.initial.apc := 0    // be cautious in case of recursion
+    ok := process.comment(apc, 1)
+$)
+RESULTIS ok
+$)
+
+
+
+AND bind.font() = VALOF
+$(  // This procedure is called when the character GC.BFT is encoutered
+// in the GCODE input - it is called even when the page that it occurs
+// in is being skipped.  It outputs POSTSCRIPT commands to effect a
+// font binding.
+LET ok = TRUE
+LET ch = ?
+LET fontno = grdarg.integer()
+// BFT <fontno> <magnification> FDL <font name> FDL
+// associate the given font number with a font called
+// <font name> at the stated magnification
+IF NOT 0 <= fontno <= 254 THEN
+$(  error("illegal font number to bind: %N*N", fontno)
+    fontno := 0
+$)
+ch := scan.string(gcode.argument, gcode.argsize,
+                  gct.fdl, "magnification string")
+IF ch\=endstreamch THEN
+$(  LET font.string = VEC chseq.strlen/bytesperword
+    // font strings have the syntax:
+    //     <font group> / <font name>
+    ch := scan.string(font.string, chseq.strlen, gct.fdl, "font name")
+    ok := ps.cmd.writef("%N %S ", fontno, gcode.argument)
+    IF ok THEN
+    $(  LET p = get.arg.substr(font.string, 1, '/')
+        p := p+1
+        get.arg.substr(font.string, p, ' ')
+        ok := ps.cmd.writef("(%S) bf ", gcode.argument)
+    $)
+$)
+RESULTIS (ok -> ch, endstreamch)
+$)
+
+
+AND catenate.data() = VALOF
+$(  // This procedure is called when a new GCODE.ID is found in the GCODE
+// input text, indicating a concatenated GCODE file.  The next character
+// read will be the version number of the GCAL which produced it - there
+// then follows a number of "rubbish" bytes until the next '\' character.
+// this procedure simply skips through them all printing interesting
+// information to the screen.
+LET ok = ?
+LET version = rdch()
+LET ch = ?
+LET saveout = output()
+selectoutput(ver.stream)
+IF version \= endstreamch THEN
+$(  IF chatty THEN
+    $(  report("from GCAL V.%N: ", version)
+        FOR i=1 TO command.name%0+2 DO print(" ")
+    $)
+    ch := rdch()
+$)
+// print out the header comment in the file
+WHILE ch\='\' & ch\=endstreamch DO
+$(  IF chatty THEN wrch(ch)
+    ch := rdch()
+$)
+unrdch()
+IF chatty THEN newline()
+selectoutput(saveout)
+ok := ps.cmd.writef("newpage*N")
+IF ok THEN ok := init.postscript()
+RESULTIS (ok -> '*P', endstreamch)
+$)
+
+
+AND scan.string(string.vec, string.byte.size, delimiter, errstr) = VALOF
+$(  // reads characters from the GCODE file into the STRING.VEC until
+// the character DELIMITER is read.
+// Provides an error message if the string read is too long
+LET n = 0
+LET ch = rdargchar(delimiter)
+WHILE ch\=endstreamch & ch\=delimiter DO
+$(  IF n<string.byte.size THEN
+    $(  n := n+1
+        string.vec%n := ch
+    $)
+    ch := grdch()
+$)
+string.vec%0 := n
+IF n>= string.byte.size THEN
+    error("%S > %N chars: *"%S...*"*N",
+          errstr, string.byte.size, string.vec)
+RESULTIS ch
+$)
+
+
+
+AND rdargchar(delimiter) = VALOF
+$(  // this procedure reads a character destined for an argument string
+// in particular it is applied when scanning DCS and APC strings.
+LET ch = ?
+LET chok = ?
+$(rpt
+    ch := grdch()
+    chok := TRUE
+    IF ch > 255 THEN
+    TEST ch=gc.nl | ch=gc.bs | ch=gc.ff | ch=gc.nul | ch=gc.chr |
+         ch=delimiter THEN
+        IF ch=gc.chr THEN ch := grdarg.integer()
+    ELSE
+    $(  error("code unsuitable for argument string: #X%X2*N", ch)
+        chok := FALSE
+    $)
+$)rpt REPEATUNTIL chok
+RESULTIS ch
+$)
+
+
+AND get.substring(string, pos, terminator, substring, substr.bytes) = VALOF
+$(  LET i = pos
+LET j = 0
+LET strlen = string%0
+WHILE i<=strlen & string%i='*S' DO i := i+1
+WHILE i<=strlen & string%i \= terminator & string%i \= '*S' DO
+$(  IF j<substr.bytes THEN
+    $(  j := j+1
+        substring%j := string%i
+    $)
+    i := i+1
+$)
+substring%0 := j
+IF i>substr.bytes THEN
+    error("GCODE argument string (*"%S...*") > %N chars*N",
+          substring, substr.bytes)
+RESULTIS i
+$)
+
+
+AND get.arg.substr(string, pos, terminator) =
+get.substring(string, pos, terminator, gcode.argument, gcode.argsize)
+
+
+
+AND do.apc(string) BE
+$(  // this procedure is called in response to a GTYPE command sequence
+// to pass an Application comment
+// The expected syntax is "<device name>:<gtype command>" - we must
+// check that the DEVICE.NAME is ours and, if so, execute the command!
+LET p = get.arg.substr(string, 1, ':')
+IF eqstring(gcode.argument, device.name) THEN
+    process.comment(string, p+1)
+$)
+
+
+AND process.comment(apc.string, pos) = VALOF
+$(  LET ok = TRUE
+LET fatal = FALSE
+LET apc.arg = VEC apc.argsize/bytesperword
+MANIFEST $( cmt.delim = ';' $)
+WHILE pos <= apc.string%0 & NOT fatal DO
+$(  pos := get.substring(apc.string, pos, cmt.delim, apc.arg, apc.argsize)
+    TEST eqstring(apc.arg, "AUTOFEED") THEN
+        fatal := NOT ps.cmd.writef("false manual ") ELSE
+    TEST eqstring(apc.arg, "MANUALFEED") THEN
+        fatal := NOT ps.cmd.writef("true manual ") ELSE
+    TEST eqstring(apc.arg, "LANDSCAPE") THEN
+        fatal := NOT ps.cmd.writef("1 m ") ELSE
+    TEST eqstring(apc.arg, "PORTRAIT") THEN
+        fatal := NOT ps.cmd.writef("0 m ") ELSE
+    TEST eqstring(apc.arg, "COPIES") THEN
+    $(  pos := get.substring(apc.string, pos, cmt.delim,
+                             apc.arg, apc.argsize)
+        TEST stringtonum(apc.arg) & 0<=result2<=max.copies THEN
+            fatal := NOT ps.cmd.writef("%N copies ", result2) ELSE
+        $(  error("illegal COPIES number *"%S*"*N", apc.arg)
+            ok := FALSE
+        $)
+    $) ELSE
+    TEST eqstring(apc.arg, "FONT") THEN
+    $(  pos := get.substring(apc.string, pos, cmt.delim,
+                             apc.arg, apc.argsize)
+        TEST stringtonum(apc.arg) & 0<=result2<=255 THEN
+            fatal := NOT ps.cmd.writef("%N f ", result2) ELSE
+        $(  error("illegal FONT number *"%S*"*N", apc.arg)
+            ok := FALSE
+        $)
+    $) ELSE
+    TEST eqstring(apc.arg, "MARGIN") THEN
+    $(  pos := get.substring(apc.string, pos, cmt.delim,
+                             apc.arg, apc.argsize)
+        fatal := NOT ps.cmd.writef("%S L ", apc.arg)
+    $) ELSE
+    TEST eqstring(apc.arg, "GET") THEN
+    $(  LET postscript.file = ?
+        pos := get.substring(apc.string, pos, cmt.delim,
+                             apc.arg, apc.argsize)
+        $<MVS
+        postscript.file := inputmember("PICTURES", apc.arg)
+        IF postscript.file = 0 THEN
+        $>MVS
+        postscript.file := findgetin(apc.arg)  // reports errors
+        TEST postscript.file=0 THEN ok := FALSE ELSE
+        $(  LET savein = input()
+            LET ch = ?
+            selectinput(postscript.file)
+            ok := ps.cmd.writef("*N/getobj save def %% GET %s*N", apc.arg)
+            IF ok THEN
+            $(  ch := rdch()
+                WHILE ch\=endstreamch & NOT fatal DO
+                $(  fatal := NOT ps.cmd.wrch(ch)
+                    ch := rdch()
+                $)
+            $)
+            endread()
+            ps.cmd.writef("*Ngetobj restore %%End GET*N")
+            selectinput(savein)
+        $)
+    $) ELSE
+    $(  error("unknown application comment *"%S*"*N", apc.arg)
+        ok := FALSE
+    $)
+    IF apc.string%pos=cmt.delim THEN pos := pos+1
+$)
+RESULTIS ok & NOT fatal
+$)
+
+
+
+$<MINOS
+
+//
+//                  MINOS  Dependent  Code
+//                  ----------------------
+
+
+MANIFEST
+$(  arg.size   = 100/bytesperword
+a.fromno   = 0
+a.fromlist = 1
+a.to       = 2
+a.hdr   = 3
+a.first    = 4
+a.last     = 5
+a.even     = 6
+a.odd      = 7
+a.opt      = 8
+bad.rc     = 20
+good.rc    = 0
+$)
+
+
+LET read.args(arg, arg.size) = VALOF
+$(  LET arg.str = "From/a,To,Header,First/k,Last/k,Even/s,Odd/s,Request/k"
+LET ok = (0\=rdargs(arg.str, arg+1, arg.size-1))
+command.name := "PSGTYPE"
+device.name  := "POSTSCRIPT"
+arg!arg.fromno := 0
+TEST NOT ok THEN
+    report("arguments unsuitable for:*N*"%S*"*N", arg.str) ELSE
+$(  IF arg!a.to=0 THEN arg!a.to := "LP:LSW-BIN"
+    arg!arg.fromno := 1
+    IF arg!a.hdr=0 THEN arg!a.hdr := "POST.GTYPE-Header"
+    IF arg!a.first\=0 THEN
+    TEST stringtonum(arg!a.first) THEN
+        arg!a.first := result2 ELSE
+    $(  report("FIRST (*"%S*") is not numeric*N", arg!a.first)
+        ok := FALSE
+    $)
+    TEST arg!a.last=0 THEN arg!a.last := maxint ELSE
+    TEST stringtonum(arg!a.last) THEN
+        arg!a.last := result2 ELSE
+    $(  report("LAST (*"%S*") is not numeric*N", arg!a.last)
+        ok := FALSE
+    $)
+    arg!a.even := (arg!a.even\=0)
+    arg!a.odd := (arg!a.odd\=0)
+$)
+chatty := TRUE
+IF ok THEN
+    writef("%S Version %N.%N*N",
+           command.name, major.version, minor.version)
+RESULTIS ok
+$)
+
+
+LET findgetin(name) = VALOF
+$(  LET scb = findinput(name)
+IF scb=0 THEN error("can't open %S GET file *"%S*"*N", device.name, name)
+RESULTIS scb
+$)
+
+LET findmaininput(name) = findinput(name)
+
+
+LET findmainout(name) = VALOF
+$(  LET scb = findoutput(name)
+IF scb=0 THEN error("can't open main output *"%S*"*N", name)
+RESULTIS scb
+$)
+
+
+LET interrupt() = testflags(1)
+
+
+LET eqstring(s1, s2) = (0=compstring(s1, s2))
+
+
+LET get.day(vect, default.day) = VALOF
+$(  IF 0\=datstring(vect) THEN default.day := vect+10
+RESULTIS default.day
+$)
+
+
+LET get.date(vect, default.date) = VALOF
+$(  IF 0\=datstring(vect) THEN default.date := vect+0
+RESULTIS default.date
+$)
+
+
+LET get.time(vect, default.time) = VALOF
+$(  IF 0\=datstring(vect) THEN default.time := vect+5
+RESULTIS default.time
+$)
+
+$>MINOS
+
+
+
+
+$<PANOS
+
+//
+//                    PANOS  Dependent Code
+//                    ---------------------
+
+
+MANIFEST
+$(  id.string  = "PSGTYPE Version 0.12"
+
+arg.str    = "FROM/a/30/e-gout TO/k HEADER *
+             *FIRST/k/c LAST/k/c EVEN/s ODD/s *
+             *REQUEST/l"
+
+var.hdr = "GCAL$PostscriptHeader"
+
+arg.size   = 1000/bytesperword
+hdr.def.size = 100/bytesperword
+max.from.files  = 30
+
+hdr.def = 0
+a.to       = hdr.def.size+0
+a.hdr   = hdr.def.size+1
+a.first    = hdr.def.size+2
+a.last     = hdr.def.size+3
+a.even     = hdr.def.size+4
+a.odd      = hdr.def.size+5
+a.opt      = hdr.def.size+6
+a.fromno   = hdr.def.size+7
+a.fromlist = hdr.def.size+8
+a.spare    = a.fromlist+max.from.files
+
+bad.rc     = return.hard
+good.rc    = 0
+$)
+
+
+//
+//                   Interrupt  Detection
+//
+
+MANIFEST
+$(  magic.handle = 0         // may as well
+$)
+
+
+LET escape.procedure(code, data1, data2, handle, evptr) BE
+  IF code=6 THEN escape.pressed := TRUE
+
+
+LET init.events() BE
+$(  DeclareEventHandler(escape.procedure, 6, 2, magic.handle)
+// intercept escape events
+SetEventStatus(6, TRUE)    // enable escape events
+escape.pressed := FALSE
+$)
+
+
+// Following doesn't work in current version of Panos:
+// LET end.events() BE RemoveEventHandler(escape.procedure, 6, magic.handle)
+LET end.events() BE RETURN
+
+
+LET interrupt() = escape.pressed
+
+
+LET help() BE
+$(  writef("                    %S FILE PARAMETERS*N", command.name)
+writes("*N")
+writes("  -FROM     lis of input GCODE files produced by GCAL*N*
+       *  -TO       output (Postscript) file (default is RS423:)*N*
+       *  -HEADER   postscript header file (default *
+                                           *<GCAL$PostscriptHeader>)*N")
+writes("*N*
+       *                       PAGE OUTPUT CONTROL*N*
+       **N")
+writes("  -FIRST    number of the first page considered for output*N*
+       *  -LAST     number of the last page considered for output*N*
+       *  -EVEN     only print the even numbered pages considered*N*
+       *  -ODD      only print the odd numbered pages considered*N")
+writes("*N*
+       *                     GCAL *"REQUEST*" OPTIONS*N*
+       **N")
+writes("  -REQUEST  GCAL *".request*" string - the following *
+                                              *separated by spaces*N*
+       *       COPIES n    produce <n> copies of the output*N*
+       *       MARGIN x    set left margin to <x> points*N")
+writes("       GET file    includes Postscript file <file> in output*N*
+       *       MANUALFEED  subsequent pages use the manual *
+                                                   *feed mechanism*N*
+       *       LANDSCAPE   print subsequent pages in landscape mode*N")
+$)
+
+
+LET read.args(arg, arg.size) = VALOF
+$(  MANIFEST $(  hdr.default.size = 100 $)  // bytes
+LET rc     = 0
+LET handle = ?
+LET current.output = output()
+init.events()
+
+command.name := "PSGTYPE"
+device.name  := "POSTSCRIPT"
+
+rc := ArgumentInit(arg.str, FALSE, FALSE, id.string, help)
+handle := result2
+selectoutput(errorstream)
+init.ver()
+selectoutput(current.output)
+
+IF rc >= 0 THEN
+$(  LET memblock = arg + a.spare
+    LET memremaining = arg.size - a.spare
+    chatty := VerbosityRequired(handle)
+
+    rc := get.string("to", handle, 1, @memblock, @memremaining)
+    IF rc>=0 THEN
+    $(  TEST rc=0 THEN arg!a.to := result2 ELSE arg!a.to := 0
+        rc := get.string("hdr", handle, 1, @memblock, @memremaining)
+        TEST rc=0 THEN arg!a.hdr := result2 ELSE
+        $(  LET default.hdr = arg + hdr.def
+            LET rc = getglobalstring(var.hdr,
+                                     default.hdr, hdr.def.size)
+            TEST rc<0 THEN
+            $(  report("can't look up *"%S*" ", var.hdr)
+                fault.message(rc)
+                newline()
+                arg!a.hdr := ""
+            $) ELSE arg!a.hdr := default.hdr
+
+            arg!a.even := get.state("even", handle)
+            arg!a.odd  := get.state("odd",  handle)
+
+            rc := get.number("first", handle, 1)
+            IF rc >= 0 THEN
+            $(  arg!a.first := result2
+                rc := get.number("last", handle, maxint)
+                IF rc>=0 THEN arg!a.last := result2
+            $)
+        $)
+    $)
+
+    IF rc >= 0 THEN
+    $(  LET index = 1
+        LET fromlist = arg + a.fromlist
+        $(rpt
+            rc := get.string("from", handle, index,
+                              @memblock, @memremaining)
+            IF rc=0 THEN
+            $(  fromlist!(index-1) := result2
+                index := index + 1
+            $)
+        $)rpt REPEATUNTIL rc \= 0 | index > max.from.files
+        arg!a.fromno := (rc<0 -> 0, index-1)
+        IF arg!a.fromno>0 & arg!a.to=0 THEN arg!a.to := fromlist!0
+    $)
+
+    IF rc >= 0 THEN
+    $(  rc := get.string("request", handle, 1, @memblock, @memremaining)
+        arg!a.opt := (rc=0 -> result2, 0)
+    $)
+$)
+IF rc<0 THEN
+$(  report("bad arguments ")
+    fault.message(rc)
+    newline()
+$)
+RESULTIS rc>=0
+$)
+
+
+AND get.number(arg, handle, def) = VALOF
+$(  LET rc  = 0
+IF GetNumberOfValues(arg, handle) >= 0 & result2 > 0 THEN
+$(  rc  := GetCardinalArg(arg, 1, handle)
+    def := result2
+$)
+result2 := def
+RESULTIS rc
+$)
+
+
+AND get.state(arg, handle) = VALOF
+$(  GetStateArg(arg, handle)
+RESULTIS result2
+$)
+
+
+AND get.string(arg, handle, index, lv.vector, lv.vecsize) = VALOF
+$(  LET rc = GetNumberOfValues(arg, handle)
+IF rc>=0 THEN
+TEST index>result2 THEN rc := 1 ELSE
+$(  rc := GetStringArg(arg, index, handle, !lv.vector,
+                                           !lv.vecsize*bytesperword)
+    IF rc>=0 THEN
+    $(  LET string = !lv.vector
+        LET spaceused = string%0/bytesperword + 1
+        result2 := string
+        !lv.vector := string + spaceused
+        !lv.vecsize := !lv.vecsize - spaceused
+    $)
+$)
+RESULTIS rc
+$)
+
+
+LET findgetin(name) = findextfile(findinput, name, "-post", FALSE,
+                          "can't open %S GET file *"%S*"*N")
+
+AND findmaininput(name) = findinput(name)
+
+
+
+
+AND findmainout(name) = findextfile(findoutput, name, "-post", TRUE,
+                                "can't open %S main output *"%S*"*N")
+
+
+AND findextfile(findproc, name, default.ext, force, errstring) = VALOF
+$(  LET contains.dash = FALSE
+LET namelen = name%0
+LET mainlen = namelen
+LET scb = 0
+FOR i=1 TO namelen DO IF name%i='-' THEN
+$(  contains.dash := TRUE
+    mainlen := i-1
+$)
+TEST contains.dash & NOT force | name%namelen=':' THEN
+$(  scb := findproc(name)
+    IF scb=0 THEN error(errstring, device.name, name)
+$) ELSE
+$(  LET string = VEC 256/bytesperword
+    LET newlen = mainlen + default.ext%0
+    IF newlen > 255 THEN newlen := 255
+    FOR i=1 TO mainlen DO string%i := name%i
+    FOR i=mainlen+1 TO newlen DO string%i := default.ext%(i-mainlen)
+    string%0 := newlen
+    scb := findproc(string)
+    IF scb=0 THEN error(errstring, device.name, string)
+$)
+RESULTIS scb
+$)
+
+
+LET eqstring(s1, s2) = (0=compstring(s1, s2))
+
+
+LET get.day(vect, default.day) = VALOF
+$(  IF 0\=datstring(vect) THEN default.day := vect+10
+RESULTIS default.day
+$)
+
+
+LET get.date(vect, default.date) = VALOF
+$(  IF 0\=datstring(vect) THEN default.date := vect+0
+RESULTIS default.date
+$)
+
+
+
+
+
+LET get.time(vect, default.time) = VALOF
+$(  IF 0\=datstring(vect) THEN default.time := vect+5
+RESULTIS default.time
+$)
+
+$>PANOS
+
+
+
+$<MVS
+
+//
+//                      MVS  Dependent Code
+//                      -------------------
+
+
+MANIFEST
+$(  arg.size   = 100/bytesperword
+a.fromno   = 0
+a.fromlist = 1
+a.to       = 2
+a.hdr   = 3
+a.first    = 4
+a.last     = 5
+a.even     = 6
+a.odd      = 7
+a.opt      = 8
+bad.rc     = 8
+good.rc    = 0
+$)
+
+
+LET read.args(arg, arg.size) = VALOF
+$( command.name := "GC2PS"
+device.name  := "POSTSCRIPT"
+
+arg!a.fromno   := 1
+line.number := 0
+gcode.file.name := ""
+arg!a.fromlist := "GCODE"
+arg!a.to       := "PSOUT"
+arg!a.hdr   := "PSHDR"
+arg!a.first    := 1
+arg!a.last     := maxint
+arg!a.even     := FALSE
+arg!a.odd      := FALSE
+arg!a.opt      := 0
+
+chatty := TRUE
+writef("%S Version %N.%N*N", command.name, major.version, minor.version)
+decodeparmstring(arg)
+
+setbreak(TRUE)
+RESULTIS TRUE
+$)
+
+
+AND decodeparmstring(arg) BE
+$(proc
+LET pp = 1
+LET word = VEC 20
+WHILE pp <= parmstring%0 DO
+  $(1
+  readparmword(word, @pp)
+  TEST eqstring(word, "first") THEN
+    arg!a.first := readparmint(@pp) ELSE
+  TEST eqstring(word, "last") THEN
+    arg!a.last := readparmint(@pp) ELSE
+  TEST eqstring(word, "odd") THEN
+    arg!a.odd := TRUE ELSE
+  TEST eqstring(word, "even") THEN
+    arg!a.even := TRUE ELSE
+  TEST eqstring(word, "request") THEN
+    $(2
+    LET l = parmstring%0 - pp + 1
+    LET rstring = getvec(l/bytesperword + 1)
+    FOR i = 1 TO l DO
+      $(
+      rstring%i := parmstring%pp
+      pp +:= 1
+      $)
+    rstring%0 := l
+    arg!a.opt := rstring
+    $)2
+  ELSE error("unknown option *"%S*"*N", word)
+  $)1
+$)proc
+
+
+AND readparmword(word, aptr) BE
+$(proc
+LET n = 0
+word%0 := 0
+WHILE (!aptr <= parmstring%0) & (parmstring%(!aptr) = ' ') DO
+  !aptr +:= 1
+UNTIL (!aptr > parmstring%0) | (parmstring%(!aptr) = ' ') DO
+  $(
+  n +:= 1
+  word%n := parmstring%(!aptr)
+  !aptr +:= 1
+  $)
+word%0 := n
+$)proc
+
+
+AND readparmint(aptr) = VALOF
+$(proc
+LET n = 0
+WHILE (!aptr <= parmstring%0) & (parmstring%(!aptr) = ' ') DO
+  !aptr +:= 1
+UNTIL (!aptr > parmstring%0) | ('0' > parmstring%(!aptr)) |
+      ('9' < parmstring%(!aptr)) DO
+  $(
+  n := n*10 + parmstring%(!aptr) - '0'
+  !aptr +:= 1
+  $)
+RESULTIS n
+$)proc
+
+
+LET findgetin(name) = VALOF
+$(  LET scb = findinput(name)
+IF scb=0 THEN error("can't open %S GET file *"%S*"*N", device.name, name)
+RESULTIS scb
+$)
+
+LET findmaininput(name) = findinput(name)
+
+
+
+
+LET findmainout(name) = VALOF
+$(  LET scb = findoutput(name)
+IF scb=0 THEN error("can't open main output *"%S*"*N", name)
+RESULTIS scb
+$)
+
+
+LET interrupt() = isbreak()
+
+
+LET eqstring(s1, s2) = VALOF
+$( LET l1 = s1 % 0
+
+ IF l1 ~= s2 % 0 THEN RESULTIS FALSE
+
+ FOR j = 1 TO l1 DO
+   $( LET c1 = s1 % j
+      LET c2 = s2 % j
+      IF 'a' <= c1 <= 'z' THEN c1 := c1 + 'A' - 'a'
+      IF 'a' <= c2 <= 'z' THEN c2 := c2 + 'A' - 'a'
+      IF c1 ~= c2 THEN RESULTIS FALSE
+   $)
+
+ RESULTIS TRUE
+  $)
+
+
+LET get.time(vect, default.time) = timeofday()
+
+
+LET get.day(vect, default.day) = default.day
+
+
+LET get.date(vect, default.date) = date()
+$>MVS
+
+
+
+
+$<VAXUNIX
+MANIFEST
+$(  arg.size   = 100/bytesperword
+    max.from.files  = 20
+    hdr.def.size = 0
+
+    a.to       = hdr.def.size+0
+    a.hdr      = hdr.def.size+1
+    a.first    = hdr.def.size+2
+    a.last     = hdr.def.size+3
+    a.even     = hdr.def.size+4
+    a.odd      = hdr.def.size+5
+    a.opt      = hdr.def.size+6
+    a.fromno   = hdr.def.size+7
+    a.fromlist = hdr.def.size+8
+
+    bad.rc     = 8
+    good.rc    = 0
+$)
+
+
+LET read.args(arg, arg.size) = VALOF
+  //
+  // Very simple BSD 4.2 version for testing
+  //
+  $( LET argp      = 1                  // Pointer into the ARGV
+     
+     command.name := ARGV!0
+     device.name  := "POSTSCRIPT"
+
+     arg!a.fromno   := 1
+     arg!a.fromlist := "-"
+     arg!a.to       := "-"
+     arg!a.hdr   := "/usr/lib/gcal/gc2ps.pshdr"
+     arg!a.even     := FALSE
+     arg!a.odd      := FALSE
+     arg!a.first    := 1
+     arg!a.last     := maxint
+     arg!a.opt      := 0
+
+     ver.stream := JOURNAL
+     chatty := FALSE
+
+     WHILE argp <= ARGC & (ARGV!argp)%1 = '-'
+     $( LET key = ARGV!argp
+        SWITCHON key%2 INTO
+        $(
+        CASE '1': arg!a.odd  := TRUE;                 ENDCASE
+        CASE '0': arg!a.even := TRUE;                 ENDCASE
+        CASE 'f': argp := argp + 1
+                  IF (argp > ARGC)
+                  $( report("No number specified after -f*N")
+                     STOP(bad.rc)
+                  $)
+                  arg!a.first:= atoi(ARGV!argp);      ENDCASE
+        CASE 'l': argp := argp + 1
+                  IF (argp > ARGC)
+                  $( report("No number specified after -l*N")
+                     STOP(bad.rc)
+                  $)
+                  arg!a.last := atoi(ARGV!argp);      ENDCASE
+        CASE 'v': chatty     := TRUE;                 ENDCASE
+        CASE 'o': argp := argp + 1
+                  IF (argp > ARGC)
+                  $( report("No output file specified after -o*N")
+                     STOP(bad.rc)
+                  $)
+                  arg!a.to := ARGV!argp;              ENDCASE
+        CASE 'h': argp := argp + 1
+                  IF (argp > ARGC)
+                  $( report("No hdr file specified after -h*N")
+                     STOP(bad.rc)
+                  $)
+                  arg!a.hdr := ARGV!argp;         ENDCASE
+        CASE 'r': argp := argp + 1
+                  IF (argp > ARGC)
+                  $( report("No request string specified after -r*N")
+                     STOP(bad.rc)
+                  $)
+                  arg!a.opt := ARGV!argp;         ENDCASE
+        DEFAULT:  report("Unknown option `%s'*N*
+*Usage: [-0] [-1] [-v] [-f] [-l] [-o output] [-h hdr] [-r requeststring]*N", key)
+                  STOP(bad.rc)
+        CASE 0:   BREAK
+        $)
+        argp := argp + 1
+     $)
+
+     IF ARGC >= argp
+     $( if ARGC-argp >= max.from.files
+        $( report("Only %n of %n files processed*N", max.from.files, argc-argp+1)
+           ARGC := max.from.files + argp -1
+        $)
+        arg!a.fromno   := ARGC - argp +1
+        FOR i = 0 TO ARGC-argp arg!(a.fromlist + I) := ARGV!(argp + I)
+     $)
+
+     IF chatty THEN report("Version %N.%N*N", major.version, minor.version)
+
+     RESULTIS TRUE
+$)
+
+AND atoi(ptr) = VALOF
+$(  LET n = 0
+    FOR I = 1 TO ptr%0
+    $(  LET ch = ptr%i
+        UNLESS '0' <= ch <= '9' BREAK
+        n := n*10 + ch - '0'
+    $)
+    RESULTIS n
+$)
+
+LET findgetin(name) = VALOF
+$(  LET scb = findinput(name)
+    IF scb=0 THEN error("can't open %S GET file *"%S*"*N", device.name, name)
+    RESULTIS scb
+$)
+
+LET findmainout(name) = VALOF
+$(  LET scb = eqstring(name, "-") -> SYSOUT, findoutput(name)
+    IF scb=0 THEN error("can't open main output *"%S*"*N", name)
+    RESULTIS scb
+$)
+
+LET eqstring(s1, s2) = VALOF
+  $( LET l1 = s1 % 0
+
+     IF l1 ~= s2 % 0 THEN RESULTIS FALSE
+
+     FOR j = 1 TO l1 DO
+       $( LET c1 = s1 % j
+          LET c2 = s2 % j
+          IF 'a' <= c1 <= 'z' THEN c1 := c1 + 'A' - 'a'
+          IF 'a' <= c2 <= 'z' THEN c2 := c2 + 'A' - 'a'
+          IF c1 ~= c2 THEN RESULTIS FALSE
+       $)
+
+     RESULTIS TRUE
+  $)
+
+LET findmaininput(name)        = eqstring(name, "-") -> SYSIN, findinput(name)
+LET interrupt()                  = FALSE
+LET get.time(vect, default.time) = timeofday(vect)
+LET get.day(vect, default.day)   = default.day          // Do any better ?
+LET get.date(vect, default.date) = date(vect)
+$>VAXUNIX
+
+
+
+$<TRIPOS
+MANIFEST
+$(  arg.size   = 100/bytesperword
+
+    a.fromlist = 0
+    a.to       = 1
+    a.hdr      = 2
+    a.first    = 3
+    a.last     = 4
+    a.even     = 5
+    a.odd      = 6
+    a.opt      = 7
+    a.ver      = 8      // Local to read.args
+    a.fromno   = 8      // Global
+
+    bad.rc     = 20
+    good.rc    = 0
+$)
+
+
+LET read.args(argv, arg.size) = VALOF
+  //
+  // Very simple TRIPOS version for testing
+  //
+  $( LET args = "from/a,to/k,hdr/k,first/k,last/k,even/s,odd/s,request/k,ver/s";     
+     command.name := "Gc2ps"
+     device.name  := "POSTSCRIPT"
+
+     UNLESS rdargs(args, argv, arg.size)
+     DO report("Bad args for *"%s*"*N", args) <> STOP (bad.rc)
+
+     UNLESS argv!a.to  DO argv!a.to  := "BSP:balfourprint.raw"
+     UNLESS argv!a.hdr DO argv!a.hdr := "sys:gcal.gc2ps-pshdr"
+
+     TEST (argv!a.first)
+     THEN TEST string.to.number(argv!a.first)
+          THEN argv!a.first := RESULT2
+          ELSE report("Bad first page *"%s*"*N", argv!a.first) <> STOP(bad.rc)
+     ELSE argv!a.first    := 1
+
+     TEST (argv!a.last)
+     THEN TEST string.to.number(argv!a.last)
+          THEN argv!a.last := RESULT2
+          ELSE report("Bad last page *"%s*"*N", argv!a.last) <> STOP(bad.rc)
+     ELSE argv!a.last    := maxint
+
+     chatty := argv!a.ver       // No more need for argv!a.ver
+     argv!a.fromno   := 1       // Now re-use it.
+
+     IF chatty THEN report("Version %N.%N*N", major.version, minor.version)
+
+     RESULTIS TRUE
+$)
+
+LET findgetin(name) = VALOF
+$(  LET scb = findinput(name)
+    IF scb=0 THEN error("can't open %S GET file *"%S*"*N", device.name, name)
+    RESULTIS scb
+$)
+
+LET findmainout(name) = VALOF
+$(  LET scb = findoutput(name)
+    IF scb=0 THEN error("can't open main output *"%S*"*N", name)
+    RESULTIS scb
+$)
+
+LET eqstring(s1, s2)             = compstring (s1, s2) = 0
+LET findmaininput(name)          = findinput(name)
+LET interrupt()                  = testflags(1)
+LET get.time(vect, default.time) = datstring(vect)+5
+LET get.day(vect, default.day)   = datstring(vect)+10
+LET get.date(vect, default.date) = datstring(vect)
+$>TRIPOS
+
+
+
+//
+//                       Main  Driving Code
+//                       ------------------
+
+
+
+LET do.this.page(page.no) =
+(((page.no & 1)=0 -> even, odd) & page.no>=min.page)
+
+
+LET is.last.page(page.no) = (page.no = max.page)
+
+
+LET start(xxx) BE
+$(  LET arg = VEC arg.size
+LET rc = bad.rc
+$<MVS parmstring := xxx $>MVS
+init.ver()  // set error reporting stream for READ.ARGS to use
+IF read.args(arg, arg.size) THEN
+$(  min.page := arg!a.first         // first page to print
+    max.page := arg!a.last          // last page to print
+    even     := NOT arg!a.odd       // print the even pages ?
+    odd      := NOT arg!a.even      // print the odd pages ?
+    post.initial.apc := arg!a.opt   // initial application comment
+    IF init.gcode() THEN
+    $(  LET saveout = output()
+        init.laserwriter(arg!a.to, arg!a.hdr)
+        $(  LET next.page = 1
+            LET input.files = arg!a.fromno
+            LET files = arg+a.fromlist
+            LET file.number = 0
+            WHILE next.page>=0 & file.number < input.files DO
+            $(  next.page := read.gcode(files!file.number,
+                                        next.page,
+                                        do.this.page, is.last.page)
+                file.number := file.number + 1
+            $)
+            IF next.page>=0 THEN rc := good.rc
+            end.laserwriter()
+        $)
+        selectoutput(saveout)
+    $)
+    end.gcode()
+$)
+end.ver()
+stop(rc)
+$)
+
+

@@ -1,0 +1,149 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+                     ######    ##    ##  ##    ##  #######  
+                     #######   ##    ##  ###  ###  ######## 
+                     ##    ##  ##    ##  ########  ##    ## 
+                     ##    ##  ##    ##  ## ## ##  #######  
+                     ##    ##  ##    ##  ##    ##  ##       
+                     ##    ##  ##    ##  ##    ##  ##       
+                     #######   ########  ##    ##  ##       
+                     ######     ######   ##    ##  ##       
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   08/08/84             *
+\*****************************************************************************/
+
+
+
+SECTION "DUMP"
+
+
+GET "LIBHDR"
+
+
+LET start()  BE
+$(
+//  Main routine of the DUMP program.  Open the main input stream, and
+//  then start dumping!
+
+    LET args      =  "FROM/A,TO/K"
+    LET argv      =  VEC 50
+
+    LET sysin     =  input()
+    LET sysout    =  output()
+    
+    LET f.file    =  0
+    LET t.file    =  0
+    LET f.stream  =  0
+    LET t.stream  =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** DUMP:  Bad arguments for string *"%S*"*N", args )
+        
+        stop( 20 )
+    $)
+
+    f.file  :=  argv!0
+    t.file  :=  argv!1
+    
+    f.stream  :=  findinput( f.file )
+    
+    IF  f.stream = 0  THEN
+    $(
+        writef( "****** DUMP:  Cannot open *"%S*":  ", f.file )
+        fault( result2 )
+        
+        stop( 20 )
+    $)
+
+    UNLESS  t.file = 0  DO
+    $(
+        t.stream  :=  findoutput( t.file )
+        
+        IF  t.stream = 0  THEN
+        $(
+            writef( "****** DUMP:  Cannot open *"%S*":  ", t.file )
+            fault( result2 )
+            
+            endstream( f.stream )
+            
+            stop( 20 )
+        $)
+    $)
+
+    //  We now have the relevant streams, so select them, and get going.
+
+    selectinput( f.stream )
+    
+    UNLESS  t.stream = 0  DO  selectoutput( t.stream )
+
+    FOR  offset = 0  TO  maxint  BY  16  DO
+    $(
+        LET chvec   =  VEC 16
+        LET ch      =  0
+        LET length  =  0
+
+        IF  testflags( #B0001 )  THEN
+        $(
+            LET o  =  output()
+            
+            selectoutput( sysout )
+            writes( "*N****** BREAK*N*N" )
+            selectoutput( o )
+            
+            BREAK
+        $)
+        
+        FOR  i = 1  TO  16  DO
+        $(
+            ch  :=  rdch()
+            
+            IF  ch = endstreamch  THEN  BREAK
+            
+            length        :=  length + 1
+            chvec!length  :=  ch
+        $)
+        
+        //  Now, print out the record, but only of there are characters
+        //  to  print out.
+        
+        UNLESS  length = 0  DO
+        $(
+            writef( "%X6:   ", offset )
+            
+            FOR  i = 1         TO  length  DO  writef( "%X2 ", chvec!i )
+            FOR  i = length+1  TO  16      DO  writes( "   " )
+            
+            writes( "  " )
+            
+            FOR  i = 1         TO  length  DO  wrch( c( chvec!i ) )
+            
+            newline()
+        $)
+
+        IF  ch = endstreamch  THEN  BREAK
+    $)
+
+    endread()
+    
+    UNLESS  t.stream = 0  DO  endwrite()
+    
+    selectinput( sysin )
+    selectoutput( sysout )
+$)
+
+
+
+AND c( char )  =
+    ( "................................ !*"#$%&'()**+,-./0123456789:;<=>?*
+      *@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]\^_`abcdefghijklmnopqrstuvwxyz{|}~."
+    ) % ((char & #X7F) + 1)
+
+
+
+

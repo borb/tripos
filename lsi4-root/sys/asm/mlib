@@ -1,0 +1,709 @@
+**********************************************************
+*                                                        *
+*        (C) Copyright 1981 Tripos Research Group        *
+*            University of Cambridge                     *
+*            Computer Laboratory                         *
+*                                                        *
+**********************************************************
+
+**********************************************************
+*                                                        *
+* This is BCPL's  machine code library for the LSI4/30.  *
+*                                                        *
+**********************************************************
+
+* Modifications:
+*   25 Oct 81 by BJK: routines GET2BYTES and PUT2BYTES
+*                     installed.
+
+* Standard symbols
+
+SECWD   EQU    12345    marks start of a program section
+LIBWD   EQU    23456    marks a machine code library rtn
+
+* Coroutine stack symbols
+
+C:LINK  EQU     0       link to next coroutine
+C:CLLR  EQU     1       caller coroutine or zero
+C:SEND  EQU     2       stack end - 50
+C:RESP  EQU     3       resumption pointer
+C:FUNC  EQU     4       function
+C:RTRN  EQU     5       return link for STOP
+
+* Global vector symbols
+
+G:STRT  EQU     1       START
+G:RES2  EQU    10       RESULT2 used for error codes
+G:RC    EQU    11       RETURNCODE for STOP
+G:SBAS  EQU    12       STACKBASE
+
+* Machine code library routines
+
+G:AVEC  EQU    20       APTOVEC
+G:CLCO  EQU    25       CALLCO
+G:COWT  EQU    26       COWAIT
+G:CTCO  EQU    23       CREATECO
+G:DTCO  EQU    24       DELETECO
+G:GBYT  EQU    15       GETBYTE
+G:G2BT  EQU    94       GET2BYTES
+G:LEVL  EQU    17       LEVEL
+G:LJMP  EQU    18       LONGJUMP
+G:MDIV  EQU    19       MULDIV
+G:PBYT  EQU    16       PUTBYTE
+G:P2BT  EQU    95       PUT2BYTES
+G:RSCO  EQU    27       RESUMECO
+G:SARD  EQU    21       SARDCH
+G:SAWR  EQU    22       SAWRCH
+G:STOP  EQU     2       STOP
+
+**********************************************************
+*                                                        *
+*              Scratchpad locations                      *
+*                                                        *
+*    N.B.  These addresses are shared between MLIB and   *
+*          KLIB, and so should be updated together.      *
+*                                                        *
+*                        IDW                             *
+*                                                        *
+**********************************************************
+
+* ----------------------------- Equivalent code in KLIB
+*
+*       ABS    :0020
+*
+*ERR    COPY   L,Y              BCPL error return
+*       COPY   A,G:RES2(Y)      set RESULT2
+*RETZ   COPY   =0,A             return zero
+*RETI   EIN                     enable interrupts
+*RET    COPY   0(X),Y           BCPL return
+*       SUB    0(Y),X
+*       JMP    1(Y)
+*
+* ----------------------------- Equivalent code in KLIB
+
+ERR     EQU    :0020            Error return
+RETZ    EQU    ERR+2            Return zero
+RETI    EQU    ERR+3            Return enabling interrupts
+RET     EQU    ERR+4            Return from BCPL procedure
+
+IBASE   EQU    :0027            Base of routine addresses
+
+ILSH    EQU    IBASE+0
+IRSH    EQU    IBASE+1
+IGBYT   EQU    IBASE+2
+IPBYT   EQU    IBASE+3
+IPCNT   EQU    IBASE+4
+ICKST   EQU    IBASE+5
+IGVEC   EQU    IBASE+6
+IFVEC   EQU    IBASE+7
+
+        ABS    ILSH
+        DATA   LSH
+
+        ABS    IRSH
+        DATA   RSH
+
+        ABS    IGBYT
+        DATA   GBYT
+
+        ABS    IPBYT
+        DATA   PBYT
+
+        ABS    IPCNT
+        DATA   PRFCNT
+        
+        ABS    ICKST
+        DATA   CHEKST
+
+**********************************************************
+*                                                        *
+*              The relocatable section                   *
+*                                                        *
+**********************************************************
+
+        REL    0
+
+MLIB    DATA   MLBEND-MLIB      section length
+        DATA   SECWD
+        DATA   17%8+'M','LI','B ','  '
+        TEXT   ' 25-Oct-81'
+
+* Left shift routine used to compile variable shifts. It
+* shifts A left by Q places.
+
+LSH     DATA   0
+        COPY   $-1,Y
+        JEQD   Q,$+3
+        SHIFT  A,L,1
+        JMP    $-2
+        JMP    0(Y)
+
+* Right shift routine used to compile variable shifts. It
+* shifts A right by Q places.
+
+RSH     DATA   0
+        COPY   $-1,Y
+        JEQD   Q,$+3
+        SHIFT  A,R,1
+        JMP    $-2
+        JMP    0(Y)
+
+* In line get byte routine used to compile '%'.
+
+GBYT    DATA   0
+        COPY   $-1,A            save return address
+        COPY   A,K
+        EXCH   X,Q              save stack pointer
+        SBM                     use byte mode
+        COPYB  0(X,Y),A         A := Y%Q
+        SWM
+        EXCH   Q,X              restore stack pointer
+        COPY   K,Y
+        JMP    0(Y)
+
+* In line put byte routine used to compile '%'.
+
+PBYT    DATA   0
+        SIN    1
+        COPY   A,K
+        COPY   $-3,A            save return address
+        EXCH   A,K
+        EXCH   X,Q              save stack pointer
+        SBM                     use byte mode
+        COPYB  A,0(X,Y)         Y%Q := A
+        SWM
+        EXCH   X,Q              restore stack pointer
+        COPY   K,Y
+        JMP    0(Y)
+
+* Profile count routine.
+
+PRFCNT  DATA   0
+        SIN    15               will get reset below
+        EXCH   $-2,Y
+        IMS    0(Y)             increment first word
+        JMP    PRFC1            jump if no overflow
+        IMS    1(Y)             increment second word
+        NOP
+
+PRFC1   ADD    =2,Y
+        SIN    2
+        EXCH   PRFCNT,Y
+        JMP    *PRFCNT
+
+* Stack check routine.
+
+CHEKST  DATA   0
+        COPY   $-1,Y            save return address
+        COPY   Y,K
+        ADD    0(Y),X           try lifting stack pointer
+        COPY   L,Y
+        COPY   G:SBAS(Y),Y
+        COPY   C:SEND(Y),Y      stack end - 50
+        EXCH   Y,K
+        CSM    K,X              compare with new stack ptr
+        JMP    CHK1             will overflow
+        NOP
+        SUB    0(Y),X           restore stack pointer
+        JMP    1(Y)             jump past frame size
+
+CHK1    SUB    0(Y),X           restore stack pointer
+        STRAP  A,97             abort the task
+        JMP    1(Y)
+
+**********************************************************
+*                                                        *
+*              GETBYTE(VECTOR,OFFSET)                    *
+*              BYTEGET(VECTOR,OFFSET)                    *
+*                                                        *
+* GETBYTE uses natural byte order of machine, BYTEGET    *
+* uses machine independent order. Identical on LSI4.     *
+*                                                        *
+**********************************************************
+
+        DATA   LIBWD
+        DATA   7%8+'g','et','by','te'
+
+GETBYT  DATA   0
+        COPY   $-1,Y            save return address
+        EXCH   X,Q              save stack pointer
+        EXCH   Y,A
+        SBM                     use byte mode
+        COPYB  0(X,Y),Y         fetch the byte
+        SWM
+        EXCH   X,Q              restore stack
+        EXCH   Y,A
+        JMP    1(Y)             jump past frame size
+
+**********************************************************
+*                                                        *
+*              PUTBYTE(VECTOR,OFFSET,BYTE)               *
+*              BYTEPUT(VECTOR,OFFSET,BYTE)               *
+*                                                        *
+* PUTBYTE uses natural byte order of machine, BYTEPUT    *
+* uses machine independent order. Identical on LSI4.     *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'p','ut','by','te'
+
+PUTBYT  DATA   0
+        COPY   $-1,Y            BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   A,Y
+        COPY   4(X),A           get BYTE from the stack
+        EXCH   X,Q              save stack pointer
+        SBM                     use byte mode
+        COPY   A,0(X,Y)         set the byte
+        SWM
+        COPY   Q,X              restore stack
+        JMP    RET
+
+**********************************************************
+*                                                        *
+*              GET2BYTES(VECTOR,OFFSET)                  *
+*                                                        *
+**********************************************************
+
+* On LSI4, GET2BYTES(V,I) => V!I
+* Included for compatibility with MLIB on other machines
+
+        DATA   LIBWD
+        DATA   7%8+'g','et','2b','yt'
+
+GT2BYT  DATA   0
+        COPY   $-1,Y            BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        ADD    A,Q              get address of reqd word
+        COPY   Q,Y              put in index register
+        COPY   0(Y),A           get 2 bytes
+        JMP    RET
+
+**********************************************************
+*                                                        *
+*              PUT2BYTES(VECTOR,OFFSET,VALUE)            *
+*                                                        *
+**********************************************************
+
+* On LSI4, PUT2BYTES(V,I,X) =>  V!I := X
+* Included for compatibility with MLIB on other machines
+
+        DATA   LIBWD
+        DATA   7%8+'p','ut','2b','yt'
+
+PT2BYT  DATA   0
+        COPY   $-1,Y            BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        ADD    A,Q              get addr of target word
+        COPY   4(X),A           get value from stack
+        COPY   Q,Y              put addr in index register
+        COPY   A,0(Y)           put 2 bytes
+        JMP    RET
+
+**********************************************************
+*                                                        *
+*              LEVEL()                                   *
+*                                                        *
+**********************************************************
+
+        DATA   LIBWD
+        DATA   7%8+'l','ev','el','  '
+
+LEVEL   DATA   0
+        COPY   $-1,Y
+        COPY   X,A              return stack pointer
+        JMP    1(Y)             jump past frame size
+
+**********************************************************
+*                                                        *
+*              LONGJUMP(STACKP, LABEL)                   *
+*                                                        *
+**********************************************************
+
+        DATA   LIBWD
+        DATA   7%8+'l','on','gj','um'
+
+LONGJ   DATA   0
+        COPY   Q,Y
+        COPY   A,X              new stack pointer
+        JMP    0(Y)             jump to LABEL
+
+**********************************************************
+*                                                        *
+*              MULDIV(A,B,C)                             *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'m','ul','di','v '
+
+MULDIV  DATA   0
+        COPY   $-1,Y            BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   A,2(X)           save A on the stack
+        COPY   =0,A             clear A
+        MUL    2(X),AQ          A*B in A,Q
+        DIV    4(X),AQ          A*B/C in Q
+        COPY   L,Y
+        COPY   A,G:RES2(Y)      set remainder in RESULT2
+        COPY   Q,A              return quotient
+APTRET  JMP    RET              used as data for APTOVEC
+
+**********************************************************
+*                                                        *
+*              APTOVEC(FN,UPB)                           *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'a','pt','ov','ec'
+
+APTVEC  DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        COPY   A,Y              put FN in Y
+        COPY   Q,A
+        ADD    =6,A             stack frame size
+        COPY   A,3(X)           plant it in the stack
+        COPY   APTJST,A
+        COPY   A,2(X)           plant a JST in the stack
+        COPY   APTRET,A
+        COPY   A,4(X)           plant a return jump
+        CEA    5(X),A           allocate the vector
+        JMP    2(X)             jump into the stack
+
+APTJST  JST    0(Y)
+
+**********************************************************
+*                                                        *
+*              SARDCH()                                  *
+*                                                        *
+**********************************************************
+
+        DATA   LIBWD
+        DATA   7%8+'s','ar','dc','h '
+
+SARDCH  DATA   0
+        COPY   $-1,Y            BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   DSTRTR,Q
+        JST    SARWST           start read
+        SIN    16
+        IN     :F9,Y            wait until data ready
+        TBIT   3,Y
+        JF     OV,$-3
+        IN     :F8,A            get the character
+        AND    =:7F,A           mask to 7 bits
+        CSK    A,=015           carriage return ?
+        JMP    SAWR1            no
+        JMP    SAWR1            no
+        COPY   =012,A           yes - convert to newline
+        JMP    SAWR1
+
+**********************************************************
+*                                                        *
+*              SAWRCH(CH)                                *
+*                                                        *
+**********************************************************
+
+        DATA   LIBWD
+        DATA   7%8+'s','aw','rc','h '
+
+SAWRCH  DATA   0
+        COPY   $-1,Y            BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+SAWR1   CSK    A,=012           newline ?
+        JMP    SAWR2            no
+        JMP    SAWR2            no
+        COPY   =015,A           yes - carriage return
+        JST    SAWRCH
+        DATA   2                frame size
+        COPY   =012,A            then line feed
+SAWR2   COPY   DSTRTW,Q
+        JST    SARWST           start write
+        OUT    A,:F8            write the character
+        SIN    16
+        IN     :F9,Y            wait until started
+        TBIT   4,Y
+        JT     OV,$-3
+        COPYE  :E7,Y            get the DCB
+        COPY   8(Y),Q           get last command
+        COPYE  :E1,Y            get count
+        RBIT   15,Y             unset bit
+        JEQ    Y,SAWR9          if 0, transfer has occurred
+        AND    DIMASK,Q         otherwise use data op start or reset
+SAWR9   JST    SARWST           restart picoprocessor
+        JMP    RET
+
+* This routine waits for any already started transmission
+* to finish then resets the picoprocessor and starts it.
+
+SARWST  DATA   0
+        SIN    7
+        IN     :F9,Y            wait until trans empty
+        TBIT   4,Y
+        JF     OV,$-3
+        COPY   DRESET,Y
+        OUT    Y,:F9            reset the picoprocessor
+        OUT    Q,:F9            start it
+        JMP    *SARWST
+
+DRESET  DATA   :0100            reset
+DSTRTR  DATA   :8610            start read
+DSTRTW  DATA   :8612            start write
+DIMASK  DATA   :FF1F
+
+**********************************************************
+*                                                        *
+*              CREATECO(FN,STSIZE)                       *
+*                                                        *
+* This function creates a coroutine with the function FN *
+* as body and stack size STSIZE. It returns a coroutine  *
+* pointer, or zero on error.                             *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'c','re','at','ec'
+
+CRTCO   DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        COPY   A,2(X)           save the arguments
+        COPY   Q,3(X)
+        COPY   Q,A
+        JST    *IGVEC           get space for the stack
+        DATA   0
+        JEQ    A,RET1           check it was got
+        COPY   A,Y
+        ADD    3(X),Y           stack end
+        COPY   =0,Q
+CRC1    COPY   Q,0(Y)           zero the stack
+        CSM    A,Y              back to stack base ?
+        JNED   Y,CRC1           no - go round again
+        HLT
+        COPY   L,Y
+        COPY   G:SBAS(Y),Y      get the current coroutine
+        COPY   A,Q
+        EXCH   Q,C:LINK(Y)      link in new coroutine
+        EXCH   A,Y
+        COPY   Q,C:LINK(Y)
+        COPY   A,C:CLLR(Y)      called from current
+        COPY   2(X),Q
+        COPY   Q,C:FUNC(Y)      set FN
+        COPY   Y,Q
+        ADD    3(X),Q           stack end
+        SUB    =50,Q            safety margin of 50
+        COPY   Q,C:SEND(Y)      set stack end
+        EXCH   A,Y
+        COPY   X,C:RESP(Y)      set resumption ptr
+        COPY   L,Y
+        COPY   A,G:SBAS(Y)      set STACKBASE
+        COPY   A,X              set up new stack
+CRC2    JST    COWAIT           A := COWAIT(A)
+        DATA   C:RTRN           frame size
+        COPY   X,Y
+        JST    *C:FUNC(Y)       A := FN(A)
+        DATA   C:RTRN           frame size
+        JMP    CRC2             REPEAT
+
+RET1    JMP    RET
+
+**********************************************************
+*                                                        *
+*              DELETECO(CPTR)                            *
+*                                                        *
+* This routine deletes a coroutine, which must not be    *
+* active.                                                *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'d','el','et','ec'
+
+DELCO   DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        COPY   A,Y              check the coroutine
+        COPY   C:CLLR(Y),Q
+        JNE    Q,COERR          error if still active
+        COPY   L,Y
+        COPY   G:SBAS(Y),Y      start from current cortn
+DELC1   COPY   Y,Q              save last coroutine
+        COPY   C:CLLR(Y),Y      get caller coroutine
+        ADD    =1,Y             -1 => root
+        JNED   Y,DELC1          loop until root found
+DELC2   COPY   Q,Y              save last coroutine
+        COPY   C:LINK(Y),Q      get next coroutine
+        JEQ    Q,COERR          end of chain
+        CSK    Q,A              found the coroutine yet?
+        JMP    DELC2            no - continue down chain
+        JMP    DELC2            no - continue down chain
+        EXCH   A,Y              found it
+        COPY   C:LINK(Y),Q      unlink it
+        EXCH   A,Y
+        COPY   Q,C:LINK(Y)
+        JST    *IFVEC           free the stack
+        DATA   0                frame size
+        JMP    RET
+
+**********************************************************
+*                                                        *
+*              CALLCO(CPTR,ARG)                          *
+*                                                        *
+* This function calls the specified coroutine passing    *
+* the argument ARG.                                      *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'c','al','lc','o '
+
+CALCO   DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        COPY   Q,2(X)           save ARG on the stack
+        COPY   L,Y
+        COPY   G:SBAS(Y),Y      get current coroutine
+        COPY   X,C:RESP(Y)      save resumption ptr
+        EXCH   A,Y
+        COPY   C:CLLR(Y),Q      check new coroutine
+        JNE    Q,COERR          error if already active
+        COPY   Y,Q              new coroutine in Q,Y
+COSWP   COPY   A,C:CLLR(Y)      activate new coroutine
+        COPY   2(X),A           recover ARG
+COENT   COPY   C:RESP(Y),X      set up new stack
+        COPY   L,Y
+        COPY   Q,G:SBAS(Y)      set STACKBASE
+        JMP    RET              return into new coroutine
+
+* Error in coroutine calling etc.
+
+COERR   STRAP  A,195            abort the task
+        JMP    RET
+
+**********************************************************
+*                                                        *
+*              COWAIT(ARG)                               *
+*                                                        *
+* This function returns from the current coroutine       *
+* passing the argument ARG.                              *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'c','ow','ai','t '
+
+COWAIT  DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        COPY   L,Y
+        COPY   G:SBAS(Y),Y      get current coroutine
+        COPY   C:CLLR(Y),Q      get its caller
+        IJEQ   Q,COERR          error. -1 => root
+        COPY   X,C:RESP(Y)      set resumption ptr
+        COPY   =0,Q
+        EXCH   Q,C:CLLR(Y)      deactivate current
+        COPY   Q,Y
+        JMP    COENT            enter caller coroutine
+
+**********************************************************
+*                                                        *
+*              RESUMECO(CPTR,ARG)                        *
+*                                                        *
+* This function deactivates the current coroutine and    *
+* resumes the specified coroutine, passing the argument  *
+* ARG.                                                   *
+*                                                        *
+**********************************************************
+
+        DATA   7%8+'r','es','um','ec'
+
+RESCO   DATA   0
+        COPY   $-1,Y            standard BCPL entry
+        ADD    0(Y),X
+        COPY   Y,0(X)
+        COPY   P,Y
+        COPY   Y,1(X)
+        COPY   Q,2(X)           save ARG on the stack
+        COPY   L,Y
+        COPY   G:SBAS(Y),Y      get current coroutine
+        CSN    A,Y              resuming the current ?
+        JMP    RESC1            yes - always OK
+        EXCH   A,Y
+        COPY   C:CLLR(Y),Q      check new coroutine
+        JNE    Q,COERR          error if already active
+        EXCH   A,Y
+        COPY   C:CLLR(Y),Q      check current coroutine
+        IJEQ   Q,COERR          error if root (-1 => root)
+RESC1   COPY   X,C:RESP(Y)      set resumption ptr
+        COPY   A,Q
+        COPY   =0,A
+        EXCH   A,C:CLLR(Y)      deactivate current
+        COPY   Q,Y
+        JMP    COSWP            swop coroutines
+
+**********************************************************
+*                                                        *
+*              STOP(CODE)                                *
+*                                                        *
+* This routine sets RETURNCODE and then returns as if    *
+* from the end of the current coroutine or task.         *
+*                                                        *
+**********************************************************
+
+        DATA   LIBWD
+        DATA   7%8+'s','to','p ','  '
+
+STOP    DATA   0
+        COPY   $-1,Y            for breakpoints
+        COPY   L,Y
+        COPY   A,G:RC(Y)        set RETURNCODE
+        COPY   G:SBAS(Y),X      find stack base
+        COPY   C:CLLR(X),Q      get caller
+        IJEQ   Q,STP1           -1 => root stack
+        JMP    CRC2             return from end of cortn
+STP1    COPY   C:RTRN(X),Y      return from task
+        JMP    1(Y)             jump to task deactivation
+
+* Global initialization list
+
+        DATA   0                end of list
+
+        DATA   G:GBYT,GETBYT-MLIB
+        DATA   G:PBYT,PUTBYT-MLIB
+        DATA   G:G2BT,GT2BYT-MLIB
+        DATA   G:P2BT,PT2BYT-MLIB
+        DATA   G:LEVL,LEVEL-MLIB
+        DATA   G:LJMP,LONGJ-MLIB
+        DATA   G:MDIV,MULDIV-MLIB
+        DATA   G:AVEC,APTVEC-MLIB
+        DATA   G:SARD,SARDCH-MLIB
+        DATA   G:SAWR,SAWRCH-MLIB
+        DATA   G:CTCO,CRTCO-MLIB
+        DATA   G:DTCO,DELCO-MLIB
+        DATA   G:CLCO,CALCO-MLIB
+        DATA   G:COWT,COWAIT-MLIB
+        DATA   G:RSCO,RESCO-MLIB
+        DATA   G:STOP,STOP-MLIB
+
+        DATA   49               highest ref global
+
+MLBEND  END
+
+

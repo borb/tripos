@@ -1,0 +1,207 @@
+SECTION "EthernetMonitor"
+
+GET "libhdr"
+
+MANIFEST
+$(
+    pkt.upb     = pkt.arg1 + 7
+    pkt.len     = pkt.upb + 1
+    data.len    = 1514/bytesperword
+$)
+
+GLOBAL
+$(
+    devid       : ug
+    unclaimed.pkts : ug+1
+$)
+
+LET start() BE
+$(  LET dcb = 0
+    LET vec.chain = 0
+    LET addr = VEC 2
+    LET setup = VEC 63
+    LET tpkt = VEC pkt.arg1+7
+    LET timer.pkt = TABLE notinuse, -1, 0, 0, 0, tickspersecond
+
+    unclaimed.pkts := 0
+
+    devid := 0
+    dcb := loadseg(":d.deqna-dev")
+    IF dcb = 0 THEN $( writef("loadseg failed %N*N", result2); GOTO stop $)
+    writef("dcb=%N*N", dcb)
+
+    devid := createdev(dcb)
+    IF devid = 0 THEN $( writef("createdev failed %N*N", result2); GOTO stop $)
+    writef("devid=%N*N", devid)
+
+    sendpkt(notinuse, devid, 1, 0, 0, addr)
+    writef("address is %X2-%X2-%X2-%X2-%X2-%X2*N",
+           addr%0, addr%1, addr%2, addr%3, addr%4, addr%5)
+
+
+    // Obtain and queue reception packets
+
+    $(  LET keep = getvec(200)
+        LET pkt.count = 0
+        IF keep = 0 THEN $( writef("insufficient store*N"); GOTO stop $)
+        $(  LET store = getvec(pkt.upb+data.len+1)
+            IF store = 0 THEN BREAK
+            store!0 := vec.chain
+            vec.chain := store
+            queue(store+1)
+            pkt.count := pkt.count + 1
+        $)  REPEAT
+        freevec(keep)
+        TEST pkt.count < 3 THEN
+        $(  writef("Insufficient store - buffer count = %N*N", pkt.count)
+            GOTO stop
+        $)
+        ELSE
+            writef("buffer count = %N*N", pkt.count)
+    $)
+
+
+    // Make setup packet
+
+    FOR i = 0 TO 127 DO setup%i := 0
+    FOR abyte = 0 TO 5 DO
+    $(
+       FOR offset = 1 TO 7 DO
+          setup%(offset+abyte*8), setup%(offset+64+abyte*8) :=
+             (offset=1 -> #XFF, addr%abyte), addr%abyte
+    $)
+
+
+    // Do setup
+
+    FOR light = 1 TO 3 DO
+    $(
+        tpkt!pkt.link := notinuse
+        tpkt!pkt.id := devid
+        tpkt!pkt.type := 3
+        tpkt!pkt.arg1 := #030000 // setup + eom
+        tpkt!pkt.arg2 := setup << 1
+        tpkt!pkt.arg3 := - (128 + (light<<2) + 2)/2     // promiscuous
+        qpkt(tpkt)
+
+        pktwait(devid, tpkt)
+
+//      writes("tpkt: "); FOR i = 0 TO pkt.arg1+7 DO writef("%X4 ", tpkt!i); newline()
+    $)
+
+    sendpkt(notinuse, devid, 2, 0, 0, #401) // enable
+
+
+    // Start timer
+
+    qpkt(timer.pkt)
+
+
+    // Now start monitoring
+
+    WHILE NOT testflags(1) DO
+    $(  LET pkt = pktwait(0, 0)
+        // There is a fundamental design bug in the deqna driver which
+        // makes it go wrong if the packet just returned is requeued
+        // immediately. I can't face the thought of fixing this at the
+        // moment, so the 'temporary' cure is to hold back the packet
+        // just returned until the NEXT one comes back. The static
+        // variable 'last.pkt' is used for this.
+        STATIC $( last.pkt = 0 $)
+        IF pkt = timer.pkt THEN $( qpkt(timer.pkt); LOOP $)
+        IF last.pkt ~= 0 THEN queue(last.pkt)
+        last.pkt := pkt
+        process(pkt)
+    $)
+
+
+stop:
+
+    dqpkt(-1, timer.pkt)
+    deletedev(devid)
+    unloadseg(dcb)
+    unloadseg(vec.chain)
+    WHILE tcb!tcb.wkq ~= 0 DO taskwait()
+$)
+
+
+AND queue(pkt) BE
+$(  pkt!pkt.link := notinuse
+    pkt!pkt.id := devid
+    pkt!pkt.type := 4
+    pkt!pkt.arg1 := 0
+    pkt!pkt.arg2 := (pkt + pkt.len) << 1
+    pkt!pkt.arg3 := -data.len
+    FOR i = pkt.len TO pkt.len+data.len-1 DO pkt!i := #12345 // debugging aid
+    qpkt(pkt)
+$)
+
+
+AND process(pkt) BE
+$(  LET good.pkt = (pkt!pkt.res1 & #XF807) = 0
+    LET length = (pkt!pkt.res1 & #X0700) + (pkt!pkt.res2 & #X00FF) + 60
+    LET buffer = pkt + pkt.len
+
+    LET write.bytes(ptr, count) BE
+        FOR byte = 0 TO count-1 DO
+            writef("%X2%C", ptr%byte, (byte=count-1 -> ' ', '-'))
+
+    TEST good.pkt THEN
+    $(  LET true.data.length = length - 14
+        write.bytes(buffer, 6)
+        write.bytes(buffer+3, 6)
+        write.bytes(buffer+6, 2)
+        FOR byte = 0 TO (true.data.length <= 18 -> true.data.length, 18) - 1 DO
+            writef("%X2", (buffer+7)%byte)
+        newline()
+    $)
+    ELSE
+    $(  writef("! %X4 %X4*N", pkt!pkt.res1, pkt!pkt.res2)
+    $)
+
+//    wrch(good.pkt -> '.', '!'); wrch('*E')
+$)
+
+
+AND pktwait(dest, pkt) = VALOF
+$(
+    LET queue.scan.link = @unclaimed.pkts
+    LET queue.scan = unclaimed.pkts
+    LET returned.pkt = ?
+
+    // See if we can find it on the private Q of already accepted packets
+    WHILE queue.scan ~= 0 DO
+    $(
+        IF ((pkt = queue.scan) | (pkt = 0)) &
+           ((dest = queue.scan!pkt.id) | (dest = 0)) THEN
+        $(
+            queue.scan.link!pkt.link := queue.scan!pkt.link
+            queue.scan!pkt.link := notinuse
+            RESULTIS queue.scan
+        $)
+        queue.scan.link := queue.scan
+        queue.scan := queue.scan!pkt.link
+    $)
+
+    // Repeat loop waiting for packets to come in until get expected one if
+    // wasn't in the list of present ones.  Q any spurious ones coming in.
+
+    queue.scan.link := @unclaimed.pkts
+
+    $(
+        returned.pkt := taskwait()
+
+        TEST ((pkt = returned.pkt) | (pkt = 0)) &
+             ((dest = returned.pkt!pkt.id) | (dest = 0)) THEN
+            RESULTIS returned.pkt
+        ELSE
+        $(  WHILE queue.scan.link!pkt.link ~= 0 DO
+                queue.scan.link := queue.scan.link!pkt.link
+            returned.pkt!pkt.link := 0
+            queue.scan.link!pkt.link := returned.pkt
+        $)
+
+    $)  REPEAT
+$)
+
+

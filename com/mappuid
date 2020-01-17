@@ -1,0 +1,52 @@
+//  Routine to map a user's PUID into a different domain.
+//  This file assumes the following headers:
+//
+//      GET "LIBHDR"
+//      GET "RINGHDR"
+//      GET "BCPL.SSPLIB"
+//      GET "BCPL.RINGMAP"
+
+
+LET mappuid( domain, result, length )  =  VALOF
+$(
+//  Map the user's puid from domain "PUID" into domain "domain".  The
+//  result vector is "result", which is "length" bytes long.
+
+    MANIFEST
+    $(
+        bytesperpuid     =  8
+        wordsperpuid     =  bytesperpuid / bytesperword
+        offset.tuid      =  1
+        offset.tpuid     =  offset.tuid    +  wordsperpuid
+        offset.authy     =  offset.tpuid   +  wordsperpuid
+        offset.puid      =  offset.authy   +  wordsperpuid
+    $)
+
+    LET uid      =  rootnode!rtn.info!rtninfo.ring!ri.uidset + offset.puid
+    LET puid     =  VEC wordsperpuid * 2
+    LET rc       =  0
+
+    //  Unpack the PUID of the current personage!
+
+    puid % 0  :=  bytesperpuid * 2
+
+    FOR  i = 0  TO  bytesperpuid-1  DO
+    $(
+        LET offset  =  i * 2
+        LET byte    =  uid % i
+        LET hb      =  (byte >> 4)  &  #X0F
+        LET lb      =  (byte     )  &  #X0F
+
+        puid % (offset + 1)  :=  hexchar( hb )
+        puid % (offset + 2)  :=  hexchar( lb )
+    $)
+
+    RESULTIS  ringmap( puid, "PUID", domain, result, length )
+$)
+
+
+
+AND hexchar( value )  =  (0 <= value <= 9)  ->  value + '0',
+                                                value + 'A' - 10
+
+

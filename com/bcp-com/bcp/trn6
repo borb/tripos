@@ -1,0 +1,358 @@
+SECTION "TRN6"
+
+GET "TRNHDR"
+
+static $( zero.value = s.FALSE $)
+
+LET evalconst(x, allow.qu) = VALOF
+$(1
+   LET a, b = 0, 0
+
+   IF x=0 DO $( transreport(117, currentbranch); RESULTIS 0  $)
+
+   IF smallnumber(x) RESULTIS x
+
+   SWITCHON h1!x INTO
+   $( DEFAULT:
+         transreport(118, h1!x, x)
+         IF (stflags & stf.debug) ~= 0 THEN abort(1236)
+         RESULTIS 0
+
+    CASE s.name:
+      $( LET t = cellwithname(x)
+         IF dvec!(t+1)=s.number RESULTIS dvec!(t+2)
+         transreport(dvec!(t+1)=0->119, 120, x)
+         RESULTIS 0
+      $)
+
+    CASE s.globnumber:
+      $( LET t = cellwithname(x!H2)
+         IF dvec!(t+1)=s.global RESULTIS dvec!(t+2)
+         transreport(dvec!(t+1)=0->119, 122, x!H2)
+         RESULTIS 0
+      $)
+
+    CASE s.number: RESULTIS h2!x
+    CASE s.true:   RESULTIS TRUE
+    CASE s.query:  UNLESS allow.qu DO transreport(92, x)
+    CASE s.false:  RESULTIS FALSE
+
+
+    CASE s.eq:
+    CASE s.ne:
+    CASE s.le:
+    CASE s.ls:
+    CASE s.gr:
+    CASE s.ge:
+    CASE s.mult:   // dyadic operators
+    CASE s.div:
+$<SLCT
+    CASE s.slct:
+$>SLCT
+    CASE s.rem:
+    CASE s.plus:
+    CASE s.minus:
+    CASE s.lshift:
+    CASE s.rshift:
+    CASE s.logor:
+    CASE s.logand:
+    CASE s.eqv:
+    CASE s.neqv:b := evalconst(h3!x, allow.qu)
+
+    CASE s.abs:    // monadic operators
+//nop CASE s.nop:
+    CASE s.neg:
+    CASE s.not: a := evalconst(h2!x, allow.qu)
+ $)
+
+    SWITCHON h1!x INTO
+ $( CASE s.abs:         RESULTIS ABS a
+    CASE s.neg:         RESULTIS -a
+    CASE s.not:         RESULTIS ~a
+//nop CASE s.nop:       RESULTIS  a                             // Boring eh ???
+    CASE s.err:         RESULTIS ((CGFLAGS & cgf.WORDADDRESS) ~= 0) ->  (a = 0),
+                                                                        (a <= 0)
+
+    CASE s.eq:          RESULTIS a  = b
+    CASE s.ne:          RESULTIS a ~= b
+    CASE s.le:          RESULTIS a <= b
+    CASE s.ls:          RESULTIS a <  b
+    CASE s.gr:          RESULTIS a >  b
+    CASE s.ge:          RESULTIS a >= b
+    CASE s.mult:        RESULTIS a * b
+    CASE s.div:         TEST b=0
+                        $( TRANSREPORT(107, a); RESULTIS a $)
+                        ELSE RESULTIS a / b
+    CASE s.rem:         TEST b=0
+                        $( TRANSREPORT(108, a, b); RESULTIS a $)
+                        ELSE RESULTIS a REM b
+    CASE s.plus:        RESULTIS a + b
+    CASE s.minus:       RESULTIS a - b
+    CASE s.lshift:      RESULTIS a << b
+    CASE s.rshift:      RESULTIS a >> b
+    CASE s.logand:      RESULTIS a & b
+    CASE s.logor:       RESULTIS a | b
+    CASE s.eqv:         RESULTIS a EQV b
+    CASE s.neqv:        RESULTIS a NEQV b
+$<SLCT
+    CASE s.slct:        RESULTIS packslct(a, b, evalconst(h4!x, TRUE) )
+$>SLCT
+ $)
+$)1
+
+
+AND assign(x, y, type) BE
+$(1
+    LET op=?
+
+    IF x=0 | smallnumber(x) | y=0 DO
+        $( $<PROD' deb("x=%n=%X4,y=%N=%X4 ", x,x, y,y)
+                   deb("%N,%N,%N*N", x=0, smallnumber(x), y=0);
+           $>PROD'
+                 transreport(111, currentbranch); RETURN  $)
+
+        SWITCHON h1!x INTO
+     $( CASE s.comma:
+        CASE s.commalist:
+            IF smallnumber(y) | h1!x\=h1!y DO
+            $( transreport(112, currentbranch); ENDCASE $)
+
+            $( LET l, n = h2, 2
+               IF h1!x=s.commalist DO
+               $( l, n := h3, h2!x
+                  UNLESS h2!y=n DO
+                  $( transreport(112, currentbranch); ENDCASE $)
+               $)
+               FOR h = l TO l+n-1 DO
+                   assign(h!x, h!y, type)
+           $)
+           ENDCASE
+
+       CASE s.halfwordap:
+        halfwordap:
+                        TEST (CGflags & cgf.halfwordop) = 0
+                        $(  op := s.halfwordap;
+                            ssp := ssp+savespacesize;
+                            out2(s.stack, ssp);                 GOTO assign.2 $)
+                        ELSE op := s.puthalfword
+                        GOTO assign.1
+       CASE s.byteap:
+        byteap:
+                        TEST (Stflags & stf.byte) = 0
+                        $( op := s.byteap;
+                            ssp := ssp+savespacesize;
+                            out2(s.stack, ssp);                 GOTO assign.2 $)
+                        ELSE op := s.putbyte
+    assign.1:
+        TEST type NE s.stind THEN
+        $( load(x, TRUE)
+           load(y, TRUE)
+           out1(type); ssp := ssp-1
+        $)
+        ELSE load(y, TRUE)
+assign.2:
+        load(h2!x, TRUE)
+        load(h3!x, TRUE)
+        TEST op=s.byteap | op=s.halfwordap
+        $(
+           TEST type NE s.stind THEN
+           $( load(x, TRUE)
+              WRITEF("+-**/")
+              load(y, TRUE)
+              out1(type); ssp := ssp-1
+           $)
+           ELSE load(y, TRUE)
+           out2(s.lg, op=s.byteap -> g.putbyte, g.puthalfword)
+           ssp := ssp-savespacesize
+           out2(s.rtap, ssp-3)                  // # arguments!
+        $)
+        ELSE out1(op)
+        ssp := ssp-3
+        ENDCASE
+$<SLCT
+//==============================================================================
+//==============================================================================
+//      Optimise Byte, Dibyte and Word operations, in case stupid front end
+//==============================================================================
+//==============================================================================
+        CASE s.slctap:
+            $(  LET const       = evalconst(h2!x, TRUE)
+                LET V           = VEC 2
+                LET size, shift = ?, ?
+
+                unpackslct(const, v)
+                size, shift := v!0, v!1
+                IF size=0 THEN size := bitsperword - shift
+
+                IF (shift REM size) = 0
+            THEN TEST size=8
+                $(  LET disp     = v!2 * BYTESPERWORD +
+                                                (BYTESPERWORD - shift/size -1)
+                    op          := s.byteap
+                    x!h1        := s.byteap
+                    x!h2        := x!h3
+                    x!h3        := disp=0 -> @zero.value,
+                                             smallnumber(disp)-> disp,
+                                                        getv(1, s.number, disp)
+//ssp := ssp-1          // In all cases ?????
+                    GOTO byteap
+                $)
+                ELSE TEST size=bitsperword
+                $(  LET disp    = v!h3
+                    op          := s.vecap
+                    x!h1        := s.vecap
+                    x!h2        := disp=0 -> @Zero.value,
+                                             smallnumber(disp)-> disp,
+                                                        getv(1, s.number, disp)
+                    GOTO vecap
+                $)
+                ELSE IF size=16
+                $(  LET disp     = v!h3 * (BYTESPERWORD/2) +
+                                               (BYTESPERWORD/2 - shift/size -1)
+                    op          := s.halfwordap
+                    x!h1        := s.halfwordap
+                    x!h2        := x!h3
+                    x!h3        := disp=0 -> @Zero.value,
+                                             smallnumber(disp)-> disp,
+                                                        getv(1, s.number, disp)
+//ssp := ssp-1          // In all cases ?????
+                    GOTO halfwordap
+                $)
+
+//              IF isconst(y)
+//              $(  LET val     = evalconst(y, TRUE)
+//                  LET mask    = ?
+//
+//                  mask        := (1 << (v!0)) -1
+//
+//                  IF (mask & val) = 0 | ((~val) & mask) = 0
+//                  $(  LET o = output()
+//                      SELECTOUTPUT(LISTOUT)
+//                      TASKWRITEF("Set all bits in selector so use %C !*N",
+//                                              (mask&val)=0 -> '&', '|')
+//                      selectoutput(o)
+//                      assign(x, y, type)
+//                      RETURN
+//                  $)
+//              $)
+
+                TEST type=s.stind
+                THEN load(y, TRUE)
+                ELSE
+                $(  load(x, TRUE)
+                    load(y, TRUE)
+                    out1(type); ssp := ssp-1
+                $)
+
+                load(h3!x, TRUE)
+$<LSI4TRIPOS    transreport(114, v!0, v!1, v!2)
+$>LSI4TRIPOS    outslct(s.slctst, const); ssp := ssp-2
+$)
+//==============================================================================
+                RETURN
+//==============================================================================
+//==============================================================================
+$>SLCT
+
+       CASE s.name:
+        IF type = s.stind THEN
+        $( load(y, TRUE)
+           transname(x, s.sp, s.sg, s.sl, 0)
+           ssp := ssp - 1
+           RETURN
+        $)
+
+       CASE s.rv: CASE s.vecap:
+        vecap:
+   $<OPB        TEST type = s.stind | (Stflags & stf.op) NE 0
+   $>OPB        $( load(y, TRUE)
+                   loadlv(x);
+   $<OPB           UNLESS type = s.stind out1(s.mod)
+   $>OPB           out1(type); ssp := ssp-2
+                $)
+   $<OPB        ELSE                    // the swine's done it!
+                $(  LET was = In.mod
+                    In.mod := TRUE
+                    load(x, TRUE)
+                    In.mod := was
+                    load(y, TRUE)
+                    out1(type); ssp := ssp-1
+                    TEST x!h1 = s.name
+                    THEN transname(x, s.sp, s.sg, s.sl, 0)
+                    ELSE $( loadlv(x); out1(s.stind); ssp := ssp-1 $)
+                    ssp := ssp-1
+                $)
+    $>OPB       ENDCASE
+
+       DEFAULT:
+           transreport(109, currentbranch)
+   $)
+$)1
+
+
+AND transname(x, p, g, l, n) BE
+$(1 LET t = cellwithname(x)
+    LET k, a = dvec!(t+1), dvec!(t+2)
+    LET op = g
+
+    SWITCHON k INTO
+    $( DEFAULT: transreport(115, x)
+                ENDCASE
+       CASE s.local:  IF t-dvecp<0 DO                   transreport(116, x)
+                      op := p
+       CASE s.global: ENDCASE
+       CASE s.label:  op := l;                                          ENDCASE
+       CASE s.number: TEST n=0
+                        THEN transreport(113, x)
+                        ELSE op := n
+    $)
+
+    out2(op, a)
+$)1
+
+$<SLCT
+
+
+AND getv(n, a,b,c,d) = VALOF
+$(  LET res = dvec + dvece
+    dvece := dvece + ((n/3)+1)*3
+    FOR i = 0 TO n DO res!i := (@a) !I
+$)
+
+MANIFEST
+$(
+        LOG.OF.BITS.PER.WORD    =
+                $<68000TRIPOS     5     $>68000TRIPOS
+                $<LSI4TRIPOS      4     $>LSI4TRIPOS
+
+        c.shift                 = 0
+        b.shift                 = bitsperword   - 2 *   LOG.OF.BITS.PER.WORD
+        a.shift                 = b.shift       +       LOG.OF.BITS.PER.WORD
+
+        a.mask                  = BITSPERWORD -1
+        b.mask                  = BITSPERWORD -1
+        c.mask                  = (1<< b.shift) -1
+$)
+
+LET packslct(a, b, c) = VALOF
+$(      IF c > c.mask | b > c.mask | a+b > bitsperword
+        THEN transreport(114, a,b,c)
+        RESULTIS ((a REM BITSPERWORD) << a.shift) | (b << b.shift) | c
+$)
+
+AND unpackslct(n, v) BE
+$(  v!0         := (n >> a.shift) & a.mask
+    v!1         := (n >> b.shift) & b.mask
+    v!2         := (n >> c.shift) & c.mask
+$)
+
+AND outslct(op, n) BE
+$(  LET v       = Vec 2
+    unpackslct(n, v)
+    out3(op, v!0, v!1)
+    out1(v!2)
+$)
+$>SLCT
+.
+
+

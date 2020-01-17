@@ -1,0 +1,316 @@
+SECTION "ZED5"
+
+GET "HDR"
+
+LET error(n, a, b) BE
+ $( LET r = 10
+    LET z = zerolevel
+    LET s = VALOF SWITCHON n INTO
+
+  $( CASE err.uc:   RESULTIS "Unknown command - %C"
+     CASE err.udc:  RESULTIS "Unknown command"
+     CASE err.bra:  RESULTIS "Unmatched parenthesis"
+     CASE err.cntx: RESULTIS "Null context after %C"
+     CASE err.pm:   RESULTIS "+ or - expected after %C"
+     CASE err.num:  RESULTIS "Number expected after %C"
+     CASE err.line: RESULTIS "Line number %N too small"
+     CASE err.fnx:  RESULTIS "Filename expected"
+     CASE err.str:  RESULTIS "String too long"
+     CASE err.nom:  RESULTIS "No match"
+     CASE err.rep:  RESULTIS "Nothing to repeat"
+     CASE err.noin: RESULTIS "Input exhausted"
+     CASE err.nopr: RESULTIS "No more previous lines"
+     CASE err.cr:   RESULTIS "Ceiling reached"
+     CASE err.glob: RESULTIS "Too many globals"
+     CASE err.ffa:  r := 20
+     CASE err.ff:   RESULTIS "Can't open %S"
+     CASE err.arg:  r := 20
+                    RESULTIS "Bad args"
+     CASE err.opt:  r := 20
+                    RESULTIS "Invalid option values"
+     CASE err.rn:   r := 20
+                    RESULTIS "Can't rename %S as %S"
+     CASE err.gv:   r := 20
+                    RESULTIS "Run out of store"
+     CASE err.cfv:  r := 20
+                    RESULTIS "Command file stack ovf"
+     CASE err.qw:   RESULTIS "Invalid %C command"
+     CASE err.brk:  RESULTIS "****BREAK"
+     CASE err.uql:  RESULTIS "Unknown qualifier"
+     CASE err.iql:  RESULTIS "Illegal qualifiers"
+  $)
+
+    zerolevel := 0
+
+    $( IF editlevel=z & n=err.noin DO
+       $( IF isinteractive(edits) DO
+             UNLESS verifying DO newline()
+          GOTO l
+       $)
+       IF cfsp=0 BREAK
+       revertcom()
+    $) REPEAT
+
+    UNLESS commlinel<=0 | isinteractive(edits) DO
+    $( FOR i = 1 TO commlinel DO wrch(commbuf%i)
+       UNLESS commbuf%commlinel='*N' DO newline()
+    $)
+    FOR i = 1 TO commpoint-1 DO wrch('*S')
+    writes(">*N")
+    writef(s, a, b)
+    newline()
+    rc := r
+    IF rc=20 | NOT isinteractive(edits) DO
+    $( UNLESS rc=20 DO ver('?', '*N')
+       IF opened DO closestreams()
+       longjump(quitlevel, quitlab)
+    $)
+  L:
+    TEST quiet | unchanged THEN writes(":*E")
+    ELSE ver( '?', '*E' )
+  longjump(editlevel, editlab)
+ $)
+
+
+AND truncate(p) = VALOF
+ $( UNLESS p>maxlinel RESULTIS FALSE
+    TEST current=-1 THEN
+       writes("****** Line +++ truncated*N")
+    ELSE
+       writef("****** Line %I3 truncated*N", current)
+    rc := 10
+    RESULTIS TRUE
+ $)
+
+
+// expand tabs in the current line with dummy characters
+AND expand() BE UNLESS expanded DO
+ $( LET j = 0
+    LET t = maxlinel-linel
+    LET p = t+pointer
+    LET c, f = 0, FALSE
+    FOR i = linel TO 1 BY -1 DO
+       linev!(t+i) := linev!i
+    UNTIL t>=maxlinel DO
+    $( IF j+(c='*T' -> 1,0) > t DO
+       $( t := t+1
+          FOR i = linel TO t BY -1 DO
+             linev!i := linev!(i-1)
+          f := TRUE
+          LOOP
+       $)
+       j := j+1
+       TEST c='*T' THEN
+          linev!j := -1
+       ELSE
+       $( t := t+1
+          c := linev!t
+          linev!j := c
+       $)
+       IF j REM 8 = 0 DO c := 0
+       IF t=p DO pointer := j
+    $)
+    IF f DO truncate(maxint)
+    linel := j
+    expanded, condensed := TRUE, TRUE
+ $)
+
+
+// remove all dummy characters from the current line
+AND compress() BE IF expanded DO
+ $( LET i, j = 0, 0
+    UNTIL i>=linel DO
+    $( i := i+1
+       UNLESS linev!i<0 DO
+       $( j := j+1
+          linev!j := linev!i
+       $)
+       IF pointer=i DO pointer := j
+    $)
+    linel := j
+    expanded := FALSE
+ $)
+
+
+// remove all dummy characters from the current line
+// leaving tabs expanded
+AND condense() BE IF expanded DO UNLESS condensed DO
+ $( LET i, j = 0, 0
+    UNTIL i>=linel DO
+    $( i := i+1
+       IF pointer=i DO pointer := j+(linev!i<0 -> 0,1)
+       UNLESS linev!i<0 DO
+       $( j := j+1
+          linev!j := linev!i
+          IF linev!i='*T' DO
+             UNTIL j REM 8 = 0 DO
+             $( j := j+1
+                linev!j := -1
+             $)
+       $)
+    $)
+    linel := j
+    condensed := TRUE
+ $)
+
+
+// step the character pointer
+AND incrementp() = VALOF
+ $( expand()
+    IF pointer=lmax RESULTIS FALSE
+    pointer := pointer+1
+    unchanged := FALSE
+    IF pointer>linel DO
+    $( linev!pointer := '*S'
+       linel := pointer $)
+    RESULTIS TRUE
+ $)
+
+
+// substitute a string for line positions P+1 to Q
+AND subst(p, q, v) BE
+ $( LET s = v!0
+    LET t = linel-q
+    LET r = 0
+    truncate(p+s+t)
+    IF p+s>maxlinel DO s := maxlinel-p
+    r := p+s
+    IF r+t>maxlinel DO t := maxlinel-r
+    linel := r+t
+    UNLESS r=q DO
+       TEST r>q THEN
+          FOR i = t TO 1 BY -1 DO
+             linev!(r+i) := linev!(q+i)
+       ELSE
+          FOR i = 1 TO t DO
+             linev!(r+i) := linev!(q+i)
+    FOR i = 1 TO s DO linev!(p+i) := v!i
+    nosubs := FALSE
+ $)
+
+
+// search line positions P+1 to Q for a string
+// Uses qualifier to restrict search
+AND index(l, p, q, v, qual) = VALOF
+ $( LET s = v!0
+   LET upcase = qual < 0
+   LET backscan = FALSE
+   IF s > (q-p) RESULTIS -1 // Search too long
+   qual := ABS qual
+   // Decide on action to be taken
+   SWITCHON qual INTO
+   $( CASE 'P': UNLESS s = q RESULTIS -1 // As always called from Find
+      CASE 'B': q := p; ENDCASE
+      CASE 'E': p := q-s
+      CASE 'L': backscan := TRUE
+      CASE 'O': q := q-s; ENDCASE
+      DEFAULT: error( err.uql )
+   $)
+    UNTIL p>q DO
+    $( LET r = l + (backscan -> q,p)
+       FOR i = 1 TO s DO
+          TEST upcase THEN
+             UNLESS compch(r!i, v!i)=0 GOTO l
+          ELSE
+             UNLESS r!i=v!i GOTO l
+       RESULTIS backscan -> q,p
+ l:    TEST backscan THEN q := q-1 ELSE p := p+1
+    $)
+    RESULTIS -1
+ $)
+
+
+AND readglobal() BE
+ $( LET v = VEC smax
+    LET s = 0
+    LET p = 0
+    LET n = 0
+    LET l = currentline
+    LET globtype=commrdch()
+    LET qual = ?
+    UNLESS globtype='A' | globtype='B' | globtype='E' DO
+      error( err.udc, 'G', globtype )
+    qual := getstring( v, TRUE )
+    s := v!0
+    IF s=0 DO error( err.cntx, 'G' )
+    IF globcount>=gmax DO error(err.glob)
+    globcount := globcount+1
+    n := globcount
+    p := newvec(s)
+    FOR i = 0 TO s DO p!i := v!i
+    g.match!n := p
+    g.qual!n := qual
+    g.type!n := globtype
+    g.count!n := 0
+    readcontext(v)
+    s := v!0
+    p := newvec(s)
+    FOR i = 0 TO s DO p!i := v!i
+    g.repl!n := p
+    p := pointer
+    s := nosubs
+    nosubs := TRUE
+    $( putline()
+       currentline := currentline!l.next
+       IF currentline=0 DO currentline := l
+       getline()
+       changeglobal(n)
+    $) REPEATUNTIL currentline=l
+    IF nosubs DO nosubs := s
+    pointer := p
+    // Verify
+    WRITEF("G%N*N",n)
+ $)
+
+
+AND alterglobal( val ) BE
+ $( LET k = 0
+    LET nstart, nend = 1, globcount
+    nextcomm()
+    IF '0' <= comm <= '9' THEN
+       k := commreadn()
+    TEST k=0 THEN
+      IF val = g.cancel THEN
+        globcount := 0
+    ELSE
+    $( IF k > globcount THEN error( err.nom )
+       nstart, nend := k,k
+    $)
+    // Do the change
+    FOR i = nstart TO nend DO
+       TEST val = g.cancel THEN
+       $( discardvec(g.match!i)
+          discardvec(g.repl!i)
+       $)
+       ELSE TEST val = g.disable THEN
+          g.type!i := - ( ABS g.type!i )
+       ELSE g.type!i := ABS g.type!i
+
+       // Modify if required
+       IF k NE 0 & val = g.cancel DO
+       $( FOR i = k TO globcount-1 DO
+          $( g.type!i, g.count!i := g.type!(i+1),g.count!(i+1)
+             g.match!i,g.repl!i := g.match!(i+1),g.repl!(i+1)  $)
+          globcount := globcount-1
+       $)
+ $)
+
+
+AND changeglobal(i) BE
+ $( LET p = 0
+    LET v = g.match!i
+    LET w = g.repl!i
+    LET type = g.type!i
+
+    IF type < 0 THEN RETURN // Global is disabled
+    $( LET n = index(linev, p, linel, v, g.qual!i )
+       LET s = n+v!0
+       IF n<0 BREAK
+       subst( (type='A'->s,n), (type='B'->n,s), w)
+       p := n+w!0
+       UNLESS type = 'E' DO p := p+v!0
+       g.count!i := g.count!i + 1
+    $) REPEAT
+ $)
+
+

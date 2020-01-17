@@ -1,0 +1,35 @@
+; Serial line loader for Micro PDP-11.
+; Loads from secondary SLU.
+; Position independent.
+; Assumes SP valid.
+
+        MOV     #176500,R5      ; base of SLU regs
+HLOOP:  JSR     PC,GET16        ;
+        MOV     R1,R3           ; address
+        JSR     PC,GET16        ;
+        MOV     R1,R4           ; count
+        BEQ     EXIT            ; zero count terminates
+LLOOP:  JSR     PC,GET8         ; get byte
+        MOVB    R1,(R3)+        ; store
+        SOB     R4,LLOOP        ; loop for more
+        BR      HLOOP           ; outer loop for another hunk
+
+EXIT:   JMP     (R3)            ; exit address
+
+GET8:   MOV     #2,R2           ; count
+        BR      GETN            ;
+GET16:  MOV     #4,R2           ; count
+GETN:   CLR     R1              ; clear destination reg
+CHLP:   BIT     #200,(R5)       ; receiver ready?
+        BEQ     CHLP            ; no, wait
+        MOV     2(R5),R0        ; get char
+        BMI     CHLP            ; ignore error chars
+        CMP     R0,#60          ; valid char?
+        BLO     CHLP            ; no, ignore
+        BIC     #360,R0         ; mask low order bits
+        ASH     #4,R1           ; do appropriate shift
+        BIS     R0,R1           ; OR in nibble
+        SOB     R2,CHLP         ; decrement shift count & loop
+        RTS     PC              ;
+
+

@@ -1,0 +1,100 @@
+        Date     Time   By      Ver     Code
+
+------- 82.04.?? ??:??  AJW/IDW f       BCP.MCG4
+Include BCPL cg bug fix. CGDYADIC had false assumtions about mem2.
+Two cases locked out in case of MEM2 TRUE
+
+------- 82.04.20 08:06  PB      f       BCP.TRN5
+Single bit selectors now use data rather than address!!!
+
+------- 82.04.20 08:21  PB      f       BCP.MCG4
+Further info for "Error in cgdyadic" .. ajw still gets it !!
+
+------- 82.04.20 08:29  PB      f       BCP.TRN2
+No warning if stf.nowarn set for undefined VALOF block
+
+------- 82.04.20 14:23  PB      f       BCP.MCG4
+Fix the AJW/IDW bug fix -- Allow MEM2 iff it is a CMP instruction
+
+------- 82.04.21 09:05  PB      f       BCP.TRN6
+Assign failed to decrement SSP after ouputing an operator (other than stind)
+just after label assign.1 [ E.g. untrapped cases of x op:= y ]
+
+------- 82.04.23 17:46  PB      f
+BCP now uses overlaid version f (but still with names)
+
+------- 82.04.25 15:22  PB      g       BCP.MCG 1,2,3,4,5,7
+SS now has LOC and GLOB as BYTE pointers (e.g. loadt(s.LOC, ssp*bpw))
+
+------- 82.04.25 15:22  PB      f/g     BCP.SYN6
+SLCT x [: y] no longer gives 'null tree' error
+
+------- 82.04.30 06:54  PB      f/g     BCP.TRN5
+evaltree calls itself with mode=TRUE, so as not to over-optimise (x=0)NEQV(y=0)
+
+------- 82.06.12 15:21  PB      g       BCP.TRN5
+After scan(@x, ) has been called, check that it's still the same operator !!
+E.g. X+0 => X !! (*** Maybe it could be RESULTIS EVALTREE(x, mode) or LOOP ***)
+
+------- 82.06.12 15:21  PB      g       BCP.(M/L)CG1
+CGERROR(0 => 'BCP Cg WARNING: ' instead of '.. error: '
+
+------- 82.06.12 15:21  PB      g       BCP.(M/L)CG(2/7)
+Treat multiple sections correctly, i.e.generate external definition.
+
+------- 82.06.12 15:21  PB      e       :L.BCP-E-???
+Code deleted (erroneously for LSI4s!!)
+
+------- 82.06.13 10:20  PB      g       BCP.GET
+Check depth of GETs (set to ten)
+
+------- 82.06.13 10:20  PB      g       BCP.TWF
+TASKWRITEF uses cli.commandname
+
+------- 82.06.13 10:20  PB      g       BCP.TRN7
+Buffered bytes reported when program too large now positive!
+
+------- 82.06.13 10:20  PB      g       BCP.SYE
+Writing recent source buffer starts at 1 rather than 0.
+
+------- 82.06.13 10:20  PB      g       BCP.MST
+Checking in to see that OV.BASE code is not scribbled over! (It isn't !!)
+
+------- 82.06.13 10:20  PB      f       :C.BCP on 68000s
+Copied to :C.OLD.BCP-F
+
+------- 82.06.13 14:20  PB      g       BCP.(MCG7/LCG1)
+DATSTRING no longer CALLSEGed; private version resident
+
+------- 82.06.13 14:20  PB      g       :C.NEW
+Version g released into :C.NEW
+
+------- 82.06.14 09:00  PB      g       STHDR BCP.(TRE SYN4 TRN2 TRN3 FEP)
+New switch LN to include line numbers in TRN error messages (default TRUE).
+Saves a bit of space if -LN.
+
+------- 82.06.14 09:00  PB      g       STHDR BCP.(TRN1 TRN3 TRN7 FEP)
+New switch TS to say how much Trn Space is free (default FALSE (?)).
+
+------- 82.06.22 12:21  PB      g       BCP.TRN1
+TS output to LISTOUT (not OCODE !!)
+
+------- 82.07.05 07:30  PB      h       (N)OVL + Cmd Cmds
+Change to version h
+
+------- 82.07.06 09:00  PB      h       BCP.TRN6
+SSP left 1 too high after expansion of (complex) op := exp.
+
+------- 82.09.?? ??:??  PB      h       BCP.MCGx
+CGERROR now has levels 0, 5 and 20. 0 -> warning, 5-> error, 20 -> fatal error
+
+------- 82.09.?? ??:??  PB      h       BCP.MCG5 + FEP
+Use counts, stack checking, Library words (23456 opt=LB)
+
+------- 82.09.?? ??:??  PB      h       BCP.TRN? + FEP
+Allow user to set max number of cases (OPT=SW200)
+
+------- 82.09.22 09:00  PB      h       BCP.MCG(5,7)
+Allow long names (OPT=LO) of the form | len | <chars> | [0s] | len |
+
+

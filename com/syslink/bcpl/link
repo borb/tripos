@@ -1,0 +1,1411 @@
+/****************************************************************************\
+*                          Systems Research Group                            *
+******************************************************************************
+
+
+      ######   #      #   ######   ##        ########  ##    ##  ##    ##
+     ########  ##    ##  ########  ##        ########  ###   ##  ##   ##
+     ##         ##  ##   ##        ##           ##     ####  ##  ##  ##
+     #######     ####    #######   ##           ##     ## ## ##  ####
+           ##     ##           ##  ##           ##     ##  ####  ## ##
+           ##     ##           ##  ##           ##     ##  ####  ##  ##
+     ########     ##     ########  ########  ########  ##   ###  ##   ##
+      ######      ##      ######   ########  ########  ##    ##  ##    ##
+
+                    ##        ########  ##    ##  ##    ##
+                    ##        ########  ###   ##  ##   ##
+                    ##           ##     ####  ##  ##  ##
+                    ##           ##     ## ## ##  ####
+                    ##           ##     ##  ####  ## ##
+                    ##           ##     ##  ####  ##  ##
+                    ########  ########  ##   ###  ##   ##
+                    ########  ########  ##    ##  ##    ##
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   20/05/86            *
+\****************************************************************************/
+
+
+
+SECTION "LINK"
+
+
+
+GET "LIBHDR"
+GET "SYSLINKHDR"
+
+
+
+LET linkfile( file )  BE
+$(
+//  Main stage of the linking process.  We have parsed the input file, checked
+//  all the parameters, and checked all the files which we will require
+//  in this section.  We must now set up the data structures which are to be
+//  filled in, and after that, let the linking commence.
+
+    LET datev     =  VEC 15
+    LET storetop  =  0
+
+    datstring( datev )
+
+    writemap( "SYSLINK map of file *"%S*" on %S, %S at %S*N",
+               file, datev+10, datev+0, datev+5 )
+
+    //  We should be careful to round the store maximum and minimum values the
+    //  right way.  Both should be even, with the maximum rounded down, and the
+    //  minimum rounded up.
+
+    p.storemax  :=  (p.storemax - 1)  &  NOT 1
+    p.storemin  :=  (p.storemin + 1)  &  NOT 1
+
+    storehwm    :=  p.storemax
+
+    abshunk( storehwm, 2 )
+
+    writeword( 0 )
+    writeword( 0 )
+
+    //  Having initialised the target free store chain, we should now allocate
+    //  the store necessary for this run.
+
+    abs.hunk     :=  NIL
+    abs.address  :=  NIL
+    abs.length   :=  NIL
+
+    w.rootnode   :=  getstore( rtn.info )
+
+    w.tasktab    :=  getstore( p.tasktab )
+    a.tasktab    :=  getstore( p.tasktab )
+    a.devtab     :=  getstore( p.devtab )
+
+    w.tasktab!0  :=  p.tasktab
+    a.tasktab!0  :=  p.tasktab
+
+    a.devtab!0   :=  p.devtab
+
+    FOR  i = 0  TO  rtn.info   DO  w.rootnode!i  :=  0
+    FOR  i = 1  TO  p.tasktab  DO  w.tasktab!i   :=  0
+    FOR  i = 1  TO  p.tasktab  DO  a.tasktab!i   :=  0
+    FOR  i = 1  TO  p.devtab   DO  a.devtab!i    :=  0
+
+    //  We have now declared the internal data structures, and so we should get
+    //  ready to allocate memory and link the files.
+
+    writemap( "*NSegments*N*N" )
+
+    UNLESS  loadfiles( permsegments )  DO  error( "Error while reading files" )
+
+    //  Having loaded all the permanent segments, we must now allocate the
+    //  store associated with the tasks.
+
+    addr.tasktab  :=  store.getvec( p.tasktab )
+    addr.devtab   :=  store.getvec( p.devtab )
+
+    alloctasks()
+    allocinfo()
+
+    storetop  :=  storehwm
+
+    //  Having done that, we can load the temporary segments into memory.
+
+    writemap( "*NInitialisation segments*N*N" )
+
+    UNLESS  loadfiles( tempsegments )  DO  error( "Error while reading files" )
+
+    //  Having loaded all the files, we must fill in all the link pointers,
+    //  we so far we have ignored.
+
+    scansegments()
+
+    //  Having set up the segments, we should then define the tasks and
+    //  devices in the system, printing out information about them.
+
+    writemap( "*NTasks*N*N" )
+
+    scantasks()
+
+    writemap( "*NDevices*N*N" )
+
+    scandevices()
+
+    //  Now, scan the infomation vectors, writing out all the info.
+
+    scaninfo()
+
+    //  Having done that, there is nothing left but to write out the rootnode
+    //  and the associated absolute store.  The free store chain is now fixed,
+    //  so we can write its base.
+
+    abshunk( p.storemin, 1 )
+
+    writeword( (storehwm-p.storemin) | 1 )
+
+    writeabsolute()
+
+    //  Finally, write out the information about the whole linking operation,
+    //  and return to the main part of the program.
+
+    writemap( "*N*N" )
+
+    writemap( "Absolute store:     " )
+    writerange( p.absmin, p.absmax )
+    writemap( "    %U5 words*N", p.absmax-p.absmin+1 )
+
+    writemap( "Relocatable store:  " )
+    writerange( storetop, p.storemax )
+    writemap( "    %U5 words*N", p.storemax-storetop+1 )
+
+    writemap( "Free store:         " )
+    writerange( p.storemin, storetop-1 )
+    writemap( "    %U5 words*N", storetop-p.storemin )
+
+    //  This really is the end of the line, so terminate the output file
+    //  properly.
+
+    writeword( t.end )
+$)
+
+
+
+AND loadfiles( list )  =  VALOF
+$(
+//  Load each file in the list given, keeping a note of the position where the
+//  individual hunks are kept, along with their size and address.  We relocate
+//  on this pass, but do not fill in pointers yet.
+
+    UNTIL  list = NIL  DO
+    $(
+        UNLESS  loadsegment( list )  DO  RESULTIS  FALSE
+
+        list  :=  list!seg.link
+    $)
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND loadsegment( segment )  =  VALOF
+$(
+//  We have been given a segment to load, and so we should load it.  The file
+//  is already open, and so all we have to do is read the file.  We split up
+//  segments into their constituent HUNKS and ABSHUNKS, performing relocation
+//  before we write the output file.
+
+    LET oldin    =  input()
+    LET oldlev   =  errorlevel
+    LET oldlab   =  errorlabel
+
+    LET name     =  segment!seg.name
+    LET segtype  =  segment!seg.type
+    LET owner    =  segment!seg.owner
+
+    LET stream   =  findinput( name )
+
+    LET top      =  storehwm
+    LET success  =  TRUE
+    LET count    =  0
+    LET type     =  0
+
+    IF  name = 0  THEN
+        error( "Failed to open *"%S*" (fault %N)", name, result2 )
+
+    selectinput( stream )
+
+    errorlevel   :=  level()
+    errorlabel   :=  label
+
+    currenthunk  :=  NIL
+
+    //  First, check to see whether this file has an owner.  If not, then there
+    //  is little point in loading it.
+
+    IF  owner = NIL  THEN
+        warning( "Unused file *"%S*"", name )
+
+    TEST  NOT readword( @type )  THEN
+
+        //  We have failed to read the first word in the file, and so the file
+        //  must be empty.  This is not actually an error, but we should put
+        //  out a warning anyway.
+
+        warning( "Empty file *"%S*"", name )
+
+    ELSE
+    $(
+        //  Repeat loop to continue reading items from the file until we hit
+        //  the file's end.
+
+$<TRIPOS
+        IF  testflags( #B0001 )  THEN  error( "BREAK" )
+$>TRIPOS
+
+        //  OK.  We have read a type, and so we should look to see what sort
+        //  of type it is.  At this point we handle:
+        //
+        //      HUNK
+        //      ABSHUNK
+        //      END
+
+        TEST  type = t.end  THEN
+
+            //  And "end" marker, but this could be a red herring.  Read the
+            //  next item from the file.
+
+            UNLESS  readword( @type )  DO  BREAK
+
+        ELSE
+        $(
+            //  More interesting.  This is a HUNK or an ABSHUNK.
+
+            LET ok  =  0
+
+            TEST  type = t.hunk     THEN  ok  :=  loadhunk( segment, @type )
+ ELSE
+            TEST  type = t.abshunk  THEN  ok  :=  loadabshunk( segment, @type )
+ ELSE
+
+                error( "Unexpected type %N in *"%S*"", type, name )
+
+            //  Having read the hunk, we should look to see whether EOF was
+            //  found while looking for reloc information.
+
+            UNLESS  ok  DO  BREAK
+
+            count  :=  count + 1
+        $)
+    $)
+    REPEAT
+
+    //  We drop out of that loop when the whole file has been loaded, so we
+    //  should close the file, and return to the caller.  It is worth putting
+    //  in a check here, to make sure that DCBs and DRIVERs are only one
+    //  hunk long.
+
+    IF  segtype = type.dcb  THEN
+        UNLESS  count = 1  DO
+            error( "Illegal number of DCB hunks: %N", count )
+
+    IF  segtype = type.driver  THEN
+        UNLESS  count = 1  DO
+            error( "Illegal number of DRIVER hunks: %N", count )
+
+    //  If we get this far, then all is OK, and we can write out the
+    //  mapping information.
+
+    IF  top = storehwm  THEN  writemap( "    (null segment)*N" )
+
+    GOTO  endoffile
+
+    //  Error recovery point.  We come here if there is any problem to do
+    //  with this file.
+
+label:
+
+    success  :=  FALSE
+
+    //  General tidy up position.
+
+endoffile:
+
+    endread()
+
+    selectinput( oldin )
+
+    errorlevel          :=  oldlev
+    errorlabel          :=  oldlab
+
+    RESULTIS  success
+$)
+
+
+
+AND loadhunk( segment, lv.type )  =  VALOF
+$(
+//  This is a normal relocatable hunk.  We should load the hunk, and then
+//  read any RELOC information after it.
+
+    LET name       =  segment!seg.name
+    LET type       =  segment!seg.type
+
+    LET length     =  checkword( name )
+
+    LET storeaddr  =  store.getvec( length )
+    LET storehunk  =  storeaddr + 1
+
+    LET hunk       =  getvec( length )
+
+    LET entry      =  0
+    LET ok         =  0
+
+    IF  hunk = 0  THEN
+        error( "Failed to allocate %N word HUNK buffer in *"%S*"", length, name )
+
+    UNLESS  readwords( hunk, length ) = length  DO
+    $(
+        //  We have failed to read the correct number of words, and so we
+        //  should complain.  We do that after we have freed the buffer
+        //  back into the pool.
+
+        freevec( hunk )
+
+        error( "Unexpected EOF in *"%S*"", name )
+    $)
+
+    //  If we reach here, then we have succeeded in reading the hunk from
+    //  the file, and so we should search for relocation information.
+
+    currenthunk  :=  storehunk*p.mcaddrinc
+
+    ok           :=  readword( lv.type )
+
+    WHILE  ok  DO
+    $(
+        //  We have read the next word from the file, and so we should look to
+        //  see if it is of type "RELOC".
+
+        LET rlength  =  0
+        LET reloc    =  0
+
+        UNLESS  !lv.type = t.reloc  DO  BREAK
+
+        //  This is a relocation hunk, so we should read the relocation info,
+        //  and update the hunk we have just read.
+
+        UNLESS  readword( @rlength )  DO
+        $(
+            //  No relocation length, so premature end of file.
+
+            freevec( hunk )
+
+            error( "Unexpected EOF in *"%S*"", name )
+        $)
+
+        reloc  :=  getvec( rlength )
+
+        IF  reloc = 0  THEN
+        $(
+            //  We have failed to get the store for the relocation information
+            //  buffer.  Oh dear!
+
+            freevec( hunk )
+
+            error( "Failed to allocate %N word RELOC buffer in *"%S*"", rlength, name )
+        $)
+
+        UNLESS  readwords( reloc, rlength ) = rlength  DO
+        $(
+            //  We have not read the correct amount of relocation information
+            //  and so we should moan further.
+
+            freevec( hunk )
+            freevec( reloc )
+
+            error( "Unexpected EOF in *"%S*"", name )
+        $)
+
+        //  Hallelujah!  We have reached this point, having read both the hunk
+        //  and the relocation information in it.  We should now perform the
+        //  relocation.
+
+        FOR  i = 0  TO  rlength-1  DO
+        $(
+            LET b.address  =  reloc!i
+            LET w.address  =  b.address/p.mcrelocinc
+
+            //  We have to be careful here, since the relocation algorithm
+            //  used does not cope with items which are not BCPL word aligned.
+
+            UNLESS  (b.address REM p.mcrelocinc) = 0  DO
+            $(
+                //  Not aligned, so cannot perform the relocation properly.
+                //  We have no choice but to abandon the operation.
+
+                freevec( hunk )
+                freevec( reloc )
+
+                error( "RELOC address %N is not BCPL word aligned", b.address )
+            $)
+
+            UNLESS  0 <= w.address < length  DO
+            $(
+                //  The relocation address is outside our range, and so we
+                //  should complain about this.
+
+                freevec( hunk )
+                freevec( reloc )
+
+                error( "Illegal RELOC address %N in *"%S*"", w.address, name )
+            $)
+
+            hunk!w.address  :=  hunk!w.address + currenthunk
+        $)
+
+        //  Having performed the relocation, we should free this relocation
+        //  buffer, and look to see if there is any more relocation info.
+
+        freevec( reloc )
+
+        ok  :=  readword( lv.type )
+    $)
+
+    //  When we drop out of there, we have done all the relocation, and all
+    //  that we need to do now is to write the hunk to disc.
+
+    entry                :=  getstore( hunk.size )
+    entry!hunk.link      :=  segment!seg.seglist
+    entry!hunk.addr      :=  storeaddr
+    entry!hunk.high      :=  storeaddr + length
+    segment!seg.seglist  :=  entry
+
+    //  Before we write the hunk to disc, print out a message to the map
+    //  file, indicating the name and location of the hunk.
+
+    writerange( storeaddr+1, storeaddr+length )
+
+    writehunkname( hunk, length, "    (no name)    " )
+
+    writemap( "    %U5 words*N", length )
+
+    abshunk( storeaddr+1, length )
+
+    writewords( hunk, length )
+
+    freevec( hunk )
+
+    RESULTIS  ok
+$)
+
+
+
+AND loadabshunk( segment, lv.type )  =  VALOF
+$(
+//  This is an absolute hunk, and the next item in the file is the load address
+//  of the absolute hunk.
+
+    LET name  =  segment!seg.name
+    LET type  =  segment!seg.type
+    LET ok    =  0
+
+    IF  type = type.dcb  THEN
+        error( "Illegal DCB hunk in absolute section" )
+
+    IF  type = type.driver  THEN
+        error( "Illegal DRIVER hunk in absolute section" )
+
+    UNLESS  abs.hunk = NIL  DO
+    $(
+        warning( "More than one absolute section" )
+
+        RESULTIS  loadnewabshunk( segment, lv.type )
+    $)
+
+    abs.address  :=  checkword( name )
+    abs.length   :=  checkword( name )
+
+    //  Check to make sure that this hunk is within the absolute store area,
+    //  and complain if not.
+
+    IF  compare( abs.address, p.absmin ) < 0  |  compare( abs.address+abs.length-1, p.absmax ) > 0  THEN
+        error( "ABSHUNK address %N length %N not within absolute store", abs.address, abs.length )
+
+    UNLESS  abs.length < storage.chunksize  DO
+        error( "ABSHUNK size %N >%N (storage.chunksize) - recompile", abs.length, storage.chunksize )
+
+    //  If we reach here, then we believe that all is OK.
+
+    abs.hunk  :=  getstore( abs.length )
+
+    UNLESS  readwords( abs.hunk, abs.length ) = abs.length  DO
+        error( "Unexpected EOF in *"%S*"", name )
+
+    //  We have got so far, and so we should look to see of there are any
+    //  ABSRELOC records after the hunk.
+
+    ok  :=  readword( lv.type )
+
+    WHILE  ok  DO
+    $(
+        //  We have read the next word from the file, and so we should look to
+        //  see if it is of type "ABSRELOC".
+
+        LET rlength  =  0
+        LET reloc    =  0
+
+        UNLESS  !lv.type = t.absreloc  DO  BREAK
+
+        //  This is a relocation hunk, so we should read the relocation info,
+        //  and update the absolute hunk we have just read.  This is only valid
+        //  if there is a "current" relocatable hunk.
+
+        IF  currenthunk = NIL  THEN
+            error( "Unexpected ABSRELOC in *"%S*"", name )
+
+        UNLESS  readword( @rlength )  DO
+            error( "Unexpected EOF in *"%S*"", name )
+
+        reloc  :=  getvec( rlength )
+
+        IF  reloc = 0  THEN
+
+            //  We have failed to get the store for the relocation information
+            //  buffer.  Oh dear!
+
+            error( "Failed to allocate %N word ABSRELOC buffer in *"%S*"", rlength, name )
+
+        UNLESS  readwords( reloc, rlength ) = rlength  DO
+        $(
+            //  We have not read the correct amount of relocation information
+            //  and so we should moan further.
+
+            freevec( reloc )
+
+            error( "Unexpected EOF in *"%S*"", name )
+        $)
+
+        //  Hallelujah!  We have reached this point, having read both the hunk
+        //  and the relocation information in it.  We should now perform the
+        //  relocation.
+
+        FOR  i = 0  TO  rlength-1  DO
+        $(
+            LET b.address  =  reloc!i
+            LET w.address  =  b.address/p.mcrelocinc - abs.address
+
+            //  We have to be careful here, since the relocation algorithm
+            //  used does not cope with items which are not BCPL word aligned.
+
+            UNLESS  (b.address REM p.mcrelocinc) = 0  DO
+            $(
+                //  Not aligned, so cannot perform the relocation properly.
+                //  We have no choice but to abandon the operation.
+
+                freevec( reloc )
+
+                error( "ABSRELOC address %N is not BCPL word aligned", b.address )
+            $)
+
+            UNLESS  0 <= w.address < abs.length  DO
+            $(
+                //  The relocation address is outside our range, and so we
+                //  should complain about this.
+
+                freevec( reloc )
+
+                error( "Illegal ABSRELOC address %N in *"%S*"", w.address, name )
+            $)
+
+            abs.hunk!w.address  :=  abs.hunk!w.address + currenthunk
+        $)
+
+        //  Having performed the relocation, we should free this relocation
+        //  buffer, and look to see if there is any more relocation info.
+
+        freevec( reloc )
+
+        ok  :=  readword( lv.type )
+    $)
+
+    //  When we drop out of the end of that loop, there's not much more to be
+    //  done.
+
+    RESULTIS  ok
+$)
+
+
+
+AND loadnewabshunk( segment, lv.type )  =  VALOF
+$(
+//  This is an absolute hunk, which must be handled in addition to the proper
+//  one.  This should only really happen in unusual circumstances.
+
+    LET name     =  segment!seg.name
+    LET address  =  checkword( name )
+    LET length   =  checkword( name )
+    LET hunk     =  0
+    LET ok       =  0
+
+    //  Check to make sure that this hunk is within the absolute store area,
+    //  and complain if not.
+
+    IF  compare( address, p.absmin ) < 0  |  compare( address+length-1, p.absmax ) > 0  THEN
+        error( "ABSHUNK address %N length %N not within absolute store", address, length )
+
+    //  If we reach here, then we believe that all is OK.
+
+    hunk  :=  getvec( length )
+
+    IF  hunk = 0  THEN
+        error( "Failed to allocate %N word ABSHUNK buffer in *"%S*"", length, name )
+
+    UNLESS  readwords( hunk, length ) = length  DO
+    $(
+        freevec( hunk )
+
+        error( "Unexpected EOF in *"%S*"", name )
+    $)
+
+    //  We have got so far, and so we should look to see of there are any
+    //  ABSRELOC records after the hunk.
+
+    ok  :=  readword( lv.type )
+
+    WHILE  ok  DO
+    $(
+        //  We have read the next word from the file, and so we should look to
+        //  see if it is of type "ABSRELOC".
+
+        LET rlength  =  0
+        LET reloc    =  0
+
+        UNLESS  !lv.type = t.absreloc  DO  BREAK
+
+        //  This is a relocation hunk, so we should read the relocation info,
+        //  and update the absolute hunk we have just read.  This is only valid
+        //  if there is a "current" relocatable hunk.
+
+        IF  currenthunk = NIL  THEN
+        $(
+            freevec( hunk )
+
+            error( "Unexpected ABSRELOC in *"%S*"", name )
+        $)
+
+        UNLESS  readword( @rlength )  DO
+        $(
+            freevec( hunk )
+
+            error( "Unexpected EOF in *"%S*"", name )
+        $)
+
+        reloc  :=  getvec( rlength )
+
+        IF  reloc = 0  THEN
+        $(
+            //  We have failed to get the store for the relocation information
+            //  buffer.  Oh dear!
+
+            freevec( hunk )
+
+            error( "Failed to allocate %N word ABSRELOC buffer in *"%S*"", rlength, name )
+        $)
+
+        UNLESS  readwords( reloc, rlength ) = rlength  DO
+        $(
+            //  We have not read the correct amount of relocation information
+            //  and so we should moan further.
+
+            freevec( hunk )
+            freevec( reloc )
+
+            error( "Unexpected EOF in *"%S*"", name )
+        $)
+
+        //  Hallelujah!  We have reached this point, having read both the hunk
+        //  and the relocation information in it.  We should now perform the
+        //  relocation.
+
+        FOR  i = 0  TO  rlength-1  DO
+        $(
+            LET b.address  =  reloc!i
+            LET w.address  =  b.address/p.mcrelocinc - address
+
+            //  We have to be careful here, since the relocation algorithm
+            //  used does not cope with items which are not BCPL word aligned.
+
+            UNLESS  (b.address REM p.mcrelocinc) = 0  DO
+            $(
+                //  Not aligned, so cannot perform the relocation properly.
+                //  We have no choice but to abandon the operation.
+
+                freevec( hunk )
+                freevec( reloc )
+
+                error( "ABSRELOC address %N is not BCPL word aligned", b.address )
+            $)
+
+            UNLESS  0 <= w.address < length  DO
+            $(
+                //  The relocation address is outside our range, and so we
+                //  should complain about this.
+
+                freevec( hunk )
+                freevec( reloc )
+
+                error( "Illegal ABSRELOC address %N in *"%S*"", w.address, name
+)
+            $)
+
+            hunk!w.address  :=  hunk!w.address + currenthunk
+        $)
+
+        //  Having performed the relocation, we should free this relocation
+        //  buffer, and look to see if there is any more relocation info.
+
+        freevec( reloc )
+
+        ok  :=  readword( lv.type )
+    $)
+
+    //  When we drop out of the end of that loop, we should merge the absolute
+    //  data with what we have read already.
+
+    FOR  i = 0  TO  length-1  DO  writeabsloc( NIL, address+i, hunk!i  )
+
+    freevec( hunk )
+
+    RESULTIS  ok
+$)
+
+
+
+//  On Panos, there are no "readwords" or "writewords" functions, so we should
+//  define them here, in terms of "readbytes" and "writebytes", which do
+//  exist.  All words must be swapped on both input and output, in order to
+//  maintain compatibility with the 68000.
+
+
+
+$<PANOS
+AND readwords( buffer, length )  =  VALOF
+$(
+    LET required  =  length*bytesperword
+    LET actual    =  readbytes( buffer, 0, required )
+    LET words     =  (actual + bytesperword - 1)/bytesperword
+
+    swapwords( buffer, length )
+
+    RESULTIS  actual = required  ->  words,  -words
+$)
+
+
+
+AND writewords( buffer, length )  BE
+$(
+    swapwords( buffer, length )
+
+    writebytes( buffer, 0, length*bytesperword )
+
+    swapwords( buffer, length )
+$)
+
+
+
+AND swapwords( buffer, words )  BE
+    FOR  i = 0  TO  words-1  DO
+        swapword( buffer+i )
+
+
+
+AND swapword( lv.word )  BE
+$(
+    LET word  =  !lv.word
+
+    FOR  i = bytesperword-1  TO  0  BY  -1  DO
+    $(
+        lv.word % i  :=  word & #XFF
+        word         :=  word >> 8
+    $)
+$)
+$>PANOS
+
+
+
+AND alloctasks()  BE
+$(
+//  Allocate all the store associated with the tasks in the system.
+
+    LET list  =  tasklist
+
+    UNTIL  list = NIL  DO
+    $(
+        LET id        =  list!task.id
+        LET stack     =  list!task.stack
+        LET priority  =  list!task.priority
+        LET segtable  =  list!task.segtable
+        LET active    =  list!task.active
+
+        LET tcb       =  getstore( p.tcbsize )
+        LET tcbaddr   =  store.getvec( p.tcbsize )
+
+        FOR  i = 0  TO  p.tcbsize  DO  tcb!i  :=  0
+
+        tcb!tcb.taskid   :=  id
+        tcb!tcb.pri      :=  priority
+        tcb!tcb.state    :=  state.dead + (active -> state.pkt, 0)
+        tcb!tcb.stsiz    :=  stack
+        tcb!tcb.seglist  :=  store.getvec( segtable!0 )
+
+        w.tasktab!id     :=  tcb
+        a.tasktab!id     :=  tcbaddr
+
+        IF  active  THEN  activetask  :=  id
+
+        list  :=  list!task.link
+    $)
+$)
+
+
+
+AND allocinfo()  BE
+
+//  Allocate the store associated with all the information vectors.
+
+    IF  f.info!fb.defined  THEN
+        allocinfoitem( f.info!fb.value )
+
+
+
+AND allocinfoitem( info )  BE
+$(
+//  Allocated the store associated with a particular information item.  At this
+//  stage, allocate just the list and string store - do not fill anything in.
+
+    LET type   =  info!i.type
+    LET value  =  info!i.value
+
+    SWITCHON  type  INTO
+    $(
+        CASE s.string  :  //  A string, so allocate the store for it.
+
+                          info!i.addr  :=  store.getvec( (value % 0)/bytesperword )
+
+                          ENDCASE
+
+
+        CASE s.list    :  //  A list item, so allocate the store for the list,
+                          //  and call ourselves recursively for all members
+                          //  of the list.
+
+                          info!i.addr  :=  store.getvec( value!0 - 1 )
+
+                          FOR  i = 1  TO  value!0  DO  allocinfoitem( value!i )
+
+                          ENDCASE
+
+
+        CASE s.number  :
+        CASE s.seglist :  //  Nothing to be done here, since no new store is
+                          //  required.
+
+                          ENDCASE
+
+
+        DEFAULT        :  panic( "(internal)  Unexpected info type %N", type )
+    $)
+$)
+
+
+
+AND scaninfo()  BE
+
+//  Scan the info vector, actually writing the items to disc this time.
+
+    IF  f.info!fb.defined  THEN
+        f.info!fb.value  :=  scaninfoitem( f.info!fb.value )
+
+
+
+AND scaninfoitem( info )  =  VALOF
+$(
+//  Write to disc all the information held in the info item.
+
+    LET type    =  info!i.type
+    LET value   =  info!i.value
+    LET addr    =  info!i.addr
+    LET length  =  0
+
+    SWITCHON  type  INTO
+    $(
+        CASE s.string  :  //  A string, so write it out.
+
+                          length  :=  (value % 0)/bytesperword + 1
+
+                          abshunk( addr, length )
+
+                          writestringwords( value, length )
+
+                          RESULTIS  addr
+
+
+        CASE s.list    :  //  A list item, so write all the individual items,
+                          //  and then write the list itself.
+
+                          length  :=  value!0
+
+                          FOR  i = 1  TO  length  DO  value!i  :=  scaninfoitem( value!i )
+
+                          abshunk( addr, length )
+
+                          writewords( value+1, length )
+
+                          RESULTIS  addr
+
+
+        CASE s.number  :  //  Simple numerical value, so return it.
+
+                          RESULTIS  value
+
+
+        CASE s.seglist :  //  A segment list, which should now have been loaded
+                          //  into memory.
+
+                          RESULTIS  value!segs.addr
+
+
+        DEFAULT        :  panic( "(internal)  Unexpected info type %N", type )
+    $)
+$)
+
+
+
+AND writestringwords( buffer, words )  BE
+
+//  Write out the buffer containing a string.  Under PANOS, this is tricky,
+//  since a "WRITEWORDS" implies a swapping of the bytes in the string.
+
+$<PANOS    writebytes( buffer, 0, words*bytesperword )    $>PANOS
+$<PANOS'   writewords( buffer, words )                    $>PANOS'
+
+
+
+AND scansegments()  BE
+$(
+//  Scan all the segments associated with the tasks and devices, filling in
+//  all the link pointers.
+
+    LET list  =  segmentlists
+
+    UNTIL  list = NIL  DO
+    $(
+        LET segments  =  list!segs.list
+        LET type      =  list!segs.type
+        LET address   =  0
+
+        //  We build up the list backwards, since it was created backwards.
+        //  This way, we can fill in the pointers iteratively rather than
+        //  recursively.
+
+        IF  type = type.seglist  THEN
+        $(
+            //  We only perform this operation for segment lists, since
+            //  DCBs and DRIVERs must be handled elsewhere.
+
+            FOR  i = segments!0  TO  1  BY  -1  DO
+            $(
+                LET segment  =  segments!i
+                LET seglist  =  segment!seg.seglist
+
+                UNTIL  seglist = NIL  DO
+                $(
+                    LET hunk  =  seglist!hunk.addr
+
+                    abshunk( hunk, 1 )
+
+                    writeword( address )
+
+                    address  :=  hunk
+                    seglist  :=  seglist!hunk.link
+                $)
+
+                segment!seg.addr  :=  address
+            $)
+
+            //  Now print out some information about this segment list,
+            //  this time backwards!
+
+            writemap( "*NSegment list %S*N*N", list!segs.name )
+
+            FOR  i = 1  TO  segments!0  DO
+            $(
+                LET segment  =  segments!i
+                LET name     =  segment!seg.name
+                LET seglist  =  segment!seg.seglist
+
+                writeseglist( seglist, name )
+            $)
+        $)
+
+        list!segs.addr  :=  address
+        list            :=  list!segs.link
+    $)
+$)
+
+
+
+AND writeseglist( seglist, name )  BE  UNLESS  seglist = NIL  DO
+$(
+//  Write a list of hunks within a particular segment.
+
+    writeseglist( seglist!hunk.link, name )
+
+    writerange( seglist!hunk.addr, seglist!hunk.high )
+    writemap( "%S*N", name )
+$)
+
+
+
+AND scantasks()  BE
+$(
+//  The time has come (the walrus said) to do something about the tasks in
+//  this system.  We should print out information about the task table, and
+//  the segment lists owned by each task.
+
+    LET list  =  tasklist
+
+    writerange( addr.tasktab, addr.tasktab+p.tasktab )
+
+    writemap( "Task table  (%N words)*N", p.tasktab )
+
+    UNTIL  list = NIL  DO
+    $(
+        LET link      =  list!task.link
+        LET id        =  list!task.id
+        LET stack     =  list!task.stack
+        LET priority  =  list!task.priority
+        LET segtable  =  list!task.segtable
+
+        LET segments  =  segtable!0
+        LET tcb       =  w.tasktab!id
+        LET tcbaddr   =  a.tasktab!id
+        LET tcbsegs   =  tcb!tcb.seglist
+
+        UNLESS  link = NIL  DO
+
+            //  This TCB has a link field, and so we should fill in the
+            //  address in the TCB before we write it.
+
+            tcb!tcb.link  :=  a.tasktab!(link!task.id)
+
+        writemap( "*NTask %N*N*N", id )
+
+        writerange( tcbaddr, tcbaddr+p.tcbsize )
+        writemap( "TCB  Stacksize %N  Priority %N*N", stack, priority )
+
+        writerange( tcbsegs, tcbsegs+segments )
+        writemap( "  Segment table  (%N words)*N", segments )
+
+        //  Now, write the segment table, and all the consituent addresses.
+
+        abshunk( tcbsegs, segments+1 )
+
+        writeword( segments )
+
+        FOR  i = 1  TO  segments  DO
+        $(
+            LET segs      =  segtable!i
+            LET segsname  =  segs!segs.name
+            LET segsaddr  =  segs!segs.addr
+
+            writeword( segsaddr )
+
+            writerange( segsaddr, NIL )
+
+            writemap( "    %N: %S*N", i, segsname )
+        $)
+
+        //  When we drop out of that loop, we have written the segment
+        //  table information, but we have still to write the TCB.
+
+        abshunk( tcbaddr, p.tcbsize+1 )
+
+        writewords( tcb, p.tcbsize+1 )
+
+        list  :=  link
+    $)
+
+    //  Having written all the TCB information, we can now write out the
+    //  task table itself.
+
+    abshunk( addr.tasktab, p.tasktab+1 )
+
+    writewords( a.tasktab, p.tasktab+1 )
+$)
+
+
+
+AND scandevices()  BE
+$(
+//  Scan the device list, filling in the device table, and then write out
+//  all the device information.
+
+    LET list  =  devicelist
+
+    writerange( addr.devtab, addr.devtab+p.devtab )
+
+    writemap( "Device table  (%N words)*N", p.devtab )
+
+    UNTIL  list = NIL  DO
+    $(
+        LET id          =  list!device.id
+        LET dcb         =  list!device.dcb
+        LET driver      =  list!device.driver
+
+        LET dcbseg      =  dcb!segs.list!1
+        LET driverseg   =  driver!segs.list!1
+
+        LET dcbaddr     =  dcbseg!seg.seglist!hunk.addr
+        LET driveraddr  =  driverseg!seg.seglist!hunk.addr
+
+        writemap( "*NDevice %N*N*N", id )
+
+        //  First, add the link from the DCB to the DRIVER code.
+
+        abshunk( driveraddr, 1 )
+
+        writeword( 0 )
+
+        abshunk( dcbaddr, 1 )
+
+        writeword( driveraddr )
+
+        //  Having done that, we can fill in the relevant field of the
+        //  device table, and print out information about this device.
+
+        a.devtab!(ABS id)  :=  dcbaddr
+
+        writerange( dcbaddr, NIL )
+        writemap( "DCB*N" )
+
+        writerange( dcbaddr, NIL )
+        writemap( "  %TC %S*N", dcb!segs.name, dcbseg!seg.name )
+
+        writerange( driveraddr, NIL )
+        writemap( "  %TC %S*N", driver!segs.name, driverseg!seg.name )
+
+        list  :=  list!device.link
+    $)
+
+    //  When we drop out of that loop, we have filled in all the information
+    //  about the devices, and so all we have to do is write the device
+    //  table out.
+
+    abshunk( addr.devtab, p.devtab+1 )
+
+    writewords( a.devtab, p.devtab+1 )
+$)
+
+
+
+AND writeabsolute()  BE
+$(
+//  Write out all the absolute store locations.  We should merge this with
+//  the absolute hunk already read.
+
+    LET tasktab  =  addr.tasktab
+    LET devtab   =  addr.devtab
+    LET tcblist  =  a.tasktab!(tasklist!task.id)
+    LET crntask  =  a.tasktab!activetask
+    LET blklist  =  p.storemin
+
+    LET debtask  =  0
+    LET days     =  0
+    LET mins     =  0
+    LET ticks    =  0
+    LET clwkq    =  0
+    LET memsize  =  p.memorysize
+    LET info     =  f.info!fb.defined  ->  f.info!fb.value,  0
+
+    writemap( "*NRoot node*N*N" )
+
+    writeabsloc( "Task table",   p.rootnode+rtn.tasktab, tasktab )
+    writeabsloc( "Device table", p.rootnode+rtn.devtab,  devtab )
+    writeabsloc( "Task list",    p.rootnode+rtn.tcblist, tcblist )
+    writeabsloc( "Current task", p.rootnode+rtn.crntask, crntask )
+    writeabsloc( "Block list",   p.rootnode+rtn.blklist, blklist )
+    writeabsloc( "Debug task",   p.rootnode+rtn.debtask, debtask )
+    writeabsloc( "Days",         p.rootnode+rtn.days,    days )
+    writeabsloc( "Minutes",      p.rootnode+rtn.mins,    mins )
+    writeabsloc( "Ticks",        p.rootnode+rtn.ticks,   ticks )
+    writeabsloc( "Clock queue",  p.rootnode+rtn.clwkq,   clwkq )
+    writeabsloc( "Memory size",  p.rootnode+rtn.memsize, memsize )
+    writeabsloc( "Information",  p.rootnode+rtn.info,    info )
+
+    //  Now, write the absolute hunk itself, if it exists.
+
+    UNLESS  abs.hunk = NIL  DO
+    $(
+        abshunk( abs.address, abs.length )
+
+        writewords( abs.hunk, abs.length )
+    $)
+$)
+
+
+
+AND writeabsloc( name, address, word )  BE
+$(
+//  Write the word given into the absolute location "address".  If this is
+//  in the absolute hunk already read, then we should merge at this point.
+
+    LET offset  =  address - abs.address
+
+    TEST  abshunk = NIL  |  (offset < 0)  |  (offset >= abs.length)  THEN
+    $(
+        //  This location is not within the absolute chunk we have
+        //  already read, and so we should write it out as a single item.
+
+        abshunk( address, 1 )
+
+        writeword( word )
+    $)
+    ELSE
+
+        //  Slightly easier, since this is within the absolute hunk.
+
+        abs.hunk!offset  :=  word
+
+    //  Now, write out the information to the map, so we can see what is
+    //  happening.
+
+    UNLESS  name = NIL  DO
+    $(
+        writerange( address, NIL )
+
+        writemap( "%TF  %U5 (%X6)*N", name, word, word*p.mcaddrinc )
+    $)
+$)
+
+
+
+AND abshunk( address, length )  BE
+$(
+//  Write an "abshunk" header.
+
+    writeword( t.abshunk )
+    writeword( address )
+    writeword( length )
+$)
+
+
+
+AND readword( lv.word )  =  readwords( lv.word, 1 ) = 1
+
+
+
+AND checkword( name )  =  VALOF
+$(
+//  Read a work, making sure that it is present.
+
+    LET word  =  0
+
+    UNLESS  readword( @word )  DO
+        error( "Unexpected EOF in *"%S*"", name )
+
+    RESULTIS  word
+$)
+
+
+
+AND writeword( word )  BE  writewords( @word, 1 )
+
+
+
+AND writerange( address1, address2 )  BE
+$(
+//  Write a range of address values.
+
+    writemap( "%U5", address1 )
+
+    TEST  address2 = NIL
+        THEN  writemap( "       " )
+        ELSE  writemap( "-%U5 ", address2 )
+
+    writemap( "(%X6", address1*p.mcaddrinc )
+
+    TEST  address2 = NIL
+        THEN  writemap( ")         " )
+        ELSE  writemap( "-%X6)  ", address2*p.mcaddrinc )
+$)
+
+
+
+AND writehunkname( buffer, length, name )  BE
+$(
+//  Look to see if this buffer holds a section name, and if so, print it out.
+//  If not, then print the default name.  If the section is very short, some
+//  of the references may overflow  -  this is an occupational hazard!
+
+$<PANOS'
+    //  Default case - the byte ordering in the string is the same as the
+    //  byte ordering of the machine, so a simple buffer pointer is enough.
+
+    LET string  =  buffer + section.name
+$>PANOS'
+
+$<PANOS
+    //  On a 32000 under Panos, we have swapped the words of the section so
+    //  that word quantities are handled properly.  This means that strings
+    //  appear backwards, and hence have to swapped again.
+
+    MANIFEST  $(  sectionwords  =  section.namelength/bytesperword  $)
+
+    LET string  =  VEC sectionwords
+
+    FOR  i = 0  TO  sectionwords  DO
+    $(
+        LET word  =  buffer!(section.name + i)
+
+        swapword( @word )
+
+        string!i  :=  word
+    $)
+$>PANOS
+
+    //  Now look at the entries in the buffer to see whether they match the
+    //  criteria for a named BCPL section.  If so, then print the name out.
+
+    UNLESS  length < section.minlength  DO
+        IF  buffer!section.secword = secword  THEN
+            IF  string % 0  =  section.namelength  THEN
+                name  :=  string
+
+    writestring( name, section.namelength )
+$)
+
+
+
+AND writestring( string, width )  BE
+$(
+//  Write a string to the map file in a fixed width.
+
+    LET size  =  string % 0
+
+    writemap( string )
+
+    FOR  i = size+1  TO  width  DO  writemap( " " )
+$)
+
+
+
+AND store.getvec( upb )  =  VALOF
+$(
+//  Allocate a chunk of store from the target machine's address space, and then
+//  return its address.
+
+    LET size    =  upb + 1
+    LET length  =  (size + 2)  &  NOT 1
+
+    //  We should be careful here, since it is possible that the following
+    //  subtraction will result in underflow, and take us through zero.
+
+    IF  compare( length, storehwm ) > 0  THEN
+        error( "Relocatable store exhausted" )
+
+    //  If we drop through here, then we know that the subtraction will not
+    //  underflow, hence it is safe to do it.
+
+    storehwm  :=  storehwm - length
+
+    IF  compare( storehwm, p.storemin ) < 0  THEN
+        error( "Relocatable store exhausted" )
+
+    abshunk( storehwm, 1 )
+
+    writeword( length )
+
+    RESULTIS  storehwm + 1
+$)
+
+

@@ -1,0 +1,212 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+      ##         ######     ####    ######    #######   ########  #      # 
+      ##        ########   ######   #######   ########  ########  ##    ## 
+      ##        ##    ##  ##    ##  ##    ##  ##    ##  ##         ##  ##  
+      ##        ##    ##  ########  ##    ##  ########  ######       ##    
+      ##        ##    ##  ##    ##  ##    ##  #######   ##          #  #   
+      ##        ##    ##  ##    ##  ##    ##  ##  ##    ##         ##  ##  
+      ########  ########  ##    ##  #######   ##   ##   ########  ##    ## 
+      ########   ######   ##    ##  ######    ##    ##  ########  #      # 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   07/08/84             *
+\*****************************************************************************/
+
+
+
+SECTION "LOADREX"
+
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "IOHDR"
+
+
+MANIFEST
+$(
+    foregroundpri  =  1000
+$)
+
+
+
+LET start()  BE
+$(
+    LET args  =  "REXFILE=TASK,SET/S,COMMAND/K"
+    LET argv  =  VEC 100
+    LET task  =  0
+    LET segl  =  VEC 4
+    LET glob  =  600
+    LET stk   =  1000
+    LET scb   =  0
+
+    UNLESS  rdargs( args, argv, 100 )  DO
+    $(
+        writef( "Bad arguments for *"%S*"*N",args )
+
+        stop( 20 )
+    $)
+
+    segl!0  :=  4
+    segl!1  :=  tcb!tcb.seglist!1
+    segl!2  :=  tcb!tcb.seglist!2
+    segl!3  :=  cli.module
+    segl!4  :=  getrexseg( argv!0 )
+
+    IF  segl!4 = 0  THEN
+    $( 
+        writes( "Can't load REX*N" )
+
+        stop( 20 )
+    $)
+
+    FOR  priority = foregroundpri  TO  1  BY  -1  DO
+    $(  
+        task  :=  createtask( segl, tcb!tcb.stsiz+50, priority )
+
+        UNLESS  task = 0  DO  BREAK
+    $)
+
+    IF task = 0  THEN  GOTO err
+
+    UNLESS  argv!2 = 0  DO
+    $(
+        LET cmd   =  argv!2
+        LET cmdl  =  cmd % 0
+        LET buff  =  0
+
+        scb   :=  getvec( scb.upb + cmdl/bytesperword + 1 )
+        buff  :=  scb + scb.upb + 1
+        
+        UNLESS  scb = 0  DO
+        $(
+            scb!scb.link   :=  0
+            scb!scb.id     :=  id.inscb
+            scb!scb.type   :=  0
+            scb!scb.buf    :=  buff
+            scb!scb.pos    :=  0
+            scb!scb.end    :=  cmdl + 1
+            scb!scb.func1  :=  0
+            scb!scb.func3  :=  0
+
+            //  Copy the buffer across into the SCB.
+
+            FOR  i = 0  TO  cmdl-1  DO  buff % i  :=  cmd % (i+1)
+
+            buff % cmdl  :=  '*N'
+        $)
+    $)
+
+    cli.module!(cli.module!1)                :=  glob
+    rootnode!rtn.tasktab!task!tcb.seglist!3  :=  cli.module
+
+    IF sendpkt( notinuse, task, 0, -1, 0,
+                copydir( currentdir ),
+                consoletask,
+                scb,
+                copydir( cli.commanddir ),
+                stk,
+                "%% " ) = 0  THEN  GOTO err
+
+    IF  argv!1  THEN
+        sendpkt( notinuse, consoletask, act.set.currentinputtask, 0, 0, task, TRUE )
+
+    RETURN
+
+err:
+    writes( "LOADREX failed*N" )
+
+    stop( 20 )
+ $)
+
+
+
+AND getrexseg( name )  =  VALOF
+$(
+//  Find the rex segment to create the new CLI.  This is found either in a
+//  file, or as the CLI segment of another task.
+
+    LET fname  =  name = 0  -> "sys:sys.rex.obj.rexcli",  name
+    LET seg    =  loadseg( fname )
+    LET task   =  0
+
+    UNLESS  seg = 0  DO  RESULTIS  seg
+
+    //  Ok.  The loadseg failed, so it is possible that this might be a task
+    //  number.
+
+    IF  convertnumber( fname, @task )  THEN
+
+        //  This is a task number, and so we can find the REX segment from a
+        //  loaded task.
+        
+        RESULTIS  rootnode!rtn.tasktab!task!tcb.seglist!4
+
+    //  If all that fails, then tough!
+
+    RESULTIS  0
+$)
+
+
+
+AND convertnumber( string, number )  =  VALOF
+$(
+    LET result  =  0
+
+    FOR  i = 1  TO  string % 0  DO
+    $(
+        LET ch  =  string % i
+        
+        UNLESS  '0' <= ch <= '9'  DO  RESULTIS  FALSE
+        
+        result  :=  result * 10  +  ch  -  '0'
+    $)
+
+    !number  :=  result
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND cli.init( pkt )  =  VALOF
+$(
+    initio()
+    currentdir           :=  pkt!pkt.arg1
+    consoletask          :=  pkt!pkt.arg2
+    cli.currentinput     :=  pkt!pkt.arg3
+    cli.standardinput    :=  findinput( "**" )
+    cli.currentoutput    :=  findoutput( "**" )
+    cli.standardoutput   :=  cli.currentoutput
+
+    IF  cli.currentinput = 0  THEN  cli.currentinput  :=  cli.standardinput
+
+    selectinput( cli.currentinput )
+    selectoutput( cli.currentoutput )
+
+    consoletask          :=  ABS cli.standardinput!scb.type
+    cli.background       :=  FALSE
+    cli.commanddir       :=  pkt!pkt.arg4
+    returncode           :=  0
+    cli.returncode       :=  0
+    cli.faillevel        :=  cli.initialfaillevel
+    cli.result2          :=  0
+    cli.commandfile % 0  :=  0
+    cli.defaultstack     :=  pkt!pkt.arg5
+    cli.module           :=  0
+
+    FOR  i = 0  TO  pkt!pkt.arg6 % 0  DO  cli.prompt % i  :=  pkt!pkt.arg6 % i
+
+    tcb!tcb.seglist!3    :=  0
+    start                :=  cli.undefglobval
+
+    result2              :=  pkt
+
+    RESULTIS  qpkt
+$)
+
+

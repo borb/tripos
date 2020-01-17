@@ -1,0 +1,16 @@
+.key server/s,com/s,de/s,rmail/s,rmessage/s
+IF EQ server <server$s>; obj:link server mobj:n mobj:        to mobj:n.tserver
+IF EQ com <com$nocom>; IF mctype=LSI4; SKIP lsi4com
+
+IF EQ com <com$nocom>; obj:link com   mobj:n mobj: CMAIN CSEND to mobj:n.tcom
+IF EQ demon <demon$d>; obj:link demon mobj:  mobj:           to mobj:n.tdemon
+IF EQ rmail <rmail$normail>; obj:link mobj:  rmail    r      to mobj:n.trmail
+IF EQ rmessage <rmessage$r>; obj:link mobj:  rmessage r      to mobj:n.trmessage
+QUIT 0
+LAB lsi4com
+obj:link com-1 mobj:n mobj:                to mobj:n.tcom-1
+obj:link com-2 mobj:n mobj: CMAIN CSEND to mobj:n.tcom-2
+join   mobj:n.tcom-1 mobj:n.tcom-2         as mobj:n.tcom
+delete mobj:n.tcom-1 mobj:n.tcom-2
+
+

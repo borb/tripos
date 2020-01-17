@@ -1,0 +1,446 @@
+// Source file "block" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+// V2.0, May 1983 - includes fold and unfold operations
+
+SECTION "BLOCK"
+GET "libhdr"
+GET "wrshdr"
+
+LET block.readfile() BE $(
+  // asks for a filename, and reads it into the text
+  // at the current cursor postion.
+  LET inputstream = input()
+  LET v, inbuf, reply = ?, ?, ?
+  v := getvec(10 * 3)
+ retry:
+  inbuf := getvec(80 / bytesperword)
+//  let v = vec 40  // savebuf, then string for OS
+//  let inbuf = getvec(80/bytesperword)
+//  let reply = ?
+  cmd.init(v)
+  cmd.simple(3, "Use this command to read a file*n")
+  cmd.simple(3, "into the text at the current cursor position.*n")
+  reply := request.filename(inbuf, "Name of file to read? ")
+  cmd.finish()  // unsplurges screen
+  freevec(inbuf)
+  IF reply = (ctl&'U') THEN GOTO done  // abort
+  $( LET src, dst, c = 0, 1, ?    // must form a kosher string for OS
+     $( c := qbuf.file%src        // that's where filename was put
+        IF c = ch.line THEN BREAK
+        v%dst := c
+        IF dst > 38*bytesperword THEN BREAK
+        src := src + 1; dst := dst + 1 $) REPEAT
+     v%0 := dst - 1  // length of string
+     IF dst = 1 THEN GOTO done  // he just hit return
+  $)
+  message("  Opening *"%S*" ...*n", v)
+  reply := sys.findinput(v)  // is it there?
+
+  IF reply = 0 THEN $(
+//    test result2 = 0 then $(
+      error("Cannot find/open file *'%s*'", v); GOTO done $)
+//    else goto retry $) // V2.0 OS command
+      
+  sys.selectinput(reply)
+  message("  Reading *"%S*" ...*n", v)
+
+  $( LET c, cnt = ?, 0
+     $( c := sys.filerdch()
+        cnt := cnt + 1
+        IF cnt = 100 THEN $(
+          sys.keywaiting(); cnt := 0; IF checkint() THEN BREAK $)
+        IF c = endstreamch THEN BREAK  // also, check interrupt
+        cur.inschar(c); cur.right()  $) REPEAT $)
+  sys.endread()
+  message("  Done*n"); sys.keywait(200)
+  done: sys.selectinput(inputstream); freevec(v) $)
+
+// checking has to be done at the right moment, because of multi-windows
+// nothing gets to these routines if 'browse' is true in the current window
+// this is called at the beginning of .delete,
+// to prevent embarassment in the source window (if different)
+LET notbrowse() = VALOF TEST browse THEN $(
+  error("You are in BROWSE mode - text cannot be altered"); RESULTIS no $)
+  ELSE RESULTIS yes
+
+LET blockisok() = VALOF $(
+  LET bx, b.y, kx, ky = marker.x!10, marker.y!10, marker.x!11, marker.y!11
+  RESULTIS
+     ky >= b.y & b.y >= 0 &
+     (~marker.hidden!10) &
+     (~marker.hidden!11) &
+     (t.column | ky = b.y -> kx > bx, TRUE) &
+     (marker.alternate!10 -> marker.alternate!11, (~marker.alternate!11)) -> yes, no $)
+
+LET checkblock() = VALOF $(
+  IF blockisok() THEN $(
+    marker.x!14         := filecol  // remember cursor position
+    marker.y!14         := fileline
+    marker.alternate!14 := no
+    marker.x!13         := marker.x!10 // for ^KV command
+    marker.y!13         := marker.y!10
+    marker.alternate!13 := marker.alternate!10
+    cur.marker(10); RESULTIS yes $) // move to <B>
+  error("Block not well defined or <B> and <K> not set (use ^KB, ^KK)")
+  RESULTIS no $)
+
+LET block.writefile() BE IF checkblock() THEN $(
+  LET outputstream = output() // must be restored afterwards
+  LET v = VEC 40  // savebuf, then string for OS
+  LET inbuf = getvec(72/bytesperword)
+  LET reply = ?
+  cmd.init(v)
+  cmd.simple(3, "The text between <B> and <K> will be written to a file*n")
+  reply := request.filename(inbuf, "Name of file to write to? ")
+  cmd.finish()
+  IF reply = (ctl&'U') THEN GOTO done  // cancel command
+  $( LET src, dst, c = 0, 1, ?
+     $( c := qbuf.file%src
+        IF c = ch.line THEN BREAK
+        IF dst > 38*bytesperword THEN BREAK
+        v%dst := c; dst := dst + 1; src := src + 1 $) REPEAT
+     v%0 := dst - 1; IF dst = 1 THEN GOTO done $)
+  message("  Opening *"%S*" ...*n", v)
+  reply := sys.findoutput(v)
+  IF reply = 0 THEN $( error("Cannot find/open/write to file *'%S*'", v); GOTO done $)
+  sys.selectoutput(reply)
+  $( LET bx, kx, ky, cnt = marker.x!10, marker.x!11, marker.y!11, 0
+  TEST t.column THEN $(  // completely different op in column mode
+    $( filecol := 0
+       message( "  Writing *"%S*" ...*N", v )
+
+       $( LET c = textspace%(textcur + filecol)
+          IF filecol >= bx THEN sys.filewrch(c)
+          cnt := cnt + 1; IF cnt = 100 THEN $(
+            sys.keywaiting(); IF checkint() THEN GOTO inter; cnt := 0 $)
+          IF c = ch.line | c >= ch.lineend THEN BREAK
+          cur.right()
+          IF filecol >= kx THEN $( sys.filewrch(ch.line); BREAK $) $) REPEAT
+       IF fileline = ky THEN BREAK
+       cur.down() $) REPEAT $)
+  ELSE $(
+    WHILE filecol ~= kx | fileline ~= ky DO $(
+      sys.filewrch(textspace%(textcur + filecol))
+      cnt := cnt + 1; IF cnt = 100 THEN $(
+        sys.keywaiting(); IF checkint() THEN GOTO inter; cnt := 0 $)
+      cur.right() $) $) $)
+  inter:  sys.endwrite()
+  message("  Done*n"); sys.keywait(200)
+  done: cur.marker(14)  // move back to user's cursor
+  selectoutput(outputstream) // previous output stream
+  freevec(inbuf) $)
+
+LET block.delete() BE IF checkblock() & notbrowse() THEN $(
+  LET bx, b.y, kx, ky, cnt = marker.x!10, marker.y!10,
+                             marker.x!11, marker.y!11, 99
+  marker.hidden!10 := yes; marker.hidden!11 := yes
+  message("  Deleting block ...*n")
+  // 23 Feb 83, changes here so that chars are deleted in right order for retrieval
+  cur.marker(11) // move to end of block
+  TEST t.column THEN $(
+    $(
+       $( LET c = textspace%(textcur + filecol)
+          IF c = ch.line | c >= ch.lineend THEN BREAK
+          IF filecol >= kx THEN BREAK
+          filecol := filecol + 1 $) REPEAT
+       $( IF filecol <= bx THEN BREAK
+          cur.left(); cur.delchar() $) REPEAT
+       textpush(ch.line)
+       IF fileline = b.y THEN BREAK
+       cur.up() $) REPEAT $)
+  ELSE $(
+    $( IF marker.y!10 = fileline & marker.x!10 = filecol THEN BREAK
+       cnt := cnt + 1; IF cnt = 100 THEN $(
+         cnt := 0; sys.keywaiting(); IF checkint() THEN BREAK $)
+       cur.left(); cur.delchar() $) REPEAT $)
+  textpush(0)
+  cur.marker(14) $)
+
+LET block.op(delsrc) BE IF checkblock() THEN $(
+  LET bx, kx, ky, cnt= marker.x!10, marker.x!11, marker.y!11, 99
+  LET cur.op = t.insertmode -> cur.inschar, cur.replacechar
+  LET b, blim, bptr = ?, 40000, 0 // bodge
+    $( LET spare = getvec(100)
+       $( b := getvec(blim/bytesperword)
+          IF b ~= 0 THEN BREAK
+          blim := blim - 300 $) REPEATWHILE blim > 500
+       freevec(spare) $)
+  IF b = 0 THEN $( error("Memory too small - no block operations"); RETURN $)
+  message( delsrc  ->  "  Moving block ...*N", "  Copying block ...*N" )
+
+  TEST t.column THEN $(
+    $( filecol := 0
+       $( LET c = textspace%(textcur + filecol)
+          IF filecol >= bx THEN $(
+            b%bptr := c; bptr := bptr + 1; IF bptr > blim THEN GOTO nospace $)
+          IF c = ch.line | c >= ch.lineend THEN BREAK
+          IF filecol = marker.x!15 & fileline = marker.y!15 THEN GOTO folderr
+          cur.right()
+          IF filecol >= kx THEN $(
+            b%bptr := ch.line; bptr := bptr + 1; IF bptr > blim THEN GOTO nospace
+            BREAK $) $) REPEAT
+       IF fileline = ky THEN BREAK
+       sys.keywaiting(); IF checkint() THEN GOTO done
+       cur.down() $) REPEAT $)
+  ELSE $(
+    $( IF filecol >= kx & fileline >= ky THEN BREAK
+       IF filecol = marker.x!15 & fileline = marker.y!15 THEN GOTO folderr
+       b%bptr := textspace%(textcur + filecol)
+       bptr := bptr + 1; IF bptr >= blim THEN GOTO nospace
+       cnt := cnt + 1; IF cnt = 100 THEN $(
+         sys.keywaiting(); IF checkint() THEN GOTO done; cnt := 0 $)
+       cur.right() $) REPEAT $)
+  cur.marker(14)
+  IF delsrc THEN block.delete() // no interrupt checking from now on
+  cur.marker(14)                // ^KV from browse window bug
+  marker.hidden!10 := no; marker.hidden!11 := no // delete hides them
+  // The content of the block has been read into the getvec'd store.
+  // now we write it at the destination
+  marker.x!10 := filecol; marker.y!10 := fileline; marker.alternate!10 := no
+  blim := bptr; bptr := 0; bx := filecol // slight cheat
+  TEST t.column THEN $(
+    $( filecol := 0
+       $( LET c = textspace%(textcur + filecol)
+          IF filecol = bx THEN BREAK
+          IF c = ch.line | c >= ch.lineend THEN cur.inschar(' ')
+          cur.right() $) REPEAT
+       $( LET c = b%bptr
+          bptr := bptr + 1; IF bptr >= blim THEN GOTO done
+          IF c = ch.line | c >= ch.lineend THEN BREAK
+          cur.op(c)
+          cur.right() $) REPEAT
+       $( LET oldline = fileline // special fix in case at end of file
+          cur.down()
+          IF oldline = fileline THEN $(
+            // end of file - new lines must be added, what a bore
+            LET oldcol = ?
+            $( oldcol := filecol; cur.right() $) REPEATWHILE oldcol ~= filecol
+            cur.inschar(ch.line)
+            cur.right() $) $) $) REPEAT $)
+  ELSE $(
+    WHILE bptr < blim DO $( cur.op(b%bptr); cur.right(); bptr := bptr + 1 $) $)
+
+  done: freevec(b)
+  marker.y!11 := fileline; marker.x!11 := filecol; marker.alternate!11 := no
+  cur.marker(14); RETURN
+
+ folderr: freevec(b)
+  error("Block operation not allowed with fold inside block - cancelled")
+  cur.marker(14)
+  RETURN
+
+ nospace: freevec(b)
+  // V1.7.3 It has been reported that this error, when in split screen mode,
+  // can leave the markers in an inconsistent state - however I
+  // cannot see how. The maximum block size has been drastically increased
+  // now, maybe I can just forget this one...
+  error("Block too big, use 2 smaller blocks"); cur.marker(14) $)
+
+LET block.copy() = block.op(no)
+
+LET block.move() = block.op(yes)
+
+LET block.fold() BE $(
+  // Turns the current block into marker 15
+  // Only one folded block per window allowed.
+  LET smallblock = ?
+  LET bx, kx, ky, cnt= marker.x!10, marker.x!11, marker.y!11, 99
+  LET cur.op = t.insertmode -> cur.inschar, cur.replacechar
+  LET b, blim, bptr = ?, 15000, 0 // bodge
+
+  IF ~blockisok() THEN $( error("Block not well defined, can't fold"); RETURN $)
+  IF marker.alternate!10 THEN $(
+    error("Cursor and block must be in same window to fold"); RETURN $)
+  IF marker.y!15 >= 0 THEN $(
+    message( "  Unfolding existing fold%s*n", (t.split -> " in this window", ""))
+    block.unfold() $)
+  checkblock() // will succeed - moves us to <B>
+
+  // chunk taken out of block.op
+    $( LET spare = getvec(100)
+       $( b := getvec(blim/bytesperword)
+          IF b ~= 0 THEN BREAK
+          blim := blim - 300 $) REPEATWHILE blim > 500
+       freevec(spare) $)
+  IF b = 0 THEN $( error("Memory too small - no block operations"); RETURN $)
+  message("  Folding block ..." )
+
+  TEST t.column THEN $(
+    $( filecol := 0
+       $( LET c = textspace%(textcur + filecol)
+          IF filecol >= bx THEN $(
+            b%bptr := c; bptr := bptr + 1; IF bptr > blim THEN GOTO nospace $)
+          IF c = ch.line | c >= ch.lineend THEN BREAK
+          cur.right()
+          IF filecol >= kx THEN $(
+            b%bptr := ch.line; bptr := bptr + 1; IF bptr > blim THEN GOTO nospace
+            BREAK $) $) REPEAT
+       IF fileline = ky THEN BREAK
+       sys.keywaiting(); IF checkint() THEN GOTO done
+       cur.down() $) REPEAT $)
+  ELSE $(
+    $( IF filecol >= kx & fileline >= ky THEN BREAK
+       b%bptr := textspace%(textcur + filecol)
+       bptr := bptr + 1; IF bptr >= blim THEN GOTO nospace
+       cnt := cnt + 1; IF cnt = 100 THEN $(
+         sys.keywaiting(); IF checkint() THEN GOTO done; cnt := 0 $)
+       cur.right() $) REPEAT $)
+  cur.marker(14)
+
+  // now must compress to a smaller vector, which hangs around
+  // until the block is unfolded.
+  smallblock := getvec(bptr / bytesperword)
+  IF smallblock = 0 THEN GOTO nospace
+  FOR i = 0 TO bptr DO smallblock%i := b%i
+  folded.block := smallblock
+  folded.len := bptr
+  block.delete()
+
+ done:
+  marker.x!15 := marker.x!13
+  marker.y!15 := marker.y!13
+  marker.alternate!15 := no
+  freevec(b)
+  RETURN
+
+ nospace:
+  error("Not enough space to fold, sorry - operation cancelled")
+  freevec(b)
+  cur.marker(14) $)
+
+LET block.unfold() BE $(
+  LET cur.op = t.insertmode -> cur.inschar, cur.replacechar
+  LET b, bptr, blim = folded.block, 0, folded.len
+  LET bx = ?
+  marker.x!14 := filecol
+  marker.y!14 := fileline
+  marker.alternate!14 := no
+  IF marker.y!15 < 0 THEN $(
+    error("Cannot unfold, no folded block%s",
+      (t.split -> " in this window", ""))
+    IF folded.block ~= 0 THEN
+      error("Internal block.unfold [%n,-ve]->%n [%n,%n]->%n",
+        marker.x!15, folded.block,
+        otherbuf!35, otherbuf!36, otherbuf!33)
+    RETURN $)
+  IF folded.block = 0 THEN $(
+    error("Internal - block.unfold [%n,%n]->0 [%n,%n]->%n",
+      marker.x!15, marker.y!15,
+      otherbuf!35, otherbuf!36, otherbuf!33); RETURN $)
+  marker.alternate!15 := no // never is
+  cur.marker(15)
+  bx := filecol
+  marker.y!15 := -1
+
+
+// Slab copied from block.op
+  TEST t.column THEN $(
+    $( filecol := 0
+       $( LET c = textspace%(textcur + filecol)
+          IF filecol = bx THEN BREAK
+          IF c = ch.line | c >= ch.lineend THEN cur.inschar(' ')
+          cur.right() $) REPEAT
+       $( LET c = b%bptr
+          bptr := bptr + 1; IF bptr >= blim THEN GOTO done
+          IF c = ch.line | c >= ch.lineend THEN BREAK
+          cur.op(c)
+          cur.right() $) REPEAT
+       $( LET oldline = fileline // special fix in case at end of file
+          cur.down()
+          IF oldline = fileline THEN $(
+            // end of file - new lines must be added, what a bore
+            LET oldcol = ?
+            $( oldcol := filecol; cur.right() $) REPEATWHILE oldcol ~= filecol
+            cur.inschar(ch.line)
+            cur.right() $) $) $) REPEAT $)
+  ELSE $(
+    WHILE bptr < blim DO $( cur.op(b%bptr); cur.right(); bptr := bptr + 1 $) $)
+
+ done:
+  freevec(b)
+  cur.marker(14)
+  folded.block := 0
+  folded.len := 0 $)
+
+//
+// word operations
+//
+
+LET eol(c) = c = ch.line | c >= ch.lineend // a global
+
+LET alphanum(c, eol.is.alph) =
+  eol(c) -> eol.is.alph, (('A'<=c & c<='Z') | ('a'<=c & c<='z') | ('0'<=c & c<='9'))
+
+LET lowerp(c) = 'a'<=c<='z'
+
+LET upperp(c) = 'A'<=c<='Z'
+
+LET whitep(c) = c = (ctl & 'I') | c = ' '
+
+// new addition - lowercase -> uppercase is end of word
+//                whitespace -> notwhite is start of word
+LET block.wordright() BE $(
+  LET c = textspace%(textcur + filecol)
+  IF eol(c) THEN $( cur.right(); RETURN $)
+  $( LET low = lowerp(c)
+     WHILE  alphanum(c, no) DO
+       $( IF low & upperp(c) THEN BREAK
+          cur.right()
+          c := textspace%(textcur + filecol)
+          low := low | lowerp(c) $) $)
+  $( LET white = whitep(c)
+     WHILE ~alphanum(c,yes) DO
+       $( IF white & ~whitep(c) THEN BREAK
+          cur.right()
+          c := textspace%(textcur + filecol)
+          white := white | whitep(c) $) $) $)
+
+// not moved to new definition - see if anyone notices?
+// yuk, no do it.
+LET block.endwordleft() BE $( LET c = ?
+  LET checkbof() = fileline = 0 & filecol = 0
+  $( LET upper = no
+     $( cur.left(); c := textspace%(textcur + filecol)
+        upper := upper | upperp(c)
+        IF upper & lowerp(c) THEN $( cur.right(); RETURN $)
+        IF checkbof() THEN RETURN
+        $) REPEATWHILE alphanum(c, yes) $)
+  $( LET unwhite = no // no - this doesn't seem constructive
+     $( cur.left(); c := textspace%(textcur + filecol)
+        IF checkbof() THEN RETURN
+        $) REPEATUNTIL alphanum(c, no) $)
+  cur.right() $)
+
+LET block.delword() BE $(  // delete in nice order in case of an undelete
+  // Less energetic than move (by popular demand)
+  // deletes either alphanum or punctuation, depending on what is under the
+  // cursor.
+  LET line, col = fileline, filecol
+  LET c = textspace%(textcur + filecol)
+  LET i = 0
+  LET alph = alphanum(c, no)
+  IF eol(c) THEN $( cur.delchar.backwards(); RETURN $)
+  $( LET lower = lowerp(c)
+     LET white = whitep(c)
+     WHILE alphanum(c, ~alph) EQV alph DO $(
+       IF lower & upperp(c) THEN BREAK
+       IF white & ~whitep(c) THEN BREAK
+       cur.right()
+       c := textspace%(textcur + filecol)
+       lower := lower | lowerp(c)
+       white := white | whitep(c)
+       i := i + 1 $) $)
+  FOR j = 1 TO i DO cur.left()
+  FOR j = 1 TO i DO cur.delchar.backwards()
+  textpush(0) $)
+
+LET block.wordleft()  BE $(
+  LET cur, lcur = filecol,  ?
+  LET c = textspace%(textcur + filecol)
+  IF filecol = 0 THEN $( cur.left(); RETURN $)
+  filecol := 0
+  $( lcur := filecol; block.wordright() $) REPEATUNTIL filecol >= cur
+  filecol := lcur $)
+
+

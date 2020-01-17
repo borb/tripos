@@ -1,0 +1,230 @@
+/****************************************************************************\
+*                           Systems Research Group                           *
+******************************************************************************
+
+
+                     ########  ########  ##    ##  ########
+                     ########  ########  ###  ###  ########
+                        ##        ##     ########  ##
+                        ##        ##     ## ## ##  ######
+                        ##        ##     ##    ##  ##
+                        ##        ##     ##    ##  ##
+                        ##     ########  ##    ##  ########
+                        ##     ########  ##    ##  ########
+
+                 ######   ##    ##    ####    #######   ########
+                ########  ##    ##   ######   ########  ########
+                ##        ##    ##  ##    ##  ##    ##  ##
+                #######   ########  ########  ########  ######
+                      ##  ##    ##  ##    ##  #######   ##
+                      ##  ##    ##  ##    ##  ##  ##    ##
+                ########  ##    ##  ##    ##  ##   ##   ########
+                 ######   ##    ##  ##    ##  ##    ##  ########
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   19/12/86            *
+\****************************************************************************/
+
+
+
+SECTION "TIMESHARE"
+
+
+
+GET "LIBHDR"
+GET "CLIHDR"
+
+
+
+MANIFEST
+$(
+    timeslice   =  tickspersecond/10
+    priority    =  maxint
+$)
+
+
+
+LET start( initpkt )  BE
+$(
+//  Main routine of the timeshare package.  If we are a command, then create
+//  a task to handle the time sharing.  Otherwise, set up the timesharing
+//  code forthwith.
+
+    TEST  initpkt = 0  THEN
+    $(
+        //  This is the command version, so check the arguments given, and
+        //  then create ourselves as a task so that we can perform the
+        //  timesharing function.
+
+        LET args  =  "No arguments needed"
+        LET argv  =  VEC 20
+        LET task  =  0
+
+        rdargs( args, argv, 20 )
+
+        task  :=  copytask( cli.module )
+
+        TEST  task = 0  THEN
+        $(
+            //  Failed to create a task for some reason.
+
+            writes( "TIMESHARE failed.*N" )
+
+            stop( 20 )
+        $)
+        ELSE
+        $(
+            //  Creation succeeded, so start the task up, and then return
+            //  to the caller.
+
+            sendpkt( notinuse, task )
+
+            writef( "TIMESHARE task is %N.*N", task )
+        $)
+    $)
+    ELSE
+    $(
+        //  We are a task which has been started up by the equivalent
+        //  command.  Pick up its task ID (and hence a pointer to its
+        //  CLI code), and then return.
+
+        LET task     =  initpkt!pkt.id
+        LET seglist  =  rootnode!rtn.tasktab!task!tcb.seglist
+        LET clisize  =  seglist!0
+        LET clicode  =  seglist!clisize
+
+        returnpkt( initpkt, TRUE, 0 )
+
+        initio()
+        selectoutput( findoutput( "**" ) )
+
+        UNTIL  testflags( #B0001 )  DO
+        $(
+            delay( timeslice )
+
+            timeshare( clisize, clicode )
+        $)
+
+        endwrite()
+
+        endtask( tcb!tcb.seglist!3 )
+    $)
+$)
+
+
+
+AND copytask( oldsegment )  =  VALOF
+$(
+//  Make a copy of the segment list we have been given, and then make a task
+//  out of it.
+
+    LET seglist  =  VEC 3
+
+    seglist!0  :=  3
+    seglist!1  :=  tcb!tcb.seglist!1
+    seglist!2  :=  tcb!tcb.seglist!2
+    seglist!3  :=  copysegment( oldsegment )
+
+    IF  seglist!3 = 0  THEN  RESULTIS  0
+
+    RESULTIS  createtask( seglist, 500, priority )
+$)
+
+
+
+AND copysegment( segment )  =  segment = 0  ->  0, VALOF
+$(
+//  Make a copy of the segment list given.
+
+    LET link  =  segment!0
+    LET size  =  segment!1
+    LET copy  =  getvec( size )
+
+    IF  copy = 0  THEN  RESULTIS  0
+
+    copy!0  :=  copysegment( link )
+
+    FOR  i = 1  TO  size  DO  copy!i  :=  segment!i
+
+    RESULTIS  copy
+$)
+
+
+
+AND timeshare( clisize, clicode )  BE
+$(
+//  Perform a time share operation.  We rotate the priorities of the relevant
+//  tasks round by one.
+
+    LET tasktable      =  rootnode!rtn.tasktab
+    LET tasktablesize  =  tasktable!0
+
+    LET tracing        =  testflags( #B1000 )
+
+    LET task1          =  0
+    LET prio1          =  0
+
+    FOR  id = 1  TO  tasktablesize  DO
+    $(
+        LET task  =  tasktable!id
+
+        UNLESS  task = 0  DO
+        $(
+            //  This slot has a task entry in it, so take its inside
+            //  leg measurements.
+
+            LET seglist   =  task!tcb.seglist
+            LET priority  =  task!tcb.pri
+
+            IF  seglist!0 = clisize  THEN
+
+                //  We may be OK, since the segment lists are of the same
+                //  size.  We must check the code pointer though.
+
+                IF  seglist!clisize = clicode  THEN
+
+                    //  Jeronimo!  We have found a CLI of the correct shape,
+                    //  so we should massage its priority.
+
+                    TEST  task1 = 0  THEN
+                    $(
+                        //  This is the first task to be found, so we should
+                        //  remember its id and priority, and move it to a
+                        //  new priority slot.
+
+                        LET p  =  1
+
+                        task1  :=  id
+                        prio1  :=  priority
+
+                        WHILE  changepri( id, p ) = 0  DO  p  :=  p + 1
+                    $)
+                    ELSE
+                    $(
+                        //  Not the first time round, so we have a previous
+                        //  task to work on.
+
+                        IF  tracing  THEN
+                            writef( "TimeShare:  T%N -> %N*N", id, prio1 )
+
+                        changepri( id, prio1 )
+
+                        prio1  :=  priority
+                    $)
+        $)
+    $)
+
+    //  When we drop out of that lot, we still have to set the priority
+    //  of the first task in the list.
+
+    UNLESS  task1 = 0  DO
+    $(
+        IF  tracing  THEN
+            writef( "TimeShare:  T%N -> %N*N", task1, prio1 )
+
+        changepri( task1, prio1 )
+    $)
+$)
+
+

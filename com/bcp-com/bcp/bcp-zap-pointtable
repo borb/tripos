@@ -1,0 +1,143 @@
+SECTION "BCP-ZAP-POINTTABLE"
+
+GET "LIBHDR"
+$$DEBUG := TRUE
+
+/*
+ * ZAP the bcp point table in the overlay file
+ */
+
+GET "MANHDR"
+GET "IOHDR"
+
+MANIFEST
+$( Point.size   =    3
+   BASELEN      = Point.size * 6
+   A.from       = 0
+   A.NOVER      = A.from+1
+   argv.upb     = 100/BYTESPERWORD +A.NOVER*2   // For rounding ...
+//   t.end = 1002; t.hunk =1000; t.reloc  = 1001
+$)
+
+GLOBAL
+$(      SYSOUT  : UG
+        VER     : UG+1
+$)
+
+LET START() BE
+$( LET in, out =?, ?
+   LET arg.string = "from/A,VER/S"
+   LET base     = VEC baselen           // Table of start points
+   LET ARGV     = VEC argv.upb
+   LET base.note= VEC 2
+   LET SYSIN    = INPUT()
+   LET RC       = ?
+   LET files    = ?
+
+   SYSOUT       := OUTPUT()
+   RC           := 0
+
+   FOR I = 0 TO BASELEN DO BASE!I := 0
+
+   IF RDARGS(arg.string, argv, argv.upb)=0
+   $( mess("bad args for *"%S*"", arg.string)
+      STOP(20)
+   $)
+
+   ver := ARGV!A.nover
+   out := findupdate(argv!A.from)
+
+   IF out=0
+   $( MESS("Failed to open %S", argv!A.from)
+      STOP(20)
+   $)
+   SELECTOUTPUT(out)
+   SELECTINPUT(out)
+
+   readwords(@files, 1)
+
+   NOTE(base.note)                              // save start
+   readwords(base, files*point.size)
+   $( Mess("*NPOINT table is %n files*N", files)
+      FOR I = 0 TO files*Point.size-1 DO MESS("%X4 ", BASE!I )
+      MESS("*N")
+   $)
+
+   FOR I = 0 TO BASELEN DO BASE!I := 0
+
+   FOR i = 0 TO FILES-1
+   $(   LET res = ?
+        NOTE(base+(i*point.size))
+        MESS("[file %n:", i)
+        FOR j = 0 TO point.size-1 DO MESS(" %X4", base + (i*point.size) + j)
+        MESS("]")
+        UNLESS readseg() = TRUE
+        $(  RC := 20
+            mess("readseg failed on %n*N", i)
+            BREAK
+        $)
+   $)
+
+   IF RC = 0
+   $( Mess("*NPOINT table is*N")
+      FOR I = 0 TO files*Point.size-1 DO MESS("%X4 ", BASE!I )
+      MESS("*N")
+      POINT(BASE.NOTE)
+      WRITEWORDS(BASE, files*Point.size)
+   $)
+
+   ENDWRITE()
+   SELECTINPUT(0)
+   SELECTOUTPUT(0)
+
+   TEST RC = 0
+   THEN mess("%S updated*N", ARGV!A.from)
+   ELSE Mess("  ZAP failed*N")
+
+   STOP(RC)
+$)
+
+AND readseg() = VALOF
+$(Each.section
+       $(Each.bit
+          LET type = T.end
+          LET space = ?
+          LET n     = ?
+
+          IF readwords(@type, 1)=0 & type=t.end RESULTIS type
+          IF type = t.end $( $<DEBUG mess("E*E"); $>DEBUG RESULTIS TRUE $)
+          UNLESS type=T.hunk | type=t.reloc
+          $( mess("[type %N]", type);           RESULTIS FALSE $)
+          UNLESS readwords(@n, 1) = 1           RESULTIS FALSE
+          $<DEBUG mess("%C%N|*E", type=T.hunk -> 'H', 'R', n)   $>DEBUG
+
+          space := GETVEC(n);
+          $<SPARE WRITEF("[GETVEC(%N) gave %N]*E", n, space) $>SPARE
+          IF space=0
+          $( mess("Failed to get a vector for relocation information -*
+                * More free space needed*N")
+             RESULTIS FALSE
+          $)
+
+          UNLESS readwords(space, n) = n
+          $( mess("readwords %n failed*N", n); RESULTIS FALSE $)
+
+          FREEVEC(space)
+       $)Each.bit REPEAT
+$)Each.section REPEAT
+
+AND mess(s, a,b,c,d,e) BE IF ver
+$( LET O = OUTPUT()
+   SELECTOUTPUT(SYSOUT)
+   WRITEF(s, a,b,c,d,e)
+   WRCH('*E')
+   SELECTOUTPUT(o)
+$)
+
+AND NOTE(ADDR) BE
+SENDPKT(notinuse, ABS COS ! scb.type, action.note, ?,?, COS!SCB.arg1, addr)
+
+AND POINT(ADDR) =
+SENDPKT(notinuse, ABS COS ! scb.type, action.point, ?,?, COS!SCB.arg1, addr)
+
+

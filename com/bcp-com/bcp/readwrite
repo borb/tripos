@@ -1,0 +1,37 @@
+SECTION "READWRITE"
+
+GET "LIBHDR"
+GET "PHHDR"
+GET "IOHDR"
+GET "MANHDR"
+
+LET READSTREAM( STREAM, PAGE, V, LEN ) = VALOF
+$( LET OLD = CIS
+   LET RES = ?
+
+   POINTAT(STREAM, PAGE)
+   CIS := STREAM
+   RES := READWORDS(V, LEN)
+   CIS := OLD
+   RESULTIS (ABS RES) = LEN -> RC.OK, 0
+$)
+
+AND WRITESTREAM( STREAM, PAGE, V, LEN ) = VALOF
+$( LET OLD = COS
+   LET RES = ?
+
+   POINTAT(STREAM, PAGE)
+   COS := STREAM
+   RES := WRITEWORDS(V, LEN)
+   COS := OLD
+   RESULTIS (ABS RES) = LEN -> RC.OK, 0
+$)
+
+AND pointat(STREAM, PAGE) = VALOF
+$( LET PVEC = TABLE 0, ?, 0
+   PVEC!1 := ((ABS PAGE)-1)*bytesperword*PH.SIZE + (PAGE > 0 -> 0, 1)
+   sendpkt(notinuse, ABS stream!scb.type, action.point, ?,?,
+                stream!scb.arg1, PVEC)
+$)
+
+

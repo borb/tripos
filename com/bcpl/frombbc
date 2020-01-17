@@ -1,0 +1,158 @@
+/***********************************************************************
+**             (C) Copyright 1984  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+*                                                                      *
+* ########  #######    ######   ##    ##  #######   #######     #####  *
+* ########  ########  ########  ###  ###  ########  ########   ####### *
+* ##        ##    ##  ##    ##  ########  ##    ##  ##    ##  ##       *
+* ######    ########  ##    ##  ## ## ##  #######   #######   ##       *
+* ##        #######   ##    ##  ##    ##  ##    ##  ##    ##  ##       *
+* ##        ##  ##    ##    ##  ##    ##  ##    ##  ##    ##  ##       *
+* ##        ##   ##   ########  ##    ##  ########  ########   ####### *
+* ##        ##    ##   ######   ##    ##  #######   #######     #####  *
+*                                                                      *
+************************************************************************
+**    Author:  Brian Knight                          February 1984    **
+***********************************************************************/
+
+
+// This program allows transfer of a file from a BBC micro running the
+// 'PHX' terminal emulator. The switch HEX allows a binary transfer as
+// hex characters rather than an ordinary character transfer.
+
+SECTION "FROMBBC"
+
+GET "LIBHDR"
+
+GLOBAL
+    $(
+    oldout              : ug
+    hexbyte             : ug + 1
+    oddnibbles          : ug + 2
+    hexmode             : ug + 3
+    $)
+
+
+LET start() BE
+    $(
+    LET argv            = VEC 50
+    LET save            = VEC 50
+    LET term            = "/**"         // Must not start with a hex digit!
+    LET tlen            = term%0
+    LET stream          = 0
+    LET rdargs.string   = "TO/A/K,HEX/S"
+
+    oldout              := output()
+    oddnibbles          := FALSE
+
+    IF rdargs(rdargs.string, argv, 50)=0
+    THEN
+      $(
+      message("Bad args for key string *"%S*"*N", rdargs.string)
+      stop(20)
+      $)
+
+    hexmode     := argv!1 \= 0
+
+    stream := findoutput(argv!0)
+    IF stream=0
+    THEN
+      $(
+      message("Can't open %S*N", argv!0)
+      stop(20)
+      $)
+
+    // All is well: issue a bell to start the transfer.
+
+    wrch(7); wrch('*E')
+
+    selectoutput(stream)
+
+      // Main loop
+      // Note that for correct functioning in hex mode, TERM must not
+      // start with a valid hex digit character.
+      $(
+      LET t     = 1
+      LET ch    = rdch()
+
+      WHILE t<=tlen & compch(ch,term%t)=0 & ch\='*N'
+      DO $(
+         save%t := ch
+         t      := t+1
+         ch     := rdch()
+         $)
+
+      IF t>tlen & ch='*N' THEN BREAK
+      FOR j = 1 TO t-1 DO writech(save%j)
+      IF ch=endstreamch THEN GOTO ended
+
+      writech(ch)
+
+        $(
+        IF testflags(1) THEN fatal.error("BREAK*N")
+        IF ch='*N' BREAK
+        ch := rdch()
+        IF ch=endstreamch THEN GOTO ended
+        writech(ch)
+        $) REPEAT
+      $) REPEAT
+
+ended:
+    endwrite()
+    selectoutput(oldout)
+    IF oddnibbles THEN message("Odd number of hex digits received*N")
+    $)
+
+
+AND writech(c) BE TEST hexmode THEN hexwrch(c) ELSE wrch(c)
+
+
+AND hexwrch(c) BE
+    $(
+    // This routine is called with a hex digit character as argument.
+    // Every second time it is called, it writes out a binary byte whose
+    // value is given by the last 2 hex digits received. Globals HEXBYTE
+    // and ODDNIBBLES are used to remember things between calls.
+    // The character '*N' is ignored.
+
+    LET val     = ?
+    IF c='*N' THEN RETURN
+
+    val := hexval(c)
+
+    TEST oddnibbles
+    THEN wrch( [hexbyte<<4] + val ) // Second nibble of pair
+    ELSE hexbyte        := val      // First nibble of pair
+
+    oddnibbles  := NOT oddnibbles
+    $)
+
+
+AND hexval(c) = VALOF
+    $(
+    c   := capitalch(c)
+
+    IF '0' <= c <= '9' THEN RESULTIS c-'0'
+    IF 'A' <= c <= 'F' THEN RESULTIS c-'A'+10
+
+    fatal.error("Bad hex character %C*N", c)
+    $)
+
+
+AND message(f,a,b,c) BE
+    $(
+    writes("******FROMBBC: ")
+    writef(f,a,b,c)
+    $)
+
+
+AND fatal.error(f,a,b,c) BE
+    $(
+    IF NOT hexmode THEN message(f,a,b,c) // Put a copy in the file
+    endwrite()
+    selectoutput(oldout)
+    message(f,a,b,c)
+    stop(20)
+    $)
+

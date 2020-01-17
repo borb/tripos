@@ -1,0 +1,89 @@
+**********************************************************
+*                                                        *
+*        (C) Copyright 1980 TRIPOS Research Group        *
+*       University of Cambridge Computer Laboratory      *
+*                                                        *
+**********************************************************
+
+* Two routines used often by the Ring Handler Task
+*
+* Global 150 :  checksum(v, wordcount)
+*               End-around-carry checksum
+*               of v!0 to v ! [wordcount-1]
+*
+* Global 151 :  blockcopy(v1, v2, wordcount)
+*               Copy wordcount words from v1 to v2
+
+        REL     0
+
+START   DATA    ENDSTART-START
+        DATA    12345  SECWORD
+        DATA    17%8+'C'
+        TEXT    'hecksu 06-Mar-80'
+
+
+        DATA    7%8+'C','he','ck','su'
+CHKSUM  DATA    0
+        COPY    $-1,Y
+        ADD     0(Y),X
+        COPY    Y,0(X)
+        COPY    P,Y
+        COPY    Y,1(X)
+
+        COPY    A,Y             A := Vector
+        COPY    =0,A            A := 0
+        RBIT    0,S             Clear carry
+        JMP     TEST
+LOOP
+        SUB     =1,Q            Q := Q-1
+        ADDC    0(Y),A          A := A+word+carry
+        ADD     =1,Y            Y := Y+1
+TEST
+        JNE     Q,LOOP          IF Q=0 drop through
+
+        ADDC    ZERO,A          Add in last carry
+        COPY    0(X),Y
+        SUB     0(Y),X
+        JMP     1(Y)
+
+ZERO    DATA    0
+*
+*       BLOCKCOPY(V1, V2, WORDCOUNT)
+*
+* Copies WORDCOUNT words from V1 to V2
+*
+        DATA    7%8+'b','lk','co','py'
+BLCOPY  DATA    0
+        COPY    $-1,Y           BCPL entry sequence
+        ADD     0(Y),X
+        COPY    Y,0(X)
+        COPY    P,Y
+        COPY    Y,1(X)
+
+        COPY    Q,Y             Y := V2
+        COPY    4(X),Q          Q := WORDCOUNT
+        COPY    X,K             Save stack pointer
+        COPY    A,X             X := V1
+        SUB     Y,X             Offset between vectors
+        JMP     BCLEND          In case WORDCOUNT is zero
+
+BCLOOP  COPY    0(X,Y),A        Get word from V1
+        COPY    A,0(Y)          Store in V2
+        ADD     =1,Y            Step up one word
+        SUB     =1,Q            Decrement WORDCOUNT
+BCLEND  JGT     Q,BCLOOP
+
+        COPY    K,X             Restore stack pointer
+
+        JMP     :24             BCPL exit routine
+
+        DATA    0        Global definitions
+        DATA    150
+        DATA    CHKSUM-START
+        DATA    151
+        DATA    BLCOPY-START
+        DATA    151
+ENDSTART
+        END
+
+

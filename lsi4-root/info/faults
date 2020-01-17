@@ -1,0 +1,667 @@
+FAULTS FILE
+===========
+General format of a line is:
+    <fault code><space>*<fault message><end of line>
+After editing this file, use the BUILDFAULTTABLE command to regenerate
+    the random access faults file.
+
+(General application or experimental program failures)
+
+   2 inconsistent arguments specified
+   3 argument(s) out of range
+   4 string too long for internal buffer
+   5 internal buffer overflowed
+   6 failed to get store for internal buffer
+   7 failed to get store for control block
+   8 unexpected character found in data
+   9 inconsistent data found
+  10 data has wrong format
+  11 internal consistency check failed
+  12 unexpected end-of-file
+  13 invalid argument(s) specified
+  14 required argument(s) missing
+
+  40 internal error (code 40) occurred - please report
+  41 argument 1 was invalid
+  42 argument 2 was invalid
+  43 argument 3 was invalid
+  44 argument 4 was invalid
+  45 argument 5 was invalid
+  46 argument 6 was invalid
+
+(68000 machine traps)
+  70 unimplemented instruction encountered (line 1111)
+  71 unimplemented instruction encountered (line 1010)
+  72 TRAPV exception detected
+  73 CHK exception detected
+  74 spurious interrupt detected
+  75 unexpected TRAP detected
+
+(Device driver aborts)
+  81 device MOVPKT failure
+
+(General machine aborts)
+  87 privilege exception detected
+  88 division by zero attempted
+  89 bus error detected
+  90 unexpected interrupt detected
+  91 unimplemented instruction encountered
+  92 memory exception detected
+  93 power up/fail trap detected
+  94 arithmetic exception detected
+  95 stack exception detected
+  96 console interrupt detected
+  97 stack overflow detected
+  98 global routine unassigned
+  99 miscellaneous machine error trap occurred
+
+(Kernel, MLIB and BLIB errors)
+ 101 invalid task or device id
+ 102 invalid priority
+ 103 insufficient free store
+ 104 device table full
+ 105 task table full
+ 106 failure to initialise device
+ 107 device not deletable
+ 108 task not deletable
+ 109 packet not found
+ 110 task already held
+ 111 global initialisation failed (gv too small?)
+ 120 argument line invalid or too long
+ 121 file is not an object module
+ 122 invalid resident library during load
+ 123 invalid stream control block
+ 179 no assignment for SYS:
+ 180 ENDTASK failed to delete task
+ 181 QPKT failure (ignore by continuing)
+ 182 unexpected packet received (ignore by continuing)
+ 185 no selected stream for ENDREAD/ENDWRITE
+ 186 invalid input stream
+ 187 invalid output stream
+ 188 input stream replenish failure
+ 189 output stream deplete failure
+ 190 control-B break detected
+
+(Kernel, MLIB and BLIB aborts)
+ 195 coroutine fault
+ 196 insufficient free store for task activation
+ 197 free store chain corrupted
+ 198 illegal QPKT
+ 199 illegal FREEVEC
+
+(Filing system errors)
+ 201 no default directory specified when needed
+ 202 object in use
+ 203 object already exists
+ 204 directory not found
+ 205 object not found
+ 206 bad stream name
+ 207 object too large
+ 208 device busy
+ 209 packet request type unknown
+ 210 stream name component invalid
+ 211 invalid object lock
+ 212 object not of required type
+ 213 disc not validated
+ 214 disc write-protected
+ 215 rename or alias across devices attempted
+ 216 directory not empty
+ 217 too many levels
+ 218 device not mounted
+ 219 point failure
+
+ 230 requested access not permitted
+ 234 creation of files in root directory not allowed
+
+(Filing system aborts)
+ 286 data block sequence number error
+ 287 bit map corrupted (probably by user program).
+ 288 object too large (temporary)
+ 289 attempt to free a key that is already free
+ 290 attempt to allocate a key that is already allocated
+ 291 CREATETASK failure (temporary)
+ 292 LOADSEG failure (temporary)
+ 293 invalid checksum detected
+ 294 disc full - insufficient free blocks available
+ 295 attempt to free an invalid lock
+ 296 disc (hardware) error. (cumulative drive status given)
+ 297 attempt to use a key that is out of range
+ 298 requested action not recognised
+ 299 ???? Consult filing system expert
+
+
+(Device handler errors)
+ 301 device in use
+ 302 action not recognised
+ 303 device not fully implemented
+
+(Ring handler faults)
+ 400 ring handler not loaded
+ 401 not enough space for reception buffer
+ 403 GETVEC failed
+ 404 failed to create coroutine
+ 405 tx pkt queues out of step
+ 406 ring service not available
+ 407 arguments in ring rx packet invalid
+ 409 ring destination didn't reply
+
+ 410 ring destination ignored packet
+ 411 ring error
+ 412 ring destination unselected
+ 413 ring destination went unselected during basic block
+ 414 ring destination busy
+ 415 ring destination station address invalid
+ 416 bad ring transmission request
+ 417 ring not working
+
+ 420 BSP handler not loaded
+ 421 name isn't that of an SSP service
+ 422 name isn't that of a BSP connection service
+ 423 name string missing
+ 424 reply to BSP open invalid
+ 425 string after "BSP:" too long
+ 426 argument string too long
+ 427 mace failed to create byte stream
+ 428 transformed address from name server too long for buffer
+
+(Fast Ring driver/handler faults)
+ 430 fast ring broken
+ 431 fast ring deadmans handle timeout
+ 432 fast ring stopped by handler
+ 433 fast ring stop requested but ring not started
+ 434 fast ring invalid act code in pkt
+ 435 fast ring tx deactivation requested but none active
+ 436 fast ring invalid interrupt status register value
+
+ 440 transmission to name server failed
+
+ 451 mond printer not ready
+ 452 mond printer offline
+ 453 mond printer switched off
+
+ 460 fast ring rx request timed out
+ 461 bad fast ring rx request
+ 462 bad association id in fast ring rx request
+ 463 too many slots missing in rx fast ring block
+ 464 udl protocol error in rx fast ring block
+ 465 fast ring broken on rx
+
+(Linking loader faults)
+ 500 external references undefined
+ 501 common area cannot be extended
+
+(Pipe Handler Errors)
+ 601 pipe already allocated and in use
+ 602 pipe handler closing down shortly
+ 603 pipe handler unable to get buffer space
+ 604 pipe in the process of purging
+ 605 bad pipe number
+ 606 pipe handler full
+
+(Tape Handler Errors)
+ 700 TAPESERVER is not listening
+ 701 tape is not mounted
+ 702 tape drive is not ready
+ 703 tape drive is in use
+ 704 tape is already mounted
+ 705 REWIND operation failed
+ 706 unknown tape operation
+ 707 WRITE-PROTECT ring is out
+ 708 END-OF-FILE encountered
+ 709 END-OF-TAPE encountered
+ 710 tape drive error (hard)
+ 711 data transmission timeout
+ 712 LOADPOINT encountered
+ 713 tape already has an open file
+ 714 tape is in use
+ 715 tape filename illegal
+ 716 tape volume name not given
+ 717 tape volume name illegal
+ 718 wrong tape volume mounted
+ 719 tape is READ-ONLY
+ 720 filename quoted does not match tape filename
+ 721 bad tape label encountered
+
+(UIDset manipulation codes)
+ 800 (SYNFIND) no synonym found
+ 801 (SYNFIND) no such synonym domain number
+ 802 (SYNFIND) mapping file is badly formatted - consult expert
+ 803 (SYNFIND) mapping file is not available - consult expert
+ 804 error in UIDset name
+ 805 fridge does not contain the requested UIDset
+ 806 fridge is corrupt
+ 807 no one logged on
+
+(Converted Fileserver codes)
+2178 fileserver off-pack reference attempted
+2187 fileserver pool empty
+2201 fileserver pack full
+2214 object open in fileserver
+2216 fileserver range error reported
+2217 invalid fileserver UID used (pack not mounted?)
+
+(Filing Machine System codes)
+
+(User Machine Stub File Handler aborts/errors)
+4001 data transfer size error
+4002 hard return code from Filing Machine
+4003 error in append function
+4004 error in setvec function
+4005 qpkt failed
+
+4101 Filing Machine busy
+4102 unrecognised operation
+4103 invalid object lock
+4104 read/write access violation
+4105 no reply from Filing Machine
+4106 name too long to transmit (>60 characters)
+4107 lookup in nameserver failed
+
+(Filing Machine Library Routine errors)
+
+(Filing Machine Command Task errors)
+5151 unable to create new session
+5152 ssp transfer size error
+5153 unrecognised operation requested
+5154 illegal name component
+5155 object is of wrong type
+5156 object not found
+5157 object already exists
+5158 invalid object lock
+5159 requested access not permitted
+5170 unable to delete renamed object, alias performed
+5172 PUID already set in filing machine
+5171 user's PUID unknown by filing machine
+5177 link installed across packs
+5181 you are unknown to the accounting system
+5182 your disc allocation is inhibited
+
+(Filing Machine Cache Task errors)
+
+(Filing Machine Lock Task errors)
+5358 invalid lock specified
+5362 object already in use
+5363 Filing M/c lock pool empty
+
+(Filing Machine Fileserver Operations Task errors)
+5580 pack has died
+5583 invalid PUID (filing system corrupt?)
+5584 attempt to install cross-pack link
+
+(Filing Machine errors originating in Fileserver - converted codes cf2178...)
+5778 attempt to use off-pack reference
+5784 pack does not exist (pack not mounted?)
+5800 block does not exist (invalid UID?)
+5801 fileserver pack full (consult filing m/c expert)
+5814 object open in fileserver (wait a few minutes)
+5816 range error (consult filing system expert)
+5817 invalid fileserver UID used
+5850 fileserver pool empty (consult filing m/c expert)
+
+("RS" compiler for Algol 68 errors)
+
+(Hardware detected errors or checks inserted by the compiler)
+6001 stack or heap overflowed
+6002 array index was out of bounds
+6003 unset or NIL pointer was dereferenced
+6004 array sizes did not match
+6005 divisor was zero
+6006 CASE or IF selector was out of bounds
+
+(Standard prelude errors)
+6010 "**" operator was given negative power
+6011 "bits pack" was given too many elements
+6012 "bytes pack" was given too many elements
+
+(Transput errors)
+6023 writing was not allowed
+6024 establish was not allowed
+6026 dimension was too large in "set" or "establish"
+6027 dimension was too small in "set" or "establish"
+6028 file was not open
+6029 reading was not allowed
+6030 "set" was not allowed
+6031 "reset" was not allowed
+6033 shift between bin and char mood was not allowed
+6034 binary transput was not allowed
+6035 shift between read and write was not allowed
+6036 mood had not been set before call of layout routine
+6037 bounds were incorrect in "associate"
+6038 "set" was called at file end
+6039 no good character position could be ensured
+6040 no good line could be ensured
+6041 no good page could be ensured
+6042 position was incorrect in "set char number"
+6043 character was not expected or converted
+6044 string could not be converted
+6045 "backspace" was called at line beginning
+6046 line was too short
+6049 value could not be read during binary input
+6050 reidf was not allowed
+6051 input line was too long
+6052 transput system failed
+6053 missing parameter on command line
+
+(Ethernet handler errors)
+6200 Ethernet handler - wrong protocol-code found
+6201 Ethernet handler - specified socket was not reserved
+6202 Ethernet handler - bad request: wrong state, bad parameters etc.
+6203 Ethernet handler - packets cleared out when stopping
+6204 Ethernet handler - attempt to reserve already reserved socket
+6205 Ethernet handler - timeout on reception request expired
+6206 Ethernet handler - function not (yet?) implemented
+6207 Ethernet handler - congestion
+6208 Ethernet handler - service name not found
+6209 Ethernet handler - failed to map address
+6210 Ethernet handler - TCP channel failed with RESET
+6211 Ethernet handler - TCP channel closed
+6212 Ethernet handler - out of contact with Ethernet Bridge
+6213 Ethernet handler - channel cancelled by explicit request
+
+(SPITBOL errors - in range 7000 - 7300)
+7000 SPITBOL - System error
+7001 SPITBOL - Addition left operand is not numeric
+7002 SPITBOL - Addition right operand is not numeric
+7003 SPITBOL - Addition caused integer overflow
+7005 SPITBOL - Affirmation operand is not numeric
+7006 SPITBOL - Alternation right operand is not pattern
+7007 SPITBOL - Alternation left operand is not pattern
+7008 SPITBOL - Compilation error encountered during execution
+7009 SPITBOL - Concatenation left opnd is not string or pattern
+7010 SPITBOL - Concatenation right opd is not string or pattern
+7011 SPITBOL - Complementation operand is not numeric
+7012 SPITBOL - Complementation caused integer overflow
+7013 SPITBOL - Division left operand is not numeric
+7014 SPITBOL - Division right operand is not numeric
+7015 SPITBOL - Division caused integer overflow
+7017 SPITBOL - Exponentiation right operand is not numeric
+7018 SPITBOL - Exponentiation left operand is not numeric
+7019 SPITBOL - Exponentiation caused integer overflow
+7020 SPITBOL - Exponentiation result is undefined
+7023 SPITBOL - Exponentiation right operand is negative
+7024 SPITBOL - Goto evaluation failure
+7025 SPITBOL - Function called by name returned a value
+7026 SPITBOL - Undefined function called
+7027 SPITBOL - Goto operand is not a natural variable
+7028 SPITBOL - Goto operand in direct goto is not code
+7029 SPITBOL - Immediate assignment left operand is not pattern
+7030 SPITBOL - Multiplication left operand is not numeric
+7031 SPITBOL - Multiplication right operand is not numeric
+7032 SPITBOL - Multiplication caused integer overflow
+7034 SPITBOL - Undefined operator referenced
+7035 SPITBOL - Pattern assignment left operand is not pattern
+7036 SPITBOL - Pattern replacement right operand is not string
+7037 SPITBOL - Subtraction left operand is not numeric
+7038 SPITBOL - Subtraction right operand is not numeric
+7039 SPITBOL - Subtraction caused integer overflow
+7041 SPITBOL - Unexpected failure in -NOFAIL mode
+7042 SPITBOL - Goto ABORT with no preceding error
+7043 SPITBOL - Goto CONTINUE with no preceding error
+7044 SPITBOL - Goto undefined label
+7048 SPITBOL - FIELD function argument is wrong datatype
+7049 SPITBOL - Attempt to change value of protected variable
+7050 SPITBOL - ANY evaluated argument is not string
+7051 SPITBOL - BREAK evaluated argument is not string
+7052 SPITBOL - BREAKX evaluated argument is not string
+7053 SPITBOL - Expression does not evaluate to pattern
+7054 SPITBOL - LEN evaluated argument is not integer
+7055 SPITBOL - LEN evaluated argument is negative or too large
+7056 SPITBOL - NOTANY evaluated argument is not string
+7057 SPITBOL - POS evaluated argument is not integer
+7058 SPITBOL - POS evaluated argument is negative or too large
+7059 SPITBOL - RPOS evaluated argument is not integer
+7060 SPITBOL - RPOS evaluated argument is negative or too large
+7061 SPITBOL - RTAB evaluated argument is not integer
+7062 SPITBOL - RTAB evaluated argument is negative or too large
+7063 SPITBOL - SPAN evaluated argument is not string
+7064 SPITBOL - TAB evaluated argument is not integer
+7065 SPITBOL - TAB evaluated argument is negative or too large
+7066 SPITBOL - ANY argument is not string or expression
+7067 SPITBOL - APPEND first argument is not buffer
+7068 SPITBOL - APPEND second argument is not string
+7069 SPITBOL - APPLY first arg is not natural variable name
+7070 SPITBOL - ARBNO argument is not pattern
+7071 SPITBOL - ARRAY first argument is not integer or string
+7072 SPITBOL - ARRAY first argument lower bound is not integer
+7073 SPITBOL - ARRAY first argument upper bound is not integer
+7074 SPITBOL - Bad dimension: zero, negative or out of range
+7075 SPITBOL - ARRAY size exceeds maximum permitted
+7076 SPITBOL - BREAK argument is not string or expression
+7077 SPITBOL - BREAKX argument is not string or expression
+7078 SPITBOL - BUFFER first argument is not integer
+7079 SPITBOL - BUFFER second argument is not string or buffer
+7080 SPITBOL - BUFFER initial value too big for allocation
+7081 SPITBOL - BUFFER first argument is out of range
+7082 SPITBOL - CLEAR argument is not string
+7083 SPITBOL - Null variable name or illegal blank in CLEAR arg
+7084 SPITBOL - COLLECT argument is not integer
+7085 SPITBOL - CONVERT second argument is not string
+7086 SPITBOL - CTI argument is not a string
+7087 SPITBOL - DATA argument is not string
+7088 SPITBOL - DATA argument is null
+7089 SPITBOL - DATA argument is missing a left paren
+7090 SPITBOL - DATA argument has null datatype name
+7091 SPITBOL - Bad blank or missing right paren in data arg
+7092 SPITBOL - DATA argument has null field name
+7093 SPITBOL - DEFINE first argument is not string
+7094 SPITBOL - DEFINE first argument is null
+7095 SPITBOL - DEFINE first argument is missing a left paren
+7096 SPITBOL - DEFINE first argument has null function name
+7097 SPITBOL - DEFINE function entry point is not defined label
+7098 SPITBOL - Bad blank or missing right paren in DEFINE arg
+7099 SPITBOL - DETACH argument is not appropriate name
+7100 SPITBOL - DUMP argument is not integer
+7101 SPITBOL - DUMP argument is negative or too large
+7102 SPITBOL - DUPL second argument is not integer
+7103 SPITBOL - DUPL first argument is not string or pattern
+7104 SPITBOL - EJECT argument is not a suitable filetag
+7105 SPITBOL - ENDFILE second argument is not a string
+7106 SPITBOL - ENDFILE first argument is not a suitable filetag
+7107 SPITBOL - EQ irst argument is not numeric
+7108 SPITBOL - EQ second argument is not numeric
+7109 SPITBOL - EVAL argument is not expression
+7111 SPITBOL - GE first argument is not numeric
+7112 SPITBOL - GE second argument is not numeric
+7113 SPITBOL - GT first argument is not numeric
+7114 SPITBOL - GT second argument is not numeric
+7115 SPITBOL - Erroneous third argument for HOST
+7116 SPITBOL - Erroneous second argument for HOST
+7117 SPITBOL - Erroneous first argument for HOST
+7118 SPITBOL - INPUT third argument (fileprops) is not a string
+7119 SPITBOL - Inappropriate second argument (filetag) for INPUT
+7120 SPITBOL - Inappropriate first argument for INPUT
+7121 SPITBOL - INSERT third argument not integer
+7122 SPITBOL - INSERT second argument not integer
+7123 SPITBOL - INSERT first argument not buffer
+7124 SPITBOL - INSERT fourth argument not a string
+7125 SPITBOL - ITC argument is not an integer
+7126 SPITBOL - LE first argument is not numeric
+7127 SPITBOL - LE second argument is not numeric
+7128 SPITBOL - LEN argument is not integer or expression
+7129 SPITBOL - LEN argument is negative or too large
+7130 SPITBOL - LEQ first argument is not string
+7131 SPITBOL - LEQ second argument is not string
+7132 SPITBOL - LGE first argument is not string
+7133 SPITBOL - LGE second argument is not string
+7134 SPITBOL - LGT first argument is not string
+7135 SPITBOL - LGT second argument is not string
+7136 SPITBOL - LLE first argument is not string
+7137 SPITBOL - LLE second argument is not string
+7138 SPITBOL - LLT first argument is not string
+7139 SPITBOL - LLT second argument is not string
+7140 SPITBOL - LNE first argument is not string
+7141 SPITBOL - LNE second argument is not string
+7148 SPITBOL - LPAD third argument not a string
+7149 SPITBOL - LPAD second argument is not integer
+7150 SPITBOL - LPAD first argument is not string
+7151 SPITBOL - LT first argument is not numeric
+7152 SPITBOL - LT second argument is not numeric
+7153 SPITBOL - NE first argument is not numeric
+7154 SPITBOL - NE second argument is not numeric
+7155 SPITBOL - NOTANY argument is not string or expression
+7156 SPITBOL - OPSYN third argument is not integer
+7157 SPITBOL - OPSYN third argument is negative or too large
+7158 SPITBOL - OPSYN second arg is not natural variable name
+7159 SPITBOL - OPSYN first arg is not natural variable name
+7160 SPITBOL - OPSYN first arg is not correct operator name
+7161 SPITBOL - OUTPUT third argument (fileprops) is not a string
+7162 SPITBOL - Inappropriate second argument (filetag) for OUTPUT
+7163 SPITBOL - Inappropriate first argument for OUTPUT
+7164 SPITBOL - POS argument is not integer or expression
+7165 SPITBOL - POS argument is negative or too large
+7166 SPITBOL - Prototype argument is not table or array
+7167 SPITBOL - REMDR second argument is not integer
+7168 SPITBOL - REMDR caused integer overflow
+7169 SPITBOL - REMDR first argument is not integer
+7170 SPITBOL - REPLACE third argument is not string
+7171 SPITBOL - REPLACE second argument is not string
+7172 SPITBOL - REPLACE first argument is not string
+7173 SPITBOL - Null or unequally long 2nd, 3rd args to REPLACE
+7174 SPITBOL - REVERSE argument is not string
+7175 SPITBOL - RPAD third argument is not string
+7176 SPITBOL - RPAD second argument is not integer
+7177 SPITBOL - RPAD first argument is not string
+7178 SPITBOL - RTAB argument is not integer or expression
+7179 SPITBOL - RTAB argument is negative or too large
+7181 SPITBOL - RPOS argument is not integer or expression
+7182 SPITBOL - RPOS argument is negative or too large
+7183 SPITBOL - SETEXIT argument is not label name or null
+7184 SPITBOL - SPAN argument is not string or expression
+7185 SPITBOL - SIZE argument is not string
+7186 SPITBOL - STOPTR first argument is not appropriate name
+7187 SPITBOL - STOPTR second argument is not trace type
+7188 SPITBOL - SUBSTR third argument is not integer
+7189 SPITBOL - SUBSTR second argument is not integer
+7190 SPITBOL - SUBSTR first argument is not string
+7191 SPITBOL - TAB argument is not integer or expression
+7192 SPITBOL - TAB argument is negative or too large
+7193 SPITBOL - TABLE argument is not integer
+7194 SPITBOL - TABLE argument is out of range
+7195 SPITBOL - TRACE fourth arg is not function name or null
+7196 SPITBOL - TRACE first argument is not appropriate name
+7197 SPITBOL - TRACE second argument is not trace type
+7198 SPITBOL - TRIM argument is not string
+7199 SPITBOL - UNLOAD argument is not natural variable name
+7200 SPITBOL - Memory overflow
+7201 SPITBOL - Requested buffer allocation exceeds MXLEN
+7202 SPITBOL - String length exceeds value of MAXLNGTH keyword
+7203 SPITBOL - Keyword value assigned is not integer
+7204 SPITBOL - Keyword in assignment is protected
+7205 SPITBOL - Keyword value assigned is negative or too large
+7206 SPITBOL - Value assigned to keyword ERRTEXT not a string
+7207 SPITBOL - Inconsistent value assigned to keyword PROFILE
+7208 SPITBOL - Syntax error. Value used where name is required
+7209 SPITBOL - Syntax error. Statement is too complicated.
+7210 SPITBOL - Bad label or misplaced continuation line
+7211 SPITBOL - Syntax error. Undefined or erroneous entry label
+7212 SPITBOL - Syntax error. Missing end line
+7213 SPITBOL - Syntax error. Duplicate label
+7214 SPITBOL - Syntax error. Duplicated goto field
+7215 SPITBOL - Syntax error. Empty goto field
+7216 SPITBOL - Invalid control card
+7217 SPITBOL - Attempted redefinition of system function
+7218 SPITBOL - Expression evaluated by name returned value
+7219 SPITBOL - Syntax error. Missing operator
+7220 SPITBOL - Syntax error. Missing operand
+7221 SPITBOL - Syntax error. Invalid use of left bracket
+7222 SPITBOL - Syntax error. Invalid use of comma
+7223 SPITBOL - Syntax error. Unbalanced right parenthesis
+7224 SPITBOL - Syntax error. Unbalanced right bracket
+7225 SPITBOL - Syntax error. Missing right paren
+7226 SPITBOL - Syntax error. Right paren missing from goto
+7227 SPITBOL - Syntax error. Right bracket missing from goto
+7228 SPITBOL - Syntax error. Missing right array bracket
+7229 SPITBOL - Insufficient memory to complete dump
+7230 SPITBOL - Keyword operand is not name of defined keyword
+7231 SPITBOL - Print limit exceeded on standard output file
+7232 SPITBOL - Syntax error. Illegal character
+7233 SPITBOL - Syntax error. Invalid numeric item
+7234 SPITBOL - Syntax error. Unmatched string quote
+7235 SPITBOL - Syntax error. Invalid use of operator
+7236 SPITBOL - Syntax error. Goto field incorrect
+7237 SPITBOL - Erroneous 2nd arg in SORT/RSORT of vector
+7238 SPITBOL - SORT/RSORT 1st arg not suitable array or table
+7239 SPITBOL - SORT/RSORT 2nd arg out of range or non-integer
+7240 SPITBOL - Subscripted operand is not table or array
+7241 SPITBOL - Array referenced with wrong number of subscripts
+7242 SPITBOL - Table referenced with more than one subscript
+7243 SPITBOL - Array subscript is not integer
+7244 SPITBOL - Indirection operand is not name
+7245 SPITBOL - Pattern match right operand is not pattern
+7246 SPITBOL - Pattern match left operand is not string
+7247 SPITBOL - Function return from level zero
+7248 SPITBOL - Function result in nreturn is not name
+7249 SPITBOL - Statement count exceeds value of STLIMIT keyword
+7250 SPITBOL - Stack overflow
+7251 SPITBOL - Too many fatal errors
+
+(Ring SSP and OPEN codes)
+#X8000 SSP or OPEN failed without giving reason
+#X8001 SSP or OPEN failed (giving text message)
+#XC002 SSP or OPEN function unknown
+#XA003 SSP or OPEN destination congested - try again
+#X8004 SSP or OPEN service not available
+#XA004 SSP or OPEN service not available - try again
+#X8005 SSP or OPEN parameters invalid
+#X8008 SSP or OPEN failed (own RC given)
+#X8009 SSP or OPEN service does not exist
+#XE00A SSP or OPEN service temporarily withdrawn
+#XC00B SSP or OPEN unexpected size of request block
+#XE00C SSP or OPEN service's resource exhausted
+#XE00D SSP or OPEN insufficient workspace in service
+#XC00E SSP or OPEN privilege not allowed
+#X800F SSP or OPEN failed to trace source of request
+
+#XC013 TSBSP connect message format error
+#X8014 TSBSP unrecognised parameter type
+#XC015 TSBSP required parameter or argument missing
+#XE016 TSBSP parameter too big
+
+(Mail system codes)
+#XDF3D Mail action already attempted
+#XDF3E No new mail
+#XDF3F User not known to Mail System
+
+(Ring Nameserver codes)
+#XDFF1 name not in nameserver
+#XDFF2 nameserver - syntax error in name string
+#XBFF3 attempt to update PROM name table
+#XDFF4 name does not belong to this machine
+#XDFF5 name already in nameserver
+#XFFF6 name table full
+#XDFF7 addition or removal of machine names not allowed
+#XBFF8 nameserver - bridge - path lost
+#XBFF9 nameserver - temporary store shortage - try later
+#XBFFA nameserver - error in communication with bridge
+
+(Ring Printer codes)
+#XBFE0 printer is busy with a ring document
+#XBFE1 printer is busy with a non-ring document
+#XBFE2 printer is switched offline
+#XBFE3 printer is powered off
+#XBFE4 printer status error occurred
+#XBFE5 printer has wrong size of paper loaded
+
+(AOT series)
+#XDFD0 AOT - cannot verify UID set
+#XDFD1 AOT - bad TUID
+#XDFD2 AOT - bad PUID
+#XDFD3 AOT - bad TPUID
+#XDFD4 AOT - bad AUTY
+
+(Packserver)
+#XCEE1 (Packserver) pack not known
+#XAEE2 (Packserver) pack not mounted
+
+(General Ring RCs)
+#XA007 internal error occurred in service - retry
+#XA00A service is temporarily unavailable
+#XA00E privilege not allowed
+#XC006 unauthorised call was made to service
+
+(End of Table Fudge)
+
+#XFFFF minus one: fudge to get the end of the table in (hehehe!!!)
+(End of Table)
+
+

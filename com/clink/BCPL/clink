@@ -1,0 +1,3329 @@
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*************************************************************************
+*  (C) Copyright 1980  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*         L I N K E R    F O R    C A M B R I D G E    H E X            *
+*                                                                       *
+*************************************************************************
+**  C  Gray  Girling      COMPUTER LAB,  CAMBRIDGE           29.02.80  **
+*************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*/
+
+
+
+
+
+
+
+
+
+
+
+
+//  LOG OF CHANGES:
+//  ===============
+//
+//  Log entries are <version number> <date> <initials> <change>
+//
+//  1.00  29.02.80  CGG   Installed
+//  1.09  21.03.80  CGG   First publicly released version
+//  1.10  24.03.80  CGG   CHEX record type 10 used
+//  1.11  03.04.80  CGG   No longer crashes with 32 byte data records
+//  1.12  14.04.80  CGG   Bug in library files fixed
+//                        U option (ignore undefined references) added
+//  1.15  23.04.80  CGG   CHEX record for absolute DEF (type 12) added
+//  1.17  25.04.80  CGG   Absolute address comparason fixed
+//                        E option (value of undefined bytes) added
+//  1.18  29.04.80  CGG   Expressions for option settings + symbol names
+//  1.24  16.05.80  CGG   Various bugs fixed
+//                        New memory management
+//                        Speeded up (10%)
+//  1.25  17.06.80  CGG   I option (include symbol table) added
+//  1.26  25.06.80  CGG   I option extended to work on resident modules
+//                        Negative deferred values now erroneous
+//  1.27  26.06.80  CGG   X option (value for undefined externals) added
+//  2.00  09.07.80  CGG   "WITH" files and "HEX" files merged
+//                        File names in "WITH" files must begin with blank
+//                        Multiple file names allowed from command line
+//                        CHEX record for weak externals (type 13) added
+//                        CHEX option records (type 11) added
+//                        Modules with duplicate name ignored
+//  2.01  11.07.80  CGG   Bug in weak externals fixed
+//                        "Comments" allowed in "WITH" files
+//  2.02  04.08.80  CGG   Entry points supported properly
+//  2.05  22.08.80  CGG   Speeded up
+//                        CHEX pragmat record (type 15) added
+//  2.08  10.10.80  CGG   Speeded up
+//                        DAT-L pragmat generated
+//                        Time procedure added to machine dependent code
+//                        Default GET library directory &c facilities added
+//  2.09  10.11.80  CGG   Deletion of last module in file bug fixed
+//  2.11  14.02.81  CGG   Dynamic DDnames & HEXLIB library added for IBM
+//  2.13  26.03.81  CGG   Map file layout and content improved to include
+//                        DAT-x and TITLE pragmat information
+//  2.16  16.10.81  CGG   Excape sequences in pragmat strings added
+//  2.17  12.01.82  CGG   New format of CHEX code definition (type 10)
+//                        record supported - old record gives warning
+//  2.18  24.02.82  CGG   Forgot to use above information in Ref chains!
+//  2.19  18.02.82  CGG   Some error messages changed
+//  2.20  10.01.83  CGG   No of file increased (to 50)
+//                        Crash prevented when file limit exceeded
+//                        Escape character in pragmats changed to %
+//  2.21  20.01.83  CGG   Cautions implemented
+//                        Caution given for module name clashes
+//  2.22  23.02.83  CGG   Bug fixed in unused file evaluation
+//                        Empty file bug fixed in Map listing
+//                        Option record scanning put in for discarded modules
+
+
+
+
+
+
+
+
+
+SECTION "Clink1"
+
+
+
+
+
+//*<TRIPOS:
+GET "libhdr"
+GET ":COM.CLINK.BCPL.clinkhdr"
+/*TRIPOS>*/
+
+
+
+/*<RSX:
+NEEDS "TITLE"
+NEEDS "IOERROR"
+GET "libhdr"
+GET "clinkhdr"
+/*RSX>*/
+
+
+
+/*<CAP:
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.clinkhdr"
+/*CAP>*/
+
+
+
+/*<IBM:
+GET "LIBHDR"
+GET "LNKHDR"
+/*IBM>*/
+
+
+
+
+
+
+
+//
+//                      Memory   Management   Module
+//
+
+
+
+
+
+// GLOBAL:  mem.blocks      -- first of chain of blocks of memory
+//          memory          -- block currently being used
+//          clear.memory    -- procedure to delete all memory
+//          simplegetvec    -- procedure to get new vector from 'memory'
+
+
+
+// MANIFEST:    block.size      -- size of each of the blocks in memory
+
+
+
+
+LET init.memory() = VALOF
+$(  mem.blocks:=getvec(block.size)
+    memory:=mem.blocks
+    TEST memory=null THEN
+    writes("Can't find enough memory for initial allocation*N") ELSE
+    memory!0:=1                 // first free offset in memory
+    RESULTIS memory\=null
+$)
+
+
+
+
+LET simplegetvec(n) = VALOF
+$(  //  This procedure assumes that 'n' will always be < 'block.size'
+    //  it does not check!
+    LET ans=null
+    TEST memory!0+n+1>block.size THEN
+    $(  LET new.block=getvec(block.size)
+        UNLESS new.block=0 THEN
+        $(  memory!0 := new.block
+            memory:=new.block
+            memory!0 := 1 + (n+1)
+            ans:= @memory!1
+        $)
+    $) ELSE
+    $(  ans:=@memory!(memory!0)
+        memory!0:=memory!0 + (n+1)
+    $)
+    RESULTIS ans
+$)
+
+
+
+LET clear.memory() BE
+UNLESS memory=null THEN
+$(  LET p.block=mem.blocks
+    memory!0:=0
+    WHILE p.block\=null THEN
+    $(  LET next=p.block!0
+        freevec(p.block)
+        p.block:=next
+    $)
+    mem.blocks:=null
+    memory:=null
+$)
+
+
+
+
+
+//
+//                        LISTS
+//
+
+
+
+// MANIFEST:   l.next
+//             l.data
+//             null=0
+
+
+
+LET new(size, a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12,a13,a14,a15) = VALOF
+$(  LET ans=null
+    TEST 1<=size<=15 THEN
+    $(  ans:=simplegetvec(size-1)
+        TEST ans=null THEN writes("no more store available*N") ELSE
+        FOR i=0 TO size-1 DO ans!i:=(@a1)!i
+    $) ELSE
+    writef("request for %n words ignored in NEW*N",size)
+    RESULTIS ans
+$)
+
+
+LET append(list, record) BE
+TEST !list=null THEN
+$(  !list:=record
+    record!l.next:=null
+$) ELSE
+$(  record!l.next:=(!list)!l.next
+    (!list)!l.next:=record
+$)
+
+
+
+/*  this procedure not necessary since introduction of memory management module
+LET clear.list(list) BE
+UNLESS list=null THEN
+$(  clear.list(list!l.next)
+    freevec(list)
+$)
+*/
+
+
+
+
+
+
+
+
+//
+//                   Files  List
+//
+
+
+
+
+// GLOBAL:  files     --  files vector
+//          this.file --  offset of current file name in 'files'
+//          rec       --  current record, last read
+//          eof       --  TRUE when all files have been exhausted
+//          this.rec  --  number of record being processed
+//          ch        --  last character read in
+
+
+
+
+
+
+
+
+// MANIFEST:    f.used
+//              f.maxmod
+//              f.type
+//              ft.normal
+//              ft.resident
+//              ft.library
+//              f.str
+//              no.of.files
+//              rec.datalen
+//              rec.name        //  6 chars packed into three words
+//              rec.len         //  number of bytes of data
+//              rec.start       //  start address in two words (two bytes)
+//              rec.type        //  one of the following...
+//              rec.info        //  start of data bytes following record def'n
+//              t.data
+//              t.eof
+//              t.def
+//              t.ref
+//              t.rel
+//              t.mod
+//              t.code
+//              t.absint
+//              t.wref
+//              t.opt
+//              t.prag
+
+
+
+
+
+
+
+LET deal.with.option(str) = VALOF
+$(  MANIFEST $(  str.len=40  $)
+    LET s=VEC str.len/bytesperword      // space for strings
+    LET newfile=?                       // HEAP variable for 'files'
+    LET p=1                             // pointer to posn in 'str'
+    LET i=1                             // string length count
+    LET success=TRUE
+//  writef("** got option *"%S*"*N",str)
+    WHILE p<=str%0 & str%p='*S' DO p:=p+1
+    WHILE i<=str.len &  p<=str%0 & str%p\='*S' & str%p\='/' DO
+    $(  s%i := str%p
+        p:=p+1
+        i:=i+1
+    $)
+    s%0:=i-1
+    UNLESS i<=1 THEN       /* if string is empty take the line as a comment */
+    TEST i>str.len THEN
+    $(  writef("linker option line too long: %S...*N", s)
+        success:=FALSE
+    $) ELSE
+    $(  newfile:=getvec(f.str+s%0/bytesperword)
+        TEST newfile=0 THEN
+        $(  writes("run out of store whilst reading option line!*N")
+            success:=FALSE
+        $) ELSE
+        $(  FOR i=0 TO s%0 DO (newfile+f.str)%i:=s%i
+            WHILE p<=str%0 & (str%p='*S' | str%p='/') DO p:=p+1
+            ch:=(p>str%0 -> '*S', str%p)
+            ch:= ('a'<=ch<='z' -> ch-'a'+'A', ch)
+            UNLESS p>str%0 | ch='O' | ch='L' | ch='R' THEN
+            $(  writef("'O' 'L' or 'R' expected on option line, found '%C'*N",
+                       ch)
+                success:=FALSE
+            $)
+            TEST ch='O' THEN
+            $(  freevec(newfile)
+                UNLESS decodeopt(s) THEN success:=FALSE
+            $) ELSE
+            $(  newfile!f.type:=(ch='L' -> ft.library,
+                                 ch='R' -> ft.resident,
+                                 ft.normal)
+                newfile!f.used:=TRUE
+                newfile!f.maxmod:=0
+                TEST s%0=0  /* file name not given! */ THEN
+                freevec(newfile) ELSE
+                TEST VALOF
+                $(  LET already.there=FALSE
+                    LET i=1
+                    WHILE \already.there & i<=files!0 DO
+                    $(  LET j=0
+                        WHILE j<=s%0 & s%j=(files!i+f.str)%j DO j:=j+1
+                        already.there:= (j>s%0)
+                        i:=i+1
+                    $)
+                    RESULTIS already.there
+                $) THEN freevec(newfile) ELSE
+                TEST files!0>=no.of.files THEN
+                $(  writef("file number limit (%N) exceeded - use F option*N",
+                           no.of.files)
+                    freevec(newfile)
+                    success := false
+                $) ELSE
+                $(  files!0:=files!0+1
+                    files!(files!0) := newfile
+//                  writef("New file *"%S*"*N",newfile+f.str)
+                $)
+            $)
+        $)
+    $)
+    RESULTIS success
+$)
+
+
+
+
+
+LET open.next.file() = VALOF
+$(  LET in=0
+    LET error=FALSE
+//  writef("next.file: this.file=%N files!0=%N",this.file,files!0)
+    IF 0 < this.file <= files!0 THEN files!this.file!f.maxmod := this.mod
+    this.file:=this.file+1
+    this.rec:=0
+    WHILE this.file<=files!0 & in=0 & \error THEN
+    TEST \files!this.file!f.used THEN this.file:=this.file+1 ELSE
+    $(  in:=findlinkin(files!this.file+f.str)
+        IF in=0 THEN
+        $(  error:=TRUE
+            freevec(files!this.file)
+            FOR i=this.file TO files!0-1 DO files!i:=files!(i+1)
+            files!0:=files!0-1
+        $)
+    $)
+    IF this.file>1 THEN this.mod:=files!(this.file-1)!f.maxmod
+    TEST in=0 THEN eof:=(this.file>files!0) ELSE selectinput(in)
+//  writef(" in=%X4  eof=%C*N",in,(eof->'T','F'))
+    RESULTIS in\=0
+$)
+
+
+
+
+
+//  LET rch() = VALOF
+//  $(  UNLESS ch='*N' | ch=endstreamch THEN ch:=rdch()
+//      RESULTIS ch
+//  $)
+
+
+
+LET make.byte(rec.offset) = VALOF
+$(  LET w=rec!rec.offset
+    LET ch1=(w >> 8) & #XFF
+    LET ch2=w & #XFF
+    LET ok=TRUE
+    LET d1=('0'<=ch1<='9'->ch1-'0', 'A'<=ch1<='F'->ch1-'A'+10,
+            VALOF $(  ok:=FALSE; RESULTIS -1  $) )
+    LET d2=('0'<=ch2<='9'->ch2-'0', 'A'<=ch2<='F'->ch2-'A'+10,
+            VALOF $(  ok:=FALSE; RESULTIS -1  $) )
+//  writef("**    '%C%C' = %N in rec!%N decoded %S*N",ch1,ch2,rec!rec.offset,
+//         rec.offset, (ok->"ok","in error"))
+    TEST ok THEN
+    $(  rec!rec.offset := (d1<<4) + d2
+        RESULTIS TRUE
+    $) ELSE RESULTIS FALSE
+$)
+
+
+
+
+
+
+//*<ASCII// if on ascii machine no need to translate characters:
+LET ascii (ch) = ch
+/*/      // now code for translation if not on ascii machine:
+LET ascii(ch) = VALOF
+SWITCHON ch INTO
+$(  CASE '*N': RESULTIS #X0D
+    CASE '*S': RESULTIS #X20
+    CASE '!': RESULTIS #X21
+    CASE '"': RESULTIS #X22
+    CASE '#': RESULTIS #X23
+    CASE '$': RESULTIS #X24
+    CASE '%': RESULTIS #X25
+    CASE '&': RESULTIS #X26
+    CASE '*'': RESULTIS #X27
+    CASE '(': RESULTIS #X28
+    CASE ')': RESULTIS #X29
+    CASE '**': RESULTIS #X2A
+    CASE '+': RESULTIS #X2B
+    CASE ',': RESULTIS #X2C
+    CASE '-': RESULTIS #X2D
+    CASE '.': RESULTIS #X2E
+    CASE '/': RESULTIS #X2F
+    CASE '0': RESULTIS #X30
+    CASE '1': RESULTIS #X31
+    CASE '2': RESULTIS #X32
+    CASE '3': RESULTIS #X33
+    CASE '4': RESULTIS #X34
+    CASE '5': RESULTIS #X35
+    CASE '6': RESULTIS #X36
+    CASE '7': RESULTIS #X37
+    CASE '8': RESULTIS #X38
+    CASE '9': RESULTIS #X39
+    CASE ':': RESULTIS #X3A
+    CASE ';': RESULTIS #X3B
+    CASE '<': RESULTIS #X3C
+    CASE '=': RESULTIS #X3D
+    CASE '>': RESULTIS #X3E
+    CASE '?': RESULTIS #X3F
+    CASE '@': RESULTIS #X40
+    CASE 'A': RESULTIS #X41
+    CASE 'B': RESULTIS #X42
+    CASE 'C': RESULTIS #X43
+    CASE 'D': RESULTIS #X44
+    CASE 'E': RESULTIS #X45
+    CASE 'F': RESULTIS #X46
+    CASE 'G': RESULTIS #X47
+    CASE 'H': RESULTIS #X48
+    CASE 'I': RESULTIS #X49
+    CASE 'J': RESULTIS #X4A
+    CASE 'K': RESULTIS #X4B
+    CASE 'L': RESULTIS #X4C
+    CASE 'M': RESULTIS #X4D
+    CASE 'N': RESULTIS #X4E
+    CASE 'O': RESULTIS #X4F
+    CASE 'P': RESULTIS #X50
+    CASE 'Q': RESULTIS #X51
+    CASE 'R': RESULTIS #X52
+    CASE 'S': RESULTIS #X53
+    CASE 'T': RESULTIS #X54
+    CASE 'U': RESULTIS #X55
+    CASE 'V': RESULTIS #X56
+    CASE 'W': RESULTIS #X57
+    CASE 'X': RESULTIS #X58
+    CASE 'Y': RESULTIS #X59
+    CASE 'Z': RESULTIS #X5A
+    CASE '[': RESULTIS #X5B
+    CASE '\': RESULTIS #X5C
+    CASE ']': RESULTIS #X5D
+    CASE '^': RESULTIS #X5E
+    CASE '_': RESULTIS #X5F
+    CASE '`': RESULTIS #X60
+    CASE 'a': RESULTIS #X61
+    CASE 'b': RESULTIS #X62
+    CASE 'c': RESULTIS #X63
+    CASE 'd': RESULTIS #X64
+    CASE 'e': RESULTIS #X65
+    CASE 'f': RESULTIS #X66
+    CASE 'g': RESULTIS #X67
+    CASE 'h': RESULTIS #X68
+    CASE 'i': RESULTIS #X69
+    CASE 'j': RESULTIS #X6A
+    CASE 'k': RESULTIS #X6B
+    CASE 'l': RESULTIS #X6C
+    CASE 'm': RESULTIS #X6D
+    CASE 'n': RESULTIS #X6E
+    CASE 'o': RESULTIS #X6F
+    CASE 'p': RESULTIS #X70
+    CASE 'q': RESULTIS #X71
+    CASE 'r': RESULTIS #X72
+    CASE 's': RESULTIS #X73
+    CASE 't': RESULTIS #X74
+    CASE 'u': RESULTIS #X75
+    CASE 'v': RESULTIS #X76
+    CASE 'w': RESULTIS #X77
+    CASE 'x': RESULTIS #X78
+    CASE 'y': RESULTIS #X79
+    CASE 'z': RESULTIS #X7A
+    CASE '{': RESULTIS #X7B
+    CASE '|': RESULTIS #X7C
+    CASE '}': RESULTIS #X7D
+    CASE '~': RESULTIS #X7E
+    DEFAULT: RESULTIS ch
+$)
+/**/
+
+
+
+
+LET charval(chpair) = VALOF
+$(  // this procedure simulates the calculation of a pair of characters
+    // value for the calculation of a checksum in the standard CP/M version
+    // of the intel hex loader!
+    LET charval(c) = ((c&#X40)=0 -> c-#X30 /* ascii '0' */, c+10-#X41 /* 'A' */)
+    LET ans=charval(ascii((chpair>>4)&#XF))
+    ans := ( (ans&#XF)<<4 ) | ( (ans&#XF0)>>4 )  // swap hex digits
+    RESULTIS ans + charval(ascii(chpair & #XF))
+$)
+
+
+
+
+LET get.rec() = VALOF
+$(  LET ok=FALSE
+    LET open.error=FALSE
+//  writef("get.rec: ch = '%C' eof=%C ",ch,(eof->'T','F'))
+    TEST ch\=endstreamch | VALOF
+    $(  LET o=open.next.file()
+        open.error := \o & \eof
+        RESULTIS o
+    $) THEN
+    $(  ch:='*S'
+        ch:=rdch()
+    $) ELSE ch:=endstreamch
+    TEST ch=endstreamch | eof THEN
+    $(  ok:=TRUE
+        rec!rec.type:=t.eof
+        rec!(rec.info+0) := #XFF
+        rec!(rec.info+1) := #XFF
+    $) ELSE
+    IF ch='$' | ch=':' | ch='*S' THEN
+    $(  LET len=0
+        TEST ch='*S' THEN
+        $(  // set it up as if it were an option record
+            ch:=rdch()
+            WHILE len+rec.info+1<=rec.size & ch\='*N' & ch\=endstreamch DO
+            $(  (rec+rec.info)!len:=ch
+                ch:=rdch()
+                len:=len+1
+            $)
+            rec!rec.type := t.opt
+            rec!rec.len := len
+            rec!rec.start := 0
+            rec!(rec.start+1) := 0
+        $) ELSE
+        $(  // standard Cambridge Hex record
+            FOR i=rec.len TO rec.type DO
+            $(  ch:=rdch()
+                rec!i:=ch<<8
+                ch:=rdch()
+                rec!i:=rec!i+ch
+            $)
+            make.byte(rec.type)
+            len:=VALOF SWITCHON rec!rec.type INTO
+                 $(  CASE t.data:
+                     CASE t.eof:
+                     CASE t.rel:
+                     CASE t.opt:
+                         $(  LET ans=0
+                             TEST make.byte(rec.len) & make.byte(rec.start) &
+                                  make.byte(rec.start+1) THEN
+                             ans:= (rec!rec.type=t.rel->2*rec!rec.len,
+                                    rec!rec.len)
+                             ELSE ans:=-1
+                             RESULTIS ans
+                         $)
+                     CASE t.prag:
+                         $(  LET ms.byte = rdch() << 8
+                             rec!rec.info := ms.byte | rdch()
+                             RESULTIS (make.byte(rec.info)->rec!rec.info,-1)
+                         $)
+                     CASE t.def:
+                     CASE t.absint:
+                     CASE t.ref:
+                     CASE t.wref:
+                         RESULTIS 2
+                     CASE t.code:
+                     CASE t.mod:
+                         RESULTIS 1
+                     DEFAULT:
+                         writef("file %S record %N: unknown type*N",
+                                  files!this.file+f.str, this.rec+1)
+                         ok:=FALSE
+                         RESULTIS 0
+                 $)
+//          writef("** Record %N ch='%C' type=%N len=%N*N",
+//                       this.rec+1, ch, rec!rec.type, len)
+            TEST rec.info+len+1>rec.size THEN
+            writef("file %S record %N: record too long*N",
+                   files!this.file+f.str, this.rec+1) ELSE
+            TEST rec!rec.type=t.opt | rec!rec.type=t.prag THEN
+            $(  FOR i=rec.info TO rec.info+len-1 DO rec!i:=rdch()
+                ch := rdch()
+                rec!(rec.info+len) := (ch << 8)+rdch()  // checksum
+            $) ELSE
+            FOR i=rec.info TO rec.info+len DO
+            $(  ch := rdch()
+                rec!i := (ch << 8)+rdch()
+            $)
+            /* includes checksum */
+            ch:=rdch()
+            // ****************** TEMPORARY CODE ******************
+            // A non-upwards compatible change to the T.CODE record type
+            // has been made - accept the old record (as above) but give
+            // a warning.  We deduce that this record is of the new
+            // variety if it is longer than we used to expect.
+            //                 Gray     06.01.82
+            IF rec!rec.type = t.code THEN
+            TEST \(ch='*N' | ch=endstreamch) THEN
+            $(  // record is the new type so make it look as if:
+                // (1) info was written into REC on a nibble by nibble basis
+                // (2) the record is 2 rather than 1 REC slots long
+                len := 2
+                // bytes already read into REC.INFO+0 and REC.INFO+1
+                // first character of checksum is already in CH
+                rec!(rec.info+len) := (ch << 8) + rdch()
+                ch := rdch() // return to original status with char in CH
+            $) ELSE
+            // give a warning about using old code definition records
+            IF cautions THEN
+            writef("file %S record %N: CAUTION -*
+                   * out of date code record type used*N",
+                   files!this.file + f.str, this.rec+1)
+        $)
+        TEST 0<=len<rec.size-rec.info & (ch='*N' | ch=endstreamch) THEN
+        $(  ok:=TRUE
+            rec!rec.datalen := len
+        $) ELSE rec!rec.datalen:=0
+        WHILE ch\='*N' & ch\=endstreamch DO ch:=rdch()
+        this.rec:=this.rec+1
+    $)
+    UNLESS ok THEN
+    writef("file %S module %N ('%S') record %N is illegal*N",
+           files!this.file+f.str, this.mod,
+           (this.mod<=0 -> "<no name>",  mod!this.mod+mod.name),
+           this.rec)
+    IF (rec!rec.type=t.eof | ch=endstreamch) & \eof THEN
+    $(  endread()
+        ch:=endstreamch
+    $)
+//  writef(" type=%X2 this.rec=%N error=%C*N",rec!rec.type,this.rec,
+//                         (ok&\open.error -> 'F','T'))
+    RESULTIS ok & \open.error
+$)
+
+
+
+
+LET comp.name(string) = (string%0\=6 -> FALSE,
+    string%1=(rec!(rec.name+0) >> 8)   &
+    string%2=(rec!(rec.name+0) & #XFF) &
+    string%3=(rec!(rec.name+1) >> 8)   &
+    string%4=(rec!(rec.name+1) & #XFF) &
+    string%5=(rec!(rec.name+2) >> 8)   &
+    string%6=(rec!(rec.name+2) & #XFF) )
+
+
+
+
+LET delete.unused.files() BE
+$(  LET m=0
+    FOR i=1 TO files!0 DO
+    $(  LET ftype = files!i!f.type
+        LET max = files!i!f.maxmod
+        LET used = (ftype \= ft.resident)
+        IF used THEN
+        $(  used:=FALSE
+            WHILE m<max & \used DO
+            $(  LET md = ?
+                m := m+1
+                md := mod!m
+                used := md!mod.used & md!mod.maxaddr+1\=md!mod.minaddr
+            $)
+        $)
+        files!i!f.used:=used
+        m := max
+        IF ftype\=ft.resident & NOT used & cautions THEN
+        $(  writef("file %S: CAUTION - no code taken from this%S file*N",
+                    files!i + f.str,
+                    (ftype=ft.library -> " library","") )
+        $)
+    $)
+$)
+
+
+
+
+
+
+LET clear.files() BE
+UNLESS files=null THEN
+$(  FOR i=1 TO files!0 DO freevec(files!i)
+    freevec(files)
+    files:=null
+$)
+
+
+.
+
+
+
+
+SECTION "Clink2"
+
+
+
+
+
+//*<TRIPOS:
+GET "libhdr"
+GET ":COM.CLINK.BCPL.clinkhdr"
+/*TRIPOS>*/
+
+
+
+/*<RSX:
+GET "libhdr"
+GET "clinkhdr"
+/*RSX>*/
+
+
+
+/*<CAP:
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.clinkhdr"
+/*CAP>*/
+
+
+
+/*<IBM:
+GET "LIBHDR"
+GET "LNKHDR"
+/*IBM>*/
+
+
+
+
+
+
+
+
+
+
+
+//
+//                      Output  Hex
+//
+
+
+
+
+// GLOBAL:  hexout    -- opened file for output of absolute intel hex
+//          mapfile   -- file for listing of loading information
+
+
+
+
+
+// MANIFEST:   cd.newpc            // changes pc in 'cambridge.hex'
+//             cd.data  = t.data   // to output a byte
+//             cd.eof   = t.eof    // to mark the end of all the hex output
+//             cd.module= t.module // to name the hex produced
+//             cd.code  = t.code   // to name the machine that the code is for
+//             cd.absint= t.absint // to generate an absolute unresolved ref
+//             cd.int   = t.int    // to give an external definition
+//             cd.ext   = t.ext    // to generate an unresolved referenece
+//             cd.wext  = t.wref   // to generate a weak unresolved ref
+//             cd.opt   = t.opt    // to generate an options record
+//             cd.prag  = t.prag   // to generate a pragmat record
+//             hexoutwidth         // width of output absolute hex
+
+
+
+
+LET cambridge.hex(type, arg, arg1, arg2) BE
+IF \pure.intel | type=cd.newpc | type=cd.data | type=cd.eof THEN
+$(
+    LET hex=TABLE 0,  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+                      0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0
+    STATIC
+    $(  beginblock = 0     /* begining of next block for map of store */
+        oldpc = 0          /* calculated value of current pc */
+    $)
+    LET alpharec(str, type, info, info2) BE
+    $(  LET sum = type+(info&byte1)+((info&byte2) >> 8)
+        selectoutput(hexout)
+        IF str=0 THEN str:="NoName"
+        wrch('$')
+        FOR i=1 TO 6 DO
+        $(  LET ch=(i>str%0 -> '*S', str%i)
+            wrch(ch)
+            sum:=sum+ascii(ch)
+        $)
+        TEST type=cd.code THEN
+        $(  sum := sum + info2
+            writef("%X2%X2%X2", type, info, info2)
+        $) ELSE
+        TEST type=cd.module THEN writef("%X2%X2",type,info) ELSE
+        $(  LET b=8*bytes.per.asm.word
+            LET words.per.address=2/bytes.per.asm.word
+            LET m=(1<<b)-1
+            writehex(type, 2)
+            FOR i=words.per.address-1 TO 0 BY -1 DO
+            writehex((info>>(i*b))&m,  2*bytes.per.asm.word)
+        $)
+        writehex(-sum, 2*bytes.per.asm.word)
+        wrch('*N')
+    $)
+    /*
+    LET clearbuf(hex) BE
+    $(  selectoutput(hexout)
+        UNLESS hex!0=0 THEN
+        $(  LET blockaddr=oldpc-hex!0
+            LET sum=hex!0+(blockaddr >> 8)+(blockaddr & #XFF)+cd.data
+            writef(":%X2%X400", hex!0, blockaddr)
+            FOR i=1 TO hex!0 DO
+            $(  sum:=sum+hex!i
+                writehex(hex!i, 2)
+            $)
+            writehex(-sum, 2)
+            wrch('*N')
+        $)
+        hex!0:=0
+    $)
+    */
+    LET saveout=output()
+    SWITCHON type INTO
+    $(  CASE cd.newpc:
+            /* program counter has changed */
+            UNLESS oldpc=arg THEN oldpc:=arg
+            ENDCASE
+        CASE cd.data:
+            $(  //  'arg'  - contains byte array of memory values to be output
+                //  'arg1' - the size of the array (in bytes)
+                LET i=0
+                selectoutput(hexout)
+                WHILE i<arg1 DO
+                $(  LET width=(hexoutwidth>arg1-i -> arg1-i, hexoutwidth)
+                    LET pc=oldpc+i
+                    LET sum=-(width+(pc>>8)+(pc&#XFF))
+                    FOR j=0 TO width-1 DO
+                    $(  hex!j:=arg%(i+j)
+                        sum:=sum-hex!j
+                    $)
+                    writef(":%X2%X400", width, pc)
+                    FOR n=0 TO width-1 DO writehex(hex!n, 2)
+                    writehex(sum, 2)
+                    wrch('*N')
+                    i:=i+width
+                $)
+                hex!0:=0
+                oldpc:=oldpc+arg1
+                selectoutput(saveout)
+            $)
+            ENDCASE
+        CASE cd.eof:
+            /* arg is the programs start address */
+            selectoutput(hexout)
+            writef(":00%X401", arg)
+            writehex(-(1+(arg&byte1)+((arg&byte2)>>8)), 2)
+            wrch('*N')
+            selectoutput(saveout)
+            ENDCASE
+        CASE cd.module:
+        CASE cd.code:
+        CASE cd.absint:
+        CASE cd.int:
+        CASE cd.wext:
+        CASE cd.ext:
+            /* 'arg' is the name of the module
+                or the name of the object machine
+                or the name of an internal or external reference
+                'arg1' indicates that the module is absolute  (0)
+                or the number of bytes in each addressable unit (nibble 1) and
+                   the number of bytes in each address (nibble 0) packed into
+                   the same byte
+                or the value of an external definition
+                or the start of an internal reference chain
+                'arg2' is the flag byte if type=cd.code
+            */
+            IF type = cd.module THEN arg1:=0  // absolute
+            alpharec(arg, type, arg1, arg2)
+            selectoutput(saveout)
+            ENDCASE
+        CASE cd.opt:
+            /* 'arg' is the option string to be given
+               'arg1' is the level of the option
+            */
+            $(  LET sum= -type-(arg1 & #XFF) - arg%0
+                selectoutput(hexout)
+                FOR i=1 TO arg%0 DO sum:=sum-ascii(arg%i)
+                writef("$%X2%X20011%S%X2*N",arg%0,arg1,arg,sum)
+                selectoutput(saveout)
+            $)
+            ENDCASE
+        CASE cd.prag:
+            /* 'arg' is the name of the pragmat begin given
+               'arg1' is the pragmat string being generated
+            */
+            $(  LET sum= -type-arg%0
+                selectoutput(hexout)
+                FOR i=1 TO arg%0 DO sum:=sum-ascii(arg%i)
+                wrch('$')
+                FOR i=1 TO 6 DO
+                $(  LET ch=(i>arg1%0->'*S',arg1%i)
+                    sum:=sum-ascii(ch)
+                    wrch(ch)
+                $)
+                writef("%X2%X2%S%X2*N",type,arg%0,arg,sum)
+                selectoutput(saveout)
+            $)
+            ENDCASE
+        DEFAULT:
+            writef("CAMBRIDGE.HEX: bad entry code - %n*N", type)
+    $)
+$)
+
+
+
+LET cmp16(a1, a2) = ((a1>=0)=(a2>=0) -> (a1-a2), (a2=0 -> 1, a2))
+
+
+
+
+
+
+
+
+
+
+
+
+//
+//                  Expand  Escapes  In  PRAGMAT  String
+//
+
+
+
+
+LET wrint(n, width, string, pos, maxpos) = VALOF
+$(  LET digs = VEC 10
+    LET i = 0
+    LET k = n
+    LET error = FALSE
+    IF n<0 THEN
+    $(  width := width-1
+        k := -n
+    $)
+    $(rpt
+        digs!i := -(-k REM 10)      // to get MAXINT &c right
+        k := k/10
+        i := i+1
+    $)rpt REPEATUNTIL k=0
+    TEST !pos+(width-i) > maxpos THEN error := TRUE ELSE
+    $(  FOR j=i+1 TO width DO
+        $(  string%(!pos) := '*S'
+            !pos := !pos+1
+        $)
+        IF n<0 THEN
+        TEST !pos+1 > maxpos THEN error:= TRUE ELSE
+        $(  string%(!pos) := '-'
+            !pos := !pos+1
+        $)
+        TEST !pos+i > maxpos THEN error := TRUE ELSE
+        FOR j = i-1 TO 0 BY -1 DO
+        $(  string%(!pos) := digs!j+'0'
+            !pos := !pos+1
+        $)
+    $)
+    RESULTIS \error
+$)
+
+
+
+LET wrhex(n, width, string, pos, maxpos) = VALOF
+$(  LET ok = (!pos+width <= maxpos)
+    IF ok THEN
+    $(  IF width>1 THEN wrhex(n>>4, width-1, string, pos, maxpos)
+        string%(!pos) := (TABLE '0','1','2','3','4','5','6','7',
+                                '8','9','A','B','C','D','D','F') ! (n&#XF)
+        !pos := !pos+1
+    $)
+    RESULTIS ok
+$)
+
+
+
+
+
+LET wroct(n, width, string, pos, maxpos) = VALOF
+$(  LET ok = (!pos+width <= maxpos)
+    IF ok THEN
+    $(  IF width>1 THEN wroct(n>>3, width-1, string, pos, maxpos)
+        string%(!pos) := '0' + (n & #X7)
+        !pos := !pos+1
+    $)
+    RESULTIS ok
+$)
+
+
+
+
+LET wrchr(n, width, string, pos, maxpos) = VALOF
+$(  LET ok = (!pos+width <= maxpos)
+    IF ok THEN
+    $(  LET ch = n&#XFF
+        IF width>1 THEN wrchr(n>>8, width-1, string, pos, maxpos)
+        string%(!pos) := (ch=0 -> '*S', ch)
+        !pos := !pos+1
+    $)
+    RESULTIS ok
+$)
+
+
+
+
+LET expand.escapes(string) = VALOF
+$(  MANIFEST $( escape.ch = '%' $)
+    LET s = ?    // the expanded string
+    LET i = 1    // index in 'string' for input character
+    LET o = 1    // index in 's' for output character
+    LET new.size = string%0
+    LET error = FALSE
+    //  This procedure looks for bytes with value zero which signal
+    //  the need for insertion of an escape sequence.  The syntax is:
+    //     <escape.ch><escape.ch>                      |
+    //     <escape.ch><printing style char><width char><value>
+    //  where:
+    //     <printing sytle char> ::= X | O | I | C
+    //     <width char>          ::= 0 | 1 | 2 | ... | 9
+    //     <value>               ::= <option character> |
+    //                               '<symbol name>'
+    FOR chno = 1 TO string%0 DO
+    IF string%chno=0 THEN new.size := new.size+8  // to be safe
+    s := getvec(new.size/bytesperword)
+    UNLESS s=0 THEN
+    $(  i := 1
+        WHILE i<=string%0 & \error DO
+        TEST string%i=escape.ch THEN
+            TEST i+1 > string%0 | string%(i+1)=escape.ch THEN
+            $(  s%o := escape.ch
+                o := o+1
+                i := i+1
+            $) ELSE
+            TEST i+3 > string%0 THEN error:=TRUE ELSE
+            $(  LET style = string%(i+1)
+                LET width.ch = string%(i+2)
+                LET value = 0
+                LET reloc = 0
+                LET type  = 0
+                i:=i+3
+                IF 'a'<=style<='z' THEN style := style + ('A'-'a')
+                TEST \'0'<=width.ch<='9' THEN error := TRUE ELSE
+                $(  LET width = width.ch - '0'
+                    LET wrproc = (style='X' -> wrhex,
+                                  style='O' -> wroct,
+                                  style='C' -> wrchr,
+                                  style='I' -> wrint, 0)
+                    error := error | wrproc=0 |
+                        get.opt(@value, @reloc, @type, FALSE, string, @i) |
+                        // check that value was not relocatable and
+                        // that it was not a 'bool' (type 1) and that
+                        // a valid address where the value can be found
+                        // has been given
+                        reloc\=0 | type=1 | value=0 |
+                        // check that write was within given field
+                        \wrproc(!value, width, s, @o, new.size)
+                $)
+            $)
+        ELSE
+        $(  s%o := string%i
+            o := o+1
+            i := i+1
+        $)
+        s%0 := o-1
+    $)
+    IF error & s\=0 THEN
+    $(  freevec(s)
+        s := 0
+    $)
+    RESULTIS s
+$)
+
+
+
+
+
+
+
+
+//
+//                       DICTIONARY
+//
+
+
+
+//  GLOBAL:     dic    -- tree of external records of the following form:
+
+
+
+// MANIFEST:    d.left
+//              d.right
+//              d.name
+//              d.modno
+//              d.rel
+//              d.value
+
+
+
+
+
+
+LET find.name(n, d) = VALOF
+/*     this procedure returns a pointer to the place in tree (!d) which
+   should point to the record containing name 'n'!
+*/
+TEST !d=null THEN RESULTIS d ELSE
+$(  LET m=?             // the name of a symbol
+    LET i=?             // a counter up to 5
+    LET dif=?           // comparason between (!d)'s name and 'n'
+    $(rpt
+        m:=!d+d.name
+        i:=0
+        WHILE i<2 & m!i-n!i=0 DO i:=i+1
+        dif:=cmp16(m!i,n!i)
+        TEST dif<0 THEN d:=!d+d.right ELSE
+        IF dif>0 THEN d:=!d+d.left
+    $)rpt REPEATUNTIL dif=0 | !d=null
+    RESULTIS d
+$)
+
+
+
+
+
+LET get.val(ext.sym) = !find.name(ext.sym, @dic)
+
+
+
+
+LET store(ext.sym, value, relocatable) BE
+$(  LET d=find.name(ext.sym, @dic)
+    TEST !d=null THEN !d:=new(8, null, null, ext.sym!0, ext.sym!1, ext.sym!2,
+                     this.mod, (relocatable-> mod!this.mod+mod.base,0), value)
+    ELSE writef("file %S module %N ('%S') record %N:*
+                * '%C%C%C%C%C%C' already defined in '%S'*N",
+        files!this.file+f.str, this.mod, mod!this.mod+mod.name, this.rec,
+        (ext.sym!0>>8), (ext.sym!0&#XFF),
+        (ext.sym!1>>8), (ext.sym!1&#XFF),
+        (ext.sym!2>>8), (ext.sym!2&#XFF),
+        ((!d)!d.modno=0 -> "OPT string", mod!((!d)!d.modno)+mod.name ) )
+$)
+
+
+
+LET store.from.str(ext.sym, rel.part) = VALOF
+$(  /*  This procedure is used from the options string decoding routine to
+      declare external symbols manualy - no error is produced if there is
+      a clash of names */
+    LET d=find.name(ext.sym, @dic)
+    IF !d=null THEN
+    !d:=new(8, null, null, ext.sym!0, ext.sym!1, ext.sym!2, 0, 0, 0)
+    /* symbol looks as if it were declared in the (imaginary) module 0 and
+       is absolute.  Result returned is the address where its value must be
+       put.  Also returned is the address of the relocation field  which
+       may be used to 'relocate' this symbol with respect to some variable
+       (i.e. add its value to some global paramter) at the end of pass 1   */
+    !rel.part:=(!d)+d.rel
+    RESULTIS (!d)+d.value
+$)
+
+
+
+
+
+LET relocate.externals() BE
+$(  LET rel.ext(d) BE
+    UNLESS d=null THEN
+    $(  rel.ext(d!d.left)
+        rel.ext(d!d.right)
+        IF d!d.rel\=0 THEN d!d.value:=d!d.value + !(d!d.rel)
+    $)
+    rel.ext(dic)
+$)
+
+
+
+
+
+AND generate.externals(module) BE
+IF input.incomplete THEN
+$(  LET find.module(mod, d) BE
+    UNLESS d=null THEN
+    $(  IF d!d.modno=mod THEN
+        $(  LET s=VEC 4
+            FOR i=0 TO 2 DO
+            $(  s%(1+i*2):=d!(d.name+i) >> 8
+                s%(2+i*2):=d!(d.name+i) & #XFF
+            $)
+            s%0:=6
+            cambridge.hex(cd.int, s, d!d.value)
+        $)
+        find.module(mod, d!d.left)
+        find.module(mod, d!d.right)
+    $)
+    find.module(module, dic)
+$)
+
+
+
+
+AND display.externals() BE
+UNLESS mapfile=0 THEN
+$(  LET chpos=0
+    STATIC
+    $(  star.given=FALSE
+        plus.given=FALSE
+        r.given=FALSE
+    $)
+    LET printtree(d, chpos) BE
+    WHILE d\=null DO
+    $(  MANIFEST $( outfield=18 $)
+        printtree(d!d.left, chpos)
+        IF d!d.modno=0 | mod!(d!d.modno)!mod.used THEN
+        $(  IF !chpos+outfield>pw THEN
+            $(  wrch('*N')
+                !chpos:=0
+            $)
+            !chpos:=!chpos+outfield
+            TEST d!d.modno=0 THEN writes("    ") ELSE
+            writef("%I2  ",d!d.modno)
+            FOR i=0 TO 2 DO
+            $(  wrch( d!(d.name+i) >> 8)
+                wrch( d!(d.name+i) & #XFF )
+            $)
+            writef("  %X4 %C",
+                   d!d.value,
+                   (d!d.modno=0->(d!d.rel\=0->'+','**'),
+                                 (d!d.rel\=0->'R','*S')) )
+            star.given:=star.given|d!d.modno=0&d!d.rel=0
+            plus.given:=plus.given|d!d.modno=0&d!d.rel\=0
+            r.given:=r.given|d!d.rel&d!d.modno\=0
+            IF !chpos+4<=pw THEN
+            $(  !chpos:=!chpos+4
+                writes("    ")
+            $)
+        $)
+        d := d!d.right
+    $)
+    LET save.output=output()
+    selectoutput(mapfile)
+    TEST dic=null THEN writes("*N*NNo external symbols generated.*N*N*N") ELSE
+    $(  writes("*N*NExternal symbols:*N*N")
+        printtree(dic, @chpos)
+        writes("*N*N")
+        IF star.given THEN
+        writes("** - absolute symbol defined in options string*N")
+        IF plus.given THEN
+        writes("+ - calculated symbol defined in options string*N")
+        IF r.given THEN writes("R - relocated symbol*N")
+        wrch('*N')
+    $)
+    selectoutput(save.output)
+$)
+
+
+
+
+
+LET clear.dictionary() BE
+$(/* this procedure not necessary since introduction of memory management module
+    LET cleardic(d) BE
+    UNLESS d=null THEN
+    $(  cleardic(d!d.left)
+        cleardic(d!d.right)
+        freevec(d)
+    $)
+    cleardic(dic)
+  */
+    dic:=null
+$)
+
+
+
+
+
+
+
+
+.
+
+
+
+
+SECTION "Clink3"
+
+
+
+
+
+//*<TRIPOS:
+GET "libhdr"
+GET ":COM.CLINK.BCPL.clinkhdr"
+/*TRIPOS>*/
+
+
+
+/*<RSX:
+GET "libhdr"
+GET "clinkhdr"
+/*RSX>*/
+
+
+
+/*<CAP:
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.clinkhdr"
+/*CAP>*/
+
+
+
+/*<IBM:
+GET "LIBHDR"
+GET "LNKHDR"
+/*IBM>*/
+
+
+
+
+
+
+
+
+//
+//                      MODULE  RECORDS
+//
+
+
+
+
+//  GLOBAL:  mod        --  a vector of module descriptions
+//           this.mod   --  the current module offset in 'mod'
+
+
+
+
+// MANIFEST:    mod.name
+//              mod.rel
+//              mod.used
+//              mod.visited
+//              mod.minaddr
+//              mod.maxaddr
+//              mod.rel
+//              mod.refs
+//              mod.asmed
+//              mod.compiled
+//              mod.linked
+//              mod.title
+//              refs.name            = l.data+0
+//              refs.addr            = l.data+3
+//              refs.type            = l.data+4
+//              mod.size             = mod.refs
+//              no.of.modules
+
+
+
+
+LET calculate.rel.bases() = VALOF
+$(  /*      This procedure uses the information held in 'mod' -- the table
+        of module descriptors and uses it find bases for the relocatable
+        modules.  It goes sequentialy through the relocatable modules fitting
+        each one into the first available section of absolute store that it
+        can find.
+            The algorithm chooses bases for the module being relocated
+        starting from 0.  Each time the module's address space is found to
+        clash with that of an absolute module the first address after the
+        clashing module is chosen and the check repeated until either a
+        choice is sucessfull or the the module is found to clash with each
+        of the modules already placed -- in which case there is no room
+        for this module and the procedure fails.
+            If the choice was sucessfull the module's base is filled in and
+        it's type in its module descriptor is chaned to 'absolute'.
+    */
+    LET mno=1                   // module being relocated
+    LET tries=0                 // number of clashed in address space
+    LET success=TRUE            // naturaly
+    FOR i=1 TO mod!0 DO mod!i!mod.visited:=\mod!i!mod.rel
+    WHILE mno<=mod!0 & success DO
+    $(  LET m=mod!mno
+        LET minaddress=m!mod.minaddr
+        LET maxaddress=m!mod.maxaddr
+        LET m.size=(cmp16(minaddress,maxaddress)<=0 -> maxaddress-minaddress, 0)
+        TEST m!mod.visited | \m!mod.used | m.size=0 THEN mno:=mno+1
+        /* not relocatable, with data in it */ ELSE
+        $(  LET min=min.addr        // first guess at address base
+            LET max=min+m.size
+            LET i=?                 // to be the module being checked against
+            IF allocate.downwards THEN
+            $(  max:=max.addr
+                min:=max-m.size
+            $)
+            tries:=0
+    //      writef("Relocating module %S: min=%X4 max=%X4 tries=%n*N",
+    //              m+mod.name,min,max,tries)
+            WHILE tries<=mod!0 & cmp16(min, min.addr)>=0 & cmp16(min, max)<=0 &
+                  cmp16(max, max.addr)<=0 & VALOF
+            $(  /* does module 'm' clash with any absolute module 'i' ? */
+                //  look at modules marked as 'visited' (i.e. already relocated)
+                //  and 'used' (i.e. the modules to be used that are already placed)
+                //  and find out if there is already a module which is allocated
+                //  inside 'min' to 'max' the trial version of the relocating
+                //  module's boundary.
+                i:=1
+                WHILE i<=mod!0 & (\mod!i!mod.visited | \mod!i!mod.used |
+                                 cmp16(min, mod!i!mod.maxaddr) > 0 |
+                                 cmp16(max , mod!i!mod.minaddr)<0 ) DO i:=i+1
+                RESULTIS i<=mod!0
+            $) DO
+            $(  TEST allocate.downwards THEN  // try again having clashed
+                $(  max:=mod!i!mod.minaddr-1
+                    min:=max-m.size
+                $) ELSE
+                $(  min:=mod!i!mod.maxaddr+1
+                    max:=min+m.size
+                $)
+                tries:=tries+1
+//              writef("clashed with module %n: min=%X4 max=%X4 tries=%N*N",
+//                     i,min,max,tries)
+            $)
+            success:=( tries<=mod!0 /* must have found a space by now */ &
+                       cmp16(min, max)<=0 &
+                       cmp16(min, min.addr)>=0 & cmp16(max, max.addr)<=0 )
+            IF success THEN
+            $(  m!mod.base := min-m!mod.minaddr
+                m!mod.minaddr := min
+                m!mod.maxaddr := max
+                m!mod.visited  := TRUE// i.e. absolute now
+            $)
+        $)
+    $)
+    UNLESS success THEN
+    writef("ran out of address space (%X4 - %X4) relocating module '%S'*N",
+            min.addr, max.addr, mod!mno+mod.name)
+    RESULTIS success
+$)
+
+
+
+
+
+
+LET delete.unused.modules() BE
+$(  LET used.found=?
+    LET i=1
+    FOR j=1 TO mod!0 DO mod!j!mod.visited := FALSE
+    $(rpt
+        used.found:=FALSE
+        FOR i=1 TO mod!0 DO
+        IF mod!i!mod.used & \mod!i!mod.visited THEN
+        $(  LET r=mod!i!mod.refs
+            used.found:= TRUE
+            mod!i!mod.visited:=TRUE
+            WHILE r\=null DO
+            $(  IF r!refs.type=t.ref /* strong reference */ THEN
+                $(  LET d=get.val(r+refs.name)
+                    //  if reference exists it has only been used if
+                    //  the first list of references in the hex is not
+                    //  the null list (#XFFFF)
+                    UNLESS d=null  | ignore.unused.refs & r!refs.addr=#XFFFF THEN
+                    UNLESS d!d.modno=0 THEN mod!(d!d.modno)!mod.used:=TRUE
+                $)
+                r:=r!l.next
+            $)
+        $)
+    $)rpt REPEATUNTIL \used.found
+$)
+
+
+
+
+LET new.module(name, relocatable, library) = VALOF
+$(  LET succeed=FALSE
+    TEST mod!0>=no.of.modules THEN
+    writef("more than %N modules in source - use M option*N",no.of.modules) ELSE
+    $(  mod!0:=mod!0+1
+        this.mod:=mod!0
+        mod!this.mod:=new(mod.size,
+                          0,0,0,0,              // filled in by 'name'
+                          relocatable, \library, FALSE,
+                          #XFFFF, 0, 0, null, 0, 0, 0, 0)
+        succeed:=(mod!this.mod\=null)
+        IF succeed THEN
+        $(  LET m=mod!this.mod
+            (m+mod.name)%0:=6
+            FOR i=1 TO 6 BY 2 DO
+            $(  (m+mod.name)%(i+1) := name!(i/2) & #XFF
+                (m+mod.name)%i     := name!(i/2) >> 8
+            $)
+        $)
+    $)
+    RESULTIS succeed
+$)
+
+
+
+
+LET size.of.module(module.no) = VALOF
+TEST 0<module.no<=mod!0 THEN
+$(  LET m=mod!module.no
+    RESULTIS (cmp16(m!mod.maxaddr, m!mod.minaddr)<0 -> 0,
+              m!mod.maxaddr-m!mod.minaddr+1)
+$) ELSE
+$(  writef("Error in size.of.module %N*N",module.no)
+    RESULTIS 0
+$)
+
+
+
+LET write.module.name(name) BE
+    writef("%C%C%C%C%C%C", name!0>>8, name!0&#XFF,
+              name!1>>8, name!1&#XFF, name!2>>8, name!2&#XFF)
+
+
+
+LET module.exists(name, number) = VALOF
+$(  LET m=1
+    LET found=FALSE
+    WHILE \found & m<=number & m<=mod!0 DO
+    $(  LET same=TRUE
+        FOR i=1 TO 6 BY 2 DO
+        same := same & ((mod!m+mod.name)%(i+1) = (name!(i/2) & #XFF)) &
+                       ((mod!m+mod.name)%i = (name!(i/2) >> 8))
+        found:=same
+        m:=m+1
+    $)
+    RESULTIS found
+$)
+
+
+
+
+LET calculate.statistics() BE
+$(  LET resident = FALSE        // is this module in a 'resident' file?
+    LET modules.file = 0        // number of file that this module is in
+    LET end.of.file.module = 0  // number of the last module in the current file
+    max.module.size := 0        // largest module found so far
+    max.store.ref := min.addr   // greatest address in relocated code
+    min.store.ref := max.addr   // least address in relocated code
+    FOR i=1 TO mod!0 DO
+    $(  LET module.min = mod!i!mod.minaddr
+        LET module.max = mod!i!mod.maxaddr
+        LET module.size = (cmp16(module.max, module.min)<0 ->
+                           0, module.max - module.min + 1)
+        IF i>end.of.file.module THEN
+        $(  modules.file:=modules.file+1
+            end.of.file.module:=files!modules.file!f.maxmod
+            resident:= (files!modules.file!f.type=ft.resident)
+        $)
+        UNLESS resident | \mod!i!mod.used THEN
+        $(  IF cmp16(module.size,max.module.size)>0 THEN
+                max.module.size:=module.size
+            IF mod!i!mod.rel THEN
+            $(  IF cmp16(module.min,min.store.ref)<0 THEN
+                    min.store.ref:=module.min
+                IF cmp16(module.max,max.store.ref)>0 THEN
+                    max.store.ref:=module.max
+            $)
+        $)
+    $)
+$)
+
+
+
+LET display.modules() BE
+UNLESS mapfile=0 THEN
+$(  LET fno=0
+    LET fno.space.used=0
+    LET total.space.used=0
+    LET save.output=output()
+    LET last.mod.in.file=0
+    LET total.message = "Allocated space from this file:"
+    LET print.total(s, underline, total) BE
+    $(  UNLESS total=0 THEN
+        $(  FOR i=1 TO 72 DO wrch('*S')
+            writef("%S*N",underline)
+            FOR i=1 TO 72-s%0-1 DO wrch('*S')
+            writef("%S %I5*N",s,total)
+        $)
+    $)
+    LET dat = VEC 10
+    dat := get.time(dat, 10)
+    selectoutput(mapfile)
+    writes("Cambridge Hex Linker: Map of Module Allocation")
+    IF dat%0\=0 THEN writef(" (%S)",dat)
+    newline()
+    writes("==============================================")
+    IF dat%0\=0 THEN
+    FOR i=1 TO dat%0+3 DO wrch('=')
+    writes("*N*N")
+    WHILE 0>=last.mod.in.file & fno<files!0 DO
+    $(  fno:=fno+1
+        print.total(total.message,"-----",fno.space.used)
+        writef("*N*N%SFile %S:*N",(files!fno!f.type=ft.library->"Library ",
+                              files!fno!f.type=ft.resident->"Resident ",
+                              ""), files!fno+f.str)
+        last.mod.in.file:=files!fno!f.maxmod
+        total.space.used := total.space.used+fno.space.used
+        fno.space.used := 0
+    $)
+    FOR i=1 TO mod!0 DO
+    $(  LET m=mod!i
+        LET p=m!mod.refs
+        LET chpos=0
+        writef("    %I2 %Sused %S module (*'%S*'):",
+                i,
+                (m!mod.used->"  ","un"),
+                (m!mod.rel->"relocated", "absolute "),
+                m+mod.name)
+        TEST cmp16(m!mod.maxaddr,m!mod.minaddr)<0 THEN
+        writef(" NO DATA     base %X4             ",m!mod.base) ELSE
+        $(  LET length = m!mod.maxaddr - m!mod.minaddr + 1
+            writef(" %X4 - %X4 base %X4 length %I5",
+                    m!mod.minaddr,
+                    m!mod.maxaddr,
+                    m!mod.base,
+                    length )
+            IF m!mod.used THEN
+            fno.space.used := fno.space.used+length
+        $)
+        IF m!mod.used &
+          (m!mod.title\=0 | m!mod.asmed\=0 |
+           m!mod.compiled\=0 | m!mod.linked\=0) THEN
+        $(  LET title = (m!mod.title=0 -> "", m!mod.title)
+            LET asmed = (m!mod.asmed=0 -> "", m!mod.asmed)
+            LET linked = (m!mod.linked=0 -> "", m!mod.linked)
+            LET compiled = (m!mod.compiled=0 -> "", m!mod.compiled)
+            writes("  ")
+            IF title%0\=0 THEN
+            $(  IF title%0+80>pw THEN writes("*N         ")
+                writef("*"%S*"",title)
+            $)
+            IF asmed%0\=0 | compiled%0\=0 | linked%0\=0 THEN
+            $(  writes("*N         ")
+                IF asmed%0\=0 THEN writef("assembled %S ",asmed)
+                IF compiled%0\=0 THEN writef("compiled %S ",compiled)
+                IF linked%0\=0 THEN writef("linked %S ",linked)
+            $)
+        $)
+        newline()
+        IF m!mod.used & p\=null & ref.info THEN
+        $(  LET base=m!mod.base
+            LET pw.72 = (pw>72 -> 72, pw)
+            writes("       ")
+            chpos:=7
+            WHILE p\=null DO
+            $(  IF chpos+19>pw.72 THEN
+                $(  writes("*N       ")
+                    chpos:=7
+                $)
+                chpos:=chpos+19
+                writes("    ")
+                write.module.name(p+refs.name)
+                writef("  %C",  p!refs.type=t.ref->'@','\' )
+                TEST p!refs.addr=#XFFFF THEN writes("UNUSED") ELSE
+                writef("%X4  ",p!refs.addr+base)
+                p:=p!l.next
+            $)
+            wrch('*N')
+        $)
+        WHILE i>=last.mod.in.file & fno<files!0 DO
+        $(  fno:=fno+1
+            print.total(total.message,"-----",fno.space.used)
+            writef("*N*N%SFile %S:*N",(files!fno!f.type=ft.library->"Library ",
+                                  files!fno!f.type=ft.resident->"Resident ",
+                                  ""), files!fno+f.str)
+            total.space.used := total.space.used + fno.space.used
+            fno.space.used := 0
+            last.mod.in.file:=files!fno!f.maxmod
+        $)
+    $)
+    print.total(total.message,"-----",fno.space.used)
+    total.space.used := total.space.used + fno.space.used
+    print.total("TOTAL space used:","=====",total.space.used)
+    UNLESS entry.point=#XFFFF THEN
+    writef("*N*NEntry point at %X4*N",entry.point)
+    writes("*N*N")
+    selectoutput(save.output)
+$)
+
+
+
+
+
+LET clear.modules() BE
+UNLESS mod=null THEN
+$(  /*  not necessary since introduction of memory management
+    FOR i=1 TO mod!0 DO
+    $(  clear.list(mod!i!mod.refs)
+        freevec(mod!i)
+    $)
+    mod!0:=0
+    */
+    freevec(mod)
+    mod:=null
+$)
+
+
+
+
+
+.
+
+
+SECTION "Clink4"
+
+
+
+
+
+//*<TRIPOS:
+GET "libhdr"
+GET ":COM.CLINK.BCPL.clinkhdr"
+/*TRIPOS>*/
+
+
+
+/*<RSX:
+GET "libhdr"
+GET "clinkhdr"
+/*RSX>*/
+
+
+
+/*<CAP:
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.clinkhdr"
+/*CAP>*/
+
+
+
+/*<IBM:
+GET "LIBHDR"
+GET "LNKHDR"
+/*IBM>*/
+
+
+
+
+
+
+//
+//                     Main   Linker
+//
+
+
+
+
+
+
+LET pass1() = VALOF
+$(  LET error=FALSE
+    LET file.opened=?
+    LET had.mod.defn = FALSE
+    LET no.module="module is not yet named*N"
+    LET save.input=input()
+
+    LET bad.message(type) BE
+    writef("file %S module %N ('%S') record %N: %S",
+           files!this.file+f.str, this.mod,
+           (this.mod<=0 | mod!this.mod+mod.name=0  ->"<no name>",
+            mod!this.mod+mod.name),
+           this.rec, type)
+
+    LET option.record() BE
+    IF rec!rec.start=0 THEN  // i.e. option level is zero
+    $(  LET s = rec+rec.info // characters specifying option
+        FOR i=1 TO rec!rec.datalen DO s%i := s!(i-1)  // pack string
+        s%0 := rec!rec.datalen
+        UNLESS deal.with.option(s) THEN
+            bad.message("bad options record*N")
+    $)
+
+    writes("Cambridge Hex Linker.  Version 2.22 23-Jan-83*N")
+    ch := '*S'
+    eof := FALSE
+    this.mod := 0
+    this.rec := 0
+    this.file := 0
+    file.opened := open.next.file()
+    TEST \file.opened  | \get.rec()  THEN
+    $(  error:=TRUE
+        IF file.opened THEN
+        writes("bad first record: ending*N")
+    $) ELSE
+    WHILE \eof & \error DO
+    $(  SWITCHON rec!rec.type INTO
+        $(  CASE t.mod:
+                WHILE \error & \eof & module.exists(rec+rec.name, this.mod) DO
+                $(  IF cautions THEN
+                    $(  writef("file %S: CAUTION - *
+                               *duplicate module ('", files!this.file+f.str)
+                        write.module.name(rec+rec.name)
+                        writes("') discarded*N")
+                    $)
+                    $(rpt
+                        // skip this module - it's a duplicate
+                        // be careful to take notice of OPTION RECORDS though
+                        error := \get.rec()
+                        IF \eof & \error & rec!rec.type=t.opt THEN
+                            option.record()
+                    $)rpt REPEATUNTIL rec!rec.type=t.mod | error | eof
+                $)
+                UNLESS error | eof THEN
+                $(  error:=\make.byte(rec.info)
+                    TEST error THEN bad.message("bad module defn*N") ELSE
+                    error:= \new.module(rec+rec.name, (rec!rec.info&1)=1,
+                                        files!this.file!f.type=ft.library)
+                    had.mod.defn:=TRUE
+                $)
+                ENDCASE
+            CASE t.ref:
+            CASE t.wref:
+                TEST \had.mod.defn THEN
+                $(  error:=TRUE
+                    bad.message(no.module)
+                $) ELSE
+                TEST make.byte(rec.info) & make.byte(rec.info+1) THEN
+                    append(mod!this.mod+mod.refs,  new(6, null,
+                    rec!(rec.name+0), rec!(rec.name+1), rec!(rec.name+2),
+                    (rec!rec.info << 8) | rec!(1+rec.info) , rec!rec.type ))
+                ELSE
+                $(  bad.message("bad external reference record*N")
+                    error:=TRUE
+                $)
+                ENDCASE
+            CASE t.absint:
+            CASE t.def:
+                TEST \had.mod.defn THEN
+                $(  error:=TRUE
+                    bad.message(no.module)
+                $) ELSE
+                TEST make.byte(rec.info) & make.byte(rec.info+1) THEN
+                store(rec+rec.name, (rec!rec.info<<8)+rec!(rec.info+1),
+                rec!rec.type=t.def &  mod!this.mod!mod.rel) ELSE
+                $(  bad.message("bad internal definition record*N")
+                    error:=TRUE
+                $)
+                ENDCASE
+            CASE t.data:
+                TEST \had.mod.defn THEN
+                $(  error:=TRUE
+                    bad.message(no.module)
+                $) ELSE
+                $(  LET addr=(rec!(rec.start+0)<<8)+
+                             (rec!(rec.start+1))
+                    LET len = rec!rec.len
+//                  writef("Data window: [%X4 - %X4] -> ",
+//                      mod!this.mod!mod.minaddr, mod!this.mod!mod.maxaddr)
+                    IF cmp16(addr, mod!this.mod!mod.minaddr)<0 THEN
+                       mod!this.mod!mod.minaddr:=addr
+                    IF \(len=0 & addr=0) &
+                       cmp16(addr+len-1, mod!this.mod!mod.maxaddr) >= 0 THEN
+                       mod!this.mod!mod.maxaddr:=addr+len-1
+//                  writef("[%X4 - %X4]*N",
+//                      mod!this.mod!mod.minaddr, mod!this.mod!mod.maxaddr)
+                $)
+                ENDCASE
+            CASE t.code:
+                $(  LET new.type = (rec!rec.datalen=2)
+                    LET bpau = 0  // bytes per addressable unit!
+                    TEST code.type=null THEN
+                    $(  code.type:=getvec(7/bytesperword)
+                        UNLESS code.type=0 THEN
+                        $(  code.type%0:=6
+                            FOR i=1 TO 6 BY 2 DO
+                            $(  code.type%i := rec!(rec.name+i/2) >> 8
+                                code.type%(i+1) := rec!(rec.name+i/2) & #XFF
+                            $)
+                        $)
+                    $)
+                    ELSE UNLESS comp.name(code.type) THEN
+                    $(  bad.message("unexpected module type: expected ")
+                        writes(code.type)
+                        wrch('*N')
+                        error:=TRUE
+                    $)
+                    TEST \make.byte(rec.info) | \VALOF
+                    $(  bpau := (new.type->rec!rec.info>>4, rec!rec.info) & #XF
+                        RESULTIS (bytes.per.asm.word=0|bytes.per.asm.word=bpau)
+                    $) THEN
+                    $(  bad.message("unexpected word size: ")
+                        writef("is %N but expected %N (bytes)*N", bpau,
+                                 bytes.per.asm.word)
+                        error:=TRUE
+                    $) ELSE
+                    $(  bytes.per.asm.word := bpau
+                        // ****************** TEMPORARY CODE *************
+                        // This test will be removed when the change over to the
+                        // new format of T.CODE record is completed
+//                      writef("PASS1: new.type = %C, rec.len = %N, *
+//                             *msb.first = %C*N", (new.type -> 'T','F'),
+//                             rec!rec.datalen, (msb.first -> 'T', 'F'))
+                        IF new.type THEN
+                        TEST make.byte(rec.info+1) THEN
+                        $(  bytes.per.address := rec!rec.info & #XF
+                            msb.first := ((rec!(rec.info+1) & 1)=1)
+                        $) ELSE
+                        $(  bad.message("bad code type record*N")
+                            error := TRUE
+                        $)
+                    $)
+                $)
+                ENDCASE
+            CASE t.opt:
+                option.record()
+                ENDCASE
+            CASE t.rel:
+                UNLESS had.mod.defn THEN
+                $(  error:=TRUE
+                    bad.message(no.module)
+                $)
+                ENDCASE
+            CASE t.eof:
+                had.mod.defn:=FALSE
+                ENDCASE
+            CASE t.prag:
+                $(  LET get.prag() = VALOF
+                    $(  LET ps.size = rec!rec.datalen
+                        LET prag.string = simplegetvec(ps.size/bytesperword)
+                        UNLESS prag.string=0 THEN
+                        $(  FOR i=1 TO ps.size DO
+                            prag.string%i := (rec+rec.info)!(i-1)
+                            prag.string%0 := ps.size
+                        $)
+                        RESULTIS prag.string
+                    $)
+                    TEST comp.name("TITLE ") THEN
+                        IF mod!this.mod!mod.title=0 THEN
+                        mod!this.mod!mod.title := get.prag()
+                    ELSE TEST comp.name("DAT-L ") THEN
+                        IF mod!this.mod!mod.linked=0 THEN
+                        mod!this.mod!mod.linked := get.prag()
+                    ELSE TEST comp.name("DAT-A ") THEN
+                        IF mod!this.mod!mod.asmed=0 THEN
+                        mod!this.mod!mod.asmed := get.prag()
+                    ELSE IF comp.name("DAT-C ") THEN
+                        IF mod!this.mod!mod.compiled=0 THEN
+                        mod!this.mod!mod.compiled := get.prag()
+                $)
+                ENDCASE
+        $)
+        UNLESS eof THEN error:=error | \get.rec()
+//*<TRIPOS:
+        IF testflags(1) THEN
+        $(  writes("****** BREAK: during pass 1*N")
+            error:=TRUE
+        $)
+/*TRIPOS>*/
+    $)
+    IF file.opened THEN
+    $(  UNLESS eof THEN endread()
+        UNLESS save.input=0 THEN selectinput(save.input)
+    $)
+    RESULTIS \error
+$)
+
+
+
+
+
+
+LET do.externals(mem, file, module) BE
+IF 0<module<=mod!0 THEN
+$(  // this procedure fills in the chain of external references for
+    // all the labels held in the current modules list
+    LET err.message(string, file, module, name) BE
+    $(  writef("file %S module %N ('%S') %S: ",
+                files!file+f.str,
+                module, mod!module+mod.name, string)
+        write.module.name(name)
+        newline()
+    $)
+    LET m=mod!module          // current module
+    LET rel.base=m!mod.base     // logical address zero
+    LET min.rel.addr=m!mod.minaddr-rel.base
+    LET max.rel.addr=m!mod.maxaddr-rel.base
+    LET p=m!mod.refs            // pointer for list of refs
+    LET msb = (msb.first -> 0, 1)   // most significant byte offset
+    LET lsb = (msb.first -> 1, 0)   // least significant byte offset
+    WHILE p\=null DO
+    $(  MANIFEST $(  max.list.len = 400  /* for arguments sake */  $)
+        // to stop infinite recursion a limit to the number of chainings
+        // down the external reference list is imposed
+        LET d=get.val(p+refs.name)      // external symbol descriptor
+        LET value=(d=null->undefined.reference, d!d.value)
+        LET mem.p=p!refs.addr           // pseudo store list pointer
+        LET i=0                         // counts number of chainings
+        IF d=null & p!refs.type=t.ref THEN
+        err.message("undefined reference", file, module, p+refs.name)
+//      writef("Module %N symb %X4:*NPointer = %X4*N",
+//             module, p!refs.addr, mem.p)
+        WHILE mem.p\=#XFFFF &
+           cmp16(min.rel.addr, mem.p)<=0 & cmp16(mem.p+1, max.rel.addr)<=0 &
+           i<max.list.len DO
+        $(  LET tmp.p=mem.p
+            // follow chain:
+            mem.p:=mem%(mem.p+lsb-min.rel.addr) +
+                   (mem%(mem.p+msb-min.rel.addr) << 8)
+//          writef("Pointer = %X4*N", mem.p)
+            // fill in VALUE with correct byte ordering:
+            mem%(tmp.p-min.rel.addr)   := (value >> (msb.first -> 8,0)) & #XFF
+            mem%(tmp.p+1-min.rel.addr) := (value >> (msb.first -> 0,8)) & #XFF
+            i:=i+1
+        $)
+        UNLESS mem.p=#XFFFF /* correct termination */ THEN
+        TEST i>=max.list.len THEN
+        err.message("reference chain too long", file, module, p+refs.name)
+        ELSE
+        err.message("bad address in ref chain", file, module, p+refs.name)
+        p:=p!l.next     // next symbol referenced by this module
+    $)
+$)
+
+
+
+
+LET tbit(map, n) = (map!(n>>4) & (1<<(n&#XF))) \= 0
+
+
+
+LET sbit(map, n) BE map!(n>>4) := map!(n>>4) | (1<<(n&#XF))
+
+
+
+
+LET end.current.module(mem, map, base, rel.base, file, module) BE
+UNLESS module<=0 THEN
+$(  LET i=0
+    LET user.break=FALSE
+    LET size=size.of.module(module)
+    LET msb = (msb.first -> 0,1)        // most significant bit offset
+    LET lsb = (msb.first -> 1,0)        // least significant bit offset
+    FOR addr=0 TO size DO  // relocate value at address 'addr'
+      IF tbit(map, addr) THEN
+      $(  LET new.cont = (mem%(addr+msb)<<8) + mem%(addr+lsb) + rel.base
+          mem%(addr+lsb) := (new.cont&#XFF)
+          mem%(addr+msb) := new.cont >> 8
+      $)
+    do.externals(mem, file, module)
+    UNLESS code.type=null THEN
+    cambridge.hex(cd.code, code.type,
+                  ((bytes.per.asm.word & #XF)<<4) + (bytes.per.address & #XF),
+                  (msb.first-> #X01, #X00))
+    $(  LET stamp=VEC 16
+        cambridge.hex(cd.prag, get.time(stamp,16), "DAT-L")
+    $)
+    cambridge.hex(cd.newpc, base)
+    UNLESS size=0 THEN cambridge.hex(cd.data, mem, size)
+    generate.externals(module)
+$)
+
+
+
+
+
+LET pass2() = VALOF
+$(  LET error=FALSE
+    LET save.input=input()
+    LET memsize=max.module.size
+    LET mem=getvec(memsize/bytesperword+1)   // - Holds contents of memory
+                                             // represented by each module
+    LET bit.map=getvec(memsize/16+1)         // - Has a bit corresponding to
+                                             // each memory location. This bit
+                                             // is set if it is to be relocated
+    LET base=0                               // - Minimum address referenced by
+                                             // a module
+    LET rel.base=0                           // - Logical address zero
+    LET module=0                             // - Number of the module we are in
+    LET file=0                               // - Number of the file we are in
+    LET file.opened=?
+    LET new.module=FALSE                     // - TRUE if reading a valid module
+    ch:='*S'
+    eof:=FALSE
+    this.mod:=0
+    this.rec:=0
+    this.file:=0
+    writef("Maximum module size: %N bytes",memsize)
+    UNLESS code.type=null THEN writef(" for %S",code.type)
+    wrch('*N')
+    file.opened:=open.next.file()
+    TEST mem=null | bit.map=null THEN
+    writef("Can't get store (%N words) for second pass -- terminating*N",
+           memsize/bytesperword+1 + memsize/16+1) ELSE
+    TEST \file.opened | \get.rec() THEN
+    $(  error:=TRUE
+        TEST file.opened THEN
+        writes("bad first record: ending*N") ELSE
+        writes("no openable files with hex in them!*N")
+    $) ELSE
+    WHILE \eof & \error DO
+    $(  SWITCHON rec!rec.type INTO
+        $(  CASE t.mod:
+                $(  LET memused=?
+                    TEST new.module THEN
+                    $(  end.current.module(mem, bit.map, base,
+                                           rel.base, file, module)
+                        memused:=size.of.module(module)
+                    $) ELSE memused:=memsize
+                    FOR i=0 TO memsize+1 DO mem%i:=default.memory
+                    FOR i=0 TO memsize/16+1 DO bit.map!i:=0
+                $)
+                this.mod:=this.mod+1
+                WHILE VALOF
+                $(  WHILE \error & \eof &
+                          module.exists(rec+rec.name, this.mod-1) DO
+                    error:=\get.rec() REPEATUNTIL rec!rec.type=t.mod|error|eof
+                    RESULTIS \error & \eof
+                $) & \mod!this.mod!mod.used DO
+                $(  error:=\get.rec() REPEATUNTIL rec!rec.type=t.mod|error|eof
+                    this.mod:=this.mod+1
+                $)
+                new.module := \eof
+                IF new.module THEN
+                $(  base:=mod!this.mod!mod.minaddr
+                    rel.base := mod!this.mod!mod.base
+                    module:=this.mod
+                    file:=this.file
+                    cambridge.hex(cd.module, mod!module+mod.name)
+                $)
+                ENDCASE
+            CASE t.data:
+                $(  LET first=(rec!(rec.start+0)<<8)+
+                             (rec!(rec.start+1))-base+rel.base
+                    LET i=rec.info
+                    LET maxi=rec.info+rec!rec.datalen-1
+                    WHILE i<=maxi & make.byte(i) DO i:=i+1
+                    error:=(i<=maxi)
+                    TEST error THEN
+                    writef("file %S module %N ('%S%') record %N *
+                           *bad data record*N", files!file+f.str,
+                           module, mod!module+mod.name, this.rec) ELSE
+                    FOR i=0 TO rec!rec.datalen-1 DO
+                    mem%(first+i) := rec!(i+rec.info)
+                $)
+                ENDCASE
+            CASE t.rel:
+                FOR i=rec.info TO rec.info+rec!rec.datalen-1 BY 2 DO
+                TEST make.byte(i) & make.byte(i+1) THEN
+                $(  LET addr=((rec!i<<8) | (rec!(i+1)&#XFF))-base+rel.base
+                    TEST cmp16(addr,memsize)<0 THEN sbit(bit.map,addr) ELSE
+                    writef("file %S module %N ('%S') record %N *
+                           *bad relocation address: %X4*N",
+                           files!file+f.str, module,
+                           mod!module+mod.name, this.rec, addr+base)
+                $) ELSE
+                $(  error:=TRUE
+                    writef("file %S module %N ('%S') record %N *
+                           *bad relocation record*N",
+                           files!file+f.str, module,
+                           mod!module+mod.name, this.rec)
+                $)
+                ENDCASE
+            CASE t.opt:
+                UNLESS rec!rec.start=0 /* option level */ THEN
+                $(  LET s=rec+rec.info
+                    FOR i=1 TO rec!rec.datalen DO s%i:=s!(i-1)
+                    s%0 := rec!rec.datalen
+                    cambridge.hex(cd.opt, s, rec!rec.start-1)
+                $)
+                ENDCASE
+            CASE t.prag:
+                $(  LET s=rec+rec.info
+                    LET name=rec+rec.name
+                    LET pragname=VEC 3
+                    LET expanded.prag = 0
+                    FOR i=0 TO 2 DO
+                    $(  pragname%(i*2+1):= name!i>>8
+                        pragname%(i*2+2):= name!i & #XFF
+                    $)
+                    pragname%0:=6
+                    FOR i=1 TO rec!rec.datalen DO s%i:=s!(i-1)
+                    s%0 := rec!rec.datalen
+                    expanded.prag := expand.escapes(s)
+                    TEST expanded.prag=0 THEN
+                    $(  writef("file %S module %N ('%S') record %N *
+                               *warning bad pragmat string:*N",
+                               files!file+f.str, module,
+                               mod!module+mod.name, this.rec)
+                        wrch('"')
+                        FOR i=1 TO s%0 DO
+                            TEST s%i=0 THEN writes("**0") ELSE
+                            TEST s%i='*N' THEN writes("**N") ELSE
+                            TEST s%i='"'  THEN writes("***"") ELSE
+                            TEST s%i='**' THEN writes("****") ELSE
+                            wrch(s%i)
+                        writes("*"*N")
+                        cambridge.hex(cd.prag, s, pragname)
+                    $) ELSE
+                    $(  cambridge.hex(cd.prag, expanded.prag, pragname)
+                        freevec(expanded.prag)
+                    $)
+                $)
+                ENDCASE
+            CASE t.eof:
+                $(  LET ep=(rec!rec.start << 8) + rec!(rec.start+1)
+                    UNLESS ep=#XFFFF THEN
+                    TEST entry.point=#XFFFF THEN entry.point:=ep+rel.base ELSE
+                    writef("file %S module %N ('%S') record %N *
+                           *entry point (%X4) ignored*N", files!file+f.str,
+                           module, mod!module+mod.name, this.rec, ep)
+                $)
+                ENDCASE
+            CASE t.wref:
+            CASE t.ref:
+            CASE t.absint:
+            CASE t.def:
+            CASE t.code:    /* ignore */
+        $)
+        UNLESS eof THEN error:=error | \get.rec()
+//*<TRIPOS:
+        IF testflags(1) THEN
+        $(  writes("****** BREAK: during pass 2*N")
+            error:=TRUE
+        $)
+/*TRIPOS>*/
+    $)
+    IF new.module & \error THEN
+    end.current.module(mem, bit.map, base, rel.base, file, module)
+    UNLESS mem=null THEN freevec(mem)
+    UNLESS bit.map=null THEN freevec(bit.map)
+    IF file.opened THEN
+    $(  UNLESS eof THEN endread()
+        UNLESS save.input=0 THEN selectinput(save.input)
+    $)
+    generate.externals(0)   // shove out labels set on the command line
+    FOR f=1 TO files!0 DO
+        IF files!f!f.type=ft.resident THEN
+            FOR m=(f=1-> 1, files!(f-1)!f.maxmod+1) TO files!f!f.maxmod DO
+                generate.externals(m)
+    cambridge.hex(cd.eof, entry.point)
+    IF \error & cmp16(min.store.ref, max.store.ref) <= 0 THEN
+    writef("Maximum extent of relocatable code: %N bytes (%X4 - %X4)*N",
+           max.store.ref-min.store.ref+1, min.store.ref, max.store.ref)
+    RESULTIS \error
+$)
+
+
+
+
+
+
+
+
+
+
+
+
+.
+SECTION "Clink5"
+
+
+
+
+
+//*<TRIPOS:
+GET "libhdr"
+GET ":COM.CLINK.BCPL.clinkhdr"
+/*TRIPOS>*/
+
+
+
+/*<RSX:
+GET "libhdr"
+GET "clinkhdr"
+/*RSX>*/
+
+
+
+/*<CAP:
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.clinkhdr"
+/*CAP>*/
+
+
+
+/*<IBM:
+GET "LIBHDR"
+GET "LNKHDR"
+/*IBM>*/
+
+
+
+
+
+
+//
+//              Parameter  Decoding  &  Initialisation
+//
+
+
+
+
+
+
+//*<TRIPOS:
+MANIFEST $( bad.rc=20 $)
+LET get.args(vect, n, startarg) =
+    rdargs("With=Files/a,To=Hex,Map/k,Ver/k,Opt/k", vect, n)\=0
+LET findlinkin(file.name) = VALOF
+$(  LET ans=findinput(file.name)
+    IF ans=0 THEN
+    $(  LET r2=result2
+        LET dir="SYS:Ring.Hex"
+        LET savedir=currentdir
+        LET newdir=locatedir(dir)
+        UNLESS newdir=0 THEN
+        $(  currentdir:=newdir
+            ans:=findinput(file.name)
+            UNLESS newdir=savedir THEN freeobj(newdir)
+            currentdir:=savedir
+        $)
+        result2:=r2
+    $)
+    IF ans=0 THEN
+    $(  LET r2=result2
+        writef("failed to open '%S': ", file.name)
+        fault(r2)
+        result2:=r2
+    $)
+    RESULTIS ans
+$)
+LET get.time(vect, n) = VALOF
+$(  LET v = TABLE  0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0
+    LET tim=v+5
+    LET dat=v
+    LET ans=vect
+    STATIC $( got.dat = FALSE $)
+    UNLESS got.dat THEN datstring(v)
+    TEST n*2<=1+tim%0+dat%0 THEN ans:="" ELSE
+    $(  FOR i=1 TO tim%0 DO vect%i:=tim%i
+        vect%(tim%0+1):='*S'
+        FOR i=1 TO dat%0 DO vect%(tim%0+i+1):=dat%i
+        vect%0:=dat%0+tim%0+1
+        got.dat := TRUE
+    $)
+    RESULTIS ans
+$)
+/*TRIPOS>*/
+
+
+
+
+/*<RSX
+MANIFEST $( bad.rc=100 $)
+LET get.args(vect,n,startarg) = VALOF
+$(  STATIC
+    $(  rsxgetvec=0
+    $)
+    LET standardisedgetvec(size) = VALOF
+    $(  LET rc=rsxgetvec(size)
+        IF rc<0 DO RESULTIS 0
+        RESULTIS rc
+    $)
+    LET ftstr=".HEX/.MAP/.VER/.HEX"
+    LET rc=?
+    rsxgetvec:=getvec  // This code will only be executed once
+    getvec:=standardisedgetvec
+    selectinput(findcml("LNK"))
+    rc:=findtitles(3, vect, ftstr)
+    IF rc<0 DO RESULTIS FALSE
+       // findtitles returns two strings per file title
+       // (1 for the file, 1 for the switches)
+       // This routine must return a listing file,
+       // a binary file, a source file and an option string
+       // Therefore move pointers as necessary
+    vect!1 := vect!0     // HEX output file
+    vect!2 := vect!2     // MAP output file
+    vect!3 := vect!4     // VERification output file
+    vect!0 := vect!6     // SOURCE input file
+    vect!4 := vect!7     // OPTIONS
+    // Now force non-explicitly given output files to null:
+    IF rc<2 DO vect!2:= 0
+    IF rc<3 DO vect!3:= 0
+    RESULTIS TRUE
+$)
+LET findlinkin(file.name) = VALOF
+$(  LET rc=findinput(file.name)
+    LET prefix="DP3:[75,2]"
+    LET suffix=".HEX"
+    LET fault.rc=rc
+    IF rc<=0 & file.name%0+prefix%0+suffix%0<40 THEN
+    $(  LET s=VEC 20
+        FOR i=1 TO prefix%0 DO s%i := prefix%i
+        FOR i=1 TO file.name%0 DO s%(prefix%0+i):=file.name%i
+        FOR i=1 TO suffix%0 DO s%(prefix%0+file.name%0+i):=suffix%i
+        s%0:=prefix%0+file.name%0+suffix%0
+        rc:=findinput(s)
+    $)
+    IF rc<=0 THEN
+    $(  writef("failed to open '%S': ", file.name)
+        writef(ioerror(fault.rc),fault.rc,file.name)
+        newline()
+    $)
+    RESULTIS (rc<0 -> 0, rc)
+$)
+LET get.time(vect, n)=VALOF
+$(  LET tim = TABLE 0,0,0, 0,0,0
+    LET dat = TABLE 0,0,0, 0,0,0
+    LET ans=vect
+    STATIC $( got.dat = FALSE $)
+    UNLESS got.dat THEN
+    $(  timeofday(tim)
+        date(dat)
+    $)
+    TEST n*2<=1+tim%0+dat%0 THEN ans:="" ELSE
+    $(  FOR i=1 TO tim%0 DO vect%i:=tim%i
+        vect%(tim%0+1):='*S'
+        FOR i=1 TO dat%0 DO vect%(tim%0+i+1):=dat%i
+        vect%0:=dat%0+tim%0+1
+        got.dat := TRUE
+    $)
+    RESULTIS ans
+$)
+/*RSX>*/
+
+
+
+
+/*<CAP
+MANIFEST $( bad.rc=100 $)
+LET get.args(vect,n,startarg) = VALOF
+$(  LET ans=?
+    selectinput(findinput("/m"))
+    RESULTIS (rdargs("With=Files/a,To=Hex,Map/k,Ver/k,Opt/k", vect, n)\=0)
+$)
+
+
+AND rdargs(keys, argv, size) = VALOF
+$(  STATIC
+    $( initialised=FALSE
+       realrdch=0
+       realunrdch=0
+       strpointer=1
+       strlength=0
+       strmin=0
+    $)
+    LET w = argv
+    LET numbargs = ?
+    LET parmrdch()=VALOF
+    $( LET ch=?
+       IF strpointer>strlength THEN
+       $( rdch:=realrdch
+          unrdch:=realunrdch
+          RESULTIS '*N'
+       $)
+       ch:=command.line%strpointer
+       strpointer:=strpointer+1
+       RESULTIS ch
+    $)
+    LET parmunrdch()=VALOF
+    $( IF strpointer<=strmin RESULTIS FALSE
+       strpointer:=strpointer-1
+       RESULTIS TRUE
+    $)
+// Start of RDARGS code
+// --------------------
+
+    UNLESS initialised DO
+    $( realrdch:=rdch      //Save rdch and replace with parmrdch
+       rdch:=parmrdch      //so command line appears in stream
+       realunrdch:=unrdch
+       unrdch:=parmunrdch
+       initialised:=TRUE
+       strlength:=command.line%0
+       UNTIL strpointer>strlength | command.line%strpointer='*S' DO
+          strpointer:=strpointer+1    //Skip over command name
+       strmin:=strpointer
+    $)
+//  Subsequent calls of rdch() will return command line characters.
+//When the end is found, '*N' will be returned and the real rdch switched
+//back into operation reading terminal characters.
+//
+// Real start of RDARGS
+// --------------------
+    !w := 0
+    FOR p = 1 TO keys%0 DO
+      $( LET kch = keys%p
+         IF kch = '/' DO
+           $( LET ch = keys%(p+1)
+              LET c = ('a'<=ch<='z' -> ch-'a'+'A', ch)
+              IF c = 'A' THEN !w := !w | 1
+              IF c = 'K' THEN !w := !w | 2
+              IF c = 'S' THEN !w := !w | 4
+              LOOP
+           $)
+         IF kch = ',' THEN
+           $( w := w+1
+              !w := 0
+           $)
+      $)
+    w := w+1
+    numbargs := w-argv
+// At this stage, the argument elements of argv have been
+// initialised to  0    -
+//                 1   /A
+//                 2   /K
+//                 3   /A/K
+//                 4   /S
+//                 5   /S/A
+//                 6   /S/K
+//                 7   /S/A/K
+    $( LET argno = -1
+       LET wsize = size + argv - w
+       SWITCHON rditem(w, wsize) INTO
+       $( DEFAULT:
+ err:     $( LET ch = ?
+             ch := rdch() REPEATUNTIL ch='*E' | ch='*N' |
+                        ch=';' | ch=endstreamch
+             RESULTIS 0
+          $)
+          CASE 0:  // *N, *E, ;, endstreamch
+             FOR i = 0 TO numbargs - 1 DO
+               $( LET a = argv!i
+                  IF 0 <= a <= 7 THEN
+                  TEST (a & 1) = 0 THEN argv!i := 0 ELSE
+                    GOTO err
+               $)
+             rdch()
+             RESULTIS w
+          CASE 1:  // ordinary item
+             argno := findarg(keys, w)
+             TEST argno>=0 THEN  // get and check argument
+               TEST 4 <= argv!argno <= 7 THEN
+                 $( // no value for key.
+                    argv!argno := -1
+                    LOOP
+                 $)
+               ELSE
+                 $( LET item = rditem(w,wsize)
+                    IF item = -2 THEN
+                       item := rditem(w,wsize)
+                    IF item <= 0 THEN
+                       GOTO err
+                 $)
+             ELSE
+               TEST rdch()='*N' & compstring("?", w)=0 THEN
+                 $( // help facility
+                    writef("%S: *E", keys)
+                    ENDCASE
+                 $)
+               ELSE
+                 unrdch()
+          CASE 2:  // quoted item (i.e. arg value)
+             IF argno<0 THEN
+               FOR i = 0 TO numbargs-1 DO
+                 SWITCHON argv!i INTO
+                   $( CASE 0: CASE 1:
+                        argno := i
+                        BREAK
+                      CASE 2: CASE 3:
+                        GOTO err
+                   $)
+             UNLESS argno>=0 GOTO err
+             argv!argno := w
+             w := w + w%0/bytesperword + 1
+       $)
+    $) REPEAT
+ $)
+
+
+// Read an item from command line
+// returns -2    "=" Symbol
+//         -1    error
+//          0    *N, *E, ;, endstreamch
+//          1    unquoted item
+//          2    quoted item
+AND rditem(v, size) = VALOF
+ $( LET p = 0
+    LET pmax = (size+1)*bytesperword-1
+    LET ch = ?
+    LET quoted = FALSE
+    FOR I = 0 TO size DO v!i := 0
+    ch := rdch() REPEATWHILE ch='*S'
+    IF ch='"' DO
+    $( quoted := TRUE
+       ch := rdch()
+    $)
+    UNTIL ch='*E' | ch='*N' | ch=endstreamch DO
+    $( TEST quoted THEN
+       $( IF ch='"' RESULTIS 2
+          IF ch='**' DO
+          $( ch := rdch()
+             IF capitalch(ch)='E' DO ch := '*E'
+             IF capitalch(ch)='N' DO ch := '*N'
+          $)
+       $)
+       ELSE
+          IF ch=';' | ch='*S' | ch='=' BREAK
+       p := p+1
+       IF p>pmax RESULTIS -1
+       v%p := ch
+       v%0 := p
+       ch := rdch()
+    $)
+    unrdch()
+    IF quoted RESULTIS -1
+    TEST p=0 THEN
+    $( IF ch='=' DO
+       $( rdch()
+          RESULTIS -2
+       $)
+       RESULTIS 0
+    $)
+    ELSE
+       RESULTIS 1
+ $)
+
+
+AND findarg(keys, w) = VALOF  // =argno if found
+                              // =-1 otherwise
+  $( MANIFEST $( matching = 0; skipping = 1 $)
+     LET state, wp, argno = matching, 0, 0
+     FOR i = 1 TO keys % 0 DO
+       $( LET kch = keys % i
+          IF state = matching THEN
+            $( IF (kch = '=' | kch= '/' | kch =',') &
+                  wp = w % 0 THEN
+                 RESULTIS argno
+               wp := wp + 1
+               UNLESS compch(kch,w % wp) = 0 THEN
+                 state := skipping
+            $)
+          IF kch = ',' | kch = '=' THEN
+            state,wp := matching,0
+          IF kch=',' THEN
+            argno := argno+1
+       $)
+     IF state = matching & wp = w % 0 THEN
+       RESULTIS argno
+     RESULTIS -1
+  $)
+
+
+
+AND capitalch(ch)= 'a'<=ch<='z' -> ch-'a'+'A' , ch
+
+AND compch(ch1,ch2)= capitalch(ch1)-capitalch(ch2)
+
+AND compstring(s1, s2) = VALOF
+$(  LET lens1, lens2 = s1%0, s2%0
+    LET smaller = lens1 < lens2 -> s1, s2
+    FOR i = 1 TO smaller%0 DO
+    $(  LET res = compch(s1%i, s2%i)
+        UNLESS res = 0 RESULTIS res
+    $)
+    IF lens1 = lens2 RESULTIS 0
+    RESULTIS smaller = s1 -> -1, 1
+$)
+
+LET get.time(vect, n) = VALOF
+$(  STATIC
+    $(  tim = 0
+        dat = 0
+    $)
+    LET ans=vect
+    IF tim=0 THEN tim:=time()
+    IF dat=0 THEN dat:=date()
+    TEST n*2<=1+tim%0+dat%0 THEN ans:="" ELSE
+    $(  dat%3:='-'
+        dat%7:='-'
+        FOR i=1 TO tim%0 DO vect%i:=tim%i
+        vect%(tim%0+1):='*S'
+        FOR i=1 TO dat%0 DO vect%(tim%0+i+1):=dat%i
+        vect%0:=dat%0+tim%0+1
+    $)
+    RESULTIS ans
+$)
+LET findlinkin(file.name) = VALOF
+$(  LET rc=?
+    TEST file.name%1='.' THEN rc:=findinput(file.name) ELSE
+    $(  LET savedir=current.dir
+        LET s=VEC 20
+        MANIFEST $( p2=#X40020000 $)
+        current.dir:=p2   // directory for file header lookup on CAP
+        TEST file.name%0>=40 THEN rc:=0 ELSE   // name too long!
+        $(  FOR i=1 TO file.name%0 DO s%(1+i):=file.name%i
+            s%1:='.'
+            s%0:=file.name%0+1
+            rc:=findinput(s)
+        $)
+        current.dir:=savedir
+    $)
+    IF rc=0 THEN
+    $(  LET r2=errorcode
+        writef("failed to open '%S': ",file.name)
+        errorcode:=r2
+        writes(fault(errorcode))
+        wrch('*N')
+    $)
+    RESULTIS rc
+$)
+/*CAP>*/
+
+
+
+
+/*<IBM:
+MANIFEST $( bad.rc=12 $)
+STATIC
+$(  sys.abend = ?
+$)
+LET get.args(vect, n, startarg) = VALOF
+$(  LET sysprint=findoutput("SYSPRINT")
+    LET filesin=findinput("FILESIN")
+    LET error=(sysprint=0 | filesin=0)
+    TEST error THEN
+    $(  IF sysprint=0 THEN writes("can't open SYSPRINT!*N")
+        IF filesin=0 THEN writes("can't open FILESIN*N")
+    $) ELSE
+    $(  LET i=1         // to count characters read from 'filesin'
+        LET ch=?
+        vect!0 := vect+5        // first available space
+        selectinput(filesin)
+        ch := rdch()            // first character
+        WHILE (i-1) < (n-5)*bytesperword & ch\='*N' & ch\=endstreamch DO
+        $(  vect!0%i := ch
+            ch:=rdch()
+            i:=i+1
+        $)
+        vect!0%0 := i-1         // size of file list read in
+        endread()
+        vect!1:="HEX"
+        vect!2:="MAP"
+        vect!3:="VER"
+        vect!4:=vect+5+(i+bytesperword-1)/bytesperword
+        selectoutput(sysprint)
+        IF startarg\=0 & startarg%0>(n-(vect!4-vect))*bytesperword THEN
+        $(  writes("options string too long: '%S'*N",startarg)
+            error:=TRUE
+        $)
+        TEST startarg=0 | startarg%0>(n-6)*bytesperword THEN
+        vect!4%0:=0 ELSE
+        FOR i=0 TO startarg%0 DO vect!4%i := startarg%i
+    $)
+    //  This is a good place to patch ABORT so that it does not
+    // dump huge ammounts of data when the user specifies a bad
+    // input file!
+    sys.abend := abort
+    abort := my.abort
+    RESULTIS \error
+$)
+AND my.abort(code, addr, oldstack, data) BE
+$(  LET scc, ucc = (code>>12) & #XFFF, code & #XFFF
+    LET sysprint = findoutput("SYSPRINT")
+    LET go.abort = TRUE
+    IF sysprint=0 THEN
+    $(  writetolog("MICROLIB Linker requires SYSPRINT")
+        STOP(16)
+    $)
+    selectoutput(sysprint)
+    writes("Cambridge Hex Linker ABEND, ")
+    TEST ucc=0 THEN
+    $(  SWITCHON scc INTO
+        $(  CASE #X0D1: writes("run out of comp time*N")
+                        go.abort := FALSE
+                        ENDCASE
+            CASE #X0D2: writes("fatal I/O error*N");      ENDCASE
+            CASE #X0D3: writes("stack overflow*N");       ENDCASE
+            DEFAULT:    writef("system completion code %X3*N", scc)
+        $)
+    $) ELSE writef("user completion code %N - LINKER ERROR*N",ucc)
+    IF scc = #X001 THEN
+    $(  writes("possibly missing membername for PDS input*N")
+        go.abort := FALSE
+    $)
+    IF scc = #X013 THEN
+    $(  writes("member of PDS not found*N")
+        go.abort := FALSE
+    $)
+    IF (scc & #XFF) = #X37 THEN
+    $(  writes("some limit exceeded on output file size*N")
+        go.abort := FALSE
+    $)
+    IF (scc >> 4) = #XC | scc = #X0D3 THEN
+    $(  writes("try increasing memory available (with %S) *N")
+        go.abort := FALSE
+    $)
+    IF (scc >> 4) = #X80 THEN
+    $(  writes("Possibly insufficient I/O space. Use K run-time option*N")
+        go.abort := FALSE
+    $)
+    IF (scc >> 4) = #X08 THEN   // Local to CAMBRIDGE 370 only
+                         writes("some resource limit has been exceeded*N")
+    endwrite()
+    TEST go.abort THEN
+    sys.abend(code, addr, oldstack, data) ELSE stop(16)
+$)
+LET myfindinput(file) = VALOF
+$( STATIC $( ddcount = 0 $)
+   GLOBAL $( createdd : 120 $)
+   // this global is provided by a linked assembly routine
+   // which allows the dynamic creation of DDnames
+   LET ddname = "DDxxxx"
+   LET v      = VEC 3
+   LET lnz    = 3
+   LET ddc    = ddcount
+   ddcount := ddcount + 1
+   FOR j = 1 TO file % 0 DO
+   $(  LET ch = file%j
+       LET c  = ('a' <= ch <= 'z' -> ch-'a'+'A', ch)
+       file%j := c
+   $)
+   FOR j = 3 TO 0 BY -1 DO
+     $( v ! j := ddc REM 10 + '0'
+        ddc   := ddc  /  10
+        IF v ! j \= '0' THEN lnz := j
+     $)
+   ddname % 0 := 6 - lnz
+   FOR j = 3 TO lnz BY -1 DO ddname % (3 + j - lnz) := v ! j
+// writef("file = '%S' DDname = '%S'*N*N",file,ddname)
+   RESULTIS (createdd(ddname, file, FALSE) = 0 -> findinput(ddname), 0)
+$)
+LET findlinkin(file.name) = VALOF
+$(  LET rc = myfindinput(file.name)
+    IF rc=0 THEN rc:=findinput(file.name)
+    IF rc=0 THEN
+    $(  LET hexlib = "HEXLIB(xxxxxxxxx"
+        MANIFEST
+        $(  firstch = 8
+            maxlen = 8
+        $)
+        UNLESS file.name%0 > maxlen THEN
+        $(  FOR i=1 TO file.name%0 DO hexlib%(i-1+firstch) := file.name%i
+            hexlib%(file.name%0+firstch) := ')'
+            hexlib%0 := firstch+file.name%0
+            rc := findinput(hexlib)
+        $)
+    $)
+    IF rc=0 THEN writef("failed to open '%S' for input*N",file.name)
+    RESULTIS rc
+$)
+LET get.time(vect, n) = VALOF
+$(  STATIC
+    $(  tim = 0
+        dat = 0
+    $)
+    LET ans=vect
+    IF tim=0 THEN tim:=timeofday()
+    IF dat=0 THEN dat:=date()
+    TEST n*2<=1+(tim%0-1)+(dat%0-2) THEN ans:="" ELSE
+    $(  dat%(2+3):='-'
+        FOR i=2+5 TO 2+6 DO IF 'A'<=dat%i<='Z' THEN dat%i:=dat%i+'a'-'A'
+        dat%(2+7):='-'
+        tim%(1+3):=':'
+        tim%(1+6):=':'
+        FOR i=2 TO tim%0 DO vect%(i-1):=tim%i
+        vect%(tim%0-1+1):='*S'
+        FOR i=3 TO dat%0 DO vect%(tim%0-1+i+1-2):=dat%i
+        vect%0:=(dat%0-2)+(tim%0-1)+1
+    $)
+    RESULTIS ans
+$)
+/*IBM>*/
+
+
+
+
+
+
+LET decodeopt(s) = VALOF
+$(  LET error=FALSE
+//  writef("** decoding option *"%S*"*N",s)
+    UNLESS s=null THEN
+    $(  LET lh.val=0
+        LET value =0
+        LET lh.rel=0
+        LET reloc =0
+        LET type  =0
+        LET sum   =0
+        LET sign  =1
+        LET p=1
+        WHILE p<=s%0 & (s%p='*S' | s%p='/' | s%p=',') DO p:=p+1
+        WHILE \error & p<=s%0 DO
+        $(  type:=0
+            lh.rel:=0
+            error:=get.opt(@lh.val, @lh.rel, @type, TRUE, s, @p)
+//          writef("lh.val: !%X4=%X4 (%N) type=%N lh.rel=%X4 p=%N*
+//                 * s!p='%C' error=%C*N",
+//                 lh.val, !lh.val, !lh.val, type, lh.rel,
+//                 p, s%p, (error->'T','F') )
+            IF p<=s%0 & s%p='=' THEN p:=p+1
+            UNLESS error THEN
+            $(  WHILE p<s%0 & s%p='*S' DO p:=p+1
+                TEST type=1 THEN
+                $(  !lh.val:=(p>s%0->TRUE, s%p\='-')
+                    IF p<=s%0 & (s%p='-' | s%p='+') THEN p:=p+1
+                $) ELSE
+                $(  reloc:=0
+                    sign:=1
+                    sum:=0
+                    $(rpt
+                        LET oldr=reloc
+                        error:=error |
+                               get.opt(@value, @reloc, @type, FALSE, s, @p)
+                        WHILE p<=s%0 & s%p='*S' DO p:=p+1
+                        TEST oldr\=reloc & sign<0 THEN
+                        $(  error:=TRUE
+                            // can't subtract deferred values
+                            reloc:=0
+                        $) ELSE
+                        UNLESS value=0 THEN sum:=sum+sign*!value
+//                      writef("    value: !%X4=%X4 (%N) reloc=%X4 p=%N*
+//                             * s!p='%C' error=%C*N",
+//                             value, !value, !value, reloc, p, s%p,
+//                             (error->'T','F') )
+                        sign:=0
+                        UNLESS p>s%0 THEN
+                        $(  sign:=(s%p='-'-> -1, s%p='+'-> +1, 0)
+                            UNLESS sign=0 THEN p:=p+1
+                        $)
+                    $)rpt REPEATUNTIL p>s%0 | sign=0
+                    IF reloc\=0 THEN
+                    TEST lh.rel=0 THEN error:=TRUE ELSE !lh.rel:=reloc
+                    !lh.val:=sum
+                $)
+                WHILE p<=s%0 & (s%p='*S' | s%p='/' | s%p=',') DO p:=p+1
+            $)
+        $)
+        error:=error |  pw<50 | \1<=hexoutwidth<=max.hexwidth |
+                        no.of.files<1 | no.of.modules<1 |
+                        cmp16(min.addr, max.addr)>=0 |
+                        default.memory > #XFF
+        IF no.of.files>no.of.modules THEN no.of.modules:=no.of.files
+    $)
+    RESULTIS \error
+$)
+
+
+
+
+AND get.opt(value, reloc, type, lhs, s, p) = VALOF
+$(  /*   Returns 'Error'
+         Types:  0 - not yet set
+                 1 - bool
+                 2 - number
+         Value: any value given by symbol
+         Reloc: address of variable to give value at end of pass 1
+         LHS  : TRUE if value is required for LHS of assignment
+         S    : String being analysed
+         P    : Pointer to current character in string
+    */
+    LET error=FALSE
+    LET temp=0
+    LET mytype=2
+    LET dollar=FALSE
+    WHILE !p<=s%0 & s%(!p)='*S' DO !p:=!p+1
+    IF !p<=s%0 & s%(!p)='$' & \lhs THEN
+    $(  dollar:=TRUE
+        !p:=!p+1
+    $)
+    !value:=0
+    error:=(!p>s%0)
+    UNLESS error THEN
+    temp:= VALOF SWITCHON ('a'<=s%(!p)<='z' -> s%(!p)-'a'+'A', s%(!p)) INTO
+        $(  CASE 'R':
+              /* include module reference output in map file */
+              mytype:=1
+              RESULTIS @ref.info
+            CASE 'W':
+              /* page width */
+              RESULTIS @pw
+            CASE 'H':
+              /* width of relocatable binary output */
+              RESULTIS @hexoutwidth
+            CASE 'P':
+              /* generate pure intel hex */
+              mytype:=1
+              RESULTIS @pure.intel
+            CASE 'I':
+              /* modules are incomplete - generate external references */
+              mytype:=1
+              RESULTIS @input.incomplete
+            CASE 'U':
+              /* ignore references to library modules if they are unused */
+              mytype:=1
+              RESULTIS @ignore.unused.refs
+            CASE 'M':
+              /* generate only the map file: no hex */
+              mytype:=1
+              RESULTIS @map.only
+            CASE 'C':
+              /* print cautions */
+              mytype := 1
+              RESULTIS @cautions
+            CASE 'D':
+              /* allocate relocatable modules from max.addr downwards */
+              mytype:=1
+              RESULTIS @allocate.downwards
+            CASE 'B':
+              /* bottom of store for relocatable module allocation */
+              RESULTIS @min.addr
+            CASE 'T':
+              /* top of store for relocatable module allocation */
+              RESULTIS @max.addr
+            CASE 'S':
+              /* start of execution point */
+              RESULTIS @entry.point
+            CASE 'X':
+              /* value to give undefined external references */
+              RESULTIS @undefined.reference
+            CASE 'E':
+              /* default memory for empty memory */
+              RESULTIS @default.memory
+            CASE 'N':
+              /* maximum number of modules catered for */
+              RESULTIS @no.of.modules
+            CASE 'F':
+              /* maximum number of files catered for */
+              RESULTIS @no.of.files
+            CASE '*'':
+              $(  LET symb=VEC 2
+                  LET max=(7>s%0-!p+1 -> s%0-!p+1, 7)
+                  LET i=0
+                  FOR j=0 TO 2 DO symb!j:=('*S'<<8)|'*S'
+                  WHILE i<max DO
+                  $(  !p:=!p+1
+                      TEST s%(!p)='*'' THEN i:=max /* stop loop! */ ELSE
+                      TEST (i&1)=1 THEN
+                          symb!(i>>1):=(symb!(i>>1)&#XFF00) | s%(!p)
+                      ELSE symb!(i>>1):= '*S' | (s%(!p)<<8)
+                      i:=i+1
+                  $)
+                  WHILE s%(!p)\='*'' & (!p)<s%0 DO !p:=!p+1
+                  error:=(max<=0 | s%(!p)\='*'') | error
+                  UNLESS s%(!p)='*'' THEN !p:=!p-1
+                  mytype:=0
+                  TEST lhs THEN temp := store.from.str(symb, reloc) ELSE
+                  $(  temp := get.val(symb)
+                      UNLESS temp=0 THEN temp := temp+d.value
+                  $)
+                  RESULTIS temp
+              $)
+            CASE '#':  CASE '0':  CASE '1':  CASE '2':  CASE '3':  CASE '4':
+            CASE '5':  CASE '6':  CASE '7':  CASE '8':  CASE '9':
+              TEST lhs | dollar THEN RESULTIS 0 ELSE
+              $(  LET end.of.no = FALSE
+                  LET hex = (s%(!p)='#')
+                  STATIC $( immed.ans=0 $)
+                  IF hex THEN !p:=!p+1
+                  immed.ans := 0
+                  $(rpt
+                      IF !p<=s%0 THEN SWITCHON s%(!p) INTO
+                      $(  CASE '1': CASE '2': CASE '3': CASE '4': CASE '5':
+                          CASE '6': CASE '7': CASE '8': CASE '9': CASE '0':
+                            immed.ans := (hex->16,10)*immed.ans + s%(!p) - '0'
+                            !p:=!p+1
+                            ENDCASE
+                          CASE 'A': CASE 'B': CASE 'C': CASE 'D': CASE 'E':
+                          CASE 'F':
+                            immed.ans := 16*immed.ans + s%(!p) - 'A' + 10
+                            error:=error|\hex
+                            !p:=!p+1
+                            ENDCASE
+                          DEFAULT: end.of.no:=TRUE
+                      $)
+                  $)rpt REPEATUNTIL error | end.of.no | !p>s%0
+                  !p:=!p-1
+                  RESULTIS @immed.ans
+              $)
+            DEFAULT:
+              writef("unknown option - *'%C*'*N",s%(!p))
+              RESULTIS 0
+        $)
+    !p:=!p+1
+    error:=error|temp=0
+//  writef("   s!(p-1)='%C' error=%C temp: !%X4=%X4 (%N) dollar=%C*N",
+//         s%(!p-1), (error->'T','F'), temp, !temp, !temp, (dollar->'T','F'))
+    UNLESS error THEN
+    $(  TEST \dollar THEN !value:=temp ELSE
+        TEST !reloc=0 THEN !reloc:=temp ELSE error:= TRUE
+        UNLESS mytype=0 THEN
+        TEST !type=0 THEN !type:=mytype ELSE error:=(mytype\=!type)
+    $)
+    RESULTIS error
+$)
+
+
+
+
+LET init.globals(vect, n, startarg) = VALOF
+$(  LET success = init.memory()
+    success := success & get.args(vect, n, startarg)
+    dic := null
+    rec := null
+    mod := null
+    files := null
+    hexout := 0
+    mapfile := 0
+    out := 0
+    option.string := ""
+    // code type definition variables -
+    code.type := null
+    bytes.per.asm.word := 1   // cannot be changed - since it is now set!
+    bytes.per.address := 2    // not used as yet! (06.01.82)
+    msb.first := FALSE
+    // initialise options:
+    pw := 135
+    hexoutwidth := 32
+    cautions := TRUE
+    map.only := FALSE
+    ref.info := FALSE
+    pure.intel := FALSE
+    input.incomplete := FALSE
+    ignore.unused.refs := FALSE    /* temporarily */
+    min.addr := 0
+    max.addr := #XFFFF
+    entry.point := #XFFFF   /* unset value */
+    undefined.reference := 0
+    default.memory := #X00
+    no.of.modules := 100
+    no.of.files   := 50
+    allocate.downwards := FALSE
+    TEST \success THEN  writes("syntax error on command line*N") ELSE
+    TEST \decodeopt(vect!4) THEN
+    $(  writes("error in options string*N")
+        success:=FALSE
+    $) ELSE
+    $(  option.string:=vect!4
+        files:=getvec(no.of.files)
+        rec:=getvec(rec.size)
+        mod:=getvec(no.of.modules)
+        TEST files=0 | rec=0 | mod=0 THEN
+        $(  writes("no store for initialisation*N")
+            success:=FALSE
+        $)  ELSE
+        $(  //  offsets in vect are:
+            //      !0  -  file name for inputfiles
+            //      !1  -  file name for 'hexout'
+            //      !2  -  optional file name for 'mapfile'
+            //      !3  -  file name for output verification
+            //      !4  -  options string
+            LET i=0
+            LET list=vect!0
+            LET listlen=list%0
+            files!0:=0
+            mod!0:=0
+            WHILE i<=listlen DO
+            $(  LET begining=i
+                LET file=VEC 30
+                i:=i+1
+                WHILE i-begining<30*bytesperword & i<=listlen &
+                      list%i\='+' & list%i\=',' & list%i\='*S' DO
+                $(  file%(i-begining):=list%i
+                    i:=i+1
+                $)
+                file%0:=i-begining-1
+                success:=success & deal.with.option(file)
+            $)
+            IF success THEN
+            $(  out:=(vect!3=0 | vect!3%0=0 -> 0,findoutput(vect!3))
+                hexout:=(map.only | vect!1=0 | vect!1%0=0->0,findoutput(vect!1))
+                mapfile:=(vect!2=0 | vect!2%0=0 -> 0, findoutput(vect!2))
+                IF \map.only & vect!1\=0 & vect!1%0\=0 & hexout=0 THEN
+                writef("can't open %S for absolute hex output - file ignored*N",
+                        vect!1)
+                IF vect!2\=0 & vect!2%0\=0 & mapfile=0 THEN
+                $(  writef("can't open %S for map output", vect!2)
+                    success:=success & \map.only
+                    TEST map.only THEN wrch('*N') ELSE
+                    writes(" - file ignored*N")
+                $)
+                IF vect!3\=0 & vect!3%0\=0 & out=0 THEN
+                writef("can't open %S for verification output - file ignored*N",
+                       vect!3)
+                UNLESS out=0 THEN selectoutput(out)
+            $)
+        $)
+    $)
+    RESULTIS success
+$)
+
+
+
+
+LET calculate.options() BE
+$(  /*  At the end of the first pass most globals for options have been used
+        We now reassign some of them to more 'usefull' values which will be
+        associated with the same letters in the options strings with the
+        delayed evaluation chatacter '$'.                                   */
+    calculate.statistics()
+    min.addr:=min.store.ref
+    max.addr:=max.store.ref
+    no.of.modules:=mod!0
+    no.of.files:=files!0
+$)
+
+
+
+LET close.globals() BE
+$(  UNLESS mapfile=0 THEN
+    $(  selectoutput(mapfile)
+        endwrite()
+    $)
+    UNLESS hexout=0 THEN
+    $(  selectoutput(hexout)
+        endwrite()
+    $)
+    UNLESS out=0 THEN
+    $(  selectoutput(out)
+        endwrite()
+    $)
+    clear.dictionary()
+    clear.modules()
+    clear.files()
+    clear.memory()
+    UNLESS rec=null THEN freevec(rec)
+    UNLESS code.type=null THEN freevec(code.type)
+$)
+
+
+
+
+LET start(startarg) BE
+$(  LET arg.vec=VEC 50
+    LET save.output=output()
+    LET success=FALSE
+    IF init.globals(arg.vec, 50, startarg) THEN
+    IF pass1() THEN
+    $(  decodeopt(option.string)  // to override options set in pass1
+        delete.unused.modules()
+        delete.unused.files()
+        success := calculate.rel.bases()
+        calculate.options()
+        relocate.externals()
+        IF success & \(map.only | hexout=0) THEN success:=pass2()
+        display.modules()
+        display.externals()
+    $)
+    close.globals()
+    UNLESS save.output=0 THEN selectoutput(save.output)
+    writef("Linking %S*N", success->"successful","failed")
+    UNLESS success THEN stop(bad.rc)
+$)
+
+
+
+
+
+

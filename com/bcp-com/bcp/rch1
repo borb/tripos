@@ -1,0 +1,36 @@
+GET "SYNHDR"
+
+LET RCH() BE
+$( CH := RDCH()
+   IF (PRSOURCE<0 | (PRSOURCE>0 & NOT SKIPPING)) &
+                                        (SHOWALL | GETP=0) & CH~=ENDSTREAMCH
+   $( UNLESS LINECOUNT=PRLINE | PRSOURCE>0
+      $( WRITEF("%I4%C ", LINECOUNT, Skipping-> '$',' '); PRLINE := LINECOUNT $)
+      WRCH(CH)
+
+   $)
+  IF CH < ' ' & (CH='*P' | CH='*N' | CH='*C')
+  $( linecount:=linecount+1; CH := '*N' $)
+
+  CHCOUNT := CHCOUNT + 1
+  CHBUF!(CHCOUNT&63) := CH
+$)
+
+LET PRCH(ch) BE IF (SHOWALL | GETP=0) & CH~=ENDSTREAMCH
+$( UNLESS LINECOUNT=PRLINE | PRSOURCE>0
+   $( WRITEF("%I4%C ", LINECOUNT, Skipping-> '$',' '); PRLINE := LINECOUNT $)
+
+   WRCH(CH)     // Jump there ......
+$)
+
+LET rdtag(char) BE
+$( LET i = 1
+   wordv%i := char
+
+   WHILE 'A'<=capitalch(ch)<='Z' | '0'<=ch<='9' | ch='.' | ch='_'
+   DO $( i := i+1; wordv%i := ch; rch() $)
+
+   wordv%0 := i
+$)
+
+

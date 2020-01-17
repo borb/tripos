@@ -1,0 +1,103 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+       ##         ######    ######   ##    ##  ##    ##  #######
+       ##        ########  ########  ##   ##   ##    ##  ########
+       ##        ##    ##  ##    ##  ##  ##    ##    ##  ##    ##
+       ##        ##    ##  ##    ##  ####      ##    ##  #######
+       ##        ##    ##  ##    ##  ## ##     ##    ##  ##
+       ##        ##    ##  ##    ##  ##  ##    ##    ##  ##
+       ########  ########  ########  ##   ##   ########  ##
+       ########   ######    ######   ##    ##   ######   ##
+
+************************************************************************
+**    Author:   Brian Knight                       December 1979      **
+***********************************************************************/
+
+//         Modifications
+
+//  19 Nov 82 by NJO  Changed to use a global lookup in the nameserver
+//         rather than a local one (which will set up a bridge path to
+//         a non-local name).  Switch parameter LOCAL added to allow a
+//         local lookup if required.  Also displays site and subnet info.
+//         for non-local names, and the "extended name" string returned
+//         by the nameserver.
+//
+//  15 Apr 83 by NJO  Does not attempt to write machine name for machines
+//         on other subnets or sites.
+
+
+SECTION "lookup"
+
+GET "LIBHDR"
+GET "RINGHDR"
+
+GET "BCPL.SSPLIB"
+
+LET start() BE
+    $(
+    LET nsvec = VEC nsv.upb
+    LET argv  = VEC 50
+    LET newnamevec = VEC 20
+    LET lkup.type  = gl.global
+
+    IF rdargs("name/a,local=pathsetup/s",argv,50) = 0
+    THEN $( writes("Bad args*n"); RETURN $)
+
+    IF argv!1 ~= 0 THEN
+       lkup.type := gl.normal
+
+    TEST general.lookup(lkup.type, argv!0, nsvec, 40, newnamevec)
+    THEN
+      $(
+      LET flags   = nsvec ! nsv.flags
+      LET slow    = (flags & nsv.flags.slow) ~= 0
+      LET extern  = (flags & nsv.flags.extern) ~= 0
+
+      IF extern & argv!1 = 0 THEN
+
+      $( writef("Non-local name:  site %N #X%X2, subnet %N*N", nsvec!nsv.site,
+                                                               nsvec!nsv.site,
+                                                               nsvec!nsv.subnet)
+      $)
+
+      writef("Station %n #X%X2", nsvec!nsv.machine.id, nsvec!nsv.machine.id)
+      UNLESS extern DO
+      $( writef(" (")
+         write.machine.name(nsvec!nsv.machine.id)
+         wrch(')')
+      $)
+      writef(", port %n, ", nsvec!nsv.port)
+
+      IF (flags & nsv.flags.nofunc) = 0
+      THEN writef("func %n, ", nsvec!3)
+
+      writef("Flags %X2 ", flags)
+
+      writes(slow -> "(slow ", "(")
+
+      writes(VALOF SWITCHON flags & nsv.flags.pmask
+                   INTO
+                     $(
+                     CASE nsv.flags.nsp:      RESULTIS "non-standard protocol)"
+                     CASE nsv.flags.bsp:      RESULTIS "OPEN (BSP))"
+                     CASE nsv.flags.ssp:      RESULTIS "SSP)"
+                     CASE nsv.flags.datagram: RESULTIS "datagram)"
+                     CASE nsv.flags.mc.name:  RESULTIS "machine name)"
+                     CASE nsv.flags.brg.name: RESULTIS "bridge name)"
+                     $)
+            )
+
+      newline()
+
+      IF newnamevec%0 ~= 0 THEN
+         writef("Transformed name: *"%S*"*N", newnamevec)
+      $)
+    ELSE fault(result2)
+    $)
+
+
+
+

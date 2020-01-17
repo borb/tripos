@@ -1,0 +1,626 @@
+|| (C) Copyright 1978 Tripos Research Group
+||     University of Cambridge
+||     Computer Laboratory
+
+GET "LIBHDR"
+
+GLOBAL
+$(
+envtrace:150
+writearg:151
+isfun:152
+deletebpt:153
+lexp:154
+rbexp:155
+bexp:156
+exp:157
+adr:158
+val:159
+fun:160
+print:161
+checkdig:162
+checkaddr:163
+cont:164
+selectask:165
+error:166
+testbreak:167
+rch:168
+wch:169
+
+rec:171
+wwrch:172
+
+add:175
+tch:176
+style:177
+salev:178
+lev:179
+currtcb:180
+globv:181
+regs:182
+vars:183
+sptr:184
+sbase:185
+standalone:186
+bpt:187
+bpt.count:188
+bpt.addr:189
+bpt.instr:190
+wrflag:191
+lch:192
+ch:193
+rdflag:194
+debtask:195
+
+currtask:199
+$)
+
+
+MANIFEST
+$(
+g.sbase=12
+
+co.link=0
+co.caller=1
+co.stackend=2
+co.resumeptr=3
+co.function=4
+
+tcb.x=12
+
+libword=23456
+
+instr.bpt=#X1A01
+instr.entry=#XE27E
+$)
+
+.
+
+SECTION "DEBUG1"
+
+GET "DEBUG"
+
+LET start(pkt) = VALOF
+ $( LET mode = 0
+    AND task = 0
+    AND code = 0
+    AND arg  = 0
+
+    TEST pkt=0 THEN      // CLI call
+    $( debtask := rootnode!rtn.debtask
+       TEST debtask!tcb.gbase!(@consoletask-
+                          @globsize)=consoletask THEN
+          rootnode!rtn.debtask := tcb
+       ELSE
+          debtask := 0
+       lev := level()
+       standalone := FALSE
+       wwrch := wrch
+       wrch := wch
+       add := 0
+       tch := 0
+       style := 0
+       vars      := TABLE 0,0,0,0,0,0,0,0,0,0
+       bpt.count := TABLE 0,0,0,0,0,0,0,0,0,0
+       bpt.addr  := TABLE 0,0,0,0,0,0,0,0,0,0
+       bpt.instr := TABLE 0,0,0,0,0,0,0,0,0,0
+    $)
+    ELSE                 // standalone entry
+    $( mode := pkt!0
+       task := pkt!1
+       code := pkt!2
+       arg  := pkt!3
+
+       IF mode=2 DO      // breakpoint
+       $( bpt := 0
+          FOR i=1 TO 9 DO
+             IF bpt.addr!i=arg DO
+             $( LET c = bpt.count!i-1
+                pkt!2 := bpt.instr!i
+                IF task=taskid RESULTIS 0
+                IF c>0 DO
+                $( bpt.count!i := c
+                   RESULTIS 0
+                $)
+                bpt := i
+             $)
+       $)
+
+       FOR i=1 TO 9 DO   // unset all breakpoints
+       $( LET ba = bpt.addr!i
+          UNLESS ba=0 DO !ba := bpt.instr!i
+       $)
+       standalone := TRUE
+       salev := level()
+
+       IF mode=0 DO      // standalone restart
+       $( writes("*NDEBUG*N")
+          pkt!1 := 0 $)
+
+       IF mode=1 DO      // abort
+       $( writef("*N!!T%N ABORT %N: ",task,code)
+          writef(VALOF SWITCHON code INTO
+           $( CASE   0: task := arg
+                        RESULTIS "BREAK T%N "
+              CASE  99: CASE  95: CASE  94:
+              CASE  93: CASE  92: CASE  91:
+                        RESULTIS "trap @ %U5 "
+              CASE  98: RESULTIS "G%N unassigned "
+              CASE  97: RESULTIS "stack overflow "
+              CASE  96: RESULTIS "console interrupt "
+              CASE 199: RESULTIS "illegal FREEVEC"
+              CASE 198: RESULTIS "illegal QPKT"
+              CASE 197: RESULTIS "store chain fault "
+              CASE 196: RESULTIS "can*'t activate "
+              CASE 195: RESULTIS "coroutine fault "
+              DEFAULT:  RESULTIS "%N "
+           $), arg)
+       $)
+
+       IF mode=2 DO      // breakpoint
+          writef("*N!!T%N BPT %N ",task,bpt)
+
+       writes("** ")
+       regs := pkt+4
+    $)
+
+    UNLESS task=0 DO selectask(task)
+    rch()
+
+    // REPEAT loop to get commands
+rec:
+    $( LET v = 0
+
+       rdflag := FALSE
+       SWITCHON ch INTO
+
+       $( CASE 'A': CASE 'G': CASE 'L':
+          CASE 'R': CASE 'V': CASE 'W':
+          CASE 'Y':
+             add := lexp()
+             ENDCASE
+
+          CASE '0': CASE '1': CASE '2':
+          CASE '3': CASE '4': CASE '5':
+          CASE '6': CASE '7': CASE '8':
+          CASE '9': CASE '#': CASE '*'':
+          CASE '(': CASE '@':
+             tch := 0
+             add := bexp()
+             ENDCASE
+
+          CASE '+': CASE '-': CASE '**':
+          CASE '/': CASE '<': CASE '>':
+          CASE '?': CASE '|': CASE '&':
+          CASE '!':
+             add := exp(val(add))
+             tch := 0
+             ENDCASE
+
+          CASE 'I':
+             add := val(add)
+             tch := 'A'
+             GOTO pra
+
+          CASE 'N':
+             IF tch=0 DO error()
+             add := add+1
+       pra:  writef("*N%C%U2: ",tch,add)
+          CASE '=':
+             print(val(add))
+             GOTO nxt
+
+          CASE '$':
+             rch()
+             style := VALOF SWITCHON ch INTO
+                $( CASE 'C': RESULTIS " %$%C%C "
+                   CASE 'D': RESULTIS " %I6 "
+                   CASE 'F': RESULTIS 0
+                   CASE 'O': RESULTIS " %O6 "
+                   CASE 'U': RESULTIS " %U5 "
+                   CASE 'X': RESULTIS " %X4 "
+                   DEFAULT:  error()
+                $)
+             GOTO nxt
+
+          CASE 'T':
+             IF tch=0 DO error()
+             FOR i=0 TO rbexp()-1 DO
+             $( IF i REM 5 = 0 DO
+                   writef("*N%C%U2: ",tch,add)
+                print(val(add))
+                add := add+1
+                testbreak()
+             $)
+             newline()
+             ENDCASE
+
+          CASE 'U':
+             IF tch=0 DO error()
+             !adr(add) := exp(rbexp())
+             ENDCASE
+
+          CASE 'P':
+             rch()
+             v := val(add)
+             add := lexp()
+             !adr(add) := v
+             ENDCASE
+
+          CASE 'X':
+             v := fun(add)
+             add := v(rbexp(),bexp(),bexp(),bexp())
+             tch := 0
+             ENDCASE
+
+          CASE 'C':
+             IF standalone DO
+             $( IF mode=2 DO
+                $( LET c = rbexp()
+                   bpt.count!bpt := c
+                $)
+                task := 0
+                GOTO cnt
+             $)
+             release(currtask)
+             GOTO nxt
+
+          CASE 'H':
+             IF standalone GOTO cnt
+             hold(currtask)
+             GOTO nxt
+
+          CASE 'S':
+             selectask(rbexp())
+             ENDCASE
+
+          CASE 'B':
+          $( LET n = checkdig(rbexp())
+             TEST n=0 THEN
+             $( FOR i=1 TO 9 DO
+                $( LET ba=bpt.addr!i
+                   UNLESS ba=0 DO
+                   $( writef("*N%N",i)
+                      writearg(ba-1)
+                   $)
+                $)
+                newline()
+             $)
+             ELSE
+             $( v := fun(add)
+                deletebpt(n)
+                IF v=0 ENDCASE
+                v := v+1
+                FOR i=1 TO 9 DO
+                   IF bpt.addr!i=v DO deletebpt(i)
+                bpt.addr!n := v
+                bpt.instr!n := !v
+                bpt.count!n := 1
+                UNLESS standalone DO !v := instr.bpt
+             $)
+             ENDCASE $)
+
+          CASE 'Q':
+          CASE endstreamch:
+             UNLESS standalone DO
+             $( UNLESS debtask=0 DO
+                   rootnode!rtn.debtask := debtask
+                GOTO cnt
+             $)
+          DEFAULT:
+             error()
+
+          CASE 'E':
+             envtrace(standalone & pkt!1=currtask ->
+                         regs!2,currtcb!tcb.x)
+          CASE '*N': CASE '*E': CASE'*S':
+             IF ch='*N' DO writes("** ")
+nxt:         rch()
+       $)
+    $) REPEAT
+
+cnt:newline()            // continue
+    standalone := FALSE
+    FOR i=1 TO 9 DO      // set all breakpoints
+    $( LET ba=bpt.addr!i
+       UNLESS ba=0 DO !ba := instr.bpt $)
+    RESULTIS task        // non-zero => HOLD
+ $)
+
+.
+
+SECTION "DEBUG2"
+
+GET "DEBUG"
+
+LET envtrace(p) BE
+ $( LET comms = 0
+
+    $( LET nbase = 0
+       LET fsize = 6
+       rch()
+       rdflag := FALSE
+       SWITCHON ch INTO
+       $( DEFAULT:
+             error()
+
+          CASE '*N':
+             IF comms=0 BREAK
+             comms := 0
+          CASE '*E':CASE '*S':
+             LOOP
+
+          CASE 'S':
+             nbase := val(add)
+             GOTO newb
+
+          CASE 'L':
+             sptr := val(add)
+             GOTO newp
+
+          CASE 'N':
+    nxtb:    newline()
+             nbase := cont(sbase+co.caller)
+             UNLESS nbase=0 | nbase=-1 DO
+             $( writes("*NCalled from*N")
+                GOTO newb $)
+             nbase := sbase
+             nbase := cont(nbase) REPEATUNTIL
+                nbase=0 | cont(nbase+co.caller)=0
+             GOTO newb
+
+          CASE 'T': CASE 'B':
+             nbase := cont(globv+g.sbase)
+    newb:    IF nbase=0 DO
+             $( writes("*NEnd of backtrace*N*N")
+                BREAK $)
+             sbase := nbase
+          CASE 'U':
+             newline()
+             nbase := cont(sbase+co.caller)
+             TEST nbase=-1 THEN
+                writes("Root stack")
+             ELSE
+             $( UNLESS nbase=0 DO writes("Active ")
+                writes("Coroutine")
+                writearg(cont(sbase+co.function))
+             $)
+             sptr :=
+                sbase=cont(globv+g.sbase) ->
+                   p, cont(sbase+co.resumeptr)
+             GOTO newp
+
+          CASE 'D':
+    nxtp:    IF sptr=sbase GOTO nxtb
+             fsize := cont(cont(sptr))
+             sptr := sptr-fsize
+          CASE 'V':
+    newp:    newline()
+             IF fsize>6 DO fsize := 6
+             TEST sptr=sbase THEN
+             $( LET send = cont(sbase+co.stackend)+50
+                LET shwm = send
+                WHILE cont(shwm)=0 DO shwm:=shwm-1
+                writef("Stack base %U5 end %U5 *
+                       *hwm %U5 ",sbase,send,shwm)
+             $)
+             ELSE
+             $( writearg(cont(sptr+1)-5)
+                writef("%U2",sptr)
+                FOR i=2 TO fsize-1 DO
+                   print(cont(sptr+i))
+             $)
+             IF fsize<1 DO error()
+             testbreak()
+             comms := comms+1
+             IF ch='B' GOTO nxtp
+       $)
+       wrch('E')
+    $) REPEAT
+ $)
+
+
+AND writearg(n) BE
+    TEST isfun(n)
+      THEN writef(" %S ",n-4)
+      ELSE writef("  %I6 ",n)
+
+
+AND isfun(f) =
+    (f>>10)>=rootnode!rtn.memsize |
+        (f-5>>10)>=rootnode!rtn.memsize -> FALSE,
+    cont(f+1)=instr.entry | cont(f-5)=libword ->
+              (f-4)%0=7, FALSE
+
+
+AND deletebpt(n) BE
+ $( LET ba = bpt.addr!n
+    UNLESS ba=0 DO
+    $( !ba := bpt.instr!n
+       bpt.addr!n := 0
+    $)
+ $)
+
+
+AND lexp() = VALOF
+    SWITCHON ch INTO
+    $( CASE 'A': CASE 'G': CASE 'L':
+       CASE 'R': CASE 'V': CASE 'W':
+       CASE 'Y':
+          tch := ch
+          RESULTIS rbexp()
+
+       DEFAULT:
+          error()
+    $)
+
+
+AND rbexp() = VALOF
+ $( rch()
+    RESULTIS bexp() $)
+
+
+AND bexp() = VALOF
+ $( LET t = tch
+    LET n = 0
+    LET r = 10
+ l: WHILE ch='*S' DO rch()
+    SWITCHON ch INTO
+    $( CASE '+': CASE '*S':
+          rch()
+          GOTO l
+
+       CASE '-':
+          RESULTIS -rbexp()
+
+       CASE '(':
+          n := exp(rbexp())
+          UNLESS ch=')' DO error()
+          rch()
+          ENDCASE
+
+       CASE '!':
+          RESULTIS cont(rbexp())
+
+       CASE '@':
+          rch()
+          n := adr(lexp())
+          ENDCASE
+
+       CASE 'A': CASE 'G': CASE 'L':
+       CASE 'R': CASE 'V': CASE 'W':
+       CASE 'Y':
+          n := val(lexp())
+          ENDCASE
+
+       CASE '*'':
+          rch()
+          n := lch
+          rch()
+          ENDCASE
+
+       CASE '#':
+          r := 8
+          rch()
+          IF ch='X' DO
+          $( r := 16
+             rch() $)
+       DEFAULT:
+          $( LET d = '0'<=ch<='9' -> ch-'0',
+              r=16 & 'A'<=ch<='F' -> ch-'A'+#XA,
+                                     VALOF BREAK
+             n := n*r+d
+             rch()
+          $) REPEAT
+    $)
+    tch := t
+    RESULTIS n
+ $)
+
+AND exp(a) = VALOF
+    SWITCHON ch INTO
+    $( CASE '+': a := a  +  rbexp(); LOOP
+       CASE '-': a := a  -  rbexp(); LOOP
+       CASE '**':a := a  *  rbexp(); LOOP
+       CASE '/': a := a  /  rbexp(); LOOP
+       CASE '?': a := a REM rbexp(); LOOP
+       CASE '>': a := a  >> rbexp(); LOOP
+       CASE '<': a := a  << rbexp(); LOOP
+       CASE '&': a := a  &  rbexp(); LOOP
+       CASE '|': a := a  |  rbexp(); LOOP
+       CASE '!': a := cont(a+rbexp());LOOP
+       CASE '*S':rch(); LOOP
+       DEFAULT:  RESULTIS a
+    $) REPEAT
+
+
+AND adr(a) = tch='Y' -> a, checkaddr(a+VALOF
+       SWITCHON tch INTO
+       $( CASE 'A': RESULTIS 0
+          CASE 'G': RESULTIS globv
+          CASE 'L': RESULTIS sptr+2
+          CASE 'R': RESULTIS regs
+          CASE 'V': checkdig(a)
+                    RESULTIS vars
+          CASE 'W': RESULTIS currtcb
+       $) )
+
+
+AND val(a) = tch=0  -> a, !adr(a)
+
+
+AND fun(a) = tch=0 -> a,
+    isfun(val(a)) -> val(a), error()
+
+
+AND print(n) BE
+    TEST style=0
+      THEN writearg(n)
+      ELSE writef(style,n,n>>8,n)
+
+
+AND checkdig(n) = VALOF
+ $( UNLESS 0<=n<=9 DO error()
+    RESULTIS n $)
+
+
+AND checkaddr(a) = VALOF
+ $( IF (a>>10)>=rootnode!rtn.memsize DO error()
+    UNLESS a=0 FOR i=1 TO 9 DO
+       IF a=bpt.addr!i RESULTIS bpt.instr+i
+    RESULTIS a $)
+
+
+AND cont(a) = !checkaddr(a)
+
+
+AND selectask(n) BE
+ $( LET t = rootnode!rtn.tasktab
+    UNLESS 0<n<=t!0 DO error()
+    t := t!n
+    IF t=0 DO error()
+    currtask := n
+    currtcb := t
+    globv := t!tcb.gbase
+ $)
+
+
+AND error() BE
+ $( writes("??*N")
+    UNLESS rdflag DO rch()
+    longjump(standalone->salev,lev, rec)
+ $)
+
+
+AND testbreak() BE UNLESS standalone DO
+    IF testflags(1) DO error()
+
+
+AND rch() BE
+ $( TEST standalone THEN
+    $( lch := sardch()
+       IF lch=#177 DO error()
+     $)
+    ELSE
+    $( IF wrflag DO wrch('*E')
+       wrflag := FALSE
+       testbreak()
+       lch := rdch()
+       testflags(1)
+    $)
+    ch := capitalch(lch)
+    rdflag := TRUE
+ $)
+
+
+AND wch(c) BE
+ $( c := c&#377
+    TEST standalone THEN
+       sawrch(c)
+    ELSE
+    $( wrflag := TRUE
+       wwrch(c)
+    $)
+ $)
+
+

@@ -1,0 +1,270 @@
+// Program to observe the proportion of CPU time used by TRIPOS tasks
+// and procedures.
+
+// Author: Jeremy Dion 1979
+//
+// Modified 23 Oct 81 by BJK to record the highest priority task in
+//                           interrupted state, rather than the highest
+//                           priority one ready to run, to avoid false
+//                           high readings for tasks which use the timer.
+
+SECTION "observe"
+GET "libhdr"
+
+GLOBAL
+$(  events   : ug
+    ttable   : ug + 1
+    strings  : ug + 2
+    free     : ug + 3
+    ticks    : ug + 5
+    savepri  : ug + 6
+    error    : ug + 7
+    nbrevents: ug + 8
+    task     : ug + 9
+    taskno   : ug + 10
+$)
+
+MANIFEST
+$(  t.task = 0
+    t.s    = 1
+    t.count= 2
+    tsize  = 3
+$)
+
+LET ready(tcb) = VALOF
+
+$(  LET int = TABLE 0, 0, 0, 0,
+                    0, 0, 0, 0,
+                    1, 1, 0, 0, // Interrupted (with or without packet)
+                    0, 0, 0, 0
+    LET state = tcb ! tcb.state & #X000F
+    RESULTIS int ! state = 1
+$)
+
+AND
+
+t(n) = ttable + (n-1) * tsize
+
+AND
+
+sample () BE
+
+$(  LET tcbptr = tcb ! tcb.link
+    WHILE tcbptr ~= 0
+    DO TEST ready (tcbptr)
+       THEN $(  LET x = tcbptr ! 12
+                LET p = x ! 1
+                LET s = p - 9
+                LET tno = tcbptr ! tcb.taskid
+                TEST tno = 0 & taskno = 0
+                THEN record (0, "- idle-")
+                ELSE IF taskno = 0 | tno = taskno
+                     DO TEST task
+                        THEN record (tno, "- all -")
+                        ELSE record (tno, s)
+                RETURN
+            $)
+       ELSE tcbptr := tcbptr ! tcb.link
+       error := error + 1
+$)
+
+AND
+
+record (task, s) BE
+
+$(  LET freet = -1
+    LET nulls = "- ??? -"
+    events := events + 1
+    IF s % 0 ~= 7
+    DO s := nulls
+    FOR n = 1 TO nbrevents
+    DO $(  IF t (n) ! t.s = 0
+           DO $( freet := t (n)
+                 BREAK
+              $)
+           IF t(n) ! t.task = task & compstring (s, t(n) ! t.s) = 0
+           DO $(  t(n) ! t.count := t(n) ! t.count + 1
+                  RETURN
+              $)
+       $)
+    TEST freet = -1
+    THEN $(  record (0, "- full-")
+             events := events - 1 // otherwise increased twice!
+         $)
+    ELSE $(  freet ! t.task := task
+             freet ! t.s := newstring (s)
+             freet ! t.count := 1
+         $)
+$)
+
+AND
+
+newstring (s) = VALOF
+
+$( LET full = "- full-"
+   TEST free <= (nbrevents - 1) * 4
+   THEN $(  LET res = strings + free
+            FOR i = 0 TO 3
+            DO res ! i := s ! i
+            free := free + 4
+            RESULTIS res
+        $)
+   ELSE RESULTIS full
+$)
+
+AND
+
+strtonum (s, num) = VALOF
+
+$( LET n,i,m = 0,1,s % 0
+   LET neg = FALSE
+   WHILE s % i = ' ' DO i := i + 1
+   IF (s % i = '+') | (s % i = '-')
+   DO $( neg := s % i = '-'
+        i := i + 1
+     $)
+   TEST ('0' <= s%i <= '9')
+   THEN WHILE ('0' <= s % i <= '9') & (i <= m)
+        DO $( n := n * 10 + (s % i - '0')
+              i := i + 1
+           $)
+   ELSE RESULTIS FALSE
+   IF neg DO n := -n
+   !num := n
+   RESULTIS i = m + 1
+$)
+
+AND
+
+hipri () BE
+
+FOR pri = maxint - 1 TO savepri BY -1
+DO IF changepri (taskid, pri) ~= 0
+   DO RETURN
+
+AND
+
+lowpri () BE
+
+FOR pri = savepri TO maxint
+DO IF changepri (taskid, pri) ~= 0
+   DO RETURN
+
+AND
+
+print () BE
+$(  LET count = 0
+    lowpri ()
+    sort ()
+    writef ("*nEvents Using > 1%% of CPU After %i6 Samples*n", events)
+    writes ("---------------------------------------------*n")
+    writes ("Task      Procedure      % CPU*n")
+    FOR n = 1 TO nbrevents
+    DO IF t (n) ! t.count > 0
+       DO $( LET pc = muldiv (t (n) ! t.count, 100, events)
+             count := count + t (n) ! t.count
+             IF pc > 0
+             DO $( TEST t (n) ! t.task ~= 0
+                    THEN writef ("%i2", t (n) ! t.task)
+                    ELSE writes ("  ")
+                    writes ("        ")
+                    writes (t (n) ! t.s)
+                    writes("        ")
+                    writef ("%i2*n", pc)
+                $)
+          $)
+    IF error > 0
+    DO writef ("*n%n unrecordable events detected*n", error)
+    IF count ~= events
+    DO writef ("%n events not accounted for*n", events - count)
+    hipri ()
+$)
+
+AND
+
+go () BE
+
+$(  MANIFEST
+    $(  b = 1
+        d = 4
+    $)
+    WHILE TRUE
+    DO $(  IF testflags (b)
+           DO $(  print ()
+                  freevec (ttable)
+                  freevec (strings)
+                  lowpri ()
+                  RETURN
+              $)
+           IF testflags (d)
+           DO print ()
+           delay (ticks)
+           sample ()
+       $)
+$)
+
+AND
+
+sort () BE
+
+FOR m = 1 TO nbrevents
+DO $( LET done = TRUE
+      FOR n = nbrevents - 1 TO m by -1
+      DO IF t (n) ! t.count < t (n + 1) ! t.count
+         DO $( LET tt = VEC tsize - 1
+               FOR j = 0 TO tsize - 1 DO tt ! j := t (n) ! j
+               FOR j = 0 TO tsize - 1
+               DO t (n) ! j := t (n + 1) ! j
+               FOR j = 0 TO tsize - 1 DO t (n + 1) ! j := tt ! j
+               done := FALSE
+            $)
+      IF done | t (m) ! t.count = 0 DO RETURN
+$)
+
+AND
+
+start () BE
+
+$(  LET args = VEC 60
+    IF rdargs ("TASK,EVENTS,TICKS,NOPROC/S,HELP/S", args, 60) = 0
+    DO $( writes ("Bad args: try arg 'help'*n")
+          RETURN
+       $)
+    IF args ! 4 ~= 0
+    DO $( writes ("This program monitors cpu usage by task and procedure.*n")
+          writes ("EVENTS: maximum number of events measurable. Default 50.*n")
+          writes ("TICKS : intervals in seconds/50 between samplings. Default 1.*n")
+          writes ("TASK  : selects recording for a particular task only.*n")
+          writes ("NOPROC: record task only, not task and procedure.*n")
+          RETURN
+       $)
+    IF args ! 1 = 0 | ~strtonum (args ! 1, @nbrevents)
+    DO nbrevents := 50
+    IF args ! 2 = 0 | ~strtonum (args ! 2, @ticks)
+    DO ticks := 1
+    IF args ! 0 = 0 | ~strtonum (args ! 0, @taskno)
+    DO taskno := 0
+    task := args ! 3 ~= 0
+    error := 0
+    ttable := getvec (nbrevents * tsize)
+    strings := getvec (nbrevents * 4)
+    IF ttable = 0 | strings = 0
+    DO $(  freevec (ttable)
+           freevec (strings)
+           writes ("Couldn't get space*n")
+           RETURN
+       $)
+    FOR i = 0 TO nbrevents * tsize - 1 DO ttable ! i := 0
+    free := 0
+    savepri := tcb ! tcb.pri
+    record (0, "- full-")
+    events := 0
+    ttable ! 2 := 0  // reset spurious "full" recording
+    writef (
+    "Task %n: break 'd' for results only, 'b' for results and stop*n",
+    taskid)
+    hipri ()
+    go ()
+$)
+
+

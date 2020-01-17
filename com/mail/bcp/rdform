@@ -1,0 +1,190 @@
+$<HEADER'
+SECTION "RDFORM"
+
+GET "header"
+GET "IOHDR"
+GET "TERMHDR"
+GET "CURHDR"
+$>HEADER'
+
+LET Rdform(y, initial.y, return.on.return, lines,text, extra5,extra6,
+                ap, ar, aa, ad,
+                bp, br, ba, bd,
+                cp, cr, ca, cd,
+                dp, dr, da, dd,
+                ep, er, ea, ed,
+                fp, fr, fa, fd,
+                hp, hr, ha, hd,
+                ip, ir, ia, id,
+                jp, jr, ja, jd,
+                end
+        ) = VALOF
+$(  LET items   = 7
+    LET item    = ?
+    LET read.redraw(addr, y, clear, item, items) BE
+    $(  LET clever      = 1
+
+        TEST clear
+        $(  CUR.WRCH(CUR.CLEAR.SCREEN)
+            cur.init(TRUE)
+            clever := cur.pos(0, y)
+            UNLESS clever newline()
+        $)
+        ELSE WRCH('*C')
+
+        //-----------------------
+        // Write out the form ...
+        //-----------------------
+        FOR i = 0 TO 8
+        $(  LET ptr = addr+i*4
+            IF !ptr=-1 BREAK
+            IF i > 0 THEN newline()
+            writes(!ptr)
+            writes(ptr!1)
+        $)
+
+        //--------------------------
+        // Reposition the cursor ...
+        //--------------------------
+        IF clever=1 THEN clever := cur.attr(-1)
+        UNLESS clever
+            UNLESS item = items-1
+            $(  newline()
+                FOR i = item TO items-2 DO WRCH('^')
+                FOR i = items-item TO 76 DO WRCH('-')
+                NEWLINE()
+            $)
+    $)
+
+    FOR ptr = @ap TO @jp BY 4
+    TEST !ptr=-1
+    $( items := (ptr - @ap) /4; BREAK $)
+    ELSE
+    $(  LET r, d = ptr!1, ptr!3
+        TEST r=0        /*      No destination!! Ignore this one !!     */
+        $(      FOR I = ptr TO @ip DO !I := I!4
+                jp := -1
+                ptr -:= 4
+        $)
+        ELSE 
+        $(      TEST d=0        /* No initial value ? */
+                THEN r%0 := 0
+                ELSE FOR i = 0 TO d%0 DO r%i := d%i
+
+                IF !ptr=0 THEN !ptr := ""       /* No string ..... */
+        $)
+    $)
+
+    item := y - initial.y
+
+    read.redraw(@ap, y, FALSE, item, items)
+
+    $(  LET term        = ?
+        TEST item<0
+        $(  WRCH(7); item := 0 $)
+        ELSE IF item >= items
+        $( WRCH(7); item := items-1 $)
+
+        term    := process(@ap + item*4, y-item)
+
+        SWITCHON term INTO
+        $(      CASE '*C':
+                CASE '*N':      IF item >= items-1 & return.on.return
+                                THEN                            RESULTIS term
+
+                DEFAULT:        item := item+1;
+                                IF terminal.type = TERM.VDU
+                                    UNLESS item >= items NEWLINE()
+                                                                        ENDCASE
+                CASE CUR.UP:    item := item-1;
+                                IF terminal.type = TERM.VDU
+                                    UNLESS item < 0 WRITES("*C^*C*L")
+                                                                        ENDCASE
+                CASE CUR.HELP:
+                                UNLESS cur.wrch(CUR.CLEAR.SCREEN) DO NEWLINE()
+UNLESS lines=0 | text=0 | text=-1 WRITEF("%S*N*N", text)
+                                WRITES("*
+*You are in FORM mode. The valid non data keys are:*N*
+*   Keypad3       ESC 3  Form is finished*N*
+*   ABANDON       ESC a  Abandon this operation*N*
+*   CLEAR SCREEN  ESC c  Reset and redraw the screen*N*
+*");                            WRITES("*
+*   DOWN          ESC d  Move on to next item*N*
+*   UP            ESC u  Move back to previous item*N*
+*");                            WRITES("*
+*   HELP          ESC ?  Display this HELP*N*
+*   END           CTRL/D Form is finished*N*
+*   DEL LINE      CTRL/X Delete the current item*N*
+*");                            WRITEF("*
+*   RUBOUT               Delete the previous character*N*
+*   RETURN               Move on to next item%S*N*
+**N*
+*Type any character to continue...*E*
+*", return.on.return -> " - If last, form is finished", "")
+                                $(  LET ch = CUR.RDCH()
+                                    IF ch = CUR.ABANDON RESULTIS ch
+                                $)
+                CASE CUR.CLEAR.SCREEN:
+                                read.redraw(@ap, y, TRUE, item, items);
+                                ENDCASE
+                CASE CUR.ABANDON:
+                CASE CUR.FN3:
+                CASE 4:                                         RESULTIS term
+        $)
+    $) REPEAT
+$)
+
+
+AND process(addr, y) = VALOF
+$(  LET prompt  = addr!0
+    LET result  = addr!1
+    LET x.base  = prompt%0
+    LET x       = result%0
+    LET x.upb   = 79 - x.base
+
+    UNLESS cur.pos(0, y) DO WRCH('*C')
+
+    writes(prompt)
+    writes(result)
+    WRCH('*E')
+
+    $(  LET ch = cur.rdch()
+        SWITCHON ch INTO
+        $( DEFAULT:     UNLESS ' ' <= ch <= #XFE | x >= x.upb
+                        $( WRCH(7);     ENDCASE $)
+                        x := x+1
+                        IF SC THEN WRCH(ch)
+                        result%x := ch
+                        IF x > result%0 THEN result%0 := x
+                        ENDCASE
+
+          CASE CUR.CLEAR.SCREEN:
+          CASE CUR.ABANDON:
+          CASE CUR.DOWN:
+          CASE CUR.HELP:
+          CASE CUR.FN3:
+          CASE CUR.UP:
+          CASE '*N':
+          CASE '*C':
+          CASE 4:
+                        RESULTIS ch
+
+
+          CASE CUR.DEL.LINE:
+          CASE 'X' - '@':
+                        FOR i = 1 TO x DO WRITES("*B *B")
+                        x := 0
+                        result%0 := x;                                  ENDCASE
+
+          CASE CUR.RUBOUT:
+                        IF x <= 0 $( WRCH(7); ENDCASE $)
+                        x -:= 1
+                        result%0 := x
+                        WRITES("*B *B");                                ENDCASE
+        $)
+        WRCH('*E')
+        IF testflags(1) RESULTIS CUR.ABANDON
+    $) REPEAT
+$)
+
+

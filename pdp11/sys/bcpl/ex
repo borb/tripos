@@ -1,0 +1,361 @@
+// (C) Copyright 1979 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+// This version includes modifications by
+// Topexpress Ltd, 1 Portugal Place, Cambridge
+
+SECTION "EX"
+
+GET "LIBHDR"
+
+GET "IOHDR"
+
+GET "PATTERN"
+
+GET "MANHDR"
+
+GET "FH2HDR"
+
+GET "CLIHDR"
+
+MANIFEST $( argvupb = 50 $)
+
+global
+$(
+/* Defined in FH2HDR are
+DeviceId : ug
+UnitNo   : ug+1
+*/
+blk1 : ug+2
+blk2 : ug+3
+ptr :  ug+4
+tsk :  ug+5
+parent:ug+6
+pattern : ug + 7
+$)
+MANIFEST $(
+copygloblwb = ug+70
+copyglobupb = ug+95
+$)
+// Globals defined in FH2HDR in which the disc description resides
+
+LET start() BE
+
+ $( LET argv = VEC argvupb
+    LET V1 = VEC argvupb      // Auxiliary vector for pattern matching
+    LET string.to.dat.overlay = "SYS:L.STRING-TO-DAT"
+    LET rc = 0
+    LET Dirname = ?
+    LET p, s = ?, ?
+    LET Disckeysopt, Datesopt, NoDatesOpt = ?, ?, ?
+    LET NEntries = 0
+    LET Seg = LoadSeg("SYS:L.DAT-TO-STRINGS")
+    LET Date = VEC 14
+    LET Stamp = VEC 2
+    LET since.stamp = VEC 2
+    LET upto.stamp = VEC 2
+    LET Day = DatStamp(Stamp)!0
+    LET ENTRYINFO = VEC 60
+    LET Total = 0
+    LET Dir, Entry, IsDir = 0, ?, ?
+    LET OldOutput, ToStream = OutPut(), ?
+    LET BreakCondition = False
+
+    Pattern    := getvec(argvupb)
+    Blk1, Blk2 := 0, 0
+    IF  pattern=0 THEN
+    $( Writef("Insufficient free store for %S*N", cli.commandname)
+       GOTO exit
+    $)
+
+    IF rdargs("DIR,P=PAT/K,DISCKEYS/S,DATES/S,*
+              *NODATES/S,TO/K,S/K,SINCE/K,UPTO/K", argv, argvupb)=0 |
+      [argv!3\=0 & argv!4\=0] THEN
+      $( writes("Parameters no good for ex command*N")
+         rc := 20
+         GOTO exit
+      $)
+
+    since.stamp!0, since.stamp!1, since.stamp!2 := 0, 0, 0
+    upto.stamp!0,  upto.stamp!1,  upto.stamp!2 := maxint, maxint, maxint
+    UNLESS argv!7=0 & argv!8=0
+      IF callseg(string.to.dat.overlay, since.stamp, argv!7) = 0 |
+         callseg(string.to.dat.overlay, upto.stamp,  argv!8) = 0
+      THEN
+      $( TEST result2 = 0
+         THEN writes("****** Invalid *'UPTO*' or *'SINCE*' parameter - ignored*N")
+         ELSE writef("****** Can't load %S - *'UPTO*' or *'SINCE*' parameter ignored*N", string.to.dat.overlay)
+      $)
+
+    Dirname := argv!0
+    Disckeysopt := argv!2\=0
+    Datesopt := argv!3\=0 | Day=0
+    NoDatesopt := argv!4\=0
+    ToStream := ArgV!5
+
+    // Construct the pattern
+    // The form is "#?(<s>)#?/(<p>)" so that the filenames
+    // printed are those which have <s> as a substring
+    // or match the pattern <p>.
+    // Defaults for <s> and <p> are "!" which will
+    // never match, except when neither is specified
+    // in which case <s> and <p> are set to "%" so that all
+    // filenames are listed.
+    // Pattern cannot overflow, as its vector
+    // is the same size as the rdargs vector.
+    p := argv!1
+    s := argv!6=0 -> (p=0 -> "%", "!"), argv!6
+    IF p=0 THEN p := "!"
+
+    pattern%0 := 0
+    concat(pattern, "#?(")
+    concat(pattern, s)
+    concat(pattern, ")#?/(")
+    concat(pattern, p)
+    concat(pattern, ")")
+
+    UNLESS ToStream=0 DO
+     $( LET Stream = FindOutput(ToStream)
+        TEST stream = 0
+        THEN
+        $( writef("****** Can't open %S*N", tostream)
+           rc := 20
+           GOTO exit
+        $)
+        ELSE selectoutput(stream)
+     $)
+
+    TEST Seg=0
+    THEN NoDatesOpt := TRUE
+    ELSE Globin(seg)  // Must be after Findoutput
+
+    IF dirname=0 THEN dirname := currentdir=0 ->
+         "$", "(CWD)"
+
+    TEST compstring(dirname, "(CWD)")=0
+    THEN dir := currentdir
+    ELSE dir := locatedir(dirname)
+    IF Dir=0 DO
+     $( Writef("Directory *"%S*" not found*N", Dirname)
+        rc := 20
+        GOTO exit
+     $)
+// Now find out about the disc we are about to examine
+     $( LET mygv,fhgv=@globsize,?
+        tsk := dir=-1 -> task.filehandler,dir!lock.task
+        fhgv := rootnode!rtn.tasktab!tsk!tcb.gbase
+        FOR globno=copygloblwb TO copyglobupb DO
+            mygv!globno := fhgv!globno
+        DeviceId := fhgv!(@DeviceId-@Globsize)
+        UnitNo :=   fhgv!(@UnitNo  -@Globsize)
+     $)
+    Blk1,Blk2 := getvec(size.block),getvec(size.block)
+    IF Blk1=0 | Blk2=0 DO
+     $( writef("Insufficient free store for %S*N",cli.commandname)
+        GOTO exit
+     $)
+    Entry := exFirst(Dir)
+    IF Entry=0 DO
+     $( writes("Directory *"")
+        writename(dir!lock.key)
+        writes("*" is empty*n")
+        GOTO exit
+     $)
+    IF Entry=-1 DO
+     $( wrch('*"')
+        writename(dir!lock.key)
+        writes("*" is not a directory*n")
+        rc := 20
+        GOTO exit
+     $)
+    UNLESS CmplPat(Pattern, V1) DO
+     $( Writes("Bad pattern for EX*N")
+        rc := 20
+        GOTO exit
+     $)
+    UNLESS Seg=0 DO Start(Stamp, Date)
+    writes("Directory *"")
+    writename(dir!lock.key)
+    TEST Seg=0
+    THEN writes("*"*N")
+    ELSE WriteF("*" on %S %S*N", Date+10, Date)
+
+     $( LET Type, Count = ?, ?
+        IF TestFlags(1) DO
+         $( BreakCondition := TRUE
+            BREAK
+         $)
+        exInfo(Entry, EntryInfo)
+
+        UNLESS Match(Pattern, V1, EntryInfo) GOTO NEXT
+
+        Type, Count := EntryInfo!17, EntryInfo!18
+
+        UNLESS Seg=0 DO Start(EntryInfo+19, Date)
+
+        UNLESS compstamp(entryinfo+19, since.stamp) >= 0 GOTO next
+        UNLESS compstamp(entryinfo+19, upto.stamp)  <= 0 GOTO next
+        writef("*S*S%TI", entryinfo)
+        IF disckeysopt DO writef(" [%I3]", entryinfo!16)
+
+        writef(" %S", type=1 -> "dir", "   ")
+        Writef(" %I3%S%S%S", Count,
+               [count=200 -> "+", " "],
+               [Type=1 -> "Pr.Ent",
+                Type=2 -> "  Word",
+                Type=3 -> " Block",
+                          "     ?"],
+               Count=1 -> " ", "s")
+
+        TEST EntryInfo!19=0 | NoDatesOpt
+        THEN NewLine()
+        ELSE
+         $( LET DayName = Day=EntryInfo!19   -> "Today",
+                          Day=EntryInfo!19+1 -> "Yesterday",
+                          Day=EntryInfo!19-1 -> "Tomorrow",
+                          Day<=EntryInfo!19+7 -> Date+10,
+                                                 Date
+            IF Datesopt DO Dayname := Date
+            Writef("  %T9 %S*N", DayName, Date+5)
+         $)
+
+    NEXT:
+        NEntries := NEntries+1
+        Total := Total+
+                [Type=3 -> Count+1, 1]
+        Entry := exNext(Entry)
+     $) REPEATUNTIL Entry=0
+
+Exit:
+    UnloadSeg(Seg)
+    UNLESS OldOutput=Output() DO
+     $( EndWrite()
+        SelectOutput(OldOutput)
+     $)
+    IF BreakCondition DO Writes("****BREAK*N")
+//    Writef("%N entr%S processed*N", NEntries,
+//        NEntries=1 -> "y", "ies")
+//    UNLESS IsDir DO
+//        Writef("%N+1 blocks allocated*N", Total)
+
+    freevec(blk1)
+    freevec(blk2)
+    freevec(pattern)
+    UNLESS dir=-1 | dir=CurrentDir THEN FreeObj(dir)
+ $)
+
+
+AND compstamp(s1, s2) = VALOF
+$( FOR i = 0 TO 2
+      UNLESS s1!i=s2!i DO RESULTIS s1!i-s2!i
+   RESULTIS 0
+$)
+
+
+AND getb(key, vector) = SendPkt(-1, tsk, Action.GetBlock, 0, 0, key, vector)
+
+AND exfirst(lock) = VALOF
+// returns disc address of first entry
+$( ptr := b.dir.hashtablebase
+   parent := lock=-1 -> rootkey, lock!lock.key
+   getb(parent, blk1)
+   if blk1!b.file.secondarytype<=0 resultis -1
+   until ptr>=b.file.infobase do
+   $( if blk1!ptr\=0 resultis blk1!ptr
+      ptr := ptr+1
+   $)
+   resultis 0
+$)
+
+and exnext(key) = valof
+// gets disc address of next beast
+$( getb(key, blk2)
+   unless blk2!b.file.hashchain=0 resultis blk2!b.file.hashchain
+   ptr := ptr+1
+   until ptr>=b.file.infobase do
+   $( if blk1!ptr\=0 resultis blk1!ptr
+      ptr := ptr+1
+   $)
+   resultis 0
+$)
+
+AND exInfo(key, Vector) = valof
+// analyse key putting
+// name into 0 - 15
+// key into 16
+// type into 17
+// count into 18
+// date into 19 - 21
+$( if key=currentdir do key := key!lock.key
+   getb(key, blk2)
+   for i = 0 to 15 do vector!i := blk2![b.file.filename+i]
+   vector!16 := key
+   vector!17 := blk2!b.file.secondarytype<0 -> 3, 1
+   test vector!17=1
+   then
+   $( let c = 0
+      for i = b.file.database to b.file.infobase-1 do
+         if blk2!i\=0 then c := c+1
+      vector!18 := c
+   $)
+   else vector!18 := blk2!b.file.highestseq
+
+   for i = 0 to 2 do vector![19+i] := blk2![b.file.creationdate+i]
+
+   UNLESS hashvalue(vector)=ptr & blk2!b.file.parentdir=parent DO
+      writes("********** WARNING - FOLLOWING ENTRY INVALID - SEEK ADVICE ***********n")
+   resultis vector
+$)
+
+AND HashValue(String) = VALOF
+$( LET Res = String%0
+   FOR i = 1 TO Res DO
+        Res := (Res*13 + CapitalCh[String%i]) & #X7FF
+        // (Make sure RES is always positive)
+
+   RESULTIS B.Dir.HashTableBase + Res REM Size.HashTable
+$)
+
+AND writename(key) BE
+ $(
+    LET devicename = DeviceId=-5 -> "DP", "DF"
+    LET link = 0
+
+    writef("%S%N:", devicename, UnitNo)
+
+     $( LET x = ?
+        getb(key, blk2)
+        IF blk2!b.file.secondarytype=1 THEN
+         $( IF link=0 THEN
+             $( wrch('$')
+                RETURN
+             $)
+            BREAK
+         $)
+        x := getvec([blk2+b.file.filename]%0/bytesperword+1)
+        FOR i = 0 TO [blk2+b.file.filename]%0 DO
+            [x+1]%i := [blk2+b.file.filename]%i
+        !x := link
+        link := x
+        key := blk2!b.file.parentdir
+     $) REPEAT
+
+     $( LET next = !link
+        writes(link+1)
+        freevec(link)
+        IF next=0 BREAK
+        wrch('.')
+        link := next
+     $) REPEAT
+ $)
+
+
+AND concat(str1, str2) BE
+ $(
+// Adds the second string to the first
+    LET len = str1%0
+    FOR j=1 TO str2%0 DO len, str1%len := len+1, str2%j
+    str1%0 := len
+ $)
+
+

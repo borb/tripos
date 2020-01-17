@@ -1,0 +1,106 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+                      ######   #######   ########  #      # 
+                     ########  ########  ########  ##    ## 
+                     ##    ##  ##    ##  ##         ##  ##  
+                     ##    ##  #######   ######      ####   
+                     ##    ##  ##    ##  ##           ##    
+                     ##    ##  ##    ##  ##           ##    
+                     ########  ########  ########     ##    
+                      ######   #######   ########     ##    
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   31/03/87             *
+\*****************************************************************************/
+
+
+
+SECTION "OBEY"
+
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "IOHDR"
+GET "MANHDR"
+
+GET "BCPL.REX-OBEY"
+
+
+
+MANIFEST
+$(
+    buffersize  =  255
+$)
+
+
+
+LET start()  BE
+$(
+//  Main routine of the "OBEY" command.  Read the rest of the command line, and
+//  then call the shell recursively to execute the command line.
+
+    LET buffer  =  VEC buffersize/bytesperword
+    LET length  =  0
+    LET ch      =  rdch()
+    
+    WHILE  ch = '*S'  |  ch = '*T'  DO  ch  :=  rdch()
+
+    UNTIL  ch = '*N'  |  ch = endstreamch  DO
+    $(
+        IF  length = buffersize  THEN
+        $(
+            writes( "****** OBEY:  Command line too long*N" )
+            
+            stop( 20 )
+        $)
+
+        length           :=  length + 1
+        buffer % length  :=  ch
+        ch               :=  rdch()
+    $)
+
+    //  Having read the command line, look to see if it is enclosed in quotes,
+    //  and if so, strip them.
+    
+    IF  length > 2  THEN
+    
+        IF  (buffer % 1  =  '"')  &  (buffer % length  =  '"')  THEN
+        $(
+            //  The command is quoted, and so strip the quotes before actually
+            //  executing the command.
+            
+            FOR  i = 2  TO  length-1  DO  buffer % (i - 1)  :=  buffer % i
+            
+            length  :=  length - 2
+        $)
+
+    buffer % 0  :=  length
+    
+    //  Having set up the buffer, we must first make sure that we are actually
+    //  running under "Rex Tripos", because if not, the call will fail.
+    
+    UNLESS  compstring( rootnode!rtn.info!info.systemtype, "Rex-Tripos" ) = 0  DO
+    $(
+        //  We are not running under the right flavour of the operating system,
+        //  and so we must stop before any more damage is done.
+        
+        writes( "****** OBEY:  System is not *"Rex-Tripos*"*N" )
+        
+        stop( 20 )
+    $)
+
+    //  Otherwise, execute the command line, and make sure that the return code
+    //  is propogated back to our own shell.
+
+    rex.obey( buffer )
+    
+    result2  :=  cli.result2
+    
+    stop( cli.returncode )
+$)
+
+

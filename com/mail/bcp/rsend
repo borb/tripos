@@ -1,0 +1,328 @@
+SECTION "RSEND"         // May be called on a COMMAND interface.
+
+GET "header"
+GET "manhdr"
+GET "iohdr"
+GET "clihdr"
+GET "BCPL.uidset"
+GET "BCPL.PUIDOFFILE"
+GET "BCPL.ssplib"
+GET "BCPL.findstringin"
+GET "bcp.z80send"
+GET "bcp.convertname"
+
+STATIC // GLOBAL
+$(
+        workfile        = ug+12
+        filestream      = ug+ 9
+$)      // UGH!!!!!!!!!!!!!!!!!
+
+LET check.user.list(users) = users=0 -> TRUE, VALOF
+$(
+    // This routine checks that a list of names at "users" is valid.
+    // The global "k" is a pointer to the next free word in this buffer.
+    // The result is true or false depending on whether all the names are valid.
+
+    LET puid            = VEC 4
+    LET name            = VEC 160/bpw     // Size of rdargs string
+    LET i               = 0
+    LET s               = ?
+    LET bad.names       = 0
+
+    WHILE i < users%0
+    $(  // Loop for a user name
+
+        s := i    // Note start position of name
+        i := i+1
+        WHILE (i <= users%0) & (users%i ~= '+') &
+                                     (users%i ~= ',') & (users%i ~= '*s')
+        $(  name%(i-s) := users%i
+            i := i+1
+        $)
+        name%0 := i-s-1
+
+        // Print a message if the conversion fails:
+        SWITCHON convert.name.to.puid(name, puid) INTO
+        $(
+
+        CASE convert.ok:
+            ENDCASE
+
+        CASE convert.bad.name:
+            TEST bad.names=0
+            THEN writef("I do not understand  %S", name)
+            ELSE writef(", %S", name)
+            bad.names := bad.names + 1
+            ENDCASE
+
+        CASE convert.no.map:
+            // Return immediately on failure to contact MAP service
+            writes("MAP failed - SEND ABANDONED*N")
+            RESULTIS FALSE
+
+        $)
+
+    $)
+
+    // If any of the names were wrong then fail
+    UNLESS bad.names = 0
+    $(  newline()
+        Resultis ask(bad.names=1 -> "Is it a distribution list ? (Y or N) ",
+                                    "Are they distribution lists ? (Y or N) ",
+                                    FALSE)
+    $)
+
+    RESULTIS TRUE
+$)
+
+AND ask(string, defalt, a,b,c,d,e) = VALOF
+$(  LET ch      = ?
+    LET rc      = ?
+
+    WRITEF(string, a,b,c,d,e)
+    WRCH('*E')                                  // UGH!!
+    ch  := rdch()
+    rc  := (capitalch(ch) = 'Y') -> TRUE,
+                (ch = '*N' | capitalch(ch) = 'N') -> FALSE, 1
+    UNTIL ch='*N' | ch=ENDSTREAMCH DO ch := RDCH()
+    UNLESS rc=1 DO RESULTIS rc
+    IF ch=ENDSTREAMCH   RESULTIS defalt
+$) REPEAT
+
+//==============================================================================
+
+
+MANIFEST
+$( A.user       = 0
+   A.from       = 1
+   a.term       = 2
+   A.about      = 3
+   A.immed      = 4
+   A.cc         = 5
+   A.bcc        = 6
+   A.reply      = 7
+   A.public     = 8
+   A.end        = A.public      +1
+   argv.words   = A.end-1 + 140/bpw
+   cap.file     = 0
+
+   Mode.command = 0
+   Mode.string  = 1
+   Mode.argv    = 2
+$)
+
+LET ERR.WRITEF(s, a,b,c,d) BE
+$(  LET R2 = RESULT2
+    WRITEF(s, a,b,c,d)
+    RESULT2 := R2
+$)
+
+LET start(mode, arg2, arg3) = VALOF
+$(  LET argv.           = GETVEC(argv.words + 100/rwpw +1)
+    LET argv            = argv.
+    LET txbuff          = argv+argv.words+1     //      VEC 100/rwpw
+    LET tripos.file     = VEC 3/rwpw
+    LET rdargs.string   = "USER=USERS=INITIALS/A,FROM,TERM/K,ABOUT/K,immed/k,*
+                          *cc/K,bcc/K,replyto/k,Public/s"
+    LET workfile.       = ":RING.MAIL.Sxx-Tdd"
+    LET term            = "/**"
+    LET saveout         = output()
+    LET workfile.created= FALSE
+    LET no.file         = FALSE
+    LET tlen            = 2
+    LET rc              = 0
+    LET file            = ?
+
+    ms.user.break.level := level()
+
+    IF argv=0
+    $( err.WRITEF("Failed to get workvector*N"); rc:=20; GOTO end $)
+
+    workfile            := workfile.
+    filestream          := 0
+    workfile % (workfile%0)     := taskid REM 10 + '0'
+    workfile % (workfile%0-1)   := taskid  /  10 + '0'
+    $(  LET station     = ROOTNODE ! RTN.info ! rtninfo.ring ! ri.myaddr
+        LET hex (ch) = ch<10 -> (ch+'0'), (ch+'A'-10)
+        workfile % (workfile%0-4)       := hex( station         & 15)
+        workfile % (workfile%0-5)       := hex((station >> 4)   & 15)
+    $)
+
+    FOR I = 5 TO 0
+    TEST lookup.name("PS.MAP", argv)
+    THEN BREAK
+    ELSE
+    $(  LET R2 = RESULT2
+        WRITEF("Failed to Locate PS.MAP %X4*N", R2)
+        IF i=0 | TESTFLAGS(1)
+        $(      RESULT2 := R2; tidyup() $)
+        delay(tickspersecond*5)
+    $)
+    map.station := argv!0
+    map.port    := argv!2
+    map.func    := argv!3
+
+    TEST mode=mode.argv
+    $(  argv := arg2
+        FOR i = argv TO argv+A.end IF !I=-1 $( FOR p=i TO argv+A.end DO !P:=0; BREAK $)
+        UNLESS argv!A.public=0 DO argv!A.public := -1
+    $)
+    ELSE
+    $(  LET oin         = input()
+        LET arg.rc      = ?
+
+        IF mode = mode.string
+        $(  LET in = findstringin(arg2)
+            IF in=0
+            $(  err.WRITEF("Failed to find *"%S*" as input (%X8)*N",
+                                arg2, RESULT2)
+                rc := 20; GOTO end
+            $)
+            SELECTINPUT(in)
+        $)
+
+        arg.rc := rdargs(rdargs.string, argv, argv.words)
+
+        IF mode = mode.string $( endread(); SELECTINPUT(oin) $)
+
+        IF arg.rc=0
+        $(  err.WRITEF("%S: Bad arguments for rdargs string*N%S*N",
+                        cli.commandname, rdargs.string);
+            rc := 20; GOTO end
+        $)
+    $)
+
+    UNLESS argv!A.immed=0 | (argv!A.term=0 & argv!A.from=0)
+    $(  err.WRITEF("You can Either have immediate data Or a file*N");
+        rc := 20; GOTO end
+    $)
+
+    // Set up input text terminator description.
+    TEST argv!A.term = 0
+    THEN IF argv!A.from ~= 0 THEN tlen := -1
+    ELSE $( term := argv!A.term; tlen := term%0 $)
+
+    IF mode=0 UNLESS check.user.list(argv!A.user)       &
+           check.user.list(argv!A.cc)   &
+           check.user.list(argv!A.bcc)
+    $( RC:=20; GOTO end $)
+
+    // Check if the "from" file exists.
+    TEST argv!A.from = 0
+    THEN TEST argv!A.immed=0 & mode=0
+         $( file        := workfile
+            filestream  := findoutput(file)
+            IF filestream = 0
+            $(  err.WRITEF("%S: Can't open %s for output (%N)*N",
+                                                cli.commandname,file, RESULT2);
+                RC:=20; GOTO end
+            $)
+         $)
+         ELSE no.file := TRUE
+    ELSE
+    $(  file            := argv!A.from
+        IF file%(file%0)= ':'
+        $(  err.WRITEF("%S: Devices cannot be sent*N", cli.commandname);
+            RC:=20; GOTO end
+        $)
+        filestream      := findinput(file)
+        IF filestream = 0
+        $(  err.WRITEF("%S: Can't open %s for input (%N)*N", cli.commandname,file, RESULT2);
+            RC:=20; GOTO end
+        $)
+        workfile.created:= TRUE
+    $)
+
+    // Read the text into the workfile if necessary:
+    IF argv!A.from = 0 & Argv!A.immed=0 & no.file=FALSE
+    $(  UNLESS cli.background
+        DO writes("Type text terminated by @Q :*N")
+        IF RDCH() = ENDSTREAMCH THEN no.file := TRUE
+        UNRDCH()
+        UNLESS no.file
+        $(
+            // Loop for each line of text.
+            LET t,ch = 1, rdch()
+            LET save = VEC 100/BYTESPERWORD
+
+            selectoutput(filestream)
+
+            WHILE (t<=tlen) & (compch(ch,term%t)=0) & (ch~='*N')
+            DO $(  save%t := ch; t, ch := t+1, rdch() $)
+            IF t=tlen+1 & ch='*n' THEN BREAK
+
+            FOR j=1 TO t-1 DO wrch(save%j)
+
+            IF ch=endstreamch THEN GOTO close
+
+            wrch(ch)
+
+            $(
+                IF testflags(1) THEN LONGJUMP(ms.user.break.level,
+                                                        ms.user.break.link)
+                IF ch='*N' BREAK
+                ch := rdch()
+                IF ch=endstreamch THEN GOTO close
+                wrch(ch)
+            $) REPEAT
+
+        $) REPEAT
+
+close:
+        selectoutput(saveout)
+
+    $)   // End of reading text into workfile.
+
+    // Set up the rest of the SEND SSP parameters.
+    // Set Tripos file parameter
+    TEST no.file
+    THEN tripos.file := 0
+    ELSE UNLESS puidoffile(file, filestream!scb.arg1, tripos.file)
+         WRITES("Failed to find the file's puid !!!!*N")
+
+    UNLESS filestream=0 DO endstream(filestream)
+    filestream := 0
+
+    TEST z80send(0, uidset()+tuid.offset, uidset()+Puid.offset,
+                        argv!A.user, argv!A.about,
+                        tripos.file, cap.file, argv!A.immed,
+                        argv!A.cc, argv!a.bcc, 0, argv!a.reply,
+                        argv!A.public -> 4, 0, -1)
+    $(  LET delete = TRUE
+        IF mode=0 UNLESS argv!A.from = 0 & Argv!A.immed=0
+        DO delete := ask("Delete %S ? [if not, it must not be altered] ", FALSE, file)
+        IF delete THEN deleteobj(file)
+    $)
+    ELSE
+    $(  LET r2 = RESULT2
+        WRITEF("%S failed %X8 - *E", cli.commandname, RESULT2)
+        FAULT(Result2)
+        IF argv!A.from = 0 & Argv!A.immed=0
+        WRITEF("File is in %S*N", workfile)
+        RESULT2 := R2
+        RC := 20
+    $)
+
+End:
+    $(  LET R2 = RESULT2
+        freevec(argv.)
+        RESULT2 := R2
+    $)
+    TEST mode=0
+    THEN stop(rc)
+    ELSE RESULTIS rc
+
+ms.user.break.link:
+    $(  LET R2 = RESULT2
+        endstream(filestream)
+        selectoutput(saveout)
+        WRITEF("****** BREAK in - %S abandoned*N", cli.commandname)
+        deleteobj(workfile)
+        RESULT2 := R2
+    $)
+    RC:=20; GOTO end
+$)
+
+Let tidyup() BE Longjump(ms.user.break.level, ms.user.break.link)
+
+

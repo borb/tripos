@@ -1,0 +1,151 @@
+SECTION "LCG11"
+
+GET "LCGHDR"
+
+LET outputsection(last, force) BE
+// Output hex assembly text
+$( LET rl = reflist
+   LET nr = 0
+
+
+   UNTIL rl = 0 DO
+   $( LET l = h2 ! rl
+      LET ln = ABS l
+      LET labval = labv ! ln
+      LET a = h3 ! rl
+      IF labval=-1 THEN cgerror(0, "label l%N unset", l)
+      stv!a := stv!a + (l < 0 -> labval-a-1, labval)
+      IF l >= 0 THEN nr := nr + 1
+      rl := !rl
+   $)
+
+    IF (CGFLAGS & cgf.CGstarted) =0
+    $( Codeout := FINDOUTPUT(codefile)
+       CGFLAGS := CGFLAGS | cgf.Cgstarted
+    $)
+    IF CODEOUT=0
+    $(  LET alternative = "T:code"
+        CGERROR(0, "CODEOUT was 0!! %S used instead*N", alternative)
+        CODEOUT := FINDOUTPUT(alternative)
+        IF CODEOUT=0
+        $( CGERROR(10, "Failed to open %S as backup output! (%N)*N",
+                                        alternative, RESULT2); RETURN $)
+    $)
+
+   selectoutput(codeOUT)
+   TEST (CGFLAGS & cgf.Hexlist) ~= 0
+   $( LET nl = needslist
+      IF namesection \= 0 DO writef(" TITL %S*N", namesection)
+      writes(" REL 0*N")
+      writes("B EQU $*N")
+      UNLESS nl = 0 THEN writes("***N")
+      UNTIL nl = 0 DO
+      $( LET v = nl + 1
+         LET w = !v
+         LET p = 0
+         nl   :=!nl
+         writes(" EXTR ")
+         FOR j = 1 TO 7 DO TEST (j & 1) = 0 THEN wrch(w >> 8)
+                           ELSE $( wrch(w & 255); p := 1 + p; w := v ! p $)
+         newline()
+      $)
+      rl := reflist
+      writes("***N")
+      IF maxgn ~= 0 | force FOR p = 0 TO stvp-1 BY 8 DO
+      $( LET t, c = p + 7, ' '
+         progsize := progsize + stvp
+         IF t >= stvp THEN t := stvp - 1
+         writes(" DATA")
+         FOR loc=p TO t DO
+         $( writef("%C:%X4",c,stv!loc & #XFFFF)
+            c := ','
+            IF rl \= 0 & h3 ! rl = loc THEN
+            $( IF h2 ! rl > 0 THEN writes("+B")
+               rl := !rl
+            $)
+         $)
+         newline()
+      $)
+      IF LAST writes(" END*N")
+   $)
+   ELSE
+   $( LET hu, re, en = t.hunk, t.reloc, t.end
+      IF maxgn~=0 | force
+      $( progsize := progsize + stvp
+         writewords(@ hu, 1)
+         writewords(@ stvp, 1)
+         writewords(stv,stvp)
+         UNLESS nr=0
+         $(  writewords(@ re, 1)
+             writewords(@ nr, 1)
+             rl := reflist
+             UNTIL rl = 0 DO
+             $( IF h2 ! rl >= 0 THEN writewords(h3+rl,1); rl := h1 ! rl $)
+         $)
+      $)
+      UNLESS needslist = 0 THEN
+      $( LET ex = t.ext
+         LET nl = needslist
+         LET ze = 0
+         writewords(@ ex, 1)
+         UNTIL nl = 0 DO
+         $( LET v = nl+1; nl:=!nl; writewords(v, 4); writewords(@ze, 1) $)
+         writewords(@ze, 1)
+      $)
+      IF last writewords(@en, 1)
+   $)
+   selectoutput(LISTOUT)
+$)
+
+/* Debugging code
+AND dboutput() BE
+$(  writes("SMSTK: ")
+    FOR p = arg1 TO tempv BY -3 DO wrkn(h1!p, h2!p)
+    UNLESS krefv=krefp DO
+    $(  writes("*NKREFV: ")
+        FOR p = krefv TO krefp-3 BY 3 DO
+        $(  writef("%N:", h1!p)
+            wrkn(h2!p, h3!p)
+        $)
+    $)
+    UNLESS kcmpv=kcmpp DO
+    $(  writes("*NKCMPV: ")
+        FOR p = kcmpv TO kcmpp-3 BY 3 DO
+        $(  writef("%N:", h1!p)
+            wrkn(h2!p, h3!p)
+        $)
+    $)
+    writef("*Nstvp=%N op=%N pdop=%N ssp=%N ", stvp,
+        op, pendingop, ssp)
+    FOR r = r.a TO r.y DO
+      UNLESS reg.k!r = k.none DO
+       $( writef("R%C=", r ! [TABLE 'A', 'Q', 'Y'])
+          wrkn(reg.k!r, reg.n!r)
+       $)
+    newline()
+$)
+
+AND wrkn(k, n) BE
+$(  LET s = VALOF
+        SWITCHON k INTO
+        $(
+        DEFAULT:    RESULTIS "?"
+        CASE k.none:RESULTIS "Z"
+        CASE k.numb:RESULTIS "N"
+        CASE k.loc: RESULTIS "P"
+        CASE k.glob:RESULTIS "G"
+        CASE k.lab: RESULTIS "L"
+        CASE k.reg: RESULTIS "R"
+        CASE k.ry:  RESULTIS "I"
+        CASE k.lvloc:
+                    RESULTIS "@P"
+        CASE k.lvglob:
+                    RESULTIS "@G"
+        CASE k.lvlab:
+                    RESULTIS "@L"
+        CASE k.jlab:RESULTIS "J"
+        $)
+    writef("%S%N ", s, n)
+$)   Debugging code */
+
+

@@ -1,0 +1,176 @@
+SECTION "SYN7"
+
+GET "SYNHDR"
+
+//com   LET rbcom() = VALOF
+
+// LOCAL -- Only called by RCOM below .............
+LET rbcom(addr) BE
+$(1
+//  LET a, op = 0, symb
+//--AND l, s = linecount, Source.name
+
+        !addr := 0                      // In case we crash out!!
+
+    SWITCHON symb INTO
+ $( DEFAULT: !addr := 0; RETURN
+
+    CASE s.name:CASE s.number:CASE s.string:CASE s.globnumber:
+    CASE s.true:CASE s.false:
+    CASE s.lv:CASE s.rv:CASE s.vecap:
+    CASE s.lparen:
+        $( LET op = SYMB
+           LET a  = rexplist()
+
+            IF symb=s.ass  $<OPB \/ (symb&becomesbit) ne 0 $>OPB THEN
+               $( op := symb
+                  nextsymb()
+                  !addr := listn(-5, op, a, rexplist(), linecount, source.name)
+                  RETURN
+               $)
+
+            IF smallnumber(a) DO synreport(53, a, -99)
+
+            IF symb=s.colon DO
+               $( UNLESS h1!a=s.name DO synreport(50, h1!a)
+                  nextsymb()
+//com             RESULTIS list4(s.colon, a, rbcom(),0) $)
+                  !addr := list4(s.colon, a, ?, 0)
+                   addr := !addr + h3
+                  LOOP                                  // TAIL RECURSION
+            $)
+
+            TEST h1!a  = s.fnap
+            THEN h1!a := s.rtap
+            ELSE synreport(55, op, symb)
+            !addr := a
+            RETURN
+        $)
+
+    CASE s.goto:CASE s.resultis:
+            $( LET op = SYMB
+               nextsymb()
+//--        RESULTIS listn(-4, op, rexp(0), l, s)
+               !addr := listn(-4, op, rexp(0), linecount, source.name)
+               RETURN
+            $)
+
+    CASE s.if:CASE s.unless:
+    CASE s.while:CASE s.until:
+            $( LET op = SYMB
+               nextsymb()
+               $( LET a = rexp(0)
+                  ignore(s.do)
+//com       RESULTIS listn(-5, op, a, rcom(), linecount, source.name)
+                  !addr := listn(-5, op, a, ?, linecount, source.name)
+               $)
+            $)
+            rcom(!addr +h3)
+            RETURN
+
+    CASE s.test:
+            nextsymb()
+            $(  LET a = rexp(0)
+                ignore(s.do)
+//com       $( LET b = rcom()
+                $(  LET b = ?
+                    rcom(@b)
+                   checkfor(s.or, 54)
+//com          RESULTIS listn(-6, s.test, a, b, rcom(), linecount, source.name)
+                   !addr := listn(-6, s.test, a, b, ?, linecount, source.name)
+                $)
+            $)
+            rcom(!addr +h4)
+            RETURN
+
+    CASE s.for:
+        $(  LET i, j, k, a = 0, 0, 0, ?
+            nextsymb()
+            a := rname()
+            checkfor(s.eq,57)
+            i := rexp(0)
+            checkfor(s.to, 58)
+            j := rexp(0)
+            IF symb=s.by DO $( nextsymb()
+                               k := rexp(0)  $)
+            ignore(s.do)
+//com       RESULTIS list6(s.for, a, i, j, k, rcom())  $)
+            !addr := list6(s.for, a, i, j, k)
+        $)
+        rcom(!addr +5)  //h6!
+        RETURN
+
+    CASE s.loop:CASE s.break:CASE s.endcase:
+    CASE s.return:CASE s.finish:
+            !addr := wordnode
+            nextsymb()
+            RETURN
+
+    CASE s.switchon:
+            nextsymb()
+            $(  LET a = rexp(0)
+                checkfor(s.into, 60)
+                !addr := listn(-5, s.switchon, a, rdsect(rdseq),
+                                                linecount, source.name)
+                RETURN
+            $)
+
+    CASE s.case:
+            nextsymb()
+            $( LET a = rexp(0)
+               checkfor(s.colon, 61)
+//com       RESULTIS list3(s.case, a, rbcom())
+               !addr := list3(s.case, a)
+            $)
+            Addr := !addr +h3
+            LOOP                                //TAIL RECURSION
+
+    CASE s.default:
+            nextsymb()
+            checkfor(s.colon, 62)
+//com       RESULTIS list2(s.default, rbcom())
+            !addr := list2(s.default)
+            addr := !addr +h2
+            LOOP                                //TAIL RECURSION
+
+    CASE s.lsect:
+            !addr := rdsect(rdblockbody)
+            RETURN
+$)
+$)1
+REPEAT
+
+
+//com   AND rcom() = VALOF
+
+// GLOBAL called in syn5 and syn6
+AND rcom(addr) BE
+$(1 LET a = ?
+
+    !addr := 0
+    rbcom(@a)
+
+    IF a=0 DO synreport(56, 100, -100)
+
+    WHILE symb=s.cont DO
+    $( LET b=0
+       nextsymb()
+//com  b:=rbcom()
+       rbcom(@b)
+       IF b=0 synreport(59,101, -101)
+       a:=list3(s.semicolon, a, b)
+    $)
+
+    WHILE symb=s.repeat | symb=s.repeatwhile | symb=s.repeatuntil
+    $(  LET op = symb
+        nextsymb()
+        TEST op=s.repeat
+// LINECOUNT was saved at entry!
+        THEN a := list3(op, a, linecount)               // WHY ?????????
+        ELSE a := list4(op, a, rexp(0), linecount)      // Why ?????????
+    $)
+
+    !addr := a
+$)1
+
+

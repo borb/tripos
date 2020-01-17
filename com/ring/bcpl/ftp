@@ -1,0 +1,1181 @@
+/*****************************************************************************
+**                (C) Copyright 1984  TRIPOS Research Group                 **
+**               University of Cambridge Computer Laboratory                **
+******************************************************************************
+
+                          ########  ########  #######
+                          ########  ########  ########
+                          ##           ##     ##    ##
+                          ######       ##     #######
+                          ##           ##     ##
+                          ##           ##     ##
+                          ##           ##     ##
+                          ##           ##     ##
+
+******************************************************************************
+**    Author:   Nick Ody                               November 1984        **
+*****************************************************************************/
+
+
+// Handles the "P" (i.e. initiator) end of a blue book FTP service,
+// reading or writing files using the protocol as requested by the user.
+
+// The program may be run under a CLI, CALLSEGed or activated as a task.
+// If CALLSEGed then the first argument must be 1 or -1 and the second
+// argument a vector of parameters, see below for fields.  If set up as
+// task then the first argument of the activation packet must be the
+// parameter vector, in the same format as for CALLSEG.  The result in
+// the activation packet will be zero on success, or a code on failure, with
+// a reason code in RES2.
+//
+// Under a CLI the program can be interactive or non-interactive.  This
+// is controlled by giving filenames on the command line:  if nether a local
+// nor a remote filename is given then interactive mode is entered.  If
+// neither the machine nor service name is given then these will be prompted
+// for as well.
+//
+// In interactive mode multiple transfers may be performed.  The stream
+// will not be closed until commanded by the user.  New filenames, direction
+// and mode will be prompted before each transfer.
+
+// Modifications
+//
+// 13-dec-84 NJO  First version on trial
+// 20-dec-84 NJO  Userid and password parameters introduced
+// 09-jan-85 NJO  Prompt for interactive mode changed
+// 27-feb-85 NJO  User UIDset included as authentication parameter if none
+//                is explicitly given on the command line.
+// 13-apr-86 PB   set calling addr to FTP.
+// 14-apr-86 PB   Allow setting of user and passwd interactively.
+
+GET "libhdr"
+
+GLOBAL
+$( constr          : ug + 0   // console stream for messages
+   level.exit      : ug + 1   // for longjumps
+   label.exit      : ug + 2
+   label.next.file : ug + 3
+
+   input.bs        : ug + 5
+   output.bs       : ug + 6
+   file.stream     : ug + 7   // may be an input or an output
+
+   rec.header      : ug + 8   // used by REC.RDCH
+   rec.rpt.char    : ug + 9           // data char in a compressed rec
+   proc.endfile    : ug + 10          // called on end-of-file
+   proc.endrec     : ug + 11          // end-of-record
+   proc.command    : ug + 12          // transfer-control command
+   rec.byte.trace  : ug + 13          // print out all bytes
+   rec.count       : ug + 14  // used by REC.WRCH
+   rec.buffer      : ug + 15          // for assembling record
+
+   binary          : ug + 16  // binary transfer requested
+   userid          : ug + 17
+   user.pw         : ug + 18
+   interactive     : ug + 19
+   info.trace      : ug + 20
+
+   facilities      : ug + 21  // attribute values
+   data.type       : ug + 22
+
+   bsp.make.ts.connection : ug + 23  // routines in LIBS section
+   bsp.forceout           : ug + 24
+   ts.parm.read           : ug + 25
+   mcname                 : ug + 26
+   get.user.name          : ug + 27
+   get.user.uidset.string : ug + 28
+   fflush                 : ug + 29
+$)
+
+.
+
+SECTION "FTP"
+
+GET ""
+
+GET "niftphdr"
+GET "tsparmhdr"
+
+MANIFEST
+$( default.facilities   = #X0041   // compression allowed
+
+   endrecch             = -2       // used as an end-of-record indicator
+$)
+
+LET start(activation.arg, callseg.parm) = VALOF
+
+$( LET localfile   = 0
+   LET machine     = ?
+   LET remotefile  = 0
+   LET direc.out   = ?      // sending file to remote machine if TRUE
+   LET service     = ?
+   LET fullname    = 0      // full name of FTP recipient service
+   LET act.task    = FALSE  // set TRUE if we're a task
+   LET rc          = 16     // set to zero on success
+   LET sysin       = ?      // input stream for a CLI
+   LET stoprq      = ?      // flags a stop in interactive mode
+   LET calling.suffix = "FTP"
+   LET argv        = VEC 50
+   LET recv        = VEC 63/bytesperword  // buffer for REC.WRCH
+
+   level.exit      := level()
+   label.exit      := exit
+   label.next.file := next.file
+
+   output.bs       := 0
+   input.bs        := 0
+   file.stream     := 0
+
+   rec.header      := 0
+   proc.endfile    := 0
+   proc.endrec     := 0
+   proc.command    := 0
+   rec.byte.trace  := FALSE
+   rec.count       := 0
+   rec.buffer      := recv
+
+   userid          := 0
+   user.pw         := 0
+   interactive     := FALSE
+   info.trace      := FALSE
+
+   SWITCHON activation.arg INTO
+
+   $( CASE 0:    // activated by CLI
+      $( LET argstr = "MACHINE,LOCALFILE,REMOTEFILE,GET/S,SEND/S,BINARY/S,*
+                       *USER/K,PASSWORD=PW/K,SERVICE/K,INFO/S,TRACE/S,FFLUSH/S"
+
+         constr := output()
+         sysin  := input()
+
+         IF rdargs(argstr, argv, 50) = 0 THEN
+            fatal.error("Bad args for string %S", argstr)
+
+         machine        := argv!0
+         userid         := getstring(0, argv!6)
+         user.pw        := getstring(0, argv!7)
+         service        := argv!8
+         info.trace     := argv!9
+         rec.byte.trace := argv!10
+         fflush         := argv!11
+
+         IF (argv!1 = 0) & (argv!2 = 0) THEN
+         $( interactive := TRUE
+
+            ENDCASE
+         $)
+
+         IF argv!3 EQV argv!4 THEN
+            fatal.error("One of GET/SEND (but not both) must be set")
+
+         localfile  := argv!1
+         remotefile := argv!2
+         direc.out  := argv!4    // SEND key given
+         binary     := argv!5
+      $)
+      ENDCASE
+
+      CASE 1:      // CALLSEGed
+      CASE -1:
+      machine    := callseg.parm!0
+      localfile  := callseg.parm!1
+      remotefile := callseg.parm!2
+      direc.out  := callseg.parm!3
+      service    := callseg.parm!4
+      binary     := callseg.parm!5
+      userid     := getstring(0, callseg.parm!6)
+      user.pw    := getstring(0, callseg.parm!7)
+      constr     := output()
+      ENDCASE
+
+      DEFAULT:     // activated as task - activation arg is packet
+      initio()
+      act.task := TRUE
+      constr   := findoutput("**")
+      IF constr = 0 THEN
+         abort(1000, result2)
+
+      $( LET parm.vec = pkt.arg1!activation.arg
+
+         machine    := parm.vec!0
+         localfile  := getstring(0, parm.vec!1)   // got to copy some parms
+         remotefile := getstring(0, parm.vec!2)
+         direc.out  := parm.vec!3
+         service    := parm.vec!4
+         binary     := parm.vec!5
+         userid     := getstring(0, parm.vec!6)
+         user.pw    := getstring(0, parm.vec!7)
+      $)
+      ENDCASE
+   $)
+
+   WHILE interactive & (machine = 0) & (service = 0) DO
+   $( LET argstr = "machine,service/k"
+
+      writef("%S> *E", argstr)
+
+      IF testflags(1) THEN
+         fatal.error("Break")
+
+      TEST rdargs(argstr, argv, 50) = 0
+      DO
+      $( message("Bad args")
+      $)
+      OR
+      $( TEST (argv!0 = 0) & (argv!1 = 0)
+         DO
+         $( message("At least one of machine name and service name required")
+         $)
+         OR
+         $( machine := argv!0
+            service := argv!1
+         $)
+      $)
+   $)
+
+   fullname := getstring((service = 0 -> "ftp-", service), machine)
+
+   IF act.task THEN     // finished with arguments now - give OK reply
+   $( returnpkt(activation.arg, 0, ?)
+      activation.arg := 0
+   $)
+
+   // Now get defaults for user id and password if these have been left
+   // as null.  User id defaults to the logged-on user name, and the password
+   // to the UIDset converted to a hex string (48 bytes).
+
+   IF compstring(userid, "") = 0 THEN
+   $( LET uname = VEC 5/bytesperword
+      LET oldu  = userid
+
+      UNLESS get.user.name(uname, 5) DO
+         fatal.error("Can't find user name (specify explicitly?)")
+
+      userid := getstring(0, uname)
+      freevec(oldu)
+   $)
+
+   IF compstring(user.pw, "") = 0 THEN
+   $( LET uidstr = VEC 48/bytesperword
+      LET oldp   = user.pw
+
+      UNLESS get.user.uidset.string(uidstr) DO
+         fatal.error("Can't find user UIDset (specify explicit password?)")
+
+      user.pw := getstring(0, uidstr)
+      freevec(oldp)
+   $)
+
+   $( LET reply.buf  = ?
+      LET text       = getstring("FTP from Tripos m/c ", mcname())
+      LET reply.desc = VEC ts.parm.bufdesc.order
+      LET ok         = bsp.make.ts.connection(fullname, calling.suffix, "",
+                                   text, 0, @input.bs, @output.bs, reply.desc)
+
+      freevec(text)
+
+      UNLESS ok DO
+         fatal.error("Can't open CR82 connection to %S", fullname)
+
+      reply.buf := ts.parm.bufdesc.buffer!reply.desc
+
+      IF reply.buf ~= 0 THEN
+      $( LET buf = VEC 40/bytesperword
+
+         TEST ts.parm.read(reply.desc, ts.parm.msgtype.accept, 1, buf, 40)
+         DO
+         $( IF info.trace & (buf%0 ~= 0) THEN
+               message("Reply recall address is %S", buf)
+         $)
+         OR message("Failed to read recall address, RC #X%X4", result2)
+
+         TEST ts.parm.read(reply.desc, ts.parm.msgtype.accept, 3, buf, 40)
+         DO
+         $( IF info.trace & (buf%0 ~= 0) THEN
+               message("Reply text is *"%S*"", buf)
+         $)
+         OR message("Failed to read reply text, RC #X%X4", result2)
+
+         freevec(reply.buf)
+      $)
+   $)
+
+next.file:
+
+   stoprq := FALSE
+
+   IF interactive THEN
+   $( LET argstr = "localfile,remotefile,send/s,get/s,binary/s,q=w=stop/s,user/k,password/k"
+
+      selectinput(sysin)
+      selectoutput(constr)
+
+      writes("FTP> *E")
+
+      IF testflags(1) THEN
+         fatal.error("Break")
+
+      IF rdargs(argstr, argv, 50) = 0 THEN
+         soft.error("Bad args")
+
+      localfile  := argv!0
+      remotefile := argv!1
+
+      IF (argv!6) THEN
+      $( freevec(userid)
+         userid := getstring(0, argv!6)
+      $)
+
+      IF (argv!7) THEN
+      $( freevec(user.pw)
+         user.pw := getstring(0, argv!7)
+      $)
+
+      IF argv!5 & (localfile=0) & (remotefile=0) & NOT argv!2 & NOT argv!3 THEN
+      $( rc := 0
+         GOTO exit
+      $)
+
+      IF (argv!6 | argv!7) & (localfile=0) & (remotefile=0) & NOT argv!2 & NOT argv!3 THEN
+         longjump(level.exit, label.next.file)
+
+      IF argv!2 EQV argv!3 THEN
+         soft.error("One of GET/SEND (but not both) must be set")
+
+      direc.out := argv!2
+      binary    := argv!4
+      stoprq    := argv!5
+   $)
+
+   IF (localfile = 0) THEN
+      soft.error("Local filename missing")
+
+   IF (remotefile = 0) THEN
+      soft.error("Remote filename missing")
+
+   file.stream := (direc.out -> findinput, findoutput) (localfile)
+
+   IF file.stream = 0 THEN
+      soft.error("Can't open local file %S for %S", localfile,
+                                               direc.out -> "input", "output")
+
+   selectinput(input.bs)     // ready for protocol startup dialogue
+   selectoutput(output.bs)
+
+   UNLESS set.up.transfer(direc.out, remotefile) DO
+      soft.error("Set-up failed")
+
+   TEST direc.out
+   DO xfr.to.remote()
+   OR xfr.from.remote()
+   IF fflush THEN bsp.forceout()
+
+   send.stop(#X2000)
+
+   TEST stoprq
+   DO message("Stopping")
+   OR IF interactive GOTO next.file
+
+   rc := 0
+
+exit:
+
+   IF input.bs ~= 0 THEN
+   $( selectinput(input.bs)
+      endread()
+   $)
+
+   IF file.stream ~= 0 THEN
+   $( TEST direc.out THEN
+      $( selectinput(file.stream)
+         endread()
+      $)
+      ELSE
+      $( selectoutput(file.stream)
+         endwrite()
+      $)
+   $)
+
+   IF fullname ~= 0 THEN
+      freevec(fullname)     // these parameters are copies
+
+   IF userid ~= 0 THEN
+      freevec(userid)
+
+   IF user.pw ~= 0 THEN
+      freevec(user.pw)
+
+   IF act.task THEN
+   $( IF activation.arg ~= 0 THEN
+         returnpkt(activation.arg, rc, result2)
+
+      IF constr ~= 0 THEN
+      $( selectoutput(constr)
+         endwrite()
+      $)
+
+      IF localfile ~= 0 THEN
+         freevec(localfile)
+
+      IF remotefile ~= 0 THEN
+         freevec(remotefile)
+
+      endtask((tcb.seglist!tcb) ! 3)
+   $)
+
+   IF activation.arg = 0 THEN    // we're in a CLI
+      stop(rc)
+
+   RESULTIS rc                   // we're CALLSEGed
+$)
+
+AND set.up.transfer(direc.out, remotefile) = VALOF
+
+// Send off an SFT and read the RPOS or RNEG coming back.  The result
+// is a bool: TRUE if the transfer can proceed.
+
+$( LET rectype = ?     // for the reply
+   LET n.args  = 5
+   LET ok      = TRUE
+
+   facilities := default.facilities   // set up defaults before we start
+   data.type  := binary -> #X0002, #X0001
+
+   IF userid ~= 0 THEN
+      n.args := n.args + 1
+
+   IF user.pw ~= 0 THEN
+      n.args := n.args + 1
+
+   rec.wrch(ftp.command.sft)
+   rec.wrch(n.args)
+
+   write.16bit.attr(ftp.attr.protocol, ftp.attr.op.eq, #X0100)
+   write.16bit.attr(ftp.attr.mode, ftp.attr.op.eq,
+                                              direc.out -> #X0003, #X8002)
+   write.16bit.attr(ftp.attr.facilities, ftp.attr.op.le, facilities)
+   write.16bit.attr(ftp.attr.data.type, ftp.attr.op.ge, data.type)
+   write.string.attr(ftp.attr.filename, ftp.attr.op.eq, remotefile)
+
+   IF userid ~= 0 THEN
+      write.string.attr(ftp.attr.username, ftp.attr.op.eq, userid)
+
+   IF user.pw ~= 0 THEN
+      write.string.attr(ftp.attr.user.auth, ftp.attr.op.eq, user.pw)
+
+   rec.write.eor()
+   bsp.forceout()
+
+   rectype := rec.rdch("SFT reply header")
+   n.args  := rec.rdch("arg count")
+
+   SWITCHON rectype INTO
+   $( DEFAULT:
+      fatal.error("Unexpected record type %N, expecting RPOS/RNEG", rectype)
+
+      CASE ftp.command.rneg:
+      message("Transfer rejected by destination")
+      ok := FALSE
+      ENDCASE
+
+      CASE ftp.command.rpos:
+      ENDCASE
+   $)
+
+   FOR i = 1 TO n.args DO
+   $( UNLESS read.attribute() DO
+         ok := FALSE
+   $)
+
+   command.end()
+
+   UNLESS ok DO
+   $( send.stop(#X1002)
+      RESULTIS FALSE
+   $)
+
+   rec.wrch(ftp.command.go)   // send the GO command
+   rec.wrch(0)
+   rec.write.eor()
+   bsp.forceout()
+
+   RESULTIS TRUE
+$)
+
+AND xfr.to.remote() BE
+
+// Send off the data, preceded by a start-of-data command and a code-select.
+
+$( LET at.eor = TRUE
+   LET count  = 0       // counts lines in text mode, Kbytes in binary
+   LET bytes  = 0
+
+   write.command(ftp.command.ss, 0)
+   write.command(ftp.command.cs, binary -> #X01, #X00)
+
+   selectinput(file.stream)
+
+   WHILE TRUE DO
+   $( LET char = rdch()
+
+      IF char = endstreamch THEN
+      $( UNLESS at.eor DO
+            rec.write.eor()
+
+         BREAK
+      $)
+
+      bytes := bytes + 1               // count bytes MOD 1K in binary mode
+      IF (bytes = 1024) & binary THEN
+      $( count := count + 1
+         bytes := 0
+      $)
+
+      at.eor := (char = '*N') & NOT binary
+
+      TEST at.eor
+      DO
+      $( rec.write.eor()
+         count := count + 1
+      $)
+      OR rec.wrch(char)
+
+      IF testflags(1) THEN
+         fatal.error("Break")
+
+      IF testflags(8) THEN
+         message("Transferring %S file to host, %N %S sent",
+           (binary -> "binary", "text"), count, (binary -> "Kbytes", "lines"))
+   $)
+
+   write.command(ftp.command.es, 0)    // terminate transfer
+   bsp.forceout()
+
+   endread()          // close the file
+   file.stream := 0
+
+   selectinput(input.bs)   // read the end-code from the receiver
+
+   WHILE TRUE DO
+   $( LET header  = bs.rdch()
+      LET command = bs.rdch()
+      LET arg     = bs.rdch()
+
+      IF header = endstreamch THEN
+         fatal.error("Unexpected end-of-stream reading ER command")
+
+      IF header ~= 0 THEN
+         fatal.error("Invalid transfer-control header %N (#X%X2)", header,
+                                                                      header)
+      IF command = ftp.command.er THEN
+      $( IF arg ~= 0 THEN
+            message("ER command had non-zero arg %N", arg)
+
+         BREAK
+      $)
+
+      message("Unexpected command %N (#X%X2) expecting ER", command, command)
+   $)
+$)
+
+AND xfr.from.remote() BE
+
+$( LET count = 0
+   LET bytes = 0
+
+   proc.command := tfr.command
+   proc.endrec  := text.eor
+
+   selectoutput(file.stream)
+
+   WHILE TRUE DO
+   $( LET char  = rec.rdch("data char from remote")
+      LET binrx = (proc.endrec = binary.eor)
+
+      IF char = endstreamch BREAK
+
+      TEST binrx
+      DO
+      $( bytes := bytes + 1            // count bytes MOD 1K in binary mode
+         IF bytes = 1024 THEN
+         $( count := count + 1
+            bytes := 0
+         $)
+      $)
+      OR
+      $( IF char = '*N' THEN
+            count := count + 1
+      $)
+
+      IF testflags(1) THEN
+         fatal.error("Break")
+
+      IF testflags(8) THEN
+         message("Transferring file from host, %N %S received",
+                                        count, (binary -> "Kbytes", "lines"))
+
+      wrch(char)
+   $)
+
+   proc.command := 0
+   proc.endrec  := 0
+
+   endwrite()         // close file
+   file.stream := 0
+
+   selectoutput(output.bs)
+
+   write.command(ftp.command.er, 0)
+$)
+
+AND tfr.command(command, arg) = VALOF
+
+// This procedure is used as the event routine to handle transfer-control
+// commands from within TRANSFER.FROM.REMOTE.
+
+$( SWITCHON command INTO
+   $( DEFAULT:
+      message("Unknown transfer-control command %N, arg %N", command, arg)
+      RESULTIS FALSE
+
+      CASE ftp.command.ss:
+      IF arg ~= 0 THEN
+         fatal.error("Non-zero arg %N in SS command", arg)
+
+      RESULTIS FALSE
+
+      CASE ftp.command.cs:   // code select - check it's valid
+      $( LET code   = arg & #B00001111
+
+         SWITCHON code INTO
+         $( DEFAULT:
+            fatal.error("Attempt to select unknown code #X%X2", code)
+            ENDCASE
+
+            CASE #X00:   // IA5
+            proc.endrec := text.eor
+            ENDCASE
+
+            CASE #X01:   // binary
+            proc.endrec := binary.eor
+            ENDCASE
+         $)
+      $)
+      RESULTIS FALSE
+
+      CASE ftp.command.ms:   // mark - write an acknowledge down byte stream
+      $( LET out = output()
+         selectoutput(output.bs)
+         write.command(ftp.command.mr, arg)
+         selectoutput(out)
+      $)
+      RESULTIS FALSE
+
+      CASE ftp.command.es:
+      IF arg ~= 0 THEN
+         message("Non-zero arg %N in ES command", arg)
+
+      result2 := endstreamch   // generate end-of-stream
+      RESULTIS TRUE
+   $)
+$)
+
+AND text.eor() = VALOF         // convert end-of-record to newline in text
+$( result2 := '*N'
+   RESULTIS TRUE
+$)
+
+AND binary.eor() = FALSE       // ignore end-of-record in binary
+
+AND send.stop(state) BE
+
+$( LET rectype = ?
+   LET n.args  = ?
+
+   rec.wrch(ftp.command.stop)
+   rec.wrch(1)                 // 1 argument
+   write.16bit.attr(ftp.attr.state, ftp.attr.op.eq, state)
+   rec.write.eor()
+   bsp.forceout()
+message("force out the stop")
+
+   rectype := rec.rdch("STOPACK header")
+   n.args  := rec.rdch("STOPACK arg count")
+
+   UNLESS rectype = ftp.command.stopack DO
+      fatal.error("Unexpected record type %N, expecting STOPACK", rectype)
+
+   FOR i = 1 TO n.args DO
+      read.attribute()
+
+   command.end()
+$)
+
+AND write.16bit.attr(code, op, value) BE
+
+$( rec.wrch(code)
+   rec.wrch(ftp.attr.format.16bit | op)
+   rec.wrch(value >> 8)
+   rec.wrch(value & #XFF)
+$)
+
+AND write.string.attr(code, op, value) BE
+
+$( rec.wrch(code)
+   rec.wrch(ftp.attr.format.string | op)
+
+   FOR i = 0 TO value%0 DO
+      rec.wrch(value%i)
+$)
+
+AND write.command(command, arg) BE
+
+// Write a transfer-control command.  It is assumed that the correct
+// stream is selected, and that it is in the correct state, i.e. at a
+// subrecord boundary in the data-transfer state.
+
+$( rec.write.subrec()      // flush any outstanding data
+
+   bs.wrch(0)              // control record header
+   bs.wrch(command)
+   bs.wrch(arg)
+$)
+
+AND rec.wrch(char) BE
+
+// Write the given character out into the current record.  If the current
+// subrecord is full then write it out to the current output stream.
+
+$( IF rec.count = 63 THEN
+      rec.write.subrec()                 // flush
+
+   rec.buffer%rec.count := char          // put character in buffer
+   rec.count            := rec.count + 1
+$)
+
+AND rec.write.subrec() BE
+
+// Flush the current subrecord.  No action if it is empty.
+
+$( IF rec.count ~= 0 THEN
+   $( bs.wrch(rec.count)           // write header
+
+      FOR i = 0 TO rec.count-1 DO
+         bs.wrch(rec.buffer % i)   // and data
+
+      rec.count := 0
+   $)
+$)
+
+AND rec.write.eor() BE
+
+// Flush the current subrecord, even if empty, and mark with the
+// end-of-record bit.
+
+$( bs.wrch(rec.count | #X80)    // write header
+
+   FOR i = 0 TO rec.count-1 DO
+      bs.wrch(rec.buffer % i)   // and data
+
+   rec.count := 0
+$)
+
+AND bs.wrch(char) BE      // write CHAR to byte stream, tracing if requested
+
+$( IF rec.byte.trace THEN
+   $( selectoutput(constr)
+      writef("t%X2*E", char)
+      selectoutput(output.bs)
+   $)
+
+   wrch(char)
+$)
+
+AND rec.rdch(reason) = VALOF
+
+// This is called to read a character from the FTP data stream.  It
+// decodes the FTP record structure and calls procedures to deal with
+// FTP level delimiters.
+//
+// Three procedure parameters may be passed in to deal with end-of-file,
+// end-of-record and embedded transfer-control commands.  These procedures
+// are passed in three globals: PROC.ENDFILE, PROC.ENDREC and PROC.COMMAND.
+// They may be set to zero, in which case a fatal error will be caused if
+// the event occurs, with the given REASON in the message.  If supplied, a
+// proc should return a boolean result:  if TRUE then the result passed back
+// in RESULT2 will be returned to the caller, if FALSE then the event is
+// assumed to have been completely dealt with and reading continues.  The
+// end-of-file procedure must return TRUE (if it returns).  Any procedure
+// may, of course, call longjump, and hence never return.
+//
+// The normal result is a data character, however ENDSTREAMCH and ENDRECCH
+// may also occur (depending on the event routines used).
+//
+// Two globals are used to hold state:  REC.HEADER holds the current
+// subrecord header octet.  The count field of this is decremented as the
+// record is read.  REC.RPT.CHAR holds the value of the character being
+// repeated in a packed record.
+
+$( next.char:
+
+   IF (rec.header & ftp.rec.hdr.count) = 0 THEN       // end of a subrecord
+
+   $( IF (rec.header & ftp.rec.hdr.end.bit) ~= 0 THEN // end of record
+
+      $( rec.header := 0         // clear it for the next read
+
+         IF proc.endrec = 0 THEN    // no EOR routine - fatal error
+            fatal.error("Unexpected end-of-record in %S", reason)
+
+         IF proc.endrec() THEN   // event routine has returned a data char
+            GOTO return.result   // pass it back
+      $)
+
+      rec.header := bs.rdch()    // else read another subrecord header
+
+      IF rec.header = endstreamch THEN
+
+      $( IF proc.endfile = 0 THEN   // no EOF routine
+            fatal.error("Unexpected end-of-file in %S", reason)
+
+         UNLESS proc.endfile() DO
+            abort(1000, ?)
+
+         rec.header := 0
+         GOTO return.result
+      $)
+
+      IF rec.header = 0 THEN     // flags transfer-control command
+      $( LET command = bs.rdch()
+         LET arg     = bs.rdch()
+
+         IF (command = endstreamch) | (arg = endstreamch) THEN
+            fatal.error("End-of-stream in transfer-control command")
+
+         IF proc.command = 0 THEN    // no CONTROL routine
+            fatal.error("Unexpected transfer-control command in %S", reason)
+
+         IF proc.command(command, arg) THEN
+            GOTO return.result
+
+         GOTO next.char
+      $)
+
+      IF (rec.header & ftp.rec.hdr.comp.bit) ~= 0 THEN  // compressed record
+      $( IF rec.header = ftp.rec.hdr.comp.bit THEN
+            fatal.error("Illegal header: only compression bit set!")
+
+         rec.rpt.char := bs.rdch()      // get the data character
+
+         IF rec.rpt.char = endstreamch THEN
+            fatal.error("End-of-stream in subrecord body")
+      $)
+
+      GOTO next.char
+   $)
+
+   rec.header := rec.header - 1  // decrement count field (it was > 0)
+
+   TEST (rec.header & ftp.rec.hdr.comp.bit) = 0 THEN
+   $( LET char = bs.rdch()       // read char from stream
+
+      IF char = endstreamch THEN
+         fatal.error("End-of-stream in record body")
+
+      result2 := char
+   $)
+   ELSE
+      result2 := rec.rpt.char    // pass a copy of the repeated char
+
+return.result:
+
+   RESULTIS result2
+$)
+
+AND bs.rdch() = VALOF      // read a character, printing it out if requested
+
+$( LET b = rdch()
+
+   IF rec.byte.trace THEN
+   $( LET out = output()
+      selectoutput(constr)
+      writef("r%X2*E", b)
+      selectoutput(out)
+   $)
+
+   RESULTIS b
+$)
+
+AND command.end() BE
+
+// Check that we receive an end-of-record at the end of a command.
+
+$( LET endrec() = VALOF $( result2 := endrecch; RESULTIS TRUE $)
+   proc.endrec := endrec
+
+   UNLESS rec.rdch("end of command") = endrecch DO
+      fatal.error("End of command record not found")
+
+   proc.endrec := 0
+$)
+
+AND read.attribute() = VALOF
+
+// Read the body of an attribute from the input stream, process it and
+// check the result.  Unexpected parameters, and information messages,
+// are printed out.
+//
+// The result is boolean:  FALSE only if the parameter is unacceptable
+// and the transfer cannot proceed.
+
+$( LET id        = rec.rdch("attr id")
+   LET qualifier = rec.rdch("attr qualifier")
+   LET format    = qualifier & ftp.attr.qual.format
+   LET value     = ?
+   LET info.rcvd = FALSE
+
+   SWITCHON format INTO
+   $( CASE ftp.attr.format.string:
+      $( LET len = rec.rdch("attr string length")
+         LET v   = VEC 60/bytesperword
+
+         FOR i = 1 TO len DO
+         $( LET b = rec.rdch("attr string data")
+            IF i <= 59 THEN
+            $( v%0 := i
+               v%i := b
+            $)
+         $)
+
+         IF (qualifier & ftp.attr.qual.op) ~= ftp.attr.op.eq THEN
+            message("Unexpected op %S in string attribute", opstring(qualifier))
+
+         TEST info.trace
+         DO message("String attribute #X%X2: *"%S*"", id, v)
+         OR
+         $( IF id = ftp.attr.info THEN
+            $( info.rcvd := TRUE
+               message("Info message: %S", v)
+            $)
+         $)
+      $)
+      RESULTIS TRUE
+
+      CASE ftp.attr.format.16bit:
+      value := (rec.rdch("attr value msb") << 8) + rec.rdch("attr value lsb")
+      ENDCASE
+
+      CASE ftp.attr.format.novalue:
+      message("No-value attribute #X%X2", id)
+      RESULTIS TRUE
+
+      CASE ftp.attr.format.unknown:
+      message("Unknown attribute #X%X2 reported", id)
+      RESULTIS TRUE
+
+      DEFAULT:
+      abort(1001, ?)     // must be a code bug!
+      RESULTIS TRUE
+   $)
+
+   SWITCHON id INTO
+
+   $( DEFAULT:         // unknown or unsupported attribute
+
+      IF info.trace THEN
+         message("16 bit attribute #X%X2: %S %N", id, opstring(qualifier), value)
+
+      RESULTIS TRUE    // transfer may still be able to proceed
+
+      CASE ftp.attr.mode:
+      UNLESS (value = #X8002) | (value = #X0003) DO
+      $( message("Incorrect mode #X%X4 specified", value)
+         RESULTIS FALSE
+      $)
+      RESULTIS TRUE
+
+      CASE ftp.attr.facilities:
+      UNLESS value <= default.facilities DO
+      $( message("Incorrect facilities #X%X4 specified", value)
+         RESULTIS FALSE
+      $)
+
+      facilities := value
+
+      RESULTIS TRUE
+
+      CASE ftp.attr.data.type:
+      UNLESS value >= data.type DO
+      $( message("Incorrect facilities #X%X4 specified", value)
+         RESULTIS FALSE
+      $)
+
+      UNLESS (value & (binary -> #B1110, #B1101)) ~= 0 THEN
+      $( message("Host refused %S transfer", binary -> "binary", "text")
+         RESULTIS FALSE
+      $)
+
+      data.type := value
+
+      RESULTIS TRUE
+
+      CASE ftp.attr.state:
+      TEST value = #X2000
+      DO message("Transfer complete")
+      OR
+      $( UNLESS info.rcvd DO
+            message("Transfer state is #X%X4", value)
+      $)
+
+      RESULTIS TRUE
+   $)
+$)
+
+AND opstring(qualifier) = VALOF
+
+// Return a string corresponding to the OP field in the given qualifier.
+
+$( SWITCHON ftp.attr.qual.op & qualifier INTO
+   $( DEFAULT:
+      abort(1001, ?)  // must be a serious bug
+      RESULTIS "unknown"
+
+      CASE #B00000000:  RESULTIS "unknown op: 0"
+      CASE #B00000001:  RESULTIS "unknown op: 1"
+      CASE #B00000010:  RESULTIS "eq"
+      CASE #B00000011:  RESULTIS "le"
+      CASE #B00000100:  RESULTIS "unknown op: 4"
+      CASE #B00000101:  RESULTIS "ne"
+      CASE #B00000110:  RESULTIS "ge"
+      CASE #B00000111:  RESULTIS "any"
+   $)
+$)
+
+AND fatal.error(string, arg1, arg2, arg3) BE
+
+$( LET m = getstring("Fatal error: ", string)
+
+   message(m, arg1, arg2, arg3)
+   freevec(m)
+
+   longjump(level.exit, label.exit)
+$)
+
+AND soft.error(string, arg1, arg2, arg3) BE
+
+$( UNLESS interactive DO
+      fatal.error(string, arg1, arg2, arg3)
+
+   message(string, arg1, arg2, arg3)
+
+   longjump(level.exit, label.next.file)
+$)
+
+AND message(string, arg1, arg2, arg3) BE
+
+$( LET out = output()
+
+   selectoutput(constr)
+
+   writes("FTP: ")
+   writef(string, arg1, arg2, arg3)
+   newline()
+
+   selectoutput(out)
+$)
+
+AND getstring(prefix, string) = VALOF
+
+// Concatenate PREFIX and STRING into a GETVECed vector.  Either argument
+// may be zero, representing a null string.
+
+$( IF prefix = 0 THEN
+      prefix := ""
+
+   IF string = 0 THEN
+      string := ""
+
+   $( LET plen = prefix%0
+      LET slen = string%0
+      LET rlen = plen + slen
+
+      IF rlen > 255 RESULTIS getstring(0, "GETSTRING result too long")
+
+      $( LET v = getvec((rlen + 1)/bytesperword)
+
+         IF v = 0 RESULTIS "no space in GETSTRING"
+
+         FOR i = 1 TO plen DO
+            v%i := prefix%i
+
+         FOR i = 1 TO slen DO
+            v%(plen + i) := string%i
+
+         v%0 := rlen
+
+         RESULTIS v
+      $)
+   $)
+$)
+
+.
+
+SECTION "FTPlibs"
+
+GET ""
+
+GET "ringhdr"
+GET "iohdr"
+GET "uidhdr"
+GET "bcpl.ssplib"
+GET "bcpl.tsparm"
+GET "bcpl.cr82lib"
+GET "bcpl.useruidset"
+GET "bcpl.ringmap"
+GET "bcpl.mappuid"
+
+// This is here because it needs RINGHDR!
+
+AND mcname() = rootnode ! rtn.info ! rtninfo.ring ! ri.myname
+
+// These are here because they need UIDHDR etc.
+
+AND get.user.name(result.buf, len) = VALOF
+
+// Gets the textual user id of the logged on user and, if it's not too
+// long, places it in the supplied buffer.  The result is Boolean indicating
+// success.
+
+$( RESULTIS mappuid("pname", result.buf, len)
+$)
+
+AND get.user.uidset.string(result.buf) = VALOF
+
+// Gets the UIDset of the logged on user and converts it into a hex string
+// (of length 48) placing it into the supplied buffer.  The UIDs are put
+// in "ring" order:  TUID, PUID, Authentity.
+
+$( LET uidset = useruidset(consoletask)
+
+   IF uidset = 0 RESULTIS FALSE
+
+   uid.to.hex(uidset, cap.tuid*bytesperword, result.buf, 1)
+   uid.to.hex(uidset, cap.puid*bytesperword, result.buf, 17)
+   uid.to.hex(uidset, cap.auty*bytesperword, result.buf, 33)
+
+   result.buf%0 := 48
+
+   RESULTIS TRUE
+$)
+
+AND uid.to.hex(uidset, u.offset, result.buf, r.offset) BE
+
+$( FOR i = 0 TO 7 DO
+   $( LET b = byteget(uidset, u.offset + i)
+
+      result.buf%(r.offset + 2*i)     := hexchar(b >> 4)   // hexchar is in
+      result.buf%(r.offset + 2*i + 1) := hexchar(b & #X0F) // "bcpl.mappuid"
+   $)
+$)
+
+

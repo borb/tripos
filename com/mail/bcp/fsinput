@@ -1,0 +1,676 @@
+
+SECTION "FSINPUT"
+GET "header"
+GET "iohdr"
+GET "termhdr"
+GET "CLIHDR"            // Cli.standardoutput
+GET "CURHDR"
+
+MANIFEST
+$(      scb.pos.routine = scb.args + 0
+        scb.finished    = scb.args + 1
+        scb.terminal    = scb.args + 2
+        scb.linevec     = scb.args + 3
+        scb.insert      = scb.args + 4
+        scb.output      = scb.args + 5
+        scb.cursor      = scb.args + 6
+        scb.input       = scb.args + 7
+        scb.lines       = scb.args + 8
+        scb.terms       = scb.args + 9
+        scb.cols        = scb.args +10
+        scb.x           = scb.args +11
+        scb.y           = scb.args +12
+        scb.my.upb      = scb.args +12
+
+        Line.blank      =  0
+        Line.Unused     = -1
+        Line.Hole       = -2
+        Noline.max      = Line.blank
+        Noline.min      = Line.hole
+
+        terms.value     = 0
+        terms.info      = 1
+        terms.step      = 2
+        tab.ch          = '*T'  //; CUR.tab.pad = '.'
+$)
+
+
+LET fs.endread(scb) BE
+$(  LET linevec = scb!scb.linevec
+    LET o       = output()
+
+    selectoutput(scb!scb.output)
+
+    WRCH('*E')
+
+                                FREEVEC(scb!scb.buf)
+    UNLESS scb!scb.terms=0      FREEVEC(scb!scb.terms)
+    IF validpointer(@linevec)
+    $(  FOR LWB = 0 TO scb!scb.lines
+        DO UNLESS noline.min <= linevec!LWB <= noline.max  FREEVEC(linevec!LWB)
+        Freevec(linevec)
+    $)
+    selectoutput(o)
+$)
+
+LET fs.replenish(scb) = VALOF   // TRUE if not EOF
+//  MUST put first char in buf%0        !!!!!!!
+$(  MANIFEST $( beyond.right    = 99 $)
+    STATIC $(   Tab     = FALSE $)
+
+    LET select.line(line.addr) = VALOF
+    $(
+        LET line = !line.addr
+        tab     := FALSE
+        UNLESS noline.min <= line <= noline.max
+                FOR i = 1 TO line%0 IF line%i = tab.ch | line%i = CUR.TAB.PAD
+                THEN tab := TRUE
+        RESULTIS line
+    $)
+
+    LET dumb.pos(x, y, line, at) BE
+    $(  LET upb = (noline.min <= line <= noline.max) -> 0, line%0
+        UNLESS x > at $(  wrch('*C'); at := 0 $)
+        FOR i = at+1 TO x>79 -> 79, x
+        DO wrch( ((i>upb) | (line%i=tab.ch)) -> ' ', line%i)
+    $)
+
+    LET redraw(line, x, ins) BE
+    $(
+        IF ins THEN cur.attr(cur.attr.insert, FALSE)
+        dumb.pos(79, 0, line, beyond.right)
+        dumb.pos( x, 0, line, beyond.right)
+        IF ins THEN cur.attr(cur.attr.insert, TRUE)
+    $)
+
+    AND OK(bool, ch) = VALOF
+    $(  TEST bool
+        THEN IF sc THEN cur.wrch(ch)
+        ELSE cur.wrch(7)
+        RESULTIS bool
+    $)
+
+    AND return.line(scb, n, ch) = VALOF
+    $(  LET linevec     = scb!scb.linevec
+        LET line        = n<0 -> "XX", linevec!n
+        LET buf         = scb!scb.buf
+        LET len         = ?
+
+        IF line=line.unused             RESULTIS FALSE
+
+        UNLESS n>0 & ch<0
+        $(  LET o       = output()
+            selectoutput(scb!scb.output)
+            IF (scb!scb.insert) cur.attr(cur.attr.insert, FALSE)
+            cur.attr(cur.allow.del, FALSE)
+            selectoutput(o)
+        $)
+        selectinput(scb)
+
+
+        TEST noline.min <= line <= noline.max
+        THEN line := ""
+        ELSE FOR i = line%0 TO 0
+                DO UNLESS line%i = ' ' $( line%0 := i; BREAK $)
+        $(  LET p = 1
+
+            FOR i = 1 TO line%0
+            $(  LET ch = line%i
+                UNLESS ch = CUR.TAB.PAD
+                $( line%p := ch; p := p+1 $)
+            $)
+            line%0 := p-1
+        $)
+
+        len             := line%0
+        FOR i = 1 TO len DO buf%(i-1) := line%i
+        buf%len         := '*N'
+
+        TEST n<0                // Pseudo line ?
+        THEN TEST ch < #XFF     // Data or not ?
+             THEN buf%0, len := ch < 0 -> CUR.NODATA, ch, 1
+             ELSE buf%0, buf%1, buf%2 := CUR.VTCH, ch>>8, ch
+        ELSE
+        $(  UNLESS noline.min <= linevec!n <= noline.max        freevec(line)
+            linevec!n   := Line.unused
+        $)
+        scb!scb.end     := len+1
+        RESULTIS TRUE
+    $)
+
+    // Shuffle lines M to N (m<n) UP the screen by AMOUNT lines
+    // Freevecs the excess
+    AND Shuffle.lines(m, n, amount, linevec) BE
+    $(  TEST amount < 0
+        $(      FOR i = m-1 TO m-amount
+                DO UNLESS noline.min <= linevec!I <= noline.max
+                   DO FREEVEC(linevec!I)
+                FOR I = m TO n DO linevec!(I+amount) := linevec!I
+                FOR I = n+amount+1 TO n Linevec!(I) := line.hole
+        $)
+        ELSE
+        $(      FOR I = n+1 TO n+amount
+                DO UNLESS noline.min <= linevec!I <= noline.max
+                   DO FREEVEC(linevec!I)
+                FOR I = n TO m BY -1 DO linevec!(I+amount) := linevec!I
+                FOR I = m TO m+amount-1 Linevec!(I) := line.hole
+        $)
+    $)
+
+    LET expand.tab(line, start) = VALOF
+    $(  LET New         = vec 80/bytesperword
+        LET p   = 0
+        LET inc = ?
+
+        TAB := FALSE
+        IF start < 0 THEN start := 0
+        inc := start
+
+        FOR i = start+1 TO line%0
+        $(  LET ch = line%i
+            UNLESS ch = CUR.TAB.PAD $( p+:= 1; new%p := ch $)
+            IF ch = tab.ch THEN tab := TRUE
+        $)
+        UNLESS tab RESULTIS FALSE
+
+        FOR i = 1 TO p DO
+        $(  LET ch = new%i
+            IF ch = tab.ch
+            $(  LET extra = 7 - (i+inc+7) REM 8
+                FOR j = 0 TO extra-1 DO line%(i+j+inc) := CUR.TAB.PAD
+                inc := inc+extra
+            $)
+            line%(i+inc) := ch
+        $)
+        line%0 := p+inc
+
+        RESULTIS TRUE
+    $)
+
+    LET tab.tab         = VEC 8/BYTESPERWORD
+    LET x,y             = scb!scb.x, scb!scb.y
+    LET pos             = scb!scb.pos.routine
+    LET linevec         = scb!scb.linevec
+    LET cursor          = scb!scb.cursor
+    LET insert          = scb!scb.insert
+    LET lines           = scb!scb.lines
+    LET terms           = scb!scb.terms
+    LET cols            = scb!scb.cols
+    LET insert.mode     = FALSE
+    LET O.o             = output()
+    LET broken          = FALSE
+    LET line            = ?
+//    LET line          = select.line(linevec+y)
+
+    IF scb!scb.finished = TRUE
+    $(  FOR i = lines TO 0 BY -1 IF return.line(scb, i, -1) RESULTIS TRUE
+                RESULT2 := 0            // For RDCH()
+                RESULTIS FALSE
+    $)
+
+    SELECTOUTPUT( scb!scb.output )
+    line        := select.line(linevec+y)
+    SELECTINPUT ( scb!scb.input  )
+
+    IF (scb!scb.insert) //& (scb!scb.terminal) = TERM.2632
+    THEN insert.mode := cur.attr(cur.attr.insert, TRUE)
+
+    UNLESS scb!scb.finished     = FALSE
+    $(  scb!scb.finished        := FALSE
+        x,y     := 0,0
+        cursor := cur.pos(x, y)
+        wrch('*E')
+        pos := cursor -> cur.pos, dumb.pos
+        scb ! scb.cursor        := cursor
+        scb ! scb.pos.routine   := pos
+    $)
+    cur.attr(cur.allow.del, TRUE)
+
+    $(  LET ch          = scb!scb.func2=0 -> cur.rdch(),
+                        VALOF $( scb!scb.func2 :=0; RESULTIS CUR.CLEAR.SCREEN $)
+        LET real.ch     = ch
+        LET ins         = insert
+        LET chars       = ?
+
+//      Where should the test be? Should users be able to over-ride the defaults
+//      UNLESS terms=0
+//      DO FOR I=1 TO terms!0 IF Ch=terms!I  RESULTIS CUR.NODATA
+        SWITCHON Ch INTO
+        $(  DEFALT:
+            DEFAULT:
+                        chars   := 1
+Do.insert:
+                        UNLESS terms=0 | chars > 1
+                        DO FOR I=1 TO terms!0 BY terms.step
+                           DO IF Ch=terms!(I+terms.value)
+                        $( selectoutput(O.o)
+                           scb!scb.x, scb!scb.y := x,y
+                           RESULTIS return.line(scb, -1, ch)
+                        $)
+
+                        IF (x+chars<=cols) &
+                                ((' '<= ch <= #X7E) | chars > 1 | ch=tab.ch)
+                        $(  //LET line = linevec!y
+                            IF noline.min <= line <= noline.max
+                            $(  $(  line        := GETVEC(cols/BYTESPERWORD)
+                                    UNLESS line=0 BREAK
+                                    SELECTOUTPUT(CLI.standardoutput)
+                                    WRITEF("GETVEC failed .....*N")
+                                    DELAY(200)
+                                    scb!scb.finished := TRUE
+                                    GOTO abandon
+//                                  abort(1001, 1002)
+                                $) REPEAT
+                                linevec!y       := line
+                                tab             := FALSE
+                                line%0          := 0
+                            $)
+
+                            WHILE line%(x) = CUR.TAB.PAD
+                            $( cur.WRCH('*B'); x -:= 1 $)
+
+                            UNLESS ins & (line%0+chars > cols)
+                            $(  TEST chars=1 THEN IF sc THEN cur.wrch(ch)
+                                ELSE FOR i = 1 TO chars DO CUR.WRCH(ch%i)
+
+                                FOR I = line%0+1 TO x DO line%i := ' '
+                                TEST ins
+                                $(  LET len     = line%0
+                                    FOR I = len TO (x+1) BY -1
+                                    DO line%(i+chars) := line%i
+                                    TEST chars=1
+                                    THEN line%(x+1) := ch
+                                    ELSE FOR i = 1 TO chars DO line%(X+i) := ch%I
+                                    len := len+chars
+                                    line%0 := len
+                                    test expand.tab(line, x+chars)
+                                    THEN redraw(line,x+chars,ins)
+                                    ELSE UNLESS insert.mode | (x+chars)=len
+                                    $(  FOR i = (x+chars)+1 TO len
+                                        DO wrch(line%i)
+                                        pos((x+chars),y, line, len-1)
+                                    $)
+                                $)
+                                ELSE
+                                    TEST chars=1
+                                    THEN line%(x+1) := ch
+                                    ELSE FOR i = 1 TO chars
+                                         DO line%(X+i+1) := ch%I
+                                x := x+chars
+                                IF x > line%0 THEN line%0 := x
+                                IF real.ch = CUR.INS.CHAR
+                                $( x:= x-chars; FOR i=1 TO chars   wrch('*B') $)
+                                                                ENDCASE
+                            $)
+                        $)
+                        Cur.wrch(7);                            ENDCASE
+
+            CASE '*T':  UNLESS insert $( CUR.WRCH(7); ENDCASE $)
+                        FOR i = 1 TO 7 DO tab.tab%i := CUR.TAB.PAD
+                        ch              := tab.tab
+                        chars           := 8 - (x REM 8)
+                        ch%0            := chars
+                        ch%chars        := tab.ch
+                        IF chars=1      THEN ch := tab.ch
+                        GOTO do.insert
+
+            CASE 0: WRITEF("x=%N, y=%N ", x, y); cur.pos(x,y); ENDCASE
+
+            CASE CUR.UP:
+                        IF OK ((y<lines-2) & (linevec!(y+1)~=Line.unused), ch)
+                        $(  y := y+1
+                            line := select.line(linevec+y)
+                            UNLESS cursor writes("*C^*N")
+                               <>  redraw(line, x,ins)
+                        $)                                      ENDCASE
+            CASE CUR.DOWN:
+down:
+                        TEST y > 0
+                        $( IF sc THEN Cur.wrch(ch); y := y-1;
+                           line := select.line(linevec+y)
+                           UNLESS cursor redraw(line, x,ins)
+                        $)
+                        ELSE
+                        $(  LET rc      = ?
+                            IF  linevec! lines    = Line.unused &
+                                linevec!(lines-1)~= Line.unused &
+                                Terminal.type = Term.2632
+                            THEN writes("*2338")        // short mode ...
+                            IF sc THEN Cur.wrch('*N')
+                            rc := return.line(scb, lines, 1)
+                            Shuffle.lines(0, lines-1, 1, linevec)
+                            pos(x, y, noline.min, beyond.right)// just in case
+                            IF rc
+                            $(  scb!scb.x, scb!scb.y := x,y
+                                WRCH('*E')
+                                selectoutput(O.o)
+                                RESULTIS TRUE
+                            $)
+                            SELECTINPUT(scb!scb.input)
+                            cur.attr(cur.allow.del, TRUE)
+                            line := select.line(linevec+y)
+                        $)                                      ENDCASE
+
+            CASE CUR.LEFT:
+                        TEST x=0
+                        THEN TEST y<lines-2 & linevec!(y+1) ~= line.unused
+                             $( x, y := cols-1, y+1
+                                line := select.line(linevec+y)
+                                UNLESS cur.pos(x,y)
+                                $(  writes("*C^*N")
+                                    dumb.pos(x, y, line, 0)
+                                $)
+                             $)
+                             ELSE Cur.wrch(7)
+                        ELSE
+                        $(  cur.WRCH('*B'); x -:= 1; GOTO pos.off.tab $) ENDCASE
+            CASE CUR.RIGHT:
+                        IF (x>cols-2)           GOTO new.line
+                        UNLESS OK(x < cols-1, ch)                       ENDCASE
+                        x := x+1
+                        WHILE line%(x) = CUR.TAB.PAD
+                        $( UNLESS CUR.WRCH(ch) DO WRCH(' '); X +:= 1 $)
+                        ENDCASE
+pos.off.tab:
+                        WHILE line%(x) = CUR.TAB.PAD
+                        $( cur.WRCH('*B'); x -:= 1 $)
+                        ENDCASE
+            CASE CUR.SKIP:
+                    IF noline.min <= line <= noline.max GOTO return.
+
+                    // skip data characters ...
+                    UNLESS x> line%0
+                    FOR i = x+1 TO line%0
+                    $(  LET ch = capitalch(line%i)
+                        UNLESS 'A' <= ch <= 'Z' | '0' <= ch <= '9'
+                        $(  LET p = i - ((i=x+1) -> 0, 1)
+                            // Now skip spaces ...
+                            FOR i = p+1 TO line%0
+                                UNLESS  line%i = ' ' |
+                                        line%i = CUR.TAB.pad |
+                                        line%i = tab.ch
+                                DO $( p := i-1; BREAK $)
+                            pos(p,y, line, x)
+                            x           := p
+                            GOTO pos.off.tab
+                        $)
+                    $)
+                    GOTO return.
+
+            CASE CUR.SKIP.BACK:
+backup:
+                    IF noline.min <= line <= noline.max  | x=0
+                    $(  IF y = lines    $( cur.wrch(7); ENDCASE $)
+                        IF linevec!(y+1) = line.unused
+                        $( cur.wrch(7); ENDCASE $)
+                        UNLESS cursor WRITES("*C^*N")
+                        y := y+1
+                        line := select.line(linevec+y)
+                        TEST noline.min <= line <= noline.max
+                        THEN x := 0
+                        ELSE x := line%0
+                        TEST cursor THEN pos(x,y)
+                        ELSE redraw(line, x, ins)
+                        UNLESS x=0 GOTO pos.off.tab
+                        ENDCASE
+                    $)
+
+                    IF x > line%0       // Beyond End of Line
+                    $( pos(line%0, y, line, x); x := line%0; ENDCASE $)
+
+                    FOR i = x TO 1 BY -1
+                    $(  LET ch = capitalch(line%i)
+                        UNLESS 'A' <= ch <= 'Z' | '0' <= ch <= '9'
+                        $(  LET p = i - ((i=x) -> 1, 0) // Move at least one ...
+                            FOR i = p TO 1 BY -1
+                                UNLESS  line%i = ' ' |
+                                        line%i = CUR.TAB.pad |
+                                        line%i = tab.ch
+                                $( p:= i; BREAK $)
+                            pos(p,y, line, x)
+                            x := p
+                            GOTO pos.off.tab
+                        $)
+                    $)
+                    line := noline.min
+                    GOTO backup
+
+            CASE CUR.HOME:
+                        IF OK(linevec!lines ~= Line.unused, ch)
+                        THEN x,y,line := 0, lines,
+                                select.line(linevec+lines);     ENDCASE
+            CASE 'X'-'@':
+            CASE CUR.DEL.LINE:
+                        x := 0
+                        Shuffle.lines(0, y-1, 1, linevec)
+                        line := select.line(linevec+y)
+                        UNLESS cur.wrch(CUR.DEL.LINE)
+                        $( WRCH('*C' | #X80)
+                           FOR i = 1 TO 80 DO WRCH(' ')
+                           WRCH('*C')
+                        $);                                             ENDCASE
+
+            CASE CUR.INS.CHAR:
+                        ch := ' '; ins := TRUE;                 GOTO DEFALT
+            CASE CUR.RUBOUT:
+                        UNLESS OK( x>0, CUR.LEFT)                       ENDCASE
+                        x := x-1
+            CASE CUR.DEL.CHAR:
+                $(  LET ch      = ?
+                    LET remove  = 1
+                    IF noline.min <= line <= noline.max                 ENDCASE
+                    IF line%0 <= x $( /*cur.wrch(7);*/          ENDCASE $)
+                    ch := line%(x+1)
+
+                    IF ch = CUR.TAB.PAD | ch=tab.ch
+                    $(  x := x-1 REPEATWHILE line%(x+1)=CUR.TAB.PAD & x >= 0
+                        x := x+1
+                        FOR I = x+1 TO line%0 IF line%i=tab.ch
+                        DO $( remove := i-x; BREAK $)
+                        cur.pos(x, y)   // well ......
+                    $)
+
+                    FOR I = x+1+remove TO line%0 DO line%(i-remove) := line%i
+                    line%0 := line%0 - remove
+                    TEST expand.tab(line, x)
+                    THEN redraw(line, x, ins)
+                    ELSE TEST cur.wrch(CUR.DEL.CHAR)
+                    THEN FOR i = 2 TO remove DO cur.wrch(CUR.DEL.CHAR)
+                    ELSE
+                        TEST x=line%0
+                        THEN TEST remove=1
+                             THEN WRITES(" *B")
+                             ELSE
+                             $( FOR i = 1 TO remove DO WRCH('*S')
+                                FOR i = 1 TO remove DO WRCH('*B')
+                             $)
+                        ELSE expand.tab(line, x) <> redraw(line, x, ins)
+//                  UNLESS x < line%0 & line%(x+2) = CUR.TAB.PAD
+                                                                        ENDCASE
+//                  x := x+1; cur.wrch(cur.right)
+//                  GOTO pos.off.tab
+                $)
+            CASE CUR.INS.LINE:
+                        x := 0
+                        y := y+1
+                        Shuffle.lines(y, lines-1, 1, linevec)
+                        line := select.line(linevec+y)
+//                      UNLESS cur.wrch(CUR.DEL.LINE)
+//                      $( WRCH('*C' | #X80)
+//                         FOR i = 1 TO 80 DO WRCH(' ')
+//                         WRCH('*C')
+//                      $);                                             ENDCASE
+//                      UNLESS cur.wrch(ch) GOTO clear.screen;          ENDCASE
+                        GOTO clear.screen
+            CASE CUR.FN3:
+            CASE 4:     scb!scb.finished        := TRUE;
+                        selectinput(scb)
+                        selectoutput(O.o)
+                        resultis fs.replenish(scb)
+            CASE CUR.HELP:
+                        IF insert.mode  THEN cur.attr(cur.attr.insert, FALSE)
+                        UNLESS cur.wrch(CUR.CLEAR.SCREEN) DO NEWLINE()
+                        WRITEF("*
+*You are in %S INPUT mode. The valid non data keys are:*N*
+*", insert -> "INSERT", "OVERSTRIKE");
+                        FOR I = 1 TO terms!0 BY terms.step
+                        DO UNLESS terms!(I+terms.info) = 0 |
+                                  terms!(I+terms.info) =-1
+                           DO WRITEF("%S*N", terms!(I+terms.info))
+                        WRITES("*
+*   ABANDON       ESC a  Abandon this operation*N*
+*   CLEAR SCREEN  ESC c  Reset and redraw the screen*N*
+*");                    WRITES("*
+*   DOWN          ESC d  Move on to next item*N*
+*   UP            ESC u  Move back to previous item*N*
+*   LEFT          ESC l  Move the cursor one character left*N*
+*");                    WRITES("*
+*   RIGHT         ESC r  Move the cursor one character right*N*
+*   DEL CHAR             Delete the character to the RIGHT of the cursor*N*
+*   HOME          ESC h  Move to the top left of the screen if it's valid text*N*
+*");                    WRITES("*
+*   SKIP          ESC s  Skip on to the next start of word*N*
+*   SKIP BACK     ESC b  skip back to the previous end of word*N*
+*");                    WRITES("*
+*   keypad 1      ESC 1  Flip OVERSTRIKE/INSERT mode.*N*
+*   keypad 3      ESC 3  Terminate document (as CTRL/D)*N*
+*   INSRT CHAR    ESC i  move characters to right of cursor one position right*N*
+*");                    WRITES("*
+*   INSRT LINE    ESC m  Make a new line above the current one*N*
+*   HELP          ESC ?  Display this HELP*N*
+*");                    WRITEF("*
+*   RUBOUT               Delete the previous character*N*
+*   DEL LINE      CTRL/X Delete the current line*N*
+*   RETURN               Move on to the first character of the next line*N*
+*   CTRL/D               End of document*N*
+**N*
+*Type a character to continue...*E*
+*")
+                        IF insert.mode  THEN cur.attr(cur.attr.insert, TRUE)
+                        $(  LET ch = CUR.RDCH()
+                            IF  ch = CUR.ABANDON GOTO abandon
+                        $)
+
+clear.screen:
+            CASE CUR.CLEAR.SCREEN:
+                        cur.attr(cur.attr.insert, FALSE)
+                        cur.wrch(CUR.CLEAR.SCREEN)
+                        cur.init(TRUE, TRUE)
+                        cur.attr(cur.allow.del, TRUE)
+
+                        FOR I = lines TO 0 BY -1
+                        DO  TEST noline.min <= linevec!I <= noline.max
+                            THEN UNLESS cursor DO WRCH('*N' | #X80)
+                            ELSE
+                            $(  TEST cursor
+                                THEN cur.pos(0, I)
+                                ELSE WRCH('*C' | #X80) <> WRCH('*L' | #X80)
+                                WRITES(linevec!i)
+                            $)
+
+                        IF INSERT cur.attr(cur.attr.insert, TRUE)
+                        UNLESS cursor | y=0
+                        $(  newline()
+                            FOR i = 1 TO  y DO WRCH('^')
+                            for i = y TO 79 DO wrch('-')
+                            newline()
+                            pos(79, y, line, 0)
+                        $)
+                        pos(x,y, line, beyond.right)
+                                                                        ENDCASE
+            CASE CUR.FN1:
+                        INSERT          := ~INSERT
+                        scb!scb.insert  :=  INSERT
+                        insert.mode     := cur.attr(cur.attr.insert, INSERT)
+                        UNLESS INSERT insert.mode := FALSE;             ENDCASE
+
+            CASE '*C':
+            CASE '*N':
+        return.:
+        new.line:
+                        If y=0 $( x:= 0; GOTO down $)
+                        IF sc THEN Cur.wrch('*N')
+                        x, y := 0, y-1;
+                        line := select.line(linevec+y)
+                        unless cursor redraw(line, x, ins);             ENDCASE
+            CASE CUR.ABANDON:
+        abandon:
+                        setflags(taskid, 1);                            ENDCASE
+        $)
+        WRCH('*E')
+        IF testflags(1)                 // If break ......
+        $(  scb!scb.x, scb!scb.y := x,y
+            setflags(taskid, 1)
+            selectoutput(O.o)
+            RESULTIS return.line(scb, -1, '*N')
+        $)
+    $) REPEAT
+$)
+
+LET fs.findinput(string, t1, s1, t2, s2, t3, s3, t4, s4, t5, s5, t6, s6,
+        t7, s7, t8, s8, t9, s9, t10, s10) = VALOF
+$(  $<standalone
+    GET "bcpl.addrtasksglobals"
+    GET "bcpl.validpointer"
+    $>standalone
+//    GET "bcpl.readtermvec"    // Got by BASICUTIL
+    LET linevec                 = ?
+    LET scb                     = GETVEC(scb.my.upb)
+    LET termv                   = readtermvec()
+    LET cols, lines             = ?,?
+
+    cols                := termv=0 -> 80, termv!TERM.width
+    lines               := termv=0 -> 23, termv!TERM.depth
+
+    IF scb=0                                                    RESULTIS 0
+
+//  FOR i = 0 TO scb.upb DO scb!I := given.scb!I
+//  freevec(given.scb)
+    FOR i = 0 TO scb.upb DO scb!I := -1
+    FOR i = scb.funcs TO scb.args-1 DO scb!I := 0
+
+    linevec                     := GETVEC(lines)        // Not really a manifest
+    IF linevec=0 $( FREEVEC(scb); RESULTIS 0 $)
+    $(  LET buf = GETVEC(cols/bytesperword)
+        IF buf=0 $( FREEVEC(scb); freevec(linevec); RESULTIS 0 $)
+        scb!scb.buf     := buf
+    $)
+
+    scb!scb.terms               := t1 = -1 -> 0, VALOF
+        $(  LET items   = 20
+            LET v       = ?
+            FOR i = 0 TO items-1 by terms.step
+            DO  IF (@t1)!(i+terms.value) = -1
+                $( items := i + terms.step -1; BREAK $)
+            V := GETVEC(items)
+            IF v=0
+            $(  FREEVEC(scb!scb.buf)
+                FREEVEC(scb)
+                freevec(linevec)
+                RESULTIS 0
+            $)
+            v!0 := items +1 - terms.step
+            FOR i = 1 TO items DO v!I := (@string)!I
+            RESULTIS v
+        $)
+    scb!scb.func1               := fs.replenish
+    scb!scb.func3               := fs.endread
+    scb!scb.id                  := id.inscb
+    scb!scb.insert              := FALSE
+    scb!scb.finished            := 1                    // Not even started!
+    scb!scb.input               := input()
+    scb!scb.output              := output()
+    scb!scb.linevec             := linevec
+    scb!scb.terminal            := termv=0 -> TERM.UNSET, termv!TERM.number
+    scb!scb.cols                := cols
+    scb!scb.lines               := lines
+    scb!scb.cursor              := ?
+    scb!scb.y                   := 0
+
+terminal.type := scb!scb.terminal
+    cur.init(TRUE, FALSE)
+    FOR I = 0 TO lines DO linevec!I := Line.unused              // Not yet used
+    RESULTIS scb
+$)
+
+

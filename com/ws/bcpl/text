@@ -1,0 +1,627 @@
+// Source file "text" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+SECTION "TEXT"
+GET "libhdr"
+GET "wrshdr"
+
+GLOBAL $( old.text.top.vis.line : ug + 98
+          at.text.end: ug + 97
+          delsize : ug + 101
+          delbuf  : ug + 102
+          delhd   : ug + 103
+          deltl   : ug + 104 $)
+
+// This section manages a textspace (ie buffer). It is utterly unaware
+// that there may be more than one in the world, and when this changes
+// the whole world is moved under this section's feet.
+// A textspace is a large character array, with a source file that is
+// accesses serially and a random access file at each end to catch things
+// that fall off. The characters in memory are arranged as two stacks,
+// with no structuring at all. The split point is the beginning of the
+// line containing the cursor.
+
+// Routines are provided to move the cursor up, down, left and right,
+// and to insert and delete characters. Markers are also monitored carefully
+// when all of this occurs. Also the deletion buffer is managed here
+// (there is only one, not one for each buffer).
+
+// A routine is provided to update the scrolling area of the 
+// screen, and 'text.update.info'
+// allows anyone to tell this routine that the scrolling area needs updating.
+
+LET text.init(sourcename, space, size) = VALOF $(
+  LET bsize = ?
+  scb.src.ptr := 0
+  TEST sourcename%0 = 1 & sourcename%1 = '**' THEN $(
+    scb.src := 0
+    scb.src.ptr := -1
+    IF ~processbufallowed THEN processbufallowed := inittwids()
+    IF ~processbufallowed THEN RESULTIS no
+    twid := createtwid(space) // parm to allow dummy to invent a number!
+                              // only for testing purposes
+    IF twid = 0 THEN RESULTIS no
+    srcname.not.dstname := yes
+    browse := no
+    formf(sourcename, 1, 40, "%s", process.dstname()) // system dep name
+    sourcename%0 := formptr - 1 $)
+   ELSE $(
+    scb.src := sysrand.find(sourcename, 1)
+    IF scb.src = 0 THEN scb.src.ptr := -1 $)
+//  scb.dst := sysrand.find(sourcename, 2); if scb.dst = 0 then resultis no
+//  test random.files then $(
+//    scb.trans:=sysrand.find(sourcename, 3); if scb.trans=0 then resultis no $)
+//  else scb.trans := -1
+  // V2.0, June 1983
+  // the dst and trans files are now only created by need.
+  // This speeds up entry, and saves fragmentation on pathetic discs.
+  // The opens MUST succeed, or the editor may not survive.
+  // -1, -2, -3 must NOT be legal scb numbers
+  // sysrand.write should check on entry for an scb of -2 or -3,
+  // and call sysrand.find(source.filename, 2 or 3) accordingly
+  scb.dst := -2
+  scb.trans := random.files -> -3, -1
+  scb.dst.ptr := 0; scb.trans.ptr := 0
+  source.filename := sourcename  // a getvec'able string
+  textspace := space
+  textmax, textend, textcur := size, size, size
+  textstart, textsp := 4, 4 // must be mul of 4 for fileserver
+  textspace%(textstart - 1) := ch.bof // purely for benefit of display
+  textspace%textend := ch.eof         // ditto
+  text.update.info := 15
+  old.text.top.vis.line := -1
+//  max.lin.displayed := textend  // for bracket flash
+//  min.lin.displayed()()() := textstart // for bracket flash
+  fileline, filecol := 0, 0
+  textcur := textend; nextline(textcur) // forces a read from src
+//  text.page.signal := no // version 1.7, fix of screen garbage bug.
+  RESULTIS yes $)
+
+AND text.dbufinit(dspace, dsize) BE $(
+  // This is only called once at the beginning of the edit.
+  // text.init is called whenever a new window is opened.
+  delbuf := dspace; delhd := 0; deltl := 0; delsize := dsize $)
+
+AND text.finish(filename, ty) BE $(
+  LET p = ?
+  IF ty = 1 THEN $(
+    LET bad = textstart
+    IF folded.block ~= 0 THEN block.unfold()
+    $( p := fileline; cur.down() $) REPEATUNTIL p = fileline
+    WHILE textcur ~= textend DO $( // last line
+      textspace%textsp := textspace%textcur
+      textsp := textsp + 1; textcur := textcur + 1 $)
+  sysrand.write(scb.dst, textspace, textstart, scb.dst.ptr, textsp - textstart) $)
+  sysrand.end(filename, scb.src, scb.dst, scb.trans, ty) $)
+
+AND ensure(space) BE IF textcur - textsp < space THEN
+  // Text is being inserted and there is not enough space.
+  // Thus, a block will have to be written to disc,
+  // either from the top or bottom of the file (wherever there is more spare)
+  TEST textsp - textstart > 2 * blcksize THEN $(
+//    text.page.signal := yes // page fault signalled.
+    sysrand.write(scb.dst, textspace, textstart, scb.dst.ptr, blcksize)
+    scb.dst.ptr := scb.dst.ptr + 1
+    FOR i = textstart TO textcur - (blcksize + 1) DO
+      textspace%i := textspace%(i + blcksize)
+    textsp := textsp - blcksize $)
+  ELSE $(
+//    text.page.signal := yes // page fault signalled.
+    IF textend - textcur < 2*blcksize THEN err(15, textend - textcur)
+    sysrand.write(scb.trans, textspace, textend - blcksize, scb.trans.ptr, blcksize)
+    scb.trans.ptr := scb.trans.ptr + 1
+    FOR i = textend - 1 TO textcur + blcksize BY -1 DO
+      textspace%i := textspace%(i - blcksize)
+    textcur := textcur + blcksize $)
+
+
+AND nextline(l) = VALOF $(   // internal
+  LET linejolt = 0
+  LET nextn = VALOF $(
+    LET c = ?
+    at.text.end := no
+    WHILE TRUE DO $(
+      c := textspace%l
+      IF l = textend THEN $( at.text.end := yes; RESULTIS l $)
+      l := l + 1
+      IF c = ch.line | c >= ch.lineend THEN RESULTIS l $) $)
+  IF textend - nextn < 100 & (scb.trans.ptr ~= 0 | scb.src.ptr ~= -1) THEN $(
+    // we are close to the top of textspace, and not all the file is in memory
+    // thus, space must be made and the next block of the file read in
+    LET answ = ?
+    linejolt := 4
+//    err(101, textend - nextn) // diagnostic
+    IF textcur - textsp < blcksize + 100 THEN $(
+      // We are running out of textspace - some will have to go out to the dst file
+      linejolt := linejolt | 2 // will get or'd into text.update.info
+
+      //  Note by IDW:  20/05/87
+      //    I don't understand the logic of the following line.  When included,
+      //    it gave errors on certain blcksize/textspace combinations.
+      //
+      //        IF textsp - textstart < 2 * blcksize THEN
+      //
+      //    The line has been changed so that, rather than checking whether
+      //    there are at least 2 blocks of data to be written out, it only
+      //    checks for one block.
+
+      IF  textsp - textstart  <  blcksize  THEN
+          err(1, textsp - textstart) // absurdly long lines?
+
+//      text.page.signal := yes // page fault signalled.
+      sysrand.write(scb.dst, textspace, textstart, scb.dst.ptr, blcksize)
+      scb.dst.ptr := scb.dst.ptr + 1
+      FOR i = textstart + blcksize TO textsp - 1 DO textspace%(i - blcksize) := textspace%i
+      textsp := textsp - blcksize $)  // there is now enough free space
+    FOR i = textcur TO textend - 1 DO textspace%(i - blcksize) := textspace%i
+    textcur := textcur - blcksize
+    TEST scb.trans.ptr ~= 0 THEN $(
+      // there is text in the transitory file that was scolled in from src
+      // and then had to be moved out again.
+      scb.trans.ptr := scb.trans.ptr - 1
+//      text.page.signal := yes // page fault signalled.
+      answ := sysrand.read(scb.trans, textspace, textend - blcksize, scb.trans.ptr)
+      IF answ ~= blcksize THEN err(3, answ) $) // should NEVER happen
+    ELSE $( // serial access source stuff coming up.
+      LET inp = input()
+      answ := 0
+      selectinput(scb.src)
+      FOR i = 1 TO blcksize DO $(
+        LET c = sys.filerdch()
+        IF c = endstreamch THEN BREAK
+        textspace%(textend + answ - blcksize) := c
+        answ := answ + 1 $)
+//      text.page.signal := yes // page fault signalled.
+      selectinput(inp)
+//      answ := sysrand.read(scb.src, textspace, textend - blcksize, scb.src.ptr)
+      scb.src.ptr := scb.src.ptr + 1
+      IF answ ~= blcksize THEN $(
+        scb.src.ptr := -1
+        FOR i = textend - 1 TO textcur + (blcksize - answ) BY -1 DO
+          textspace%i := textspace%(i - (blcksize - answ)) $)
+      textcur := textcur + blcksize - answ $) $)
+  RESULTIS linejolt = 0 -> nextn, -linejolt $)
+
+AND err(n, nn) BE $(
+  error("Text internal #%n(%n) sp=%n cur=%n, srcptr=%n dstptr=%n",
+    n, nn, textsp, textcur, scb.src.ptr, scb.dst.ptr)
+  error("Have you got absurdly long (ie > 500 characters) lines in your file?") $)
+
+LET prevline(l) = VALOF $(   // internal
+  LET linejolt = 0
+  LET prev = ?
+  prev := VALOF $(
+    LET c = ?
+    IF l = textstart THEN RESULTIS l
+    l := l - 1
+    WHILE TRUE DO $(
+      IF l = textstart THEN RESULTIS l
+      l := l - 1
+      c := textspace%l
+      IF c = ch.line | c >= ch.lineend THEN RESULTIS l + 1 $) $)
+  IF prev = textstart & scb.dst.ptr ~= 0 THEN $(
+    // we need to wind some text back into memory
+//    err(102, textstart) // diagnostic
+    IF ~random.files THEN RESULTIS -1 // we can do nothing
+    IF textcur - textsp < blcksize + 100 THEN $(
+      // and some other text has to be thrust out
+      IF textend - textsp < blcksize + 1000 THEN err(4, textend-textsp)
+//      text.page.signal := yes // page fault signalled.
+      sysrand.write(scb.trans, textspace, textend - blcksize, scb.trans.ptr, blcksize)
+      linejolt := 4
+      scb.trans.ptr := scb.trans.ptr + 1
+      FOR i = textend - 1 TO textcur + blcksize BY -1 DO
+        textspace%i := textspace%(i - blcksize)
+      textcur := textcur + blcksize $)
+    FOR i = textsp - 1 TO textstart BY -1 DO
+      textspace%(i + blcksize) := textspace%i
+    textsp := textsp + blcksize
+    scb.dst.ptr := scb.dst.ptr - 1
+    IF scb.dst.ptr < 0 THEN err(5, scb.dst.ptr) // should NEVER happen
+//    text.page.signal := yes // page fault signalled.
+    sysrand.read(scb.dst, textspace, textstart, scb.dst.ptr)
+    linejolt := linejolt | 2 $)
+  RESULTIS linejolt = 0 -> prev, -linejolt $)
+
+//  An extension to WS - all deleted chars are placed in a buffer,
+//  and can be retrieved in the case of catastrophe
+
+LET textpush(c) BE $(
+  LET n = delhd + 1
+  IF n = delsize THEN n := 0
+  IF n = deltl THEN $( deltl := deltl + 1; IF deltl = delsize THEN deltl := 0 $)
+  delbuf%delhd := c; delhd := n $)
+
+// August 1983, extra complexities re ^QH
+// char 0 in queue now separates conceptually deleted chunks
+LET textpop(single) = VALOF $(
+  LET c, any.ch.line = 0, no // feeble attempt to help hardscroll in simple cases
+  WHILE c = 0 DO c := textpop1(single) // ignore preceeding 0 chars
+  IF c = -1 THEN RESULTIS 0 // empty
+  TEST single THEN textpush(0) // so that ^H on undeleted block will not unseal
+  ELSE WHILE c ~= 0 DO $(
+    IF c = -1 THEN $( c := 0; BREAK $)
+    IF c = ch.line THEN any.ch.line := yes
+    c := textpop1() $)
+  RESULTIS any.ch.line -> ch.line, c $)
+
+AND textpop1() = VALOF $(
+  // returns the character popped, to aid hardware scroll stuff.
+  LET n = delhd
+  LET backwards = no
+  LET c = ?
+  IF n = deltl THEN $( rptstop := yes; RESULTIS -1 $) // empty
+  IF n = 0 THEN n := delsize
+  n := n - 1
+  c := delbuf%n
+  delhd := n
+  IF c = 0 THEN RESULTIS c // separator char
+  IF c >= 128 THEN $( c := c & 127; backwards := yes $)
+  cur.inschar(c) // always insert -
+                 // replace would put replaced char back on stack!
+  IF ~backwards THEN cur.right()
+  RESULTIS c $) // ^G, ^T etc lead to delete backwards
+
+// Another WS extension - ditto copies the character above in the text.
+
+LET textditto() BE $(
+  LET p = prevline(textsp)
+  IF fileline = 0 THEN $( rptstop := yes; RETURN $)
+  IF p < 0 THEN p := prevline(textsp)
+  IF p < 0 THEN err(15, p) // absurdly long line
+  IF filecol >= textsp - p THEN RETURN
+  TEST t.insertmode THEN cur.inschar(textspace%(p + filecol))
+    ELSE cur.replacechar(textspace%(p + filecol)) $)
+
+LET cant.rewind(last.dead.line) BE $(
+  // If the machine cannot provide random access files,
+  // this might happen - he cannot wind backwards far enough
+  lines.rolled.past := lines.rolled.past + last.dead.line
+  fileline := fileline - (1 + last.dead.line)
+  error("Top of memory file buffer - cannot rewind further")
+  FOR i = 0 TO nmark - 1 DO
+    IF marker.y!i >= 0 & (~marker.alternate!i) THEN $(
+      marker.x!i := 0
+      marker.y!i := marker.y!i - (1 + last.dead.line)
+      IF marker.y!i < 0 THEN marker.y!i := 0 $) $)
+
+// Now the conventional cursor movement commands.
+
+LET cur.up() BE TEST textsp = textstart & scb.dst.ptr = 0 THEN rptstop := yes ELSE $(
+  LET sp, cur = textsp, textcur
+  LET tsp = prevline(textsp)
+  IF tsp < 0 THEN $( // caused a page fault, everything may have moved
+    IF ~random.files THEN $(
+      cant.rewind(fileline - 1)
+      text.update.info := text.update.info | 7; RETURN $)
+    text.update.info := text.update.info | (-tsp)
+    sp := textsp; cur := textcur
+    tsp := prevline(textsp)
+    IF sp = tsp THEN RETURN
+    IF tsp < 0 THEN err(7, tsp) $)
+  textsp := tsp
+  $( textcur := textcur - 1
+     sp := sp - 1
+     textspace%textcur := textspace%sp $) REPEATUNTIL sp = textsp
+  IF (cur - textcur) - 1 < filecol THEN filecol := (cur - textcur) - 1
+  fileline := fileline - 1
+  text.update.info := text.update.info | 5 $)
+  // Above update necessary? I'm not quite sure...
+
+LET cur.down() BE $(
+  LET sp = nextline(textcur + filecol)
+  LET ate = at.text.end // set up by nextline
+  LET sp2 = nextline(sp) // must ensure some of next line there too,
+                         // so that find works over line boundaries
+  IF sp < 0 THEN err(7, sp)  // current line should all be in memory
+  IF sp2 < 0 THEN $(     // reasonable page fault
+    text.update.info := text.update.info | (-sp2)
+    sp := nextline(textcur + filecol)
+    IF sp < 0 THEN err(6, sp)  // absurdly long line could cause this?
+    ate := at.text.end
+    sp2 := nextline(sp)
+    IF sp2 < 0 THEN err(8, sp2) $)
+  TEST ate THEN rptstop := yes ELSE $(
+    $( textspace%textsp := textspace%textcur
+       textsp := textsp + 1
+       textcur := textcur + 1 $) REPEATUNTIL sp = textcur
+    textspace%textsp := ch.eof // bogus char to fool screen
+                               // in case of unterminated last line
+    // It is here that one might consider stripping trailing spaces and blanks.
+    // However remember to check the markers,
+    // and think carefully concerning the last line in the file.
+    // Wislon says I should add a *n to it ...
+    // Turning spaces into tabs might also be done,
+    // but that would slow EVERYTHING down eg block ops, find etc. Yech!
+    sp := sp2 - sp
+    IF sp > 0 & (~at.text.end) THEN sp := sp - 1
+    IF sp < filecol THEN filecol := sp
+    fileline := fileline + 1
+    text.update.info := text.update.info | 3 $) $)
+
+LET cur.left() BE TEST filecol ~= 0 THEN filecol := filecol - 1
+  ELSE $( filecol := 9999; cur.up(); IF filecol = 9999 THEN filecol := 0 $)
+
+LET cur.right() BE $(
+  LET c = textspace%(textcur+filecol)
+  TEST textcur + filecol = textend THEN rptstop := yes ELSE
+    TEST c = ch.line | c >= ch.lineend THEN $( filecol := 0; cur.down() $)
+    ELSE filecol := filecol + 1 $)
+
+LET cur.inschar(c) BE $( // cur stays still
+  LET col, cur = filecol, ?
+  LET lin = c = ch.line | c >= ch.lineend
+  IF browse THEN $( rptstop := yes; error("Cannot edit text in BROWSE mode"); RETURN $)
+  ensure(4)
+  updated := yes
+  IF lin THEN text.update.info := text.update.info | 5
+  IF (marker.y!10 = fileline | marker.y!11 = fileline) &
+    (~marker.hidden!10) & (~marker.hidden!11) & t.column THEN
+      text.update.info := text.update.info | 7 // highly unlikely
+  textcur := textcur - 1; cur := textcur
+  WHILE col ~= 0 DO $(
+    textspace%cur := textspace%(cur + 1)
+    cur := cur + 1; col := col - 1 $)
+  TEST lin THEN FOR i = 0 TO nmark - 1 DO $(
+    IF marker.y!i < fileline | marker.alternate!i THEN LOOP
+    IF marker.y!i = fileline THEN
+      TEST marker.x!i > filecol THEN marker.x!i := marker.x!i - filecol ELSE LOOP
+    marker.y!i := marker.y!i + 1
+    text.update.info := text.update.info | 4 $)
+  ELSE FOR i = 0 TO nmark - 1 DO $(
+    IF marker.y!i = fileline & marker.x!i > filecol & (~marker.alternate!i) THEN
+      marker.x!i := marker.x!i + 1 $)
+  textspace%(textcur + filecol) := c $)
+
+LET cur.delchar() BE IF textcur + filecol ~= textend THEN $(
+  LET col = filecol + textcur
+  LET c = textspace%col
+  LET lin = c = ch.line | c >= ch.lineend
+  IF browse THEN $( rptstop := yes; error("Cannot edit text in BROWSE mode"); RETURN $)
+  updated := yes
+  IF (marker.y!10 = fileline | marker.y!11 = fileline) &
+    (~marker.hidden!10) & (~marker.hidden!11) & t.column THEN
+      text.update.info := text.update.info | 7
+  WHILE col ~= textcur DO $(
+    textspace%col := textspace%(col - 1); col := col - 1 $)
+  IF c < ch.lineend THEN textpush(c)
+  textcur := textcur + 1
+  IF lin THEN nextline(textcur + filecol) // may provoke page fault
+  TEST lin THEN FOR i = 0 TO nmark - 1 DO $(
+    IF marker.y!i <= fileline | marker.alternate!i THEN LOOP
+    marker.y!i := marker.y!i - 1
+    IF marker.y!i = fileline THEN marker.x!i := marker.x!i + filecol $)
+  ELSE $(
+    FOR i = 0 TO nmark - 1 DO
+      IF marker.y!i = fileline & marker.x!i > filecol & (~marker.alternate!i) THEN
+        marker.x!i := marker.x!i - 1 $)
+  IF lin THEN text.update.info := text.update.info | 5 $)
+
+LET cur.delchar.backwards() BE $(
+  // like cur.delchar, but for ^G, ^T etc leads to better undeletion
+  // see routines 'textpush' and 'textpop' above
+  LET prev.delhd, c = delhd, ?
+  cur.delchar(); IF prev.delhd = delhd THEN RETURN // nothing pushed
+  c := delbuf%prev.delhd; IF c > 127 THEN c := ' '
+  delbuf%prev.delhd := c | 128 $)
+
+LET cur.replacechar(c) BE $( // cur stays still
+  LET ch = textspace%(textcur + filecol)
+  IF browse THEN $( rptstop := yes; error("Cannot edit text in BROWSE mode"); RETURN $)
+  updated := yes
+  TEST ch = ch.line | ch >= ch.lineend THEN cur.inschar(c)
+  ELSE textpush(ch); textspace%(textcur + filecol) := c $)
+
+LET text.update() BE $( // renew text area of screen
+  LET discjolt = no
+ rewind.restart:
+  IF fileline < text.top.vis.line THEN $(
+    text.top.vis.line := fileline
+    text.top.vis.line := text.top.vis.line -    // experimental scroll prevention
+      (text.bot.scr.line - text.top.scr.line)/2 // makes text page
+    IF text.top.vis.line < 0 THEN               // if cursor goes off screen
+      text.top.vis.line := 0
+    text.update.info := text.update.info | 7 $)
+  IF fileline >= text.top.vis.line + (text.bot.scr.line-text.top.scr.line) THEN $(
+    text.top.vis.line := fileline-((text.bot.scr.line-text.top.scr.line) - 1)/2
+    text.update.info := text.update.info | 7 $)
+
+// Horizontal scroll is now dealt with in 'screen'
+// Doing it here at all was a serious logical error -
+// H. scroll is by screen positions, not text chars.
+//
+//if filecol >= xmax + displaycol then $(
+//  displaycol := displaycol + o.colinc repeatwhile filecol < displaycol
+//  text.update.info := 15 $)
+//if filecol < displaycol then $(
+//  displaycol := displaycol - o.colinc repeatwhile filecol < displaycol
+//  text.update.info := 15 $)
+
+  // Lines before the beginning of file NEVER display.
+  IF text.top.vis.line < 0 THEN text.top.vis.line := 0
+  IF old.text.top.vis.line ~= text.top.vis.line THEN
+    text.update.info := text.update.info | 7
+
+start.again: // pageing fault causes everything to restart
+  old.text.top.vis.line := text.top.vis.line
+  $(
+  LET curlin = (fileline - text.top.vis.line) + text.top.scr.line
+  LET t, lin, savec = nextline(textcur), fileline, curlin - 1
+    IF t < 0 THEN $( // page fault
+      text.update.info := text.update.info | (-t)
+      IF discjolt THEN err(10); discjolt := yes; GOTO start.again $)
+  // we always update the current line.
+  text.updateline(curlin, textspace, textcur, t, fileline)
+  IF (text.update.info & 4) ~= 0 THEN $(
+//    max.lin.displayed := 0 // for bracket flash
+    curlin := curlin + 1
+    lin := lin + 1
+    WHILE curlin <= text.bot.scr.line DO $( LET nt = nextline(t)
+//      max.lin.displayed := nt
+      IF (curlin & 3) = 0 THEN IF sys.keywaiting() THEN RETURN
+      IF nt < 0 THEN $( // page fault - everything has moved
+        text.update.info := text.update.info | (-t)
+        IF discjolt THEN err(11); discjolt := yes; GOTO start.again $)
+      IF t = nt &
+         text.bot.scr.line - curlin > 3 &
+         text.top.vis.line > 0  // ie ludicrous amount of space at bottom
+      THEN $(
+        text.top.vis.line := text.top.vis.line -
+          (text.bot.scr.line - (curlin + 1))
+        IF text.top.vis.line < 0 THEN text.top.vis.line := 0
+        text.update.info := text.update.info | 7
+        GOTO start.again $)
+      text.updateline(curlin, textspace, t, nt, lin)
+      lin := lin + 1; curlin := curlin + 1; t := nt $)
+    text.update.info := text.update.info & (~4) $) // text below cursor done
+
+  IF (text.update.info & 2) ~= 0 THEN $(
+//    min.lin.displayed := textcur // for bracket flash
+    lin := fileline - 1; t := textsp
+    WHILE savec >= text.top.scr.line DO $(
+      LET nt = prevline(t)
+//      min.lin.displayed := nt // for bracket flash
+      IF (lin & 3) = 0 THEN IF sys.keywaiting() THEN RETURN
+      IF nt < 0 THEN $( // page fault - everything may have moved
+        text.update.info := text.update.info | (-nt)
+        IF ~random.files THEN $(
+          cant.rewind(lin); GOTO rewind.restart $)
+        IF discjolt THEN err(12); discjolt := yes; GOTO start.again $)
+      text.updateline(savec, textspace, (lin < 0 -> nt - 1, nt),
+                      t, (lin < 0 -> bofline, lin))
+      lin := lin - 1; savec := savec - 1; t := nt $) $)
+    text.update.info := text.update.info & (~2) $) // lines above cursor done
+  IF (text.update.info & 8) ~= 0 & t.ruler THEN $( // update ruler line
+    LET p = 0
+    text.updateline(ruler.scr.line, rulerbuf, 0, p, rulerline) $)
+  text.update.info := 0 $)
+
+AND text.updateline(scrline, wad, pos, next, type) BE $( // internal
+  // ensure that you do not splurge a temporary menu or display
+  IF scrline < cmd.curline THEN RETURN
+  // take care of sideways scroll. (now redundant)
+  scr.updateline(scrline, wad, /* pos = next -> next,
+    pos + displaycol > next -> next - 1, pos + displaycol */ pos, type) $)
+
+LET text.delline() BE $(
+  LET c, len = ?, ?
+  IF browse THEN $(
+    rptstop := yes; error("You are in BROWSE mode - text may not be altered")
+    RETURN $)
+  updated := yes
+  textpush(0)
+  WHILE filecol ~= 0 DO $( cur.left(); cur.delchar() $)
+  cur.endofline(); len := filecol
+  c := textspace%(textcur + filecol)
+  IF c = ch.eof THEN len := len - 1
+  filecol := 0; FOR i = 0 TO len DO cur.delchar.backwards()
+  textpush(0) $)
+
+LET cur.endofline() BE $(
+  LET n = nextline(textcur + filecol)
+  IF n < 0 THEN $( n := nextline(textcur + filecol)
+                   IF n < 0 THEN err(16, n) $) // absurdly long line
+  filecol := (at.text.end -> n, n - 1) - textcur $)
+
+LET cur.marker(m) BE $(
+  LET old = ?
+  IF marker.y!m < 0 THEN error("Marker %n not set - internal error", m)
+  IF marker.alternate!m THEN $( text.update(); swapbufs() $)
+//  while fileline > marker.y!m do $(
+//    old := fileline; cur.up(); if old = fileline then break $)
+//  while fileline < marker.y!m do $(
+//    old := fileline; cur.down(); if old = fileline then break $)
+//  while filecol > marker.x!m do $(
+//    old := filecol; cur.left(); if old = filecol then break $)
+//  while filecol < marker.x!m do $(
+//    old := filecol; cur.right(); if old = filecol then break $) $)
+  cur.moveto(marker.y!m, marker.x!m,0) $)
+
+// V2.0 stuff - bracket flashing.
+// When the user types in a ( or ), the matching bracket
+// (if there is one on the screen) flashes briefly.
+// Thus two routines are needed, for searching forwards and backwards.
+// If he's typing a long way ahead, forget it.
+
+LET text.forw.bra.search() BE $(
+  LET lin, place, depth, ch = fileline, textcur + filecol, 0, ?
+  LET last.line.begin = textcur
+  IF text.update.info ~= 0 THEN RETURN
+  $( ch := textspace%place
+     TEST ch = ch.line | ch >= ch.lineend THEN $(
+       last.line.begin := place + 1
+       lin := lin + 1
+       IF (lin & 3) = 0 & sys.keywaiting() THEN RETURN $) ELSE
+//     test place >= max.lin.displayed  then return else
+     TEST lin > text.top.vis.line + (text.bot.scr.line - text.top.scr.line) THEN
+       RETURN ELSE
+     TEST place > textend THEN RETURN ELSE
+     TEST ch = ')' THEN $(
+       TEST depth > 0 THEN depth := depth - 1 ELSE $(
+         marker.x!12 := place - last.line.begin
+         marker.y!12 := lin
+//         error("Placing bracket flash at line=%n col=%n",
+//           marker.y!12, marker.x!12) // diagnostic
+         marker.alternate!12 := no
+         text.update.info := text.update.info | 5 // beyond cursor
+         RETURN $) $) ELSE
+     IF ch = '(' THEN depth := depth + 1
+     place := place + 1 $) REPEAT $)
+
+LET text.back.bra.search() BE $(
+  LET lin, place, depth, ch = fileline, textcur + filecol, 0, ?
+  LET last.line.begin = textcur
+  IF text.update.info ~= 0 THEN RETURN
+  $( IF place = textcur THEN place := textsp
+     place := place - 1
+     ch := textspace%place
+     TEST ch = ch.line | ch >= ch.lineend THEN $(
+//       last.line.begin := place
+       lin := lin - 1
+       IF (lin & 3) = 0 & sys.keywaiting() THEN RETURN $) ELSE
+     TEST lin < text.top.vis.line THEN RETURN ELSE
+     TEST place < textstart THEN RETURN ELSE
+//     test place < min.lin.displayed then return else
+     TEST ch = '(' THEN $(
+       TEST depth > 0 THEN depth := depth - 1 ELSE $(
+         // now another loop is needed, to find the next beginning of line
+         last.line.begin := place
+         marker.x!12 := place >= textcur -> place - textcur, VALOF $(
+           LET match.position = place
+           $( ch := textspace%place
+              IF ch = ch.line | ch >= ch.lineend | place < textstart THEN
+                RESULTIS match.position - (place + 1)
+              place := place - 1 $) REPEAT $)
+         marker.y!12 := lin
+//         error("Placing bracket flash at line=%n col=%n",
+//           marker.y!12, marker.x!12) // diagnostic
+         marker.alternate!12 := no
+         text.update.info := text.update.info | 3 // above cursor
+         RETURN $) $) ELSE
+     IF ch = ')' THEN depth := depth + 1 $) REPEAT $)
+
+AND cur.moveto(line, col, mes) = VALOF $(
+  // returns yes if interrupted
+  LET intcnt = 50 // interruptable
+  IF line < 0 THEN line := 0
+  IF col < 0 THEN col := 0
+  WHILE fileline > line DO $(
+   LET prev = fileline
+   intcnt := intcnt - 1
+    IF intcnt = 0 THEN $(
+      intcnt := 200; IF mes ~= 0 THEN message(mes)
+      sys.keywaiting(); IF checkint() THEN RESULTIS yes $)
+    cur.up(); IF fileline = prev THEN BREAK $) // could stick if ~random.files
+  $( LET prev = fileline // care re meeting end of file
+     IF fileline >= line THEN BREAK
+     intcnt := intcnt - 1
+     IF intcnt = 0 THEN $(
+       intcnt := 200; IF mes ~= 0 THEN message(mes)
+       sys.keywaiting(); IF checkint() THEN RESULTIS yes $)
+     cur.down(); IF fileline = prev THEN BREAK $) REPEAT
+  IF filecol < col THEN cur.endofline()
+  WHILE filecol > col DO cur.left()
+  RESULTIS no $)
+
+

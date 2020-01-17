@@ -1,0 +1,674 @@
+
+
+
+
+
+SECTION "asm3"
+
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//
+//                    Loader   Output   Module
+//
+
+
+
+
+
+
+/*       This module is responsible for providing facilities for the
+   generation of a load file -- The default format of such a file is
+   an extension of Mostec style Intel hex  (see the Mostec Z80 assembler
+   reference manual appendix C for a complete definition) called Cambridge Hex.
+   Cambridge Hex is defined elsewhere.
+         The chosen format is generally applicable and will be generalised
+   for use on 16 bit machines.  It can be changed by assigning 'code.gen'
+   to some other procedure which supports the same entry reasons (see
+   'intel.hex'.
+         'putword' and 'putaddress' can be used for the direct generation
+   of absolute code.  'putlabelspec' has a more complicated argument and will
+   generate external, relocatable or absolute data.  The object taken as an
+   argument is generated in a vector of size 'spec.size' in the complimentary
+   procedure 'labelexpression' declared in another module.
+      26.02.80
+*/
+
+
+
+
+
+/*     The following are kept for reference & documentation
+GLOBAL
+$(     binbuf   : ioman+3       //  buffer for binary produced by that line
+       pc       : ioman+6       //  contains expected value of program counter
+$)
+*/
+
+
+
+
+
+
+LET fitsmask(n,m) = (n>=0 -> (n&\m)=0, (\(n&\m|m))=0 )
+
+
+LET putword(n) BE
+$(  // bytesperasmword is the number of bytes in the object machine's word
+    // (i.e. the length of information corresponding to an increment in
+    // address).  'bytesperword' is the number of bytes in a word on the
+    // machine that we are executing on.
+    LET m=(1<<(bytesperasmword*8))-1
+    IF binbuf!b.nextmod=binbuf!b.top DO
+       $(  IF binbuf!b.top >= binbufsize+b.nextmod DO error(e.binfull)
+           binbuf!b.top:=binbuf!b.top+1
+       $)
+    binbuf!b.nextmod:=binbuf!b.nextmod+1
+    binbuf!(binbuf!b.nextmod):=n & m
+    UNLESS fitsmask(n,m) DO warn(e.badbyte)
+$)
+
+
+
+AND putaddress(n) BE
+$(  LET m=(1<<(8*bytesperasmword))-1
+    LET sign=n&\((1<< (8*wordsperaddress*bytesperasmword) )-1)
+    FOR i=1 TO wordsperaddress DO
+    TEST ~msbytefirst THEN
+    $(  putword(m&n)
+        m:=m << (8*wordsperaddress)
+    $) ELSE
+    putword((n >> (8*bytesperasmword*(wordsperaddress-i))) & m)
+    UNLESS sign=0 | sign=(-1&(1 << (8*wordsperaddress*bytesperasmword) )-1) THEN
+    error(e.badbyte)
+$)
+
+
+
+AND movebinword(places) BE
+/*     This procedure will be rarely used:  it repositions the pointer to the
+   binary buffer of bytes generated so far on this line 'binbuf' so that
+   reference can be made to bytes formerly generated.
+*/
+TEST b.nextmod<binbuf!b.nextmod+places<=binbuf!b.top
+THEN binbuf!b.nextmod:=binbuf!b.nextmod+places
+ELSE error(e.mtbuf)
+
+
+
+AND outhex(n) BE FOR i=bytesperasmword-1 TO 0 BY -1 DO
+   writehex((n>>(i*8)) & byte1, 2)
+
+
+
+
+
+AND code.gen(type, a1, a2) =
+
+//*<CHEX
+    intelhex(type, a1, a2)
+/*CHEX>*/
+
+/*<TIMBIN
+    timbin(type, a1, a2)
+/*TIMBIN>*/
+
+// this routine can be redefined in the user's part of the assembler
+// to generate a different output format, the 'type's are as follows:
+//    cd.undef   sets undefined byte filler
+//    cd.clear   clears internal buffers
+//    cd.newpc   changes loader's pc to 'arg1'
+//    cd.data    outputs data byte 'arg1'
+//    cd.eof     tidies up loader file (binout)
+//    cd.int     declares internal symbol 'arg1'
+//               at address 'arg2'
+//    cd.ext     declares external symbol 'arg1'
+//               last used at address 'arg2'
+//    cd.rel     declares word at address 'arg1'
+//               as relocatable
+//    cd.module  declares module name 'arg1'
+//    cd.code    declares code type 'arg1' with
+//               'arg2' bytes per word
+//    cd.absint  declares absolute internal symbol
+//               'arg1' at address 'arg2'
+//    cd.wext    declares weak external symbol
+//               'arg1' last used at address 'arg2'
+//    cd.opt     linker option string 'arg1'
+//               interpreted at level 'arg2'
+//    cd.prag    name of pragmat is 'arg1' text is
+//               'arg2'
+
+
+
+//*<CHEX
+AND intelhex(type, arg, arg1) BE
+// this procedure generates "Cambridge Hex", see definition.
+// It is compatable with "Intel Hex" if records begining '$' are
+// taken as comments, as recomended.  Hence the code output
+// should be able to be loaded by any standard Intel Hex loader.
+// (this only applies to 8 bit machines).
+UNLESS binfile=0 | pass=first THEN
+$(
+    LET hex=TABLE 0,  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+                      0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0
+    LET rel=TABLE 0,  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+                      0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0
+    STATIC
+    $(  beginblock = 0     // begining of next block for map of store
+        oldpc = -1         // calculated value of current pc
+        pc.valid = FALSE   // FALSE until first pc is set
+        first.valid = FALSE// last pc was first valid pc set
+        overflowing = FALSE// TRUE when about to run out of address space
+    $)
+    LET alpharec(str, type, info) BE
+    $(  // generates a checksummed record with string 'str' in the field
+        // from columns 2 to 5 with record type 'type'.
+        // 'info' represents the information necessary for the body of the
+        // record.
+        LET sum = type+(info&byte1)+((info&byte2) >> 8)    // checksum
+        selectoutput(binfile)
+        IF str=0 THEN str:="NoName"
+        wrch('$')
+        FOR i=1 TO 6 DO
+        $(  LET ch=(i>str%0 -> '*S', str%i)
+            wrch(ch)
+            sum:=sum+cvtchar(ch)
+        $)
+        TEST type=cd.code   THEN writef("%X2%X4", type, info) ELSE
+        TEST type=cd.module THEN writef("%X2%X2", type, info) ELSE
+        $(  LET b=8*bytesperasmword
+            LET m=(1<<b)-1
+            writehex(type, 2)
+            FOR i=wordsperaddress-1 TO 0 BY -1 DO
+            outhex((info>>(i*b))&m)
+        $)
+        outhex(-sum)
+        wrch('*N')
+    $)
+    LET clearbuf(hex, type) BE
+    $(  // clears one of the buffers kept in this routine ('hex' or 'rel').
+        // this buffer is pointed to by 'hex'.
+        // generates a data or relocating information record depending upon
+        // 'type'.
+        LET blocklen=(type=cd.data -> hex!0, hex!0/2)
+        selectoutput(binfile)
+        IF pc.valid | blocklen>0 THEN
+        $(  IF blocklen\=0 | type=cd.data THEN
+            $(  LET blockaddr=(type=cd.data -> oldpc-blocklen, 0)
+                LET sum=blocklen+(blockaddr >> 8)+(blockaddr & #XFF)+type
+                wrch(type=cd.data -> ':','$')
+                writehex(blocklen,2)
+                writehex(blockaddr, 4)
+                writehex(type, 2)
+                FOR i=1 TO hex!0 DO
+                $(  sum:=sum+hex!i
+                    outhex(hex!i)
+                $)
+                outhex(-sum)
+                wrch('*N')
+            $)
+            hex!0:=0
+        $)
+    $)
+    LET saveout=output()
+    LET savewrch=wrch
+    wrch:=syswrch
+    SWITCHON type INTO
+    $(  CASE cd.undef:
+             // 'arg' is the value for the byte used for undefined output
+             ENDCASE
+        CASE cd.clear:
+            // clear internal buffers
+            UNLESS hex!0=0 THEN clearbuf(hex, cd.data)
+            clearbuf(rel, cd.rel)
+            selectoutput(saveout)
+            ENDCASE
+        CASE cd.newpc:
+            // program counter has changed
+            UNLESS oldpc=arg THEN
+            $(  TEST pc.valid THEN
+                $(  LET s1=(arg>=0 -> +1,-1)
+                    LET s2=(oldpc>=0 -> +1,-1)
+                    IF hex!0>0 | (s1=s2->s1*(arg-oldpc),s2)<0 | first.valid THEN
+                    clearbuf(hex, cd.data)
+                    first.valid:=FALSE
+                $) ELSE first.valid:=TRUE
+        //      UNLESS mapfile=0 THEN
+        //        $(  selectoutput(mapfile)
+        //            writef("%X4 - %X4  (%N)*N",beginblock,
+        //                   oldpc,oldpc-beginblock)
+        //            beginblock:=arg
+        //        $)
+                oldpc:=arg
+                selectoutput(saveout)
+            $)
+            pc.valid := TRUE
+            ENDCASE
+        CASE cd.data:
+            $(  // output 'arg' to the intel hex file
+                IF overflowing THEN error(e.overflow)
+                hex!0:=hex!0+1
+                hex!(hex!0):=arg
+                overflowing := (oldpc = #XFFFF)
+                // #XFFFF should be the following really:
+                // (1 << (bytesperasmword * wordsperaddress)) - 1
+                oldpc := oldpc + 1
+                IF hex!0>=hexoutwidth THEN
+                $(  clearbuf(hex, type)
+                    selectoutput(saveout)
+                $)
+            $)
+            ENDCASE
+        CASE cd.eof:
+            // arg is the programs start address
+            IF overflowing & hex!0=0 THEN oldpc := #XFFFF
+            clearbuf(hex, cd.data)
+            clearbuf(rel, cd.rel)
+            writef(":00%X401", arg)
+            outhex( -(1+(arg&byte1)+((arg&byte2)>>8)) )
+            wrch('*N')
+            selectoutput(saveout)
+            ENDCASE
+        CASE cd.int:
+        CASE cd.absint:
+        CASE cd.wext:
+        CASE cd.ext:
+            // 'arg' holds the name of the symbol and:
+            // 'arg1' is the address of the internal symbol, or
+            // 'arg1' is the last symbol that used the external symbol
+            alpharec(arg, type, arg1)
+            selectoutput(saveout)
+            ENDCASE
+        CASE cd.rel:
+            // store 'arg' as address in 'rel' buffer for relocation info
+            rel!0 := rel!0+2
+            rel!(rel!0-1) := (arg&byte2) >> 8
+            rel!(rel!0)   := (arg&byte1)
+            IF rel!0>=hexoutwidth THEN
+            $(  clearbuf(rel, cd.rel)
+                selectoutput(saveout)
+            $)
+            ENDCASE
+        CASE cd.module:
+            // 'arg' is TRUE if module is absolute FALSE otherwise,
+            // 'arg1' is the name of the new module
+            clearbuf(hex, cd.data)
+            clearbuf(rel, cd.rel)
+            alpharec(arg1, cd.module, (arg->0,1))
+            pc.valid := FALSE
+            selectoutput(saveout)
+            ENDCASE
+        CASE cd.code:
+            // 'arg' is the name of the object machine
+            // 'arg1' is packed as follows:
+            //          bits 15 - 12:  bytes per addressable unit
+            //          bits 11 -  8:  bytes per address
+            //          bits 7  -  0:  flags (bit 0 = MSB first)
+            UNLESS hex!0=0 THEN clearbuf(hex)
+            clearbuf(rel, cd.rel)
+            alpharec(arg, cd.code, arg1)
+            selectoutput(saveout)
+            ENDCASE
+        CASE cd.opt:
+            // 'arg' is the option string to be given
+            // 'arg1' is the level of the option
+            $(  LET sum= -type-(arg1 & #XFF) - arg%0
+                selectoutput(binfile)
+                FOR i=1 TO arg%0 DO sum:=sum-cvtchar(arg%i)
+                writef("$%X2%X20011%S%X2*N",arg%0,arg1,arg,sum)
+                selectoutput(saveout)
+            $)
+            ENDCASE
+        CASE cd.prag:
+            // 'arg' is the name of the pragmat begin given
+            // 'arg1' is the pragmat string being generated
+            $(  LET sum= -type-arg%0
+                selectoutput(binfile)
+                FOR i=1 TO arg%0 DO sum:=sum-cvtchar(arg%i)
+                wrch('$')
+                FOR i=1 TO 6 DO
+                $(  LET ch=(i>arg1%0->'*S',arg1%i)
+                    sum:=sum-cvtchar(ch)
+                    wrch(ch)
+                $)
+                writef("%X2%X2%S%X2*N",type,arg%0,arg,sum)
+                selectoutput(saveout)
+            $)
+            ENDCASE
+        DEFAULT:
+            error(e.interror, 8)
+    $)
+    wrch:=savewrch
+$)
+/*CHEX>*/
+
+
+
+
+/*<TIMBIN
+AND timbin(type, arg, arg1) BE
+// this procedure generates "TIMBIN".
+// It is roughly compatable with TRIPOS binary, see definition.
+UNLESS binfile=0 THEN
+$(  MANIFEST $(  relbuf.size = 32  $)
+    LET rel=TABLE 0,  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+                      0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0
+    STATIC
+    $(  oldpc = -1            // calculated value of current pc
+        pc.valid = FALSE      // FALSE until first pc is set
+        first.valid = FALSE   // last pc was first valid pc set
+        absolute.module=TRUE  // TRUE when the current module is absolute
+        block.len = 0         // length of current data block
+        block.list = null     // list of data block lengths
+        block.list.top = null // top entry in the block list
+        undef = 0             // value of undefined bytes
+        last.end.out = 0      // last address in last block output
+        pending.byte = -1     // -1 if no byte pending otherwise the byte
+    $)
+    LET abs.cmp(v1, v2) = VALOF
+    $(  LET s1 = (v1>=0 -> +1, -1)
+        LET s2 = (v2>=0 -> +1, -1)
+        RESULTIS (s1=s2 -> s1*(v1-v2), s2)
+    $)
+    LET writeword(word) BE
+    $(  wrch(word>>8)
+        wrch(word & #XFF)
+    $)
+    LET clearbuf(rel) BE
+    $(  // clears the buffer 'rel'
+        // generates a relocating information record
+        LET blocklen = rel!0
+        IF pc.valid | blocklen>0 THEN
+        $(  LET saveout = output()
+            selectoutput(binfile)
+            IF blocklen\=0 THEN
+            $(  LET base = (block.list.top=null -> 0, block.list.top!2)
+                writeword(1010)
+                writeword(blocklen)
+                FOR i=1 TO rel!0 DO writeword(rel!i-base)
+            $)
+            rel!0:=0
+            selectoutput(saveout)
+        $)
+    $)
+    LET new.buf() BE
+    $(  // record new block
+        TEST block.list.top=null THEN   // list it empty
+        $(  block.list.top := simplegetvec(2)
+            block.list := block.list.top
+        $) ELSE
+        $(  block.list.top!0 := simplegetvec(2)
+            block.list.top := block.list.top!0
+        $)
+        block.list.top!0 := null
+        block.list.top!1 := block.len
+        block.list.top!2 := oldpc-block.len
+        block.len := 0
+    $)
+    LET end.block() BE
+    UNLESS block.list.top=null THEN
+    $(  IF pending.byte>=0 THEN
+        $(  LET saveout = output()
+            selectoutput(binfile)
+            writeword(absolute.module -> 1003, 1000)
+            IF absolute.module THEN
+            writeword(block.list.top!1 + block.list.top!2 - 1)
+            writeword(1)
+            writeword((pending.byte<<8) | (undef & #XFF))
+            selectoutput(saveout)
+            pending.byte := -1
+        $)
+        block.list.top := block.list.top!0
+    $)
+    LET begin.block() BE
+    UNLESS block.list.top=null THEN
+    IF pc.valid | block.list.top!1>0 THEN
+    $(  LET blockaddr = block.list.top!2
+        LET fore.block = (\absolute.module &
+                          abs.cmp(blockaddr, last.end.out) > 0 ->
+                          blockaddr - last.end.out, 0) +
+                        (pending.byte>=0 -> 1,0)
+        LET blocklen = block.list.top!1 + fore.block
+        blockaddr := blockaddr - fore.block
+//      writef("TIMBIN: next block %X4 - %X4 (fore block size %X4)*N",
+//            blockaddr, blockaddr+blocklen, fore.block)
+        UNLESS blocklen=0 & \absolute.module THEN
+        $(  // allow zero length records for absolute records
+            // (since they provide the information that the assembler
+            // has visited that location) but not for relocatable
+            // ones (since there is not location field).
+            LET saveout = output()
+            selectoutput(binfile)
+            writeword(absolute.module -> 1003, 1000)
+            IF absolute.module THEN writeword(blockaddr)
+            writeword(blocklen/2)
+            UNLESS absolute.module THEN
+            $(  block.list.top!1 := blocklen
+                block.list.top!2 := blockaddr  // to account for FORE.BLOCK
+                IF pending.byte>=0 THEN wrch(pending.byte)
+                FOR i=1 TO (fore.block & (\1)) - (pending.byte>=0 -> 1, 0) DO
+                wrch(undef)
+                pending.byte := ((fore.block&1)=1 -> undef, -1)
+            $)
+            last.end.out := blockaddr+blocklen
+            selectoutput(saveout)
+        $)
+    $)
+    LET savewrch=wrch
+    wrch:=syswrch
+    TEST pass=first THEN
+    SWITCHON type INTO
+    $(  CASE cd.undef:
+            // 'arg' holds value for byte used for undefined code
+            undef := arg
+            ENDCASE
+        CASE cd.clear:
+            // clear internal buffers
+//          writef("TIMBIN: line %i4 CLEAR*N", line.of.file)
+            new.buf()
+            rel!0 := 0
+            ENDCASE
+        CASE cd.newpc:
+            // program counter has changed
+//          writef("TIMBIN: line %I4 NEWPC %X4 (old PC = %X4)*N",
+//                 line.of.file, arg, oldpc)
+            UNLESS oldpc=arg THEN
+            $(  TEST pc.valid THEN
+                $(  LET s1=(arg>=0 -> +1,-1)
+                    LET s2=(oldpc>=0 -> +1,-1)
+                    IF block.len>0 | (s1=s2->s1*(arg-oldpc),s2)<0 |
+                       first.valid THEN new.buf()
+                    first.valid:=FALSE
+                $) ELSE first.valid:=TRUE
+                oldpc:=arg
+                pc.valid:=TRUE
+            $)
+            ENDCASE
+        CASE cd.data:
+//          writef("TIMBIN: line %I4 DATA %X2 (buffer size = %N)*N",
+//                 line.of.file, arg, block.len)
+            block.len := block.len+1
+            oldpc:=oldpc+1
+            ENDCASE
+        CASE cd.rel:
+            // store 'arg' as address in 'rel' buffer for relocation info
+//          writef("TIMBIN: line %I2 RELDATA %X4 (pc = %X4)*N",
+//                 line.of.file, arg, oldpc)
+            rel!0 := rel!0+1
+            IF rel!0>=relbuf.size THEN
+            $(  new.buf()
+                rel!0 := 0
+            $)
+            ENDCASE
+        CASE cd.module:
+            // 'arg' is TRUE if module is absolute FALSE otherwise,
+            // 'arg1' is the name of the new module
+//          writef("TIMBIN: line %I4 MODULE*N", line.of.file)
+            block.list := null
+            block.list.top := null
+            block.len := 0
+            rel!0 := 0
+            pc.valid := FALSE
+            ENDCASE
+        DEFAULT: ENDCASE
+    $) ELSE   //  pass two
+    SWITCHON type INTO
+    $(  CASE cd.clear:
+            // clear internal buffers
+            end.block()
+            clearbuf(rel)
+            begin.block()
+            ENDCASE
+        CASE cd.newpc:
+            // program counter has changed
+            UNLESS oldpc=arg THEN
+            $(  TEST pc.valid THEN
+                $(  IF block.list.top!1>0 | abs.cmp(arg,oldpc) |
+                    first.valid THEN
+                    $(  TEST absolute.module THEN end.block() ELSE
+                        block.list.top := block.list.top!0
+                        clearbuf(rel)
+                        begin.block()
+                    $)
+                    first.valid:=FALSE
+                $) ELSE first.valid:=TRUE
+                oldpc:=arg
+                pc.valid:=TRUE
+            $)
+            ENDCASE
+        CASE cd.data:
+            $(  // output 'arg' to the intel hex file
+                LET saveout = output()
+                selectoutput(binfile)
+                TEST pending.byte>=0 THEN
+                $(  writeword((pending.byte<<8) | (arg&#XFF))
+                    pending.byte := -1
+                $) ELSE pending.byte := arg
+                selectoutput(saveout)
+                oldpc:=oldpc+1
+            $)
+            ENDCASE
+        CASE cd.eof:
+            $(  // arg is the programs start address
+                LET saveout = output()
+                selectoutput(binfile)
+                writeword(1002)
+                selectoutput(saveout)
+            $)
+            ENDCASE
+        CASE cd.int:
+        CASE cd.absint:
+        CASE cd.wext:
+        CASE cd.ext:
+            // 'arg' holds the name of the symbol and:
+            // 'arg1' is the address of the internal symbol, or
+            // 'arg1' is the last symbol that used the external symbol
+            error(e.badloaddir)
+            ENDCASE
+        CASE cd.rel:
+            // store 'arg' as address in 'rel' buffer for relocation info
+            rel!0 := rel!0+1
+            rel!(rel!0)   := arg
+            IF rel!0>=relbuf.size THEN
+            $(  block.list.top := block.list.top!0
+                clearbuf(rel, cd.rel)
+                begin.block()
+            $)
+            ENDCASE
+        CASE cd.module:
+            // 'arg' is TRUE if module is absolute FALSE otherwise,
+            // 'arg1' is the name of the new module
+            absolute.module := arg
+            pc.valid := FALSE
+            last.end.out := 0             // address of end of last block
+            block.list.top := block.list  // rewind to begining of the list
+            begin.block()
+            ENDCASE
+        CASE cd.code:
+            // 'arg' is the name of the object machine
+            // 'arg1' is the number of bytes per word used (1)
+            ENDCASE
+        CASE cd.opt:
+            // 'arg' is the option string to be given
+            // 'arg1' is the level of the option
+            error(e.badloaddir)
+            ENDCASE
+        CASE cd.prag:
+            // 'arg' is the name of the pragmat begin given
+            // 'arg1' is the pragmat string being generated
+            ENDCASE
+        DEFAULT:
+            error(e.interror, 8)
+    $)
+    wrch:=savewrch
+$)
+/*TIMBIN>*/
+
+
+
+
+AND putlabelspec(spec) BE
+$(  /*    'spec' is a 3 element vector which is the result of parsing
+       some label expression (see 'label.expression').  Offset 0 contains
+       the value obtained.  Offset 1 can be 0 or 1 (and other values if
+       the parsed expression was illegal or an external), 0 implies that
+       the value is absolute.  Offset 2 is zero unless the expression was
+       an external in which case it will contain the address of the external
+       symbol's value field.
+    */
+    LET local.pc = pc+binbuf!b.top-b.nextmod
+    TEST spec!2=0 THEN putaddress(spec!0) ELSE putaddress(!(spec!2))
+    IF spec!1\=0 /* i.e. relocatable or external */ THEN
+    TEST spec!2=0 /* not external */ THEN code.gen(cd.rel, local.pc)
+    ELSE !(spec!2) := local.pc
+$)
+
+
+
+
+
+
+
+
+
+
+

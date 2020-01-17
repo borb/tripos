@@ -1,0 +1,1627 @@
+/*****************************************************************************
+**                (C) Copyright 1984  TRIPOS Research Group                 **
+**               University of Cambridge Computer Laboratory                **
+******************************************************************************
+
+                 ######   #######   ########  ##        ##
+                ########  ########  ########  ##        ##
+                ##        ##    ##  ##        ##        ##
+                #######   #######   ######    ##        ##
+                      ##  ##        ##        ##        ##
+                      ##  ##        ##        ##        ##
+                ########  ##        ########  ########  ########
+                 ######   ##        ########  ########  ########
+
+******************************************************************************
+**      Author:   Nick Ody                              January 1984        **
+*****************************************************************************/
+
+// Based on a program on Phoenix by D.J. Watson.
+
+
+//   This program is given a document and a list of words to be ignored
+//and produces a list of all non-ignorable words in the document, together
+//with the line numbers on which they occur.
+
+//   The definition of a "word" is group of letters, digits etc. containing
+//at least one letter and surrounded by "layout" or "punctuation" characters.
+//Punctuation characters are stripped from beginning or end of word, but
+//retained if embedded.  A layout character terminates a word.
+
+//   Letters are mapped to lower case on input if a global switch is set.
+//Otherwise case matching is exact except for the first letter of a word,
+//where an upper case letter in a main document will match a lower case
+//letter in a wordlist.
+
+//   The wordlist is in two parts:  MINDICT should be a small list of common
+//words.  It is read in before the main document.  DICT is read in after the
+//main document and used to eliminate known words.  A further word list,
+//CONTEXT, may be given.  When a word in CONTEXT is found the context of
+//the surrounding text is printed.  Any of these may be omitted.
+
+//   The Tripos version of the program allowed lists as well as single
+//files to be supplied for any of the above.  In the Phoenix version this
+//mechanism is still supported in the main program, but there is no way of
+//feeding in multiple file parameters.
+
+// Mod record
+// ----------
+
+// 08-feb-84 NJO  The dictionary "sys:info.dictionaries.main" now included
+//                by default unless the switch NODEFAULTDICT is set.  Single
+//                quote removed from list of "punctuation" characters.
+// 14-mar-84 NJO  Map introduced to take characters to attributes in order
+//                to administer punctuation rules etc.  Single quote returned
+//                to punctuation list.  Punctuation rules upgraded:  now
+//                included as part of word unless adjacent to a layout char.
+//                Store usage now only printed if STATS switch set.
+// 08-may-84 NJO  Testflags inserted after 'duff character' error to cope
+//                with SPELLing binaries etc. by accident!
+// 18-may-84 NJO  Flags etc. added so that default DICT appears as "file 0"
+//                in messages.  Distinct word count kept and printed in final
+//                message.  Line numbers altered to include file number as
+//                well and printed as "file.line".
+// 07-aug-84 NJO  Comparison ordering function changed so that letters take
+//                priority over other characters and numbers are numerical.
+// 09-aug-84 NJO  Bug fix in CONTEXT output:  line numbers now printed in
+//                the same style as in the main output.  Comparison count
+//                and CTRL/E message introduced into sorting phase.  CONTEXT
+//                buffer re-organised.  Now closes CONTEXTOUT file!
+// 17-aug-84 NJO  Bug fixed - used to print store usage if BREAK typed during
+//                reading of parameters.
+// 23-may-85 NJO  Modified for porting back to Phoenix - MVS this time!
+//                SORT.LIST routine incorporated in source.  Interactive
+//                file inputting and file lists abolished.
+// 07-jun-85 NJO  SMALLRDCH now switched between CONTEXT and non-CONTEXT
+//                supporting versions to save work when (as is usual) the
+//                facility isn't needed.  Some other speed-up tidies done too.
+// 09-aug-85 NJO  Non lower casing added as a global switch.  Defaults to
+//                non lower case.  Character sets for layout and punctuation
+//                modified.  Case matching algorithm changed.
+// 16-aug-85 NJO  Newline before statistics info.  Bug fix in first character
+//                upper-casing code.
+// 20-aug-85 NJO  Count of words in document which are also in dictionary added.
+//                'Bad characters' now converted to layout characters.  Message
+//                printed on first occurrence.
+// 12-sep-85 NJO  Error message improved for out-of-store in READ.WORD.  Over-
+//                long words now truncated rather than causing fatal error.
+// 18-sep-85 NJO  Decoding of parameter string added to set lower-case and
+//                tracing facilities.
+// 28-oct-85 NJO  Options for dictionary style output (no line nos. etc.), and
+//                sorting output on line numbers.  Error message on repeat
+//                words in dictionary removed.  Output letter ordering changed
+//                to aAbB  etc. - comparison routine modded.
+// 29-oct-85 NJO  LEX.ORDER.MAP added to handle lexical order of output.
+// 01-nov-85 NJO  Option C to force count output in dictionary mode.  Print no.
+//                of words not in dict.  Ignore ';', ',', '*S' in opt string.
+//    nov-85 BCK  Correct spelling in comments!  Change program name to
+//                SPELLCHECK in error messages.
+// 18-nov-85 NJO  New return code 4 for illegal character(s) in input.  Now
+//                stops with RC 12 on illegal options.  RC still 16 for all
+//                other errors, and zero for success.
+//    dec-85 BCK  Add extra EBCDIC characters to layout list.  Bug fix: tests
+//                for newline in wrong order when printing dict type o/p list.
+// 19-dec-85 NJO  Prevent same CONTEXT line from being printed twice.  Count
+//                CONTEXT words as normal words for statistics output.
+// 23-dec-85 NJO  New option 'R' to print words which are in the dictionary.
+//                Stats info: count of words on MINDICT and CONTEXT inputs.
+// 02-Jan-86 NJO  Bug fix in "upper case first letter" fudge in read.word.
+// 06-Mar-86 NJO  Ported back to Tripos!
+// 17-Mar-86 NJO  Bug fix:  private compstring routine must have a different
+//                name (now nc.compstring) or Tripos filing system won't work!
+//                Couple of other tidies.
+// 18-Mar-86 NJO  Another bug fixed in string comparison routine!
+// 08-May-86 NJO  Bug fix:  didn't check for absence of OPT parameter!
+
+SECTION "spell"
+
+GET "libhdr"
+GET "bcpl.sortlist"
+
+GLOBAL
+$( hashtab         : ug       // hash table!
+   sysprint        : ug+1     // stream for messages
+   doc.lineno      : ug+2     // line within whole (concatenated) document
+   fileno          : ug+3     // current file in a concatenation
+   file.lineno     : ug+4     // line in current file
+   wordno          : ug+5     // word within whole source document
+   ch              : ug+6     // pending char from READ.WORD
+   ch.type         : ug+7     // bits indicate attributes of CH
+   level.exit      : ug+8     // exit back to top level used by ERROR
+   label.exit      : ug+9
+   rw.result       : ug+10    //Result from read.word
+   word.buf        : ug+11    //Used by read.word
+   chtype.map      : ug+12    //Byte vector:  char value => type
+   stats           : ug+13    //Print hash table statistics etc. if set
+   gvec.anchor     : ug+14    //Used by SMALLGETVEC (q.v.)
+   gvec.ptr        : ug+15
+   gvec.size       : ug+16
+   gvec.number     : ug+17
+   rdch.buf        : ug+18    //Circ. buf. used by SMALLRDCH and write.context
+   rdch.buf.ptr    : ug+19    //Unloading pointer: next char to be returned
+   rdch.buf.lead   : ug+20    //Loading pointer: next position to be written
+   rdch.buf.trail  : ug+21    //Number of chars in buffer behind unload ptr
+   nodefaultdict   : ug+22    //Set from RDARGS switch
+   n.comparisons   : ug+23    //Counts calls of COMPARE during sort phase
+   n.doc.files     : ug+24    //Number of files in source document
+   distinct.words  : ug+25    //Number of different words in DOC
+   words.in.dict   : ug+26    //No of source words which were in the dictionary
+   smallrdch       : ug+27    //Proc. set to CXT.SMALLRDCH or NOCXT.SMALLRDCH
+   reading.dict    : ug+28    //Set TRUE if reading MINDICT, CONTEXT or DICT
+   lower.case.ip   : ug+29    //If TRUE then all input characters lower cased
+   dict.type.output: ug+30    //No counts etc. in output if TRUE
+   line.order.output: ug+31   //Output in line number (not alpha) order
+   chars.on.out.line: ug+32   //Number of chars printed (dict o/p mode only)
+   dict.out.width   : ug+33   //Max line width in dict o/p mode
+   lex.order.map    : ug+34   //Byte vector:  char value => lexical order
+   force.count.info : ug+35   //If TRUE count info printed in dict o/p mode
+   illeg.char.found : ug+36   //Set TRUE on illegal character in any input
+   last.cxt.line    : ug+37   //Line no of last printed CONTEXT line
+   reverse.op.test  : ug+38   //Show words which ARE in the dictionary
+$)
+
+MANIFEST
+$( hashsize        = 1009     //Size (not upb) of hashtab - should be prime
+   gvec.blksize    = 1023     //Used by SMALLGETVEC (q.v.)
+   argv.size       = 100/bytesperword
+   max.wd.size     = 80       //Largest allowed "word" (bytes)
+   linevec.size    = 7        //Size of extension block for occurrence lines
+   rdch.buf.upb    = 159      //Buffer for WRITE.CONTEXT
+   rdch.buf.maxch  = (rdch.buf.upb+1)/2 //No of chars buffered behind and ahead
+   default.dict.out.width = 132         //Line width in dict o/p mode
+   min.dict.out.width     = 40
+   max.dict.out.width     = 1024
+
+   wd.link         = 0        //Fields of a word descriptor
+   wd.type         = 1
+   wd.count        = 2        //Count of occurrences
+   wd.line         = 3        //Line of first occurrence
+   wd.linevec      = 4        //Extra block for further occurrences
+   wd.string       = 5
+
+   wd.type.new     = 0        //Values in wd.type field
+   wd.type.word    = 1
+   wd.type.dict    = 2
+   wd.type.mindict = 3
+   wd.type.context = 4
+
+                              //Character attribute bits
+   ch.type.print   = #X01     //Printing character
+   ch.type.letter  = #X02     //'A'<=ch<='Z' or 'a'<=ch<='z'
+   ch.type.layout  = #X04
+   ch.type.punct   = #X08
+   ch.type.error   = #X10     //Funny characters faulted
+   ch.type.eol     = #X20     //Increments line number
+   ch.type.uc.ltr  = #X40     //'A'< =ch<='Z'
+   ch.type.number  = #X80
+   ch.type.eos     = ch.type.eol | ch.type.layout
+
+   stream.link     = 0        //Stream descriptor
+   stream.scb      = 1
+$)
+
+LET start() BE
+
+$( LET to.stream   = 0        // output files
+   LET cxt.out     = 0
+   LET doc.anch    = 0        // anchors of input file descriptor chains
+   LET dict.anch   = 0
+   LET min.anch    = 0
+   LET cxt.anch    = 0
+   LET cxt.enabled = FALSE                         // set if CONTEXT requested
+   LET rc          = 16                            // set to zero iff success
+   LET layout.ch   = "*S*T*N*C*P"                  // these delimit words
+   LET punct.ch    = "!*"*'()[]{}_;:,.?<>"         // stripped from ends of wds
+   LET eol.ch      = "*N*C*P"                      // these increment line no.
+   LET misc.ch     = "#$%&**+-/=@\^`|~"            // other printing chars
+   LET wd.vec      = VEC max.wd.size/bytesperword  // put into global WORD.BUF
+   LET ch.vec      = VEC 255/bytesperword          // ditto CHTYPE.MAP
+   LET lex.vec     = VEC 255/bytesperword          // ditto LEX.ORDER.MAP
+   LET rb.vec      = VEC rdch.buf.upb/bytesperword // ditto RDCH.BUF
+
+   // initialise globals
+
+   hashtab        := 0
+   sysprint       := output()
+   doc.lineno     := 1
+   wordno         := 0
+   level.exit     := level()
+   label.exit     := exit
+   word.buf       := wd.vec
+   chtype.map     := ch.vec
+   stats          := FALSE
+   gvec.anchor    := 0
+   gvec.size      := 0
+   gvec.number    := 0
+   rdch.buf       := rb.vec
+   distinct.words := 0
+   words.in.dict  := 0
+   n.comparisons  := 0
+   smallrdch      := nocxt.smallrdch
+   reading.dict   := TRUE
+   lex.order.map  := lex.vec
+   illeg.char.found := FALSE
+
+   // read arguments and open streams etc.
+
+   $( LET argv   = VEC argv.size
+      LET argstr = "FROM=DOC/A,TO/K,WORDLIST=IGNORE=DICT/K,MINDICT/K,*
+                   *CONTEXT/K,CONTEXTOUT/K,STATS/S,NODEFAULTDICT/S,OPT/K"
+
+      IF rdargs(argstr, argv, argv.size) = 0 THEN
+         error("Args unsuitable for string %S", argstr)
+
+      doc.anch    := read.file.list(argv!0, "DOC")   // main source document
+      n.doc.files := result2
+
+      IF argv!1 ~= 0 THEN
+      $( to.stream := findoutput(argv!1)
+         IF to.stream = 0 THEN
+            error("Can't open TO stream %S", argv!1)
+      $)
+
+      nodefaultdict := argv!7 ~= 0
+
+      UNLESS nodefaultdict DO    // set up descriptor for default dictionary
+      $( LET dname = ":info.dictionaries.main"
+         LET dict = findinput(dname)
+         LET desc = smallgetvec(stream.scb)
+
+         IF dict = 0 THEN
+            error("Can't open default dictionary %S", dname)
+
+         IF desc = 0 THEN
+            error("Can't get space for file descriptor")
+
+         stream.link!desc := 0
+         stream.scb!desc  := dict
+         dict.anch        := desc
+      $)
+
+      IF argv!2 ~= 0 THEN    // chain other dictionaries after default
+      $( LET dict.file.list = read.file.list(argv!2, "DICT")
+
+         TEST dict.anch = 0
+         DO dict.anch             := dict.file.list
+         OR stream.link!dict.anch := dict.file.list
+      $)
+
+      IF argv!3 ~= 0 THEN
+         min.anch := read.file.list(argv!3, "MINDICT")
+
+      IF argv!4 ~= 0 THEN
+         cxt.anch := read.file.list(argv!4, "CONTEXT")
+
+      IF argv!5 ~= 0 THEN
+      $( cxt.out := findoutput(argv!5)
+         IF cxt.out = 0 THEN
+            error("Can't open CONTEXTOUT stream %S", argv!5)
+      $)
+
+      IF argv!6 ~= 0 THEN    // print statistics at the end
+         stats := TRUE
+
+      init.chtype.map(layout.ch, punct.ch, eol.ch, misc.ch)
+                                        // these may be parameters one day
+
+      lower.case.ip     := FALSE     // initialise option switches
+      dict.type.output  := FALSE
+      line.order.output := FALSE
+      force.count.info  := FALSE
+      reverse.op.test   := FALSE
+//      stats             := FALSE   // already set in Tripos version
+
+      IF argv!8 ~= 0 THEN
+      $( UNLESS decode.options(argv!8) DO
+            error("Bad options")
+      $)
+   $)
+
+   hashtab := smallgetvec(hashsize-1)
+   IF hashtab = 0 THEN
+      error("Can't get hash table vector (size %N)", hashsize)
+
+   FOR i = 0 TO hashsize-1 DO
+      hashtab!i := 0
+
+   read.files(min.anch, read.mindict)
+   read.files(cxt.anch, read.context)
+
+   IF (cxt.out ~= 0) | (to.stream ~= 0) THEN   // set stream for context info
+   $( TEST cxt.out = 0                         // during source document read
+      DO selectoutput(to.stream)
+      OR selectoutput(cxt.out)
+   $)
+
+   IF cxt.enabled THEN
+      smallrdch := cxt.smallrdch    // switch on context buffer handling
+
+   reading.dict := FALSE
+
+   read.files(doc.anch, read.doc)
+
+   smallrdch := nocxt.smallrdch     // switch context buffer off again
+
+   reading.dict := TRUE
+
+   read.files(dict.anch, read.dict)
+
+   IF to.stream ~= 0 THEN
+      selectoutput(to.stream)
+
+   print.wordlist()
+
+   IF force.count.info | NOT dict.type.output THEN
+   $( writef("*N*
+             *Total lines:     %N*N*
+             *Total words:     %N*N*
+             *Distinct words:  %N (%N in dictionary, %N not)*N",
+                                   doc.lineno-1, wordno, distinct.words,
+                                   words.in.dict, distinct.words-words.in.dict)
+   $)
+
+   rc := illeg.char.found -> 4, 0
+
+exit:
+
+   IF stats THEN
+      message("%N blocks of store used", gvec.number)
+
+   close.file.list(doc.anch)
+   close.file.list(dict.anch)
+   close.file.list(min.anch)
+   close.file.list(cxt.anch)
+
+   smallgetvec.release()
+
+   IF (to.stream ~= 0) & (to.stream ~= sysprint) THEN
+   $( selectoutput(to.stream)
+      endwrite()
+   $)
+
+   IF (cxt.out ~= 0) & (cxt.out ~= sysprint) THEN
+   $( selectoutput(cxt.out)
+      endwrite()
+   $)
+
+   selectoutput(sysprint)
+
+   stop(rc)
+$)
+
+AND read.files(list, read.proc) BE
+
+//   Call the proc READ.PROC for each file in the list of file descriptors
+//passed as parameter LIST.
+
+$( LET stream.desc = list
+
+   fileno := 1
+
+   WHILE stream.desc ~= 0 DO     // initialise for the next file
+   $( selectinput(stream.scb!stream.desc)
+
+      file.lineno    := 1
+      rdch.buf.ptr   := 0    // clear SMALLRDCH's read ahead buffer
+      rdch.buf.lead  := 0
+      rdch.buf.trail := 0
+      word.buf%1     := 0    // see case fudge in read.word!
+      ch             := smallrdch()
+
+      read.proc()   // processes the file
+
+      fileno      := fileno + 1
+      stream.desc := stream.link!stream.desc
+   $)
+$)
+
+AND read.doc() BE
+
+//   Read successive words from the input document and record the line
+//number(s) on which they occur.
+
+$( LET last.lineno = file.lineno
+
+   last.cxt.line := 0      // reset last CONTEXT line printed
+
+   WHILE read.word(TRUE) DO
+   $( LET type       = result2    // result2 is the TYPE returned by READ.WORD
+      LET eff.lineno = file.lineno*n.doc.files + fileno-1 // packed file & line
+
+      IF testflags(1) THEN
+         error("BREAK while reading main document")
+
+      IF testflags(8) THEN
+         message("Reading main document (file %N line %N)", fileno, file.lineno)
+
+      wordno      := wordno+1
+      doc.lineno  := doc.lineno + file.lineno - last.lineno
+      last.lineno := file.lineno
+
+      SWITCHON type INTO
+
+      $( CASE wd.type.new:     // new word - set type to WORD and record line
+         wd.type!rw.result    := wd.type.word
+new.word:
+         wd.count!rw.result   := 1
+         wd.line!rw.result    := eff.lineno
+         wd.linevec!rw.result := 0
+         distinct.words       := distinct.words+1
+         ENDCASE
+
+         CASE wd.type.mindict: // word in MINDICT - ignore it
+         ENDCASE
+
+         CASE wd.type.context: // context info required - write it out
+         write.context()
+         IF wd.count!rw.result = 0 THEN
+            GOTO new.word
+         GOTO old.word
+
+         CASE wd.type.word:    // another occurrence of a new word - record line
+old.word:
+         $( LET count = wd.count!rw.result
+
+            IF eff.lineno = wd.line!rw.result THEN   // same line - ignore
+               GOTO word.end
+
+            IF count = 1 THEN    // we must obtain a line number vector
+            $( LET linevec = smallgetvec(linevec.size-1)
+               IF linevec = 0 THEN
+                  error("Failed to get store for line number vector (increase STORE)")
+
+               wd.linevec!rw.result := linevec
+               linevec!0            := eff.lineno
+
+               GOTO inc.count
+            $)
+
+            IF count <= linevec.size + 1 THEN  // still room in number vector
+            $( LET linevec = wd.linevec!rw.result
+
+               IF linevec!(count-2) = eff.lineno THEN // same line - ignore
+                  GOTO word.end
+
+               IF count = linevec.size + 1 THEN   // last slot used up
+                  GOTO inc.count
+
+               linevec!(count-1) := eff.lineno
+            $)
+inc.count:
+            wd.count!rw.result := wd.count!rw.result+1
+word.end:
+         $)
+         ENDCASE
+
+         DEFAULT:
+         message("Unexpected RC %N from read.word reading main document*
+                 * - word is %S", result2, wd.string+rw.result)
+         ENDCASE
+      $)
+   $)
+
+   doc.lineno  := doc.lineno + file.lineno - last.lineno
+$)
+
+AND read.mindict() BE
+
+//   Read words from the currently selected input stream and create
+//WD.TYPE.MINDICT entries so occurrences of the word in the main document
+//will be ignored.
+
+$( LET n.words = 0
+
+      IF testflags(1) THEN
+         error("BREAK while reading MINDICT")
+
+      IF testflags(8) THEN
+         message("Reading MINDICT (file %N line %N)", fileno, file.lineno)
+
+   WHILE read.word(TRUE) DO
+   $( LET type = result2       // result2 is the TYPE of the word just read
+
+      SWITCHON type INTO
+
+      $( CASE wd.type.new:
+         wd.type!rw.result := wd.type.mindict
+         ENDCASE
+
+         CASE wd.type.mindict:
+         message("Duplicated word *"%S*" in MINDICT (file %N line %N)",
+                                     wd.string+rw.result, fileno, file.lineno)
+         ENDCASE
+
+         DEFAULT:
+         message("Unexpected RC %N from read.word reading MINDICT - word is %S",
+                                                   result2, wd.string+rw.result)
+         ENDCASE
+      $)
+
+      n.words := n.words + 1
+   $)
+
+   IF stats THEN
+      message("%N words from MINDICT file %N", n.words, fileno)
+$)
+
+AND read.context() BE
+
+//   Read words from the currently selected input stream and create
+//WD.TYPE.CONTEXT entries so the context will be printed out when such
+//a word is encountered in the document.
+
+$( LET n.words = 0
+
+   WHILE read.word(TRUE) DO
+   $( LET type = result2       // result2 is the TYPE of the word just read
+
+      IF testflags(1) THEN
+         error("BREAK while reading CONTEXT")
+
+      IF testflags(8) THEN
+         message("Reading CONTEXT (file %N line %N)", fileno, file.lineno)
+
+      SWITCHON type INTO
+
+      $( CASE wd.type.new:
+         CASE wd.type.mindict:       // override if it occurs in mindict too
+         wd.type!rw.result  := wd.type.context
+         wd.count!rw.result := 0
+         ENDCASE
+
+         CASE wd.type.context:
+         message("Duplicated word *"%S*" in CONTEXT (file %N line %N)",
+                                     wd.string+rw.result, fileno, file.lineno)
+         ENDCASE
+
+         DEFAULT:
+         message("Unexpected RC %N from read.word reading CONTEXT - word is %S",
+                                                   result2, wd.string+rw.result)
+         ENDCASE
+      $)
+
+      n.words := n.words + 1
+   $)
+
+   IF stats THEN
+      message("%N words from CONTEXT file %N", n.words, fileno)
+$)
+
+AND read.dict() BE
+
+//   Read words from the currently selected input stream. If they have
+//occurred in the document then change the type of the descriptor to
+//WD.TYPE.DICT so it will not be printed out.
+
+$( IF (fileno = 1) & nodefaultdict THEN   //Fudge so default appears as file 0
+      fileno := 2
+
+   WHILE read.word(FALSE) DO
+   $( LET type = result2       // result2 is the TYPE of the word just read
+
+      IF testflags(1) THEN
+         error("BREAK while reading DICT")
+
+      IF testflags(8) THEN
+         message("Reading DICT (file %N line %N)", fileno-1, file.lineno)
+
+      SWITCHON type INTO
+
+      $( CASE wd.type.word:    // occurred in doc. - mark it
+         wd.type!rw.result := wd.type.dict
+         words.in.dict     := words.in.dict + 1
+         ENDCASE
+
+         CASE wd.type.new:     // didn't occur in doc. - ignore
+         CASE wd.type.mindict:
+         CASE wd.type.context:
+         ENDCASE
+
+         CASE wd.type.dict:    // occurs elsewhere in DICT - ignore too!
+         ENDCASE
+
+         DEFAULT:
+         message("Unexpected RC %N from read.word reading DICT - word is %S",
+                                                 result2, wd.string+rw.result)
+         ENDCASE
+      $)
+   $)
+$)
+
+AND print.wordlist() BE
+
+//   Link all the descriptors for words whose type is still WD.TYPE.WORD
+//into one chain and sort them into a sensible order.  Print the result
+//to the output file giving the line number of each recorded occurrence.
+
+$( LET statvec       = VEC 20    // chain length frequency counts for STATS
+   LET list.anchor   = 0
+
+   FOR i = 0 TO 20 DO
+      statvec!i := 0
+
+   FOR chain = 0 TO hashsize-1 DO
+   $( LET anchor   = hashtab+chain
+      LET word     = !anchor
+      LET count    = 0
+
+      UNTIL word = 0 DO
+      $( LET next.word = wd.link!word
+         LET type      = wd.type!word
+         LET print.it  = FALSE
+
+         count := count+1
+
+         IF NOT reverse.op.test & ((type = wd.type.word) |
+                ((type = wd.type.context) & (wd.count!word ~= 0))) THEN
+            print.it := TRUE
+
+         IF reverse.op.test & (type = wd.type.dict) THEN
+            print.it := TRUE
+
+         IF print.it THEN
+         $( wd.link!word := list.anchor            // place WORDs on chain
+            list.anchor  := word
+         $)
+
+         word := next.word
+      $)
+
+      TEST count >= 20
+      DO statvec!20    := statvec!20 + 1   // lengths > 20 all lumped together
+      OR statvec!count := statvec!count + 1
+
+      !anchor := 0   // remove from hash table
+   $)
+
+   IF stats THEN
+   $( LET out = output()
+      selectoutput(sysprint)
+
+      message("Hash table statistics (table size %N)", hashsize)
+      FOR i = 0 TO 20 DO
+         writef("Length %S%I2 occurred %N times*N", (i=20 -> ">=","  "), i,
+                                                                    statvec!i)
+      selectoutput(out)
+   $)
+
+   // now define the comparison routines for use with sort.list
+   // they are logical replacements for compstring(wd.string+e1, wd.string+e2)
+
+   $( LET compare(e1, e2) = VALOF
+
+      // This comparison routine orders items first on letters and digits
+      // considering other characters only if they are needed.  Digits are
+      // placed into numerical order such that 10 comes after 2 etc.
+
+      // Two passes are performed, the first ignoring all non-alphanumerics
+
+      $( MANIFEST
+         $( ch.type.alphanum = ch.type.letter | ch.type.number
+         $)
+
+         LET s1 = wd.string + e1  // strings
+         LET s2 = wd.string + e2
+         LET l1 = s1%0            // string lengths
+         LET l2 = s2%0
+         LET c1 = ?               // current characters
+         LET c2 = ?
+         LET p1 = ?               // string pointers
+         LET p2 = ?
+         LET t1 = ?               // "types" of characters
+         LET t2 = ?
+         LET dd = 0               // digit diff: non-zero if scanning a number
+         LET sp = FALSE           // set TRUE on the Second Pass
+
+         n.comparisons := n.comparisons+1
+
+         IF (n.comparisons REM 100) = 0 THEN    // check flags every 100 calls
+         $( IF testflags(8) THEN
+               message("Sorting - %N comparisons done", n.comparisons)
+         $)
+
+next.pass:
+         p1 := 0                        // reset character pointers
+         p2 := 0
+
+next.chars:
+         p1 := p1 + 1                   // step to next char in both strings
+         IF p1 > l1 THEN
+         $( IF p2 ~= l2 THEN      // second string is longer - hence "greater"
+               RESULTIS -1
+            GOTO end.of.strings
+         $)
+
+         p2 := p2 + 1
+         IF p2 > l2 THEN          // first must be longer or would have ended!
+            RESULTIS 1
+         c1 := s1%p1
+         c2 := s2%p2
+         GOTO test.chars
+
+next.c2:
+         p2 := p2 + 1                   // next char of second string only
+         IF p2 > l2 THEN
+         $( IF p1 ~= l1 THEN
+               RESULTIS 1
+            GOTO end.of.strings
+         $)
+         c2 := s2%p2
+         GOTO test.chars
+
+next.c1:
+         p1 := p1 + 1                   // next char of first string
+         IF p1 > l1 THEN
+         $( IF p2 ~= l2 THEN      // second string is longer - hence "greater"
+               RESULTIS -1
+            GOTO end.of.strings
+         $)
+         c1 := s1%p1
+
+test.chars:
+         IF (c1 = c2) & (dd = 0) GOTO next.chars
+
+         t1 := chtype.map%c1    // index into type map
+         t2 := chtype.map%c2
+
+         UNLESS sp DO
+         $( IF (t1 & ch.type.alphanum) = 0 GOTO next.c1  // in 1st pass ignore
+            IF (t2 & ch.type.alphanum) = 0 GOTO next.c2  // non-alphanumerics
+
+            IF (t1 & ch.type.uc.ltr) ~= 0 THEN           // and ignore case
+               c1 := c1 - 'A' + 'a'
+            IF (t2 & ch.type.uc.ltr) ~= 0 THEN
+               c2 := c2 - 'A' + 'a'
+         $)
+
+         IF (t1 & ch.type.number) ~= 0 THEN
+         $( IF (t2 & ch.type.number) ~= 0 THEN
+            $( IF dd = 0 THEN   // record first digit difference
+                  dd := c1-c2
+               GOTO next.chars  // keep scanning
+            $)
+            RESULTIS 1          // longer number is "greater"
+         $)
+
+         IF (t2 & ch.type.number) ~= 0 RESULTIS -1
+
+         IF dd ~= 0 RESULTIS dd // equal length number - diff is first digits
+
+         // if chars have still not been dealt with map them to their
+         // lexical order and compare again
+
+         $( LET lex.diff = lex.order.map%c1 - lex.order.map%c2
+
+            IF lex.diff ~= 0 RESULTIS lex.diff
+
+            GOTO next.chars
+         $)
+
+end.of.strings:                         // both strings ended
+         IF dd ~= 0 THEN                // scanning a number
+            RESULTIS dd                 // equal length - diff of first digits
+
+         IF sp RESULTIS 0               // second pass - really no difference!
+
+         sp := TRUE                     // go round for a second pass
+
+         GOTO next.pass
+      $)
+
+      LET line.order.compare(e1, e2) = VALOF
+
+      // This compare function sorts on line number of first occurrence
+
+      $( RESULTIS wd.line!e1 - wd.line!e2
+      $)
+
+      // now sort the list using one of the COMPARE functions as above
+
+      sortlist(@list.anchor, 0, 0, wd.link,
+                       line.order.output -> line.order.compare, compare)
+
+      IF stats THEN
+         message("Sorting took %N comparisons", n.comparisons)
+   $)
+
+   $( LET word    = list.anchor         // now print out the results
+      LET op.line = 0
+
+      UNTIL word = 0 DO
+      $( LET count    = wd.count!word   // occurrence count
+         LET eff.line = wd.line!word    // packed line and file number
+         LET str      = wd.string+word  // the word itself
+
+         IF testflags(1) THEN
+            error("BREAK while writing output file")
+
+         IF testflags(8) THEN
+            message("Writing output file - %N lines written", op.line)
+
+         IF dict.type.output THEN       // write *N or *S before word
+         $( IF chars.on.out.line > 0 THEN
+            $( TEST chars.on.out.line + str%0 + 1 > dict.out.width THEN
+               $( newline()
+                  chars.on.out.line := 0
+               $)
+               ELSE
+               $( wrch('*S')
+                  chars.on.out.line := chars.on.out.line + 1
+               $)
+            $)
+         $)
+
+         writes(str)
+
+         IF dict.type.output THEN
+         $( chars.on.out.line := chars.on.out.line + str%0
+
+            GOTO next.word       // no counts etc in dictionary type output
+         $)
+
+         FOR i = (wd.string+word)%0 TO 15 DO
+            wrch('*S')
+
+         TEST n.doc.files = 1
+         DO writef(" %N", eff.line)
+         OR writef(" %N.%N", (eff.line REM n.doc.files)+1, eff.line/n.doc.files)
+
+         IF count > 1 THEN     // read out line number vector
+         $( LET linevec = wd.linevec!word
+            FOR i = 0 TO count-2 < linevec.size -> count-2, linevec.size-1 DO
+            $( eff.line := linevec!i
+               TEST n.doc.files = 1
+               DO writef(" %N", eff.line)
+               OR writef(" %N.%N", (eff.line REM n.doc.files)+1,
+                                                        eff.line/n.doc.files)
+            $)
+         $)
+
+         IF count > linevec.size+1 THEN  // some lines were omitted
+            writef("... (%N more)", count - (linevec.size+1))
+
+         newline()
+         op.line := op.line + 1
+
+next.word:
+         word    := wd.link!word
+      $)
+   $)
+
+   IF dict.type.output & (chars.on.out.line ~= 0) THEN
+      newline()
+$)
+
+AND read.word(make) = VALOF
+
+//   This procedure reads a word from the input stream and finds or constructs
+//a descriptor to correspond to it.  If it is successful then TRUE is returned,
+//the descriptor placed in the global RW.RESULT and its TYPE field in RESULT2.
+//The string read is placed in WORD.BUF, and copied into a new descriptor if
+//one is constructed.
+//
+//   The parameter MAKE controls action if a descriptor does not already
+//exist.  If TRUE then a new one is made and passed back.  If FALSE then
+//RESULT2 will still contain WD.TYPE.NEW, but the value returned in RW.RESULT
+//is the hash chain anchor.
+//
+//   If end-of-stream occurs then FALSE is returned.
+//
+//   The first character from the stream is assumed to be in global CH, and the
+//next character following is in that global on exit.
+
+$( LET ch.count    = 0
+   LET letter.read = FALSE
+
+   // *** HORRIBLE FUDGE
+   //
+   // It is required that a dictionary entry whose first letter is lower case
+   // should match a word in the document whose first letter is either case.
+   // Accordingly, if we are reading a dictionary and it is found that the
+   // previously read word (in WORD.BUF) started with a lower case letter,
+   // then this letter is zapped to upper case and the same word is returned
+   // again!  This simulates both cases having been read from the dictionary.
+
+   IF reading.dict & NOT lower.case.ip THEN
+   $( LET c1.type = chtype.map%(word.buf%1)
+
+      IF ((c1.type & ch.type.letter) ~= 0) & ((c1.type & ch.type.uc.ltr) = 0) THEN
+      $( word.buf%1 := word.buf%1 + 'A' - 'a'   // zap to upper case
+
+         ch.count := word.buf%0
+
+         GOTO got.word
+      $)
+   $)
+
+retry:
+   WHILE (ch.type & (ch.type.layout | ch.type.punct)) ~= 0 DO
+                                            // read up to an interesting char
+   $( IF ch = endstreamch THEN
+      $( result2 := 0
+         RESULTIS FALSE
+      $)
+
+      IF (ch.type & ch.type.eol) ~= 0 THEN  // end-of-line - increment line no
+         file.lineno := file.lineno+1
+
+      ch := smallrdch()
+   $)
+
+   WHILE TRUE DO              // read interesting characters into WORD.BUF
+
+   $( TEST (ch.type & ch.type.letter) ~= 0 THEN
+         letter.read := TRUE
+      ELSE
+      $( IF (ch.type & ch.type.layout) ~= 0 THEN
+         $( IF letter.read BREAK
+
+            ch.count := 0        // this "word" contains no letter - discard it
+            GOTO retry
+         $)
+      $)
+
+      IF ch.count = max.wd.size THEN
+         message("Word too long in file %N line %N - truncated", fileno, file.lineno)
+
+      ch.count := ch.count+1
+
+      UNLESS ch.count > max.wd.size DO
+         word.buf % ch.count := ch
+
+      ch := smallrdch()
+   $)
+
+   // Strip off trailing punctuation
+
+   WHILE ((chtype.map % (word.buf%ch.count)) & ch.type.punct) ~= 0 DO
+      ch.count := ch.count-1
+
+   word.buf % 0 := ch.count
+
+got.word:
+
+   $( LET hash.anchor  = hashchain(word.buf)
+
+      rw.result := !hash.anchor
+
+      UNTIL rw.result = 0 DO             // search for the given string
+      $( LET dict.str = wd.string + rw.result
+
+         IF nc.compstring(word.buf, dict.str) = 0 THEN
+         $( result2 := wd.type!rw.result
+            RESULTIS TRUE
+         $)
+
+         rw.result := wd.link!rw.result
+      $)
+                                         // not there - make new desc?
+      UNLESS make DO
+      $( result2 := wd.type.new
+         rw.result := hash.anchor
+         RESULTIS TRUE                   // no - exit
+      $)
+                                         // yes - get a vector
+      rw.result := smallgetvec(wd.string + ch.count/bytesperword)
+
+      IF rw.result = 0 THEN
+         error("Failed to get store for word descriptor (increase STORE)")
+
+      wd.link!rw.result   := !hash.anchor
+      !hash.anchor        := rw.result
+      wd.type!rw.result   := wd.type.new
+
+      FOR i = 0 TO ch.count DO
+         (wd.string + rw.result)%i := word.buf%i
+
+      result2 := wd.type.new
+      RESULTIS TRUE
+   $)
+$)
+
+AND write.context() BE
+
+//   First check whether the current line has been printed completely before.
+//If so, do nothing, otherwise print it out:
+//   Back up to NL or as many characters as possible in the input buffer and
+//print them out again preceded by a line number.  Then print ahead similarly.
+
+$( LET count  = 0
+   LET ptr    = rdch.buf.ptr
+   LET sol    = FALSE
+   LET eol    = FALSE
+
+   IF file.lineno = last.cxt.line THEN     // printed already
+      RETURN
+
+   FOR i = 1 TO rdch.buf.trail DO
+
+   $( LET char = ?
+
+      ptr := ptr - 1
+      IF ptr < 0 THEN
+         ptr := rdch.buf.upb
+
+      char := rdch.buf%ptr
+
+      sol := (chtype.map%char & ch.type.eol) ~= 0
+
+      IF sol THEN
+      $( TEST i = 1    // target word was at end of line - back up past eol
+         DO LOOP
+         OR BREAK
+      $)
+
+      count := count + 1
+   $)
+
+   IF n.doc.files > 1 THEN
+      writef("%N.", fileno)
+   writef("%N: ", file.lineno)
+
+   UNLESS sol | (rdch.buf.trail ~= rdch.buf.maxch) DO
+      writes("...")
+
+   FOR i = 1 TO count DO       // write out the preceding characters
+   $( UNLESS sol & (i = 1) DO  // don't write the eol character itself
+         wrch(rdch.buf%ptr)
+
+      ptr := ptr + 1
+      IF ptr > rdch.buf.upb THEN
+         ptr := 0
+   $)
+
+   UNTIL ptr = rdch.buf.lead DO   // then succeeding characters
+   $( LET char = rdch.buf%ptr
+
+      eol := (chtype.map%char & ch.type.eol) ~= 0
+      IF eol THEN
+         BREAK
+
+      wrch(char)
+
+      ptr := ptr + 1
+      IF ptr > rdch.buf.upb THEN
+         ptr := 0
+   $)
+
+   UNLESS eol DO
+      writes("...")
+
+   newline()
+
+   IF sol & eol THEN       // whole line has been written out
+      last.cxt.line := file.lineno
+$)
+
+AND cxt.smallrdch() = VALOF
+
+$( LET char = ?
+
+next.char:
+   char := rdch()
+
+   IF rdch.buf.ptr = rdch.buf.lead THEN   // either beginning or end of file
+   $( IF char = endstreamch THEN          // end - pass back end-of-stream
+      $( ch.type := ch.type.eos
+         RESULTIS endstreamch
+      $)
+
+      FOR i = 0 TO rdch.buf.maxch-1 DO    // beginning - fill up lead buffer
+      $( rdch.buf%rdch.buf.lead := char
+         rdch.buf.lead          := rdch.buf.lead + 1
+         char                   := rdch()
+
+         IF char = endstreamch BREAK
+      $)
+   $)
+
+   IF char ~= endstreamch THEN            // put it in the buffer
+   $( rdch.buf%rdch.buf.lead := char
+      rdch.buf.lead          := rdch.buf.lead + 1
+      IF rdch.buf.lead > rdch.buf.upb THEN
+         rdch.buf.lead := 0
+   $)
+
+   char         := rdch.buf%rdch.buf.ptr    // extract char to be passed back
+   rdch.buf.ptr := rdch.buf.ptr + 1
+   IF rdch.buf.ptr > rdch.buf.upb THEN
+      rdch.buf.ptr := 0
+
+   IF rdch.buf.trail < rdch.buf.maxch THEN  // still near beginning of file
+      rdch.buf.trail := rdch.buf.trail + 1
+
+   ch.type := chtype.map%char               // get type code byte from map
+
+   TEST lower.case.ip & ((ch.type & ch.type.uc.ltr) ~= 0) THEN
+      char := char - 'A' + 'a'              // map upper case to lower
+   ELSE
+   $( IF (ch.type & ch.type.error) ~= 0 DO  // bad char - warn user
+      $( message("Bad character #X%X2 in file %N line %N",
+                                                char, fileno, file.lineno)
+         IF testflags(1) THEN
+            error("BREAK in smallrdch")
+
+         // There are several possible policies for dealing with bad characters:
+         // the original version of the program just ignored them - to do this
+         // GOTO next.char.  This version zaps them into layout characters, so
+         // a warning message will only be produced on the first occurrence.
+         // It has been suggested that a count of occurrences be kept, but this
+         // would require a new data structure.
+
+         ch.type         := (ch.type & NOT ch.type.error) | ch.type.layout
+         chtype.map%char := ch.type   // zap its type in the map to 'layout'
+         illeg.char.found := TRUE
+      $)
+   $)
+
+   RESULTIS char
+$)
+
+AND nocxt.smallrdch() = VALOF
+
+$( LET char = ?
+
+next.char:
+   char := rdch()
+
+   IF char = endstreamch THEN
+   $( ch.type := ch.type.eos
+      RESULTIS endstreamch
+   $)
+
+   ch.type := chtype.map%char               // get type code byte from map
+
+   TEST lower.case.ip & ((ch.type & ch.type.uc.ltr) ~= 0) THEN
+      char := char - 'A' + 'a'              // map upper case to lower
+   ELSE
+   $( IF (ch.type & ch.type.error) ~= 0 DO  // bad char - warn user and discard
+      $( message("Bad character #X%X2 in file %N line %N",
+                                                char, fileno, file.lineno)
+         IF testflags(1) THEN
+            error("BREAK in smallrdch")
+
+         // See comment on 'bad characters' in CXT.SMALLRDCH
+
+         ch.type         := (ch.type & NOT ch.type.error) | ch.type.layout
+         chtype.map%char := ch.type   // zap its type in the map to 'layout'
+         illeg.char.found := TRUE
+      $)
+   $)
+
+   RESULTIS char
+$)
+
+AND error(string, arg1, arg2, arg3) BE
+
+$( message(string, arg1, arg2, arg3)
+   longjump(level.exit, label.exit)
+$)
+
+AND message(string, arg1, arg2, arg3) BE
+
+$( LET out = output()
+
+   selectoutput(sysprint)
+
+   writes("Spell:  ")
+   writef(string, arg1, arg2, arg3)
+   newline()
+
+   selectoutput(out)
+$)
+
+AND read.file.list(filename, parmname) = VALOF
+
+//   If the parameter FILENAME starts with a '!' then it is an indirection
+//to a list of input files, otherwise it is a normal filename.  The result of
+//the call in either case is a list of stream descriptor blocks with RESULT2
+//giving the number of blocks.  ERROR is called in the event of an error.
+
+$( TEST filename%1 = '!'
+   DO
+   $( LET subfile = VEC 30/bytesperword
+      LET indfile = 0
+      LET nfiles  = 0
+      LET anchor  = 0
+      LET lastfile= @anchor - stream.link
+      LET failed  = FALSE
+      LET sysin   = input()
+      LET interact= ?
+
+      IF filename%0 > 31 THEN
+         error("%S filename %S is too long (max 31)", parmname, filename)
+
+      FOR i = 2 TO filename%0 DO
+         subfile%(i-1) := filename%i
+      subfile%0 := filename%0 - 1
+
+      indfile := findinput(subfile)
+      IF indfile = 0 THEN
+         error("Can't open %S indirection file %S", parmname, subfile)
+
+      selectinput(indfile)
+
+      interact := nc.compstring(subfile, "**") = 0
+
+      WHILE TRUE DO
+      $( LET file  = 0
+         LET desc  = ?
+         LET char  = ?
+         LET chars = 0
+
+         IF testflags(1) THEN
+            error("BREAK")
+
+         IF interact THEN
+            writef("%S file %N%S> *E", parmname, nfiles+1,
+                                  nfiles=0 -> " (*"/***" to terminate) ", "")
+
+         char := rdch()
+
+         UNTIL (char='*N') | (char='*E') | (char=endstreamch) DO
+         $( chars := chars + 1
+
+            IF chars <= 30 THEN
+               subfile%chars := char
+
+            char := rdch()
+         $)
+
+         IF chars > 30 THEN
+         $( message("%S subfile %N is too long (max 30)", parmname, nfiles+1)
+            IF interact GOTO file.loop
+            failed := TRUE
+            GOTO file.error
+         $)
+
+         IF chars = 0 THEN
+            TEST char = endstreamch
+            DO BREAK
+            OR LOOP
+
+         subfile%0 := chars
+
+         IF nc.compstring(subfile, "/**") = 0 THEN
+            BREAK
+
+         desc := smallgetvec(stream.scb)
+         IF desc = 0 THEN
+         $( message("No store for stream desc reading %S subfile %N",
+                                                          parmname, nfiles+1)
+            failed := TRUE
+            GOTO file.error
+         $)
+
+         file := findinput(subfile)
+         IF file = 0 THEN
+         $( message("Can't open %S subfile %S", parmname, subfile)
+            IF interact GOTO file.loop
+            failed := TRUE
+            GOTO file.error
+         $)
+
+         stream.scb!desc      := file
+         stream.link!desc     := 0
+         stream.link!lastfile := desc
+         lastfile             := desc
+         nfiles               := nfiles + 1
+file.loop:
+      $)
+file.error:
+
+      IF indfile ~= 0 THEN
+      $( selectinput(indfile)
+         endread()
+      $)
+
+      IF failed THEN
+      $( UNTIL anchor = 0 DO
+         $( selectinput(stream.scb!anchor)
+            endread()
+            anchor := stream.link!anchor
+         $)
+         error("Abandoned")
+      $)
+
+      selectinput(sysin)
+
+      result2 := nfiles
+      RESULTIS anchor
+   $)
+   OR
+   $( LET file = ?
+      LET desc = smallgetvec(stream.scb)
+
+      IF desc = 0 THEN
+         error("Can't get space for %S file descriptor", parmname)
+
+      file := findinput(filename)
+      IF file = 0 THEN
+         error("Can't open %S file %S", parmname, filename)
+
+      stream.link!desc := 0
+      stream.scb!desc  := file
+
+      result2 := 1
+      RESULTIS desc
+   $)
+$)
+
+AND close.file.list(anchor) BE
+$( UNTIL anchor = 0 DO
+   $( selectinput(stream.scb!anchor)
+      endread()
+      anchor := stream.link!anchor
+   $)
+$)
+
+AND init.chtype.map(layout.chars, punct.chars, eol.chars, misc.chars) BE
+
+// Set up the map which takes a character value to its type.
+
+$( FOR char = 0 TO 255 DO
+   $( LET type = 0
+
+      IF charinstring(char, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") ~= 0 THEN
+         type := type | ch.type.letter | ch.type.uc.ltr | ch.type.print
+
+      IF charinstring(char, "abcdefghijklmnopqrstuvwxyz") ~= 0 THEN
+         type := type | ch.type.letter | ch.type.print
+
+      IF charinstring(char, "0123456789") ~= 0 THEN
+         type := type | ch.type.number | ch.type.print
+
+      IF charinstring(char, misc.chars) ~= 0 THEN
+         type := type | ch.type.print
+
+      IF charinstring(char, layout.chars) ~= 0 THEN
+         type := type | ch.type.layout
+
+      IF charinstring(char, punct.chars) ~= 0 THEN
+         type := type | ch.type.punct
+
+      IF charinstring(char, eol.chars) ~= 0 THEN
+         type := type | ch.type.eol
+
+      IF type = 0 THEN
+         type := ch.type.error
+
+      chtype.map%char := type
+   $)
+
+   // now set up the lexical order map
+
+   FOR i = 0 TO 255 DO
+      lex.order.map%i := #XFF  // undefined chars are ">" defined ones
+
+   $( LET lex.number = 0
+
+      load.lex.map("aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ",
+                                                                  @lex.number)
+      load.lex.map(misc.chars, @lex.number)   // these are ">" letters
+
+      load.lex.map(punct.chars, @lex.number)  // these are even ">"!
+   $)
+$)
+
+AND load.lex.map(string, lv.lex.number) BE
+
+$( LET lex.number = !lv.lex.number
+
+   FOR i = 1 TO string%0 DO
+   $( lex.order.map%(string%i) := lex.number
+      lex.number               := lex.number + 1
+   $)
+
+   !lv.lex.number := lex.number
+$)
+
+AND decode.options(opt.string) = VALOF
+
+$( LET opt.len = opt.string%0
+   LET ptr     = 1
+   LET opt.ok  = TRUE
+
+   WHILE ptr <= opt.len DO
+   $( LET ch = opt.string%ptr
+
+      ptr := ptr + 1
+
+      SWITCHON ch INTO
+      $( DEFAULT:
+         message("Unknown option *'%C*'", ch)
+         opt.ok := FALSE
+         ENDCASE
+
+         CASE ';':             // delimiters
+         CASE '*S':
+         ENDCASE
+
+         CASE 'l':
+         CASE 'L':
+         lower.case.ip := TRUE
+         ENDCASE
+
+         CASE 's':
+         CASE 'S':
+         stats := TRUE
+         ENDCASE
+
+         CASE 'n':
+         CASE 'N':
+         line.order.output := TRUE
+         ENDCASE
+
+         CASE 'd':
+         CASE 'D':
+         dict.type.output  := TRUE
+         chars.on.out.line := 0
+
+         UNLESS read.num.opt(opt.string, @ptr, @dict.out.width) DO
+            dict.out.width := default.dict.out.width   // no value given
+
+         UNLESS (min.dict.out.width <= dict.out.width <= max.dict.out.width) |
+                                                       (dict.out.width = 0) DO
+         $( message("Silly dictionary output width %N", dict.out.width)
+            opt.ok := FALSE
+         $)
+         ENDCASE
+
+         CASE 'c':
+         CASE 'C':
+         force.count.info := TRUE
+         ENDCASE
+
+         CASE 'i':
+         CASE 'I':
+         reverse.op.test := TRUE
+         ENDCASE
+      $)
+   $)
+
+   RESULTIS opt.ok
+$)
+
+AND read.num.opt(opt.string, lv.ptr, lv.value) = VALOF
+
+//   Reads a number from the given option string using and updating the
+//given pointer.  The result is a boolean indicating success.  The value
+//is written to the given location.
+
+$( LET opt.len     = opt.string%0
+   LET ptr         = !lv.ptr
+   LET num         = 0
+   LET minus       = FALSE
+   LET digit.read  = FALSE
+
+   WHILE ptr <= opt.len DO
+   $( LET ch = opt.string%ptr
+
+      TEST (ch = '-') & NOT minus & NOT digit.read THEN
+         minus := TRUE
+      ELSE
+      $( UNLESS '0' <= ch <= '9' DO
+            BREAK
+
+         digit.read := TRUE
+         num        := num*10 + ch - '0'
+      $)
+
+      ptr := ptr + 1
+   $)
+
+   !lv.ptr   := ptr
+   !lv.value := minus -> -num, num
+
+   RESULTIS digit.read
+$)
+
+AND charinstring(char, string) = VALOF
+
+$( FOR i = 1 TO string % 0 DO
+      IF string % i = char RESULTIS i
+
+   RESULTIS 0
+$)
+
+AND smallgetvec(upb) = VALOF
+
+//   This is used instead of GETVEC for getting small blocks.  It obtains
+//store using GETVEC in large chunks, chaining them together from GVEC.ANCHOR
+//so they can be freed easily.  If the requested block will not fit in the
+//current large block a new one is obtained and chained in.  If a block
+//larger than 1/4 of the large block size is requested this is obtained
+//directly.
+
+$( LET size = upb+1
+
+   IF size > gvec.blksize/4 THEN   // big block - get it directly
+   $( LET v = getvec(size)
+
+      IF v = 0 RESULTIS 0
+
+      gvec.number := gvec.number+1
+
+      IF gvec.anchor = 0 THEN
+      $( gvec.anchor := v          // first on chain - put straight in
+         v!0         := 0
+         RESULTIS v+1
+      $)
+
+      v!0          := !gvec.anchor // not first - put in second
+      !gvec.anchor := v
+      RESULTIS v+1
+   $)
+
+   // arrive here iff given block is small
+
+   IF size > gvec.size THEN       // it will not fit in current block
+   $( LET new.block = getvec(gvec.blksize)   // get a new one
+
+      IF new.block = 0 RESULTIS 0
+
+      gvec.number := gvec.number+1
+      new.block!0 := gvec.anchor
+      gvec.anchor := new.block
+      gvec.ptr    := new.block+1
+      gvec.size   := gvec.blksize
+   $)
+   $( LET v = gvec.ptr            // by now it will definitely fit
+      gvec.ptr  := gvec.ptr+size
+      gvec.size := gvec.size-size
+      RESULTIS v
+   $)
+$)
+
+AND smallgetvec.release() BE
+
+$( LET n = gvec.number
+
+   UNTIL gvec.anchor = 0 DO
+   $( LET nextv = !gvec.anchor
+      freevec(gvec.anchor)
+      n           := n-1
+      gvec.anchor := nextv
+   $)
+
+   IF n ~= 0 THEN
+      message("Warning:  %N blocks not released", n)
+$)
+
+AND hashchain(name) = VALOF
+
+//   Returns a pointer to the anchor in the hash table corresponding to
+//the given name.
+
+$( LET acc = name%0
+
+   FOR i = 1 TO name%0 DO
+      acc := (acc << 1) + acc + name%i
+
+   RESULTIS hashtab + ((acc & #X7FFF) REM hashsize)
+$)
+
+AND nc.compstring(s1, s2) = VALOF
+
+// Have to supply this procedure explicitly on Phoenix BCPL.  Compares the
+// characters of the two strings and returns zero if they are identical,
+// < zero if s1 is lexically "earlier" than s2, and > zero otherwise.  The
+// Tripos version of this proc. also performs case equation, but this should
+// not be done in this version.
+
+$( LET l1 = s1%0
+   LET l2 = s2%0
+
+   IF l1 ~= l2 THEN RESULTIS l1-l2
+
+   FOR i = 1 TO l1 DO
+   $( LET d = s1%i - s2%i
+
+      IF d ~= 0 THEN RESULTIS d
+   $)
+
+   RESULTIS 0
+$)
+
+

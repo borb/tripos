@@ -1,0 +1,188 @@
+SECTION $<NOVL "NOVL" $>NOVL $<SOVL "SOVL" $>SOVL
+
+$<PDPRSX NEEDS "OVRLAY" $>PDPRSX
+
+//GET "ROOTHDR"
+GET "COMHDR"
+
+$<TRIPOS
+MANIFEST
+$( notinuse =-1; pkt.type = 2; pkt.res1 = 3; pkt.res2 = 4
+   pkt.arg1 = 5; pkt.arg2 = 6; pkt.arg3 = 7;
+   pkt.arg4 = 8; pkt.arg5 = 9; pkt.arg6 =10
+   scb.type = 2; scb.arg1 = 9; Action.point=21
+   t.end = 1002; t.hunk =1000; t.reloc  = 1001
+$)
+$>TRIPOS
+
+LET LOADOVERLAY(S) = (S = -2) ->
+ $<H            GET "info:*"h: 3.00 %d %t (%u)*"" $>H
+ $<I            GET "info:*"i: 3.00 %d %t (%u)*"" $>I
+ $<J            GET "info:*"j: 3.00 %d %t (%u)*"" $>J
+ $<K            GET "info:*"k: 3.00 %d %t (%u)*"" $>K
+ $<L            GET "info:*"l: 3.00 %d %t (%u)*"" $>L
+ $<M            GET "info:*"m: 3.00 %d %t (%u)*"" $>M
+ $<N            GET "info:*"n: 3.00 %d %t (%u)*"" $>N
+, $<RESIDENT ? $>RESIDENT
+$<RESIDENT'
+VALOF
+$<PDPRSX
+$(G LET E = OVERLAY(S)
+    IF E < 0
+$>PDPRSX
+$<TRIPOS
+$(G STATIC $( Res.ov=0; OVS=0 $)
+ LET E = ?
+ LET Load.OV(n) = VALOF
+ $(Load.ov
+    LET ptr     = OVBASE
+    LET ovtop   = OVBASE!(-1)+OVBASE
+    LET list    = 0
+    LET liste   = @list
+    LET oldinput= input()
+    UNLESS 0 < n <= (OVS!0)
+    $( DEB("[%N too big: ", n); DEB("(%N,%N)]", 1, OVS!0);  GOTO Error121 $)
+
+    selectinput(OVFILE)
+    POINTAT(OVS+n*3-2)
+
+    $(Each.section
+       LET base = 0
+       LET limit = -1
+
+       $(Each.bit
+          LET type = T.end
+          LET space = ?
+          LET n     = ?
+          IF readwords(@type, 1)=0 & type=t.end GOTO ok //null section -> end
+          IF type = t.end $( $<DEBUG DEB("E*E"); $>DEBUG        GOTO OK $)
+          UNLESS type=T.hunk | type=t.reloc
+          $( DEB("[type %N]", type);                            GOTO error121 $)
+          readwords(@n, 1)
+          $<DEBUG DEB("%C%N|*E", type=T.hunk -> 'H', 'R', n)    $>DEBUG
+          space := ptr; ptr := ptr+n+1
+
+          IF ptr>ovtop
+          TEST type=t.reloc
+          $( space := GETVEC(n)-1;
+                $<SPARE WRITEF("[GETVEC(%N) gave %N]*E", n, space+1) $>SPARE
+             IF space=-1
+             $( DEB("Failed to get a vector for relocation information -*
+                * More free space needed*N")
+                GOTO err
+             $)
+          $)
+          ELSE
+          $( DEB("Too big (%N>%N)", ptr-OVBASE, ovtop-OVBASE); GOTO error121 $)
+          readwords(space+1, n)
+
+          TEST type = t.hunk
+          $( space!0 := 0
+             !liste := space
+             liste := space
+             limit := n
+             base  := space+1
+          $)
+          ELSE // t.reloc
+          $( FOR i=1 TO n DO
+             $( LET a = space!i
+                UNLESS 0<=a<=limit THEN $( DEB("[reloc]"); GOTO error121 $)
+                base!a := base!a+base*mcaddrinc
+             $)
+              IF ptr>ovtop FREEVEC(space+1)
+                $<SPARE <> WRITEF("[Free %N]*E", space+1) $>SPARE
+
+             ptr := ptr-n-1
+          $)
+       $)Each.bit REPEAT
+    $)Each.section REPEAT
+error121:
+    RESULT2 := 121
+err:list := 0
+ok: selectinput(oldinput)
+$<SPARE $( LET o=output(); SELECTOUTPUT(SYSOUT)
+           WRITEF(" [R%N (%N,%N,%N)]", n, OVS!(n*3-2), OVS!(n*3-2+1), OVS!(n*3-2+2) )
+           WRITEF("[%N uses %N words, %N free]*E ", n, ptr-ovbase, ovtop-ptr)
+           SELECTOUTPUT(o)
+        $)
+$>SPARE
+
+    RESULTIS list
+$)Load.ov
+
+ OVS := TABLE -1,
+        0,0,0,  0,0,0,  0,0,0,  0,0,0,  0,0,0,
+        0,0,0,  0,0,0,  0,0,0,  0,0,0,  0,0,0,
+        0,0,0,  0,0,0,  0,0,0,  0,0,0,  0,0,0,  ?,?,?,?,?,?,?,?,?
+
+$<DEBUG
+      DEB("[%N -> %N", Res.ov, s)
+$>DEBUG
+
+   IF s=-1
+   $(   Res.ov := 0
+        !OVS := -1
+        FOR i = 1 TO 15*3 DO OVS!I := 0
+        RETURN
+   $)
+   IF s= 0 THEN s := 0 <> RETURN
+   IF Res.ov=s RETURN // Nothing to do!
+   UNLESS VALID.POINTER(@OVFILE)
+   $( LET oin=input()
+      LET ov.file = (devicetask("BCP-COMPILER:") > 0) -> "BCP-COMPILER:",
+$<NOVL
+ $<H                                                     "SYS:L.bcp-h-ov" $>H
+ $<I                                                     "SYS:L.bcp-i-ov" $>I
+ $<J                                                     "SYS:L.bcp-j-ov" $>J
+ $<K                                                     "SYS:L.bcp-k-ov" $>K
+ $<L                                                     "SYS:L.bcp-l-ov" $>L
+ $<M                                                     "SYS:L.bcp-m-ov" $>M
+ $<N                                                     "SYS:L.bcp-n-ov" $>N
+$>NOVL
+$<SOVL
+ $<H                                                     "SYS:L.bcp-h-sov" $>H
+ $<I                                                     "SYS:L.bcp-i-sov" $>I
+ $<J                                                     "SYS:L.bcp-j-sov" $>J
+ $<K                                                     "SYS:L.bcp-k-sov" $>K
+ $<L                                                     "SYS:L.bcp-l-sov" $>L
+ $<M                                                     "SYS:L.bcp-m-sov" $>M
+ $<N                                                     "SYS:L.bcp-n-sov" $>N
+$>SOVL
+      OVFILE := FINDINPUT(ov.file)
+      $<DEBUG DEB(".") $>DEBUG
+      IF OVFILE = 0
+      $( DEB("Failed to open overlay file '%S' %N*N", ov.file, RESULT2); GOTO ERR $)
+      SELECTINPUT(OVFILE)
+      readwords(OVS, 1)
+      readwords(OVS+1, OVS!0 *3)
+      SELECTINPUT(Oin)
+   $)
+   E := Load.ov(s)
+   $<DEBUG DEB("]") $>DEBUG
+
+   UNLESS E=0 | globin(OVBASE)=0 $( Res.ov := s; RETURN $)
+err:
+   E := RESULT2
+$>TRIPOS
+    $( SELECTOUTPUT(SYSOUT)
+$<SPARE WRITEF(" Reading %N (%N,%N,%N)*N",
+                                        s, OVS!(s*3-2), OVS!(s*3-1), OVS!(s*3) )
+$>SPARE
+       WRITEF("BCP- Overlay failure (%N) on %N*N", E, S)
+$<PDPRSX
+       UNLESS BACKTRACE = UNDEFINED BACKTRACE()
+       UNLESS ABORT     = UNDEFINED ABORT(1, E, S)
+$>PDPRSX
+       $<TRIPOS Reportcount := 10000; longjump(RST.P, RST.L) $>TRIPOS
+       FINISH
+    $)
+$)G
+
+$<TRIPOS
+AND POINTAT(ADDR) =
+$<DEBUG VALOF DEB("[PA %N,%N,%N] *E", !addr, addr!1, addr!2) <> RESULTIS $>DEBUG
+SENDPKT(notinuse, ABS CIS ! scb.type, action.point, ?,?, CIS!SCB.arg1, addr)
+$>TRIPOS
+$>RESIDENT'
+
+

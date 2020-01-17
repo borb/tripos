@@ -1,0 +1,108 @@
+GET "LIBHDR"
+GET "MANHDR"
+GET "IOHDR"
+
+GLOBAL $( rc:UG; SYSOUT:UG+1; SYSIN:UG+2; L.P:UG+3; L.L:UG+4 $)
+
+LET START() BE
+$( LET ARGV     = VEC 80
+   LET arg      = "File/a,write/s"
+   LET in       = ?
+   LET V        = VEC 50
+   LET from     = 0
+   LET len      = 0
+   LET TYPE     = 'X'
+   LET type.l   = 5
+   LET rc1, rc2 = ?, ?
+
+   L.p := level()
+   SYSOUT := OUTPUT()
+   SYSIN := INPUT()
+   RC := 0
+
+   IF RDARGS(arg, argv, 80)=0 errmess(20, "badargs")
+   in := (argv!1 -> findupdate, findinput)(argv!0);
+    IF in=0 ERRMESS(20, "Failed to open %S", argv!0)
+
+   $( LET ch = RDCH()
+      SWITCHON CAPITALCH(ch) INTO
+      $( DEFAULT: LOOP
+         CASE 'H': CASE '?':
+                Mess(
+"Commands are R<from> <len>, $<t><t.l>. (t may be C, N, In, S, or def X*N"
+                        ); LOOP
+
+         CASE '*N':     Mess("*N#"); LOOP
+         CASE 'R': from := READN(); Len := READN()
+                   TEST argv!1
+                   THEN cis := in
+                   ELSE SELECTINPUT(in)
+                   rc1 := POINTAT(from)
+                   rc2 := readwords(V, len)
+print:             SELECTINPUT(SYSIN)
+writef("<%N,%N> ", rc1, rc2)
+                   FOR I = 0 TO len-1 DO
+                        SWITCHON CAPITALCH(type) INTO
+                        $( DEFAULT:     MESS(bytesperword=2 -> "%X4 ", "%X8 ",
+                                                V!I);   ENDCASE
+                           CASE 'C':    FOR J = 0 TO bytesperword-1
+                                        DO write.char(v%(i*2+J));ENDCASE
+                           CASE 'N':    MESS("%N ", V!I);       ENDCASE
+                           CASE 'S':    MESS("'%S'", V);        BREAK
+                           CASE 'I':    $( LET str = "%I? "
+                                            str%3 := type.l
+                                           MESS(str, V!I)
+                                        $)                      ENDCASE
+                        $)
+                   Mess("*N")
+                   LOOP
+
+         CASE '$': type := CAPITALCH(RDCH())
+                   type.l := CAPITALCH(RDCH())
+        CASE 'T':
+                   GOTO print
+
+         CASE 'Q':
+         CASE ENDSTREAMCH:      BREAK
+      $)
+   $) REPEAT //UNTIL TERMINATOR = ENDSTREAMCH
+   l.l:
+   ENDstream(in)
+   stop(rc)
+$)
+
+AND write.char(ch) BE mess( ' ' <= ch <= 126 -> "%C ", "<%N>", ch)
+
+//'A' <=capitalch(ch)<= 'Z' | '0' <=ch<= '9' | VALOF SWITCHON ch INTO
+//   $( DEFAULT: RESULTIS FALSE
+//              RESULTIS TRUE
+//   $) -> "%C ", "<%N>", ch)
+
+AND mess(s, a,b,c) BE
+$( LET O = OUTPUT()
+   SELECTOUTPUT(SYSOUT)
+   WRITEF(s, a,b,c)
+   WRCH('*E')
+   SELECTOUTPUT(o)
+$)
+
+AND errmess(n, s, a,b,c) BE
+$(
+   mess(s,a,b,c)
+   RC := n
+   LONGJUMP(L.P, L.L)
+$)
+
+AND NOTE(ADDR) BE
+SENDPKT(notinuse, ABS CIS ! scb.type, action.note, ?,?, CIS!SCB.arg1, addr)
+
+AND POINT(ADDR) =
+SENDPKT(notinuse, ABS CIS ! scb.type, action.point, ?,?, CIS!SCB.arg1, addr)
+
+AND POINTAT(pos) = VALOF
+$( LET V = TABLE 0, ?, 0
+   V!1 := pos*BYTESPERWORD
+   RESULTIS point(V)
+$)
+
+

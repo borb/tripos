@@ -1,0 +1,719 @@
+/*****************************************************************************\
+*                        Olivetti Research Laboratory                         *
+*******************************************************************************
+
+
+                          ########  ########  #      # 
+                          ########  ########  ##    ## 
+                             ##        ##      ##  ##  
+                             ##        ##       ####   
+                             ##        ##        ##    
+                             ##        ##        ##    
+                             ##        ##        ##    
+                             ##        ##        ##    
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   08/05/87             *
+\*****************************************************************************/
+
+
+
+SECTION "TTY"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+
+
+
+GLOBAL
+$(
+    conco.in                        :  ug + 0
+    conco.out                       :  ug + 1
+    conpkt.in                       :  ug + 2
+    conpkt.out                      :  ug + 3
+    device.in                       :  ug + 4
+    device.out                      :  ug + 5
+    readbuffer                      :  ug + 6
+    readbuffere                     :  ug + 7
+    readbufferp                     :  ug + 8
+    stopping                        :  ug + 9
+    ttyco.in                        :  ug + 10
+    ttyco.out                       :  ug + 11
+    ttypkt.in                       :  ug + 12
+    ttypkt.out                      :  ug + 13
+    writebuffer                     :  ug + 14
+    writebuffere                    :  ug + 15
+    writebufferp                    :  ug + 16
+$)
+
+
+
+MANIFEST
+$(
+    co.stacksize                    =  500
+
+    wordsperbuffer                  =  1000
+    bytesperbuffer                  =  wordsperbuffer * bytesperword
+
+    wordsperchunk                   =  50
+    bytesperchunk                   =  wordsperchunk * bytesperword
+
+    ch.handshake                    =  'Y'
+
+    NIL                             =  -1
+$)
+
+
+
+LET start()  BE
+$(
+//  Main routine of the TTY program.  We create two circular buffers, and four
+//  coroutines to handle them.
+
+    LET args         =  "No arguments needed"
+    LET argv         =  VEC 20
+
+    LET blibpktwait  =  pktwait
+
+    rdargs( args, argv, 20 )
+
+    device.in    :=  devicetask( "ttyin:" )
+    device.out   :=  devicetask( "ttyout:" )
+
+    IF  device.in = 0  |  device.out = 0  THEN
+    $(
+        //  We have not got the relevant devices, so we should complain here
+        //  and now about this!
+        
+        writes( "TTY devices not loaded*N" )
+        
+        stop( 20 )
+    $)
+
+    ttyco.in     :=  createco( tty.in, co.stacksize )
+    ttyco.out    :=  createco( tty.out, co.stacksize )
+    conco.in     :=  createco( con.in, co.stacksize )
+    conco.out    :=  createco( con.out, co.stacksize )
+
+    readbuffer   :=  getvec( wordsperbuffer )
+    writebuffer  :=  getvec( wordsperbuffer )
+
+    IF  ttyco.in = 0  |  ttyco.out = 0  |  readbuffer = 0   |
+        conco.in = 0  |  conco.out = 0  |  writebuffer = 0  THEN
+    $(
+        //  Failed to create the coroutines, so we should return now with an
+        //  error.
+        
+        writes( "No more store ...*N" )
+        
+        UNLESS  ttyco.in = 0     DO  deleteco( ttyco.in )
+        UNLESS  ttyco.out = 0    DO  deleteco( ttyco.out )
+        UNLESS  conco.in = 0     DO  deleteco( conco.in )
+        UNLESS  conco.out = 0    DO  deleteco( conco.out )
+
+        UNLESS  readbuffer = 0   DO  freevec( readbuffer )
+        UNLESS  writebuffer = 0  DO  freevec( writebuffer )
+        
+        stop( 20 )
+    $)
+
+    //  Set up the pointers into the circular buffers, and then set the
+    //  coroutines running.
+
+    readbufferp   :=  0
+    readbuffere   :=  0
+    writebufferp  :=  0
+    writebuffere  :=  0
+
+    //  Having created the coroutines, we should start them up so that we
+    //  can begin acting as a terminal interface.
+
+    writes( "Type *"~.*" to finish*N" )
+
+    sendpkt( notinuse, consoletask, act.sc.mode, 0, 0, TRUE )
+
+    pktwait     :=  copktwait
+    stopping    :=  FALSE
+
+    ttypkt.in   :=  callco( ttyco.in )
+    ttypkt.out  :=  callco( ttyco.out )
+
+    conpkt.in   :=  callco( conco.in )
+    conpkt.out  :=  callco( conco.out )
+
+    $(  //  Loop to wait for packets to be sent to us.  When they arrive, we
+        //  dispatch them to the relevant coroutine.
+        
+        LET pkt  =  taskwait()
+
+        //  Look to see which of the coroutines claims to own this packet.
+
+        TEST  pkt = ttypkt.in   THEN  ttypkt.in   :=  callco( ttyco.in, pkt )
+        ELSE
+        
+        TEST  pkt = ttypkt.out  THEN  ttypkt.out  :=  callco( ttyco.out, pkt )
+        ELSE
+        
+        TEST  pkt = conpkt.in   THEN  conpkt.in   :=  callco( conco.in, pkt )
+        ELSE
+        
+        TEST  pkt = conpkt.out  THEN  conpkt.out  :=  callco( conco.out, pkt )
+        ELSE
+        
+        //  We cannot handle it, since nobody claims it!
+            
+        abort( 9999, pkt )
+    $)
+    REPEATUNTIL  ttypkt.in = NIL  &  ttypkt.out = NIL  &
+                 conpkt.in = NIL  &  conpkt.out = NIL
+
+    //  When we drop out of that loop, we should set the "pktwait" back to
+    //  the previous version, and then set the terminal back to its proper
+    //  state.
+
+    pktwait  :=  blibpktwait
+
+    freevec( readbuffer )
+    freevec( writebuffer )
+    
+    deleteco( ttyco.in )
+    deleteco( ttyco.out )
+    deleteco( conco.in )
+    deleteco( conco.out )
+    
+    sendpkt( notinuse, consoletask, act.sc.mode, 0, 0, FALSE )
+
+    writes( "*N*N" )
+$)
+
+
+
+AND copktwait( id, pkt )  =  cowait( pkt )
+
+
+
+AND tty.in()  BE
+$(
+//  Coroutine to read characters from the TTY device, and put them into the
+//  read buffer.
+
+    LET ch  =  ttyrdch()
+
+    readbuffer % readbuffere  :=  ch
+    readbuffere               :=  (readbuffere + 1) REM bytesperbuffer
+$)
+REPEAT
+
+
+
+AND con.in()  =  VALOF
+$(
+//  Coroutine to read characters from the console, and then add them to the
+//  write buffer.
+
+    LET chunk  =  VEC wordsperchunk
+
+    LET starc  =  FALSE
+    LET tilde  =  FALSE
+
+    $(  //  Repeat loop to get chunks of characters from the console, and
+        //  then add them to the circular buffer.
+
+        LET chars  =  sendpkt( notinuse, consoletask, act.read.buffer, 0, 0,
+                               chunk, bytesperchunk, 1 )
+
+        FOR  i = 0  TO  chars-1  DO
+        $(
+            LET ch  =  chunk % i
+
+            IF  tilde  THEN
+            $(
+                //  Escape character, so we should handle it!
+            
+                IF  ch = '.'  THEN  
+                $(
+                    //  We want to stop this program, but we can only do that
+                    //  sensibly if we cancel the TTY reception packet as well.
+                    //  Both circular buffers should be flushed as well, to
+                    //  cause the write coroutines to terminate immediately.
+
+                    dqpkt( device.in, ttypkt.in )
+
+                    ttypkt.in     :=  NIL
+                    stopping      :=  TRUE
+
+                    readbufferp   :=  readbuffere
+                    writebufferp  :=  writebuffere
+                    
+                    RESULTIS  NIL
+                $)
+                
+                IF  ch = '#'  THEN
+                $(
+                    //  We want to send a break down the line.  The only 
+                    //  way we can do this sensibly is to hit the Z8530 chip!
+                    
+                    0 % #X00FA0000  :=  5
+                    0 % #X00FA0000  :=  #B00010000
+                    
+                    delay( tickspersecond/10 )
+
+                    0 % #X00FA0000  :=  5
+                    0 % #X00FA0000  :=  #B11101010
+                    
+                    LOOP
+                $)
+                
+                IF  ch = '<'  THEN
+                $(
+                    //  We want to fetch a file from the other end.  We set
+                    //  up the state, and then handle the operation.  To make
+                    //  sure that nothing else happens in the mean time, 
+                    //  cancel the reception request, and flush the buffers.
+                    
+                    dqpkt( device.in, ttypkt.in )
+
+                    readbufferp   :=  readbuffere
+                    writebufferp  :=  writebuffere
+                    
+                    ttyrx()
+                    
+                    qpkt( ttypkt.in )
+                    
+                    LOOP
+                $)
+
+                IF  ch = '>'  THEN
+                $(
+                    //  We want to send a file to the other end.  We set
+                    //  up the state, and then handle the operation.  To make
+                    //  sure that nothing else happens in the mean time, 
+                    //  cancel the reception request, and flush the buffers.
+                    
+                    dqpkt( device.in, ttypkt.in )
+
+                    readbufferp   :=  readbuffere
+                    writebufferp  :=  writebuffere
+                    
+                    ttytx()
+                    
+                    qpkt( ttypkt.in )
+                    
+                    LOOP
+                $)
+            $)
+
+            tilde  :=  ch = '~'  &  starc
+            starc  :=  ch = '*C'
+            
+            UNLESS  tilde  DO
+            $(
+                writebuffer % writebuffere  :=  ch
+                writebuffere                :=  (writebuffere + 1) REM bytesperbuffer
+            $)
+        $)
+    $)
+    REPEAT
+$)
+
+
+
+AND tty.out()  =  VALOF
+$(
+//  Coroutine to take characters from the write buffer, and send them to the
+//  TTY device.
+
+    ttywrch( '*C' )
+
+    UNTIL  stopping  DO
+
+        TEST  writebufferp = writebuffere  THEN  delay( 1 )
+        ELSE
+        $(
+            LET ch  =  writebuffer % writebufferp
+
+            writebufferp  :=  (writebufferp + 1) REM bytesperbuffer
+            
+            ttywrch( ch )
+        $)
+
+    RESULTIS  NIL
+$)
+
+
+
+AND con.out()  =  VALOF
+$(
+//  Coroutine to take characters from the read buffer, and send them to the
+//  console.
+
+    UNTIL  stopping  DO
+
+        TEST  readbufferp = readbuffere  THEN  delay( 1 )
+        ELSE
+        $(
+            LET chunk  =  VEC wordsperchunk
+            LET chars  =  0
+
+            UNTIL  readbufferp = readbuffere  |  chars = bytesperchunk  DO
+            $(
+                LET ch  =  readbuffer % readbufferp
+
+                readbufferp    :=  (readbufferp + 1) REM bytesperbuffer
+                
+                chunk % chars  :=  ch
+                chars          :=  chars + 1
+            $)
+            
+            sendpkt( notinuse, consoletask, act.sc.write, 0, 0, chunk, chars )
+        $)
+
+    RESULTIS  NIL
+$)
+
+
+
+AND ttytx()  BE
+$(
+//  Transmit a file to the other end of the serial line.
+
+    LET args  =  "FILE/A,TO,EOF/K"
+    LET argv  =  VEC 50
+
+    sendpkt( notinuse, consoletask, act.sc.mode, 0, 0, FALSE )
+
+    writes( "*N*NTransmit file: *E" )
+
+    TEST  rdargs( args, argv, 50 )  THEN
+    $(
+        LET sysout   =  output()
+
+        LET f.file   =  0
+        LET t.file   =  0
+        LET eof      =  0
+        LET stream   =  0
+
+        f.file  :=  argv!0
+        t.file  :=  argv!1
+        eof     :=  argv!2
+        
+        IF  t.file = 0  THEN  t.file  :=  f.file
+        IF  eof = 0     THEN  eof     :=  "{eof}"
+        
+        //  Having sorted out the arguments, we should open the file at this
+        //  end to make sure that we can do this.
+        
+        stream  :=  findinput( f.file )
+        
+        TEST  stream = 0  THEN  writef( "Cannot open *"%S*"*N", f.file )
+        ELSE
+        $(
+            //  We can open the file, so send the command to the other end.
+        
+            TEST  sendcommand( "ttyrx", t.file, eof )  THEN
+
+                //  We have sent the command, so all we should do is to 
+                //  enter the code which handles the reception of characters.
+                
+                TEST  transmitfile( stream, eof )
+                    THEN  writes( "*CTransmission succeeded*N" )
+                    ELSE  writes( "*CTransmission failed*N" )
+
+            ELSE  writes( "Failed to send command*N" )
+
+            endstream( stream )
+        $)
+    $)
+    ELSE  writef( "Bad arguments for *"%S*"*N", args )
+
+    sendpkt( notinuse, consoletask, act.sc.mode, 0, 0, TRUE )
+$)
+
+
+
+AND ttyrx()  BE
+$(
+//  Receive a file from the other end of the serial line.
+
+    LET args  =  "FILE/A,TO,EOF/K"
+    LET argv  =  VEC 50
+
+    sendpkt( notinuse, consoletask, act.sc.mode, 0, 0, FALSE )
+
+    writes( "*N*NReceive file: *E" )
+
+    TEST  rdargs( args, argv, 50 )  THEN
+    $(
+        LET sysout   =  output()
+
+        LET f.file   =  0
+        LET t.file   =  0
+        LET eof      =  0
+        LET stream   =  0
+
+        f.file  :=  argv!0
+        t.file  :=  argv!1
+        eof     :=  argv!2
+        
+        IF  t.file = 0  THEN  t.file  :=  f.file
+        IF  eof = 0     THEN  eof     :=  "{eof}"
+        
+        //  Having sorted out the arguments, we should open the file at this
+        //  end to make sure that we can do this.
+        
+        stream  :=  findoutput( t.file )
+        
+        TEST  stream = 0  THEN  writef( "Cannot open *"%S*"*N", t.file )
+        ELSE
+        $(
+            //  We can open the file, so send the command to the other end.
+        
+            TEST  sendcommand( "ttytx", f.file, eof )  THEN
+            $(
+                //  We have sent the command, so all we should do is to 
+                //  enter the code which handles the reception of characters.
+                
+                TEST  receivefile( stream, eof )
+                    THEN  writes( "*CReception succeeded*N" )
+                    ELSE  writes( "*CReception failed*N" )
+
+                endstream( stream )
+            $)
+            ELSE  writes( "Failed to send command*N" )
+        $)
+    $)
+    ELSE  writef( "Bad arguments for *"%S*"*N", args )
+
+    sendpkt( notinuse, consoletask, act.sc.mode, 0, 0, TRUE )
+$)
+
+
+
+AND sendcommand( command, file, eof )  =  VALOF
+$(
+//  We should send the command to the other machine, waiting for it to reflect
+//  the characters as we go.
+
+    UNLESS  ttywrites( command )    DO  RESULTIS  FALSE
+    UNLESS  ttywrites( " " )        DO  RESULTIS  FALSE
+    UNLESS  ttywrites( file )       DO  RESULTIS  FALSE
+    UNLESS  ttywrites( " " )        DO  RESULTIS  FALSE
+    UNLESS  ttywrites( eof )        DO  RESULTIS  FALSE
+    UNLESS  ttynewline()            DO  RESULTIS  FALSE
+$)
+
+
+
+AND transmitfile( stream, eof )  =  VALOF
+$(
+//  Handle the "transmit file" protocol.  Before anything else, we handshake
+//  with the other machine, just to make sure that all is well.  We then send
+//  the file line by line, followed by the "eof" marker.
+
+    LET sysin  =  input()
+    LET lines  =  0
+
+    $(  //  Repeat loop to read a line from the file, and send it down to
+        //  the other machine.
+
+        LET buffer  =  VEC 255/bytesperword
+        LET length  =  0
+        LET ch      =  0
+        
+        selectinput( stream )
+        
+        UNTIL  length = 255  DO
+        $(
+            ch  :=  rdch()
+            
+            IF  ch = '*N'  |  ch = endstreamch  THEN  BREAK
+
+            length           :=  length + 1
+            buffer % length  :=  ch
+        $)
+        
+        selectinput( sysin )
+        
+        //  Look for the end of file condition.
+        
+        IF  length = 0  &  ch = endstreamch  THEN  BREAK
+        
+        //  Look for an overlong line which has had to be split.
+        
+        UNLESS  ch = '*N'  |  ch = endstreamch  DO  unrdch()
+        
+        //  Having done that, it is safe to fill in the buffer, and then send
+        //  it to the other machine.
+        
+        buffer % 0  :=  length
+        lines       :=  lines + 1
+        
+        UNLESS  ttywriteline( buffer )  DO  RESULTIS  FALSE
+
+        writef( "*C%I5*E", lines )
+    $)
+    REPEAT  //  Until the end of the file.
+
+    UNLESS  ttywriteline( eof )  DO  RESULTIS  FALSE
+
+    //  If we come here, then it appears that we have succeeded in
+    //  transmitting the file, so we should rejoice.
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND receivefile( stream, eof )  =  VALOF
+$(
+//  Receive a file from a remote machine.  We handshake with the other machine
+//  to make sure that all is well.  After that, we wait for the file to be
+//  sent to us.
+
+    LET sysout  =  output()
+    LET lines   =  0
+
+    $(  //  Repeat loop to read a line from the file, and send it down to
+        //  the other machine.
+
+        LET buffer     =  VEC 255/bytesperword
+        LET lfpending  =  FALSE
+        LET length     =  0
+        
+        UNTIL  length = 255  DO
+        $(
+            LET ch  =  ttyrdch()
+            
+            IF  ch = '*N'  &  lfpending  THEN  BREAK
+            
+            length           :=  length + 1
+            buffer % length  :=  ch
+            
+            lfpending        :=  ch = '*C'
+        $)
+        
+        //  When we drop out of that, there is a spurious "*C" in the buffer,
+        //  so we should strip this.
+        
+        buffer % 0  :=  length - 1
+        
+        //  Look for the end of file condition, since it is the other machine
+        //  which is sending us the "eof" marker.
+
+        IF  compstring( buffer, eof ) = 0  THEN  BREAK
+        
+        selectoutput( stream )
+        writef( "%S*N", buffer )
+        selectoutput( sysout )
+        
+        UNLESS  ttynewline()  DO  RESULTIS  FALSE
+        
+        lines  :=  lines + 1
+        
+        writef( "*C%I5*E", lines )
+    $)
+    REPEAT  //  Until the end of the file.
+
+    //  If we come here, then it appears that we have succeeded in
+    //  receiving the file, so we should rejoice.
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND ttyrdch()  =  sendpkt( notinuse, device.in )  &  #X7F
+
+
+
+AND ttywrch( ch )  BE  sendpkt( notinuse, device.out, 0, 0, 0, (ch & #X7F) )
+
+
+
+AND ttycheck( ch )  =  VALOF
+$(
+//  Read a character from the tty, and then make sure it is what we are
+//  expecting.
+
+    LET ttych  =  ttyrdch()
+
+    RESULTIS  ch = ttych
+$)
+
+
+
+AND ttywrites( string )  =  VALOF
+$(
+//  Write a string to the other end.
+
+    FOR  i = 1  TO  string % 0  DO
+    $(
+        LET ch  =  string % i
+        
+        UNLESS  ttywrite( ch )  DO  RESULTIS  FALSE
+    $)
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND ttywriteline( string )  =  VALOF
+$(
+//  Write a string to the other end, terminating it with a newline.
+
+    UNLESS  ttywrites( string )  DO  RESULTIS  FALSE
+
+    RESULTIS  ttynewline()
+$)
+
+
+
+AND ttywrite( ch )  =  VALOF
+$(
+//  Write a character, and then check its reflection.  Certain special
+//  characters cannot be done this way, so we should escape them.
+
+    TEST  ch = '*T'  |  ch = '*C'  |  ch = '*P'  THEN
+    $(
+        //  Special characters which cause a special reflection.  We should
+        //  send them with an escape character before.  This turns off
+        //  reflection, so we can't be sure that they have got through.
+        
+        ttywrch( 16 )    //  DLE
+        ttywrch( ch )    //  The character itself
+        
+        RESULTIS  TRUE
+    $)
+    ELSE
+    $(
+        //  We can send this character in the normal way.
+
+        ttywrch( ch )
+
+        RESULTIS  ttycheck( ch )
+    $)
+$)
+
+
+
+AND ttynewline()  =  VALOF
+$(
+//  Write a newline character.
+
+    LET ch1  =  0
+    LET ch2  =  0
+
+    ttywrch( '*C' )
+
+    ch1  :=  ttyrdch()
+    ch2  :=  ttyrdch()
+
+    RESULTIS  (ch1 = '*C'  &  ch2 = '*N')  |  (ch2 = '*C'  &  ch1 = '*N')
+$)
+
+

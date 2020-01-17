@@ -1,0 +1,36 @@
+SECTION "WRITETIME"
+
+GET "libhdr"
+
+LET start()  BE
+$(
+    LET v = VEC 3
+
+    datstamp( v )
+
+    writetime( v )
+$)
+
+AND writetime( v )  BE
+$(
+    LET mins  =  v!1
+    LET ticks  =  v!2
+    LET secs   =  ticks / tickspersecond
+    LET rest   =  (ticks REM tickspersecond) * (100/tickspersecond)
+
+    write0( mins, 2 )
+    wrch( ':' )
+    write0( secs, 2 )
+    wrch( '.' )
+    write0( rest, 2 )
+    newline()
+$)
+
+AND write0( n, d )  BE
+$(
+    IF  d > 1  THEN  write0( n/10, d-1 )
+
+    wrch( n REM 10  +  '0' )
+$)
+
+

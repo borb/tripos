@@ -1,0 +1,313 @@
+/************************************************************************
+*  (C) Copyright 1980  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*       U S E R    A U T H E N T I C A T O R    I N T E R F A C E       *
+*                                                                       *
+*************************************************************************
+**  C  Gray  Girling      COMPUTER LAB,  CAMBRIDGE           04.09.80  **
+************************************************************************/
+
+
+SECTION "Logon"
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.ringhdr"
+GET "BCPL.ring"
+GET "BCPL.ringssp"
+GET "IOHDR"
+GET "BCPL.synfind"
+GET "BCPL.gethex"
+GET "BCPL.finduidset"
+GET "BCPL.killfridge"
+
+
+
+
+
+
+LET start() BE
+$(  LET arg=VEC 100/bytesperword
+    LET rc=10
+    MANIFEST
+    $(  a.name    = 0
+        a.pw      = 1
+        a.npw     = 2
+        a.time    = 3
+        a.service = 4
+        a.check   = 5
+        a.set     = 6
+        a.make    = 7
+        a.kill    = 8
+        a.system  = 9
+        a.auty    = 10
+        a.priv    = 11
+        res.size  = 32
+        data.size = 20
+    $)
+    TEST
+    rdargs("Name,PW=Password,NP=NewPW,Timeout/k,Service/k,*
+           *CHECK/S,SET/S,MAKE/S,KILL/s,Sys/s,As=Auty/k,Using=Priv/k", 
+           arg, 100/bytesperword)=0 THEN
+        writeit("Syntax error on command line*N") ELSE
+    TEST dr.initialise()~=0 THEN dr.writeringerror() ELSE
+    $(  LET userauth     = VEC sv.upb
+        LET check        = (arg!a.check~=0)
+        LET set          = (arg!a.set~=0 | arg!a.npw~=0)
+        LET make         = (arg!a.make~=0)
+        LET kill         = (arg!a.kill~=0)
+        LET sys          = (arg!a.system~=0)
+        LET logon        = ~set & ~check & ~make & ~kill
+        LET results      = VEC res.size
+        LET data         = VEC data.size
+        LET data.puid    = data+5
+        LET data.pw      = data+9
+        LET data.timeout = data+13
+        LET data.auth    = (kill -> data.pw, data.timeout)
+        LET data.npw     = data.timeout
+        LET pw           = VEC 20/bytesperword
+        LET npw          = VEC 20/bytesperword
+        LET uidsetlist   = (rootnode ! rtn.info ! rtninfo.ring) + ri.uidset
+        LET user.on      = (!uidsetlist~=0)
+        LET uidset       = (user.on -> !uidsetlist+1, 0)
+        LET sysuidset    = 0
+        // Space for "PRIVILEGE", the expected AUTY and the PRIV to use        
+        LET privilege    = VEC uidsize
+        LET auty.vec     = VEC uidsize
+        LET priv.vec     = VEC uidsize
+        // New UIDSET's authentity will be either AUTY or "SYSTEM" or "USER"
+        LET auty.name    = (arg!a.auty\=0 & arg!a.auty%0\=0 -> arg!a.auty,
+                               sys -> "SYSTEM", "USER")
+        LET authentity   = puid.find(auty.name, auty.vec)
+        // Privilege for use is either PRIV or "PWPRIV"
+        LET priv.name    = (arg!a.priv\=0 & arg!a.priv%0\=0 ->        
+                               arg!a.priv, "PWPRIV")
+        LET priv         = puid.find(priv.name, priv.vec)
+        // Name of the service used will be SERVICE or "SYSAUTH" or "USERAUTH"
+        LET service.name = (arg!a.service\=0 & arg!a.service%0\=0 -> 
+                            arg!a.service,
+                            sys -> "SYSAUTH", "USERAUTH")
+        // We need a name if one is not supplied for LOGON and MAKE but
+        // we only need one for KILL, CHECK or SET if one is not supplied AND
+        // one is not available from the rootnode!
+        LET needsname    = !uidsetlist=0 | logon | make  |
+                           (arg!a.name~=0 & (kill | check | set))
+        LET terminal     = "**"
+        LET savein       = input()
+        LET fridge.tag   = consoletask
+        gethex("FF02DFBBEBF7B5D8", privilege, uidsize)
+        selectinput(findinput(terminal))
+        TEST logon THEN
+        $(  killfridge(fridge.tag)
+            !uidsetlist := getvec(capsize)
+            UNLESS !uidsetlist=0 THEN
+            $(  uidset:=!uidsetlist+1
+                FOR i=0 TO capsize DO (!uidsetlist)!i:=0
+            $)
+        $) ELSE
+        IF (kill | make) & priv\=0 THEN 
+            sysuidset:=finduidset(priv, privilege, fridge.tag)
+        TEST check & (set | make | kill) | set & (make | kill) | make & kill
+        THEN writeit("Illegal combination of requests*N") ELSE
+        TEST authentity=0 THEN
+            writef("Authentity *"%S*" is unknown*N", auty.name) ELSE  
+        TEST priv=0 THEN
+            writef("Privilege *"%S*" is unknown*N", priv.name) ELSE
+        TEST (kill | make) & sysuidset=0 THEN
+            writeit("Can't find TUID for *"%S*" privilege*N", priv.name) ELSE
+        TEST needsname & ~get.name(arg!a.name, data.puid) THEN
+        $(  rc:=5
+            result2:=#XC006
+        $) ELSE
+        $(  TEST logon THEN
+            $(  FOR i=0 TO 3 DO put2bytes(uidset+cap.puid, i, data.puid!i)
+                FOR i=0 TO uidsize-1 DO (uidset+cap.auty)!i := authentity!i
+                uidset!cap.usertag := fridge.tag
+            $) ELSE
+                UNLESS needsname THEN
+                FOR i=0 TO 3 DO data.puid!i := get2bytes(uidset+cap.puid, i)
+            IF logon & arg!a.time=0 THEN
+            arg!a.time:= "12D"  // default timeout = 5 mins
+            IF arg!a.pw=0 & ~kill THEN
+                TEST set THEN
+                arg!a.pw:=ask("Current Password:", pw, 20/bytesperword, TRUE)
+                ELSE
+                arg!a.pw:=ask("Password:", pw, 20/bytesperword, TRUE)
+            results!0 := res.size
+            data!0 := (check | kill -> 12, set | make -> 16, 14)
+            IF arg!a.npw=0 & set THEN
+                arg!a.npw := ask("New Password:", npw, 20/bytesperword, TRUE)
+            TEST set & VALOF
+            $(  LET checkpw = VEC 20/bytesperword
+                ask("Verify new Password:", checkpw, 20/bytesperword, TRUE)
+                RESULTIS 0~=compstring(arg!a.npw, checkpw)
+            $) THEN
+            $(  writeit("Verification failed*N")
+                result2:=#XC006
+            $) ELSE
+            TEST 0=dr.rctype(dr.lookup(service.name, userauth)) THEN
+            $(  data!4 := (check->0, set->2, make->3, kill->4, 1)// entry number
+                IF ~kill & arg!a.pw%0>8 THEN arg!a.pw%0 := 8
+                IF set & arg!a.npw%0>8 THEN arg!a.npw%0 := 8
+                FOR i=1 TO res.size DO results!i := 0 // clear results buffer
+                UNLESS kill THEN
+                $(  FOR i=1 TO arg!a.pw%0 DO
+                        dr.byteput(data.pw, i-1, arg!a.pw%i)
+                    FOR i=arg!a.pw%0+1 TO 8 DO
+                        dr.byteput(data.pw, i-1, '*S')
+                $)
+                TEST set THEN
+                $(  FOR i=1 TO arg!a.npw%0 DO
+                        dr.byteput(data.npw, i-1, arg!a.npw%i)
+                    FOR i=arg!a.npw%0+1 TO 8 DO
+                        dr.byteput(data.npw, i-1, '*S')
+                $) ELSE
+                IF make | kill THEN
+                    FOR i=0 TO 3 DO
+                        data.auth!i := get2bytes (sysuidset+cap.tuid, i)
+                TEST logon & ~get.timeout(arg!a.time, data.timeout) THEN
+                $(  writeit("Error in timeout*N")
+                    result2 := #XC005
+                $) ELSE
+                IF -1=dr.rctype(dr.ssp(userauth, data, results, 20, 2)) | VALOF
+                $(  LET see.rc = FALSE
+                    TEST dr.result2=0 THEN
+                        TEST check THEN writeit("password matches*N") ELSE
+                        TEST set | make THEN writeit("new password set*N") ELSE
+                        TEST kill THEN writeit("user deleted*N") ELSE
+                        $(  LET result.tuid = results+4
+                            LET result.tpuid= results+2*4
+                            FOR i=0 TO 2*4-1 DO
+                                put2bytes(uidset+cap.tuid, i, result.tuid!i)
+                        $)
+                    ELSE see.rc:=TRUE
+                    RESULTIS see.rc
+                $) THEN
+                $(  LET r2=result2
+                    writeit("LOGON: (%S in service %S) ",
+                             (arg!a.name=0 -> "logged on user", arg!a.name),
+                             service.name)
+                    result2 := r2
+                    dr.writeringerror(dr.result2)
+                    writes("The reply block contains:*N")
+                    FOR i=1 TO res.size DO
+                        writef("%I3 - #X%X8 (%N)*N", i, results!i, results!i)
+                    result2 := r2
+                $)
+            $) ELSE
+            $(  LET r2 = result2
+                writeit("Couldn't look-up *"%S*": ",service.name)
+                result2 := r2
+                dr.writeringerror(result2)
+                result2 := r2
+            $)
+        $)
+        $(  LET r2=result2
+            IF !uidsetlist~=0 & get2bytes((uidset+cap.puid),0)>>8 ~= #XFF THEN
+            $(  freevec(!uidsetlist)
+                !uidsetlist:=0
+            $)
+            endread()
+            selectinput(savein)
+            result2:=r2
+        $)
+    $)
+    dr.terminate()
+    stop((result2=0 -> 0, rc))
+$)
+
+
+
+AND get.timeout(str, timevec) = VALOF
+$(  LET tvec = VEC 4/bytesperword-1
+    LET ok = gethex(str, tvec, 4/bytesperword)
+    IF ok THEN
+    $(  timevec!0 := get2bytes(tvec, 0)
+        timevec!1 := get2bytes(tvec, 1)
+    $)
+    RESULTIS ok
+$)
+
+
+
+AND ask(question, ansvec, anssize, non.reflect) = VALOF
+$(  LET i=?
+    LET ch=?
+    $(rpt
+        i:=1
+        writeit(question)
+        writes(" *E")
+        IF non.reflect THEN reflect.off(TRUE)
+        ch:=rdch()
+        WHILE ch='*S' DO ch:=rdch()
+        WHILE ch~='*N' & ch~=endstreamch DO
+        $(  IF i < bytesperword*anssize THEN ansvec%i := ch
+            ch:=rdch()
+            i:=i+1
+        $)
+        IF i>=bytesperword*anssize THEN writes("Answer too long!*N")
+    $)rpt REPEATUNTIL i<bytesperword*anssize | ch=endstreamch
+    ansvec%0 := i-1
+    IF non.reflect THEN reflect.off(FALSE)
+    RESULTIS ansvec
+$)
+
+
+
+AND writeit(string, a1, a2, a3, a4, a5) BE
+$(  LET r2=result2
+    writef(string, a1, a2, a3, a4, a5)
+    result2:=r2
+$)
+
+
+
+AND reflect.off(true.for.non.reflect) BE
+
+$( sendpkt(notinuse, consoletask, act.non.reflect.mode, ?, ?,
+                                                       true.for.non.reflect)
+$)
+
+
+
+
+AND get.name(suggested.name, puid) = VALOF
+$(  LET name = VEC 40/bytesperword
+    LET users.puid = VEC uidsize-1
+    LET errors=0
+    TEST suggested.name=0 THEN
+    ask("User:", name, 40/bytesperword, FALSE)
+    ELSE FOR i=0 TO suggested.name%0 DO name%i := suggested.name%i
+    users.puid := puid.find(name, users.puid)
+    WHILE name%0~=0 & errors<=5 & 0=users.puid DO
+    $(  errors := errors+1
+        writeit("User *"%S*" unknown*N", name)
+        ask("User's initials:", name, 40/bytesperword, FALSE)
+        UNLESS name%0=0 THEN users.puid := puid.find(name, users.puid)
+    $)
+    IF users.puid~=0 THEN FOR i=0 TO 3 DO puid!i := get2bytes(users.puid, i)
+    synfind(0)   // clear in core tree
+    RESULTIS name%0~=0 & errors<=5
+$)
+
+
+
+
+AND puid.find(string, puid) =
+    (string%0=16 & gethex(string, puid, 8/bytesperword) -> puid,
+        synfind(string, from.name.domain, 0))
+
+.
+
+SECTION "logon-libs"
+
+GET "libhdr"
+GET "ringhdr"
+GET "BCPL.ringhdr"
+GET "BCPL.writeerror"
+GET "BCPL.refresh"
+GET "BCPL.delete"
+
+

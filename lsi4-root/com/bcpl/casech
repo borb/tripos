@@ -1,0 +1,378 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+|| CASECH [FROM] input [TO] output [DICT dictionary] [L] [U] [A]
+
+SECTION "CASECH"
+GET "LIBHDR"
+
+GLOBAL $(
+Upper      : ug + 0
+Lower      : ug + 1
+Ch         : ug + 2
+WordV      : ug + 3
+wch        : ug + 4
+WordSize   : ug + 5
+CharV      : ug + 6
+TreeVec    : ug + 7
+TreeP      : ug + 8
+LineCount  : ug + 9
+NameTree   : ug + 10
+WordNode   : ug + 11
+Word       : ug + 12
+Echo       : ug + 13
+SetTag     : ug + 14
+mstream    : ug + 15
+$)
+
+
+LET ReadProg() BE
+$(1
+
+    SWITCHON Ch INTO
+
+$(S CASE '*P':
+    CASE '*N':   LineCount := LineCount+1
+    CASE '*T':
+    CASE '*S': RCh(Echo) REPEATWHILE Ch='*S'
+               LOOP
+
+    CASE '0':CASE '1':CASE '2':CASE '3':CASE '4':
+    CASE '5':CASE '6':CASE '7':CASE '8':CASE '9':
+         ReadNumber(10)
+         LOOP
+
+    CASE 'a':CASE 'b':CASE 'c':CASE 'd':CASE 'e':
+    CASE 'f':CASE 'g':CASE 'h':CASE 'i':CASE 'j':
+    CASE 'k':CASE 'l':CASE 'm':CASE 'n':CASE 'o':
+    CASE 'p':CASE 'q':CASE 'r':CASE 's':CASE 't':
+    CASE 'u':CASE 'v':CASE 'w':CASE 'x':CASE 'y':
+    CASE 'z':
+    CASE 'A':CASE 'B':CASE 'C':CASE 'D':CASE 'E':
+    CASE 'F':CASE 'G':CASE 'H':CASE 'I':CASE 'J':
+    CASE 'K':CASE 'L':CASE 'M':CASE 'N':CASE 'O':
+    CASE 'P':CASE 'Q':CASE 'R':CASE 'S':CASE 'T':
+    CASE 'U':CASE 'V':CASE 'W':CASE 'X':CASE 'Y':
+    CASE 'Z':
+         RdTag()
+         WriteTag()
+         LOOP
+
+    CASE '$':  RCh(Echo)
+              TEST Ch='(' | Ch=')'
+                THEN
+                  $(
+                    RdTag()
+                    WriteTag()
+                  $)
+                ELSE RCh(Echo)
+              LOOP
+    CASE '/':
+       RCh(Echo)
+       IF Ch='\' THEN $( RCh(Echo) ; LOOP $)
+       IF Ch='**' THEN $( ReadComment('/') ; LOOP $)
+       UNLESS Ch='/' LOOP
+    Comment:
+       RCh(Echo) REPEATUNTIL IsCC(Ch) | Ch=EndStreamCh
+       LOOP
+
+    CASE '|':
+       RCh(Echo)
+       IF Ch='|' THEN GOTO Comment
+       UNLESS Ch='**' THEN LOOP
+       ReadComment('|')
+       LOOP
+
+    CASE '#':
+       $( LET Radix = 8
+          RCh(Echo)
+          IF Ch='B' THEN $( Radix := 2  ; RCh(Echo) $)
+          IF Ch='X' THEN $( Radix := 16 ; RCh(Echo) $)
+          ReadNumber(Radix)
+          LOOP $)
+
+    CASE '"': RCh(Echo)
+              FOR I = 1 TO 255 DO
+              $( IF Ch='"' BREAK
+                 RdStrCh()  $)
+              RCh(Echo)
+              LOOP
+
+    CASE '*'':RCh(Echo)
+              RdStrCh()
+              RCh(Echo)
+              LOOP
+
+
+    DEFAULT:  RCh(Echo)
+              LOOP
+
+    CASE EndStreamCh: RETURN
+$)S
+$)1 REPEAT
+
+AND IsCC(Ch)= (Ch='*N') | (Ch='*P')
+
+AND packstring(v, s) = VALOF
+    $(
+    LET n = v!0 & #XFF
+    LET size = n/bytesperword
+    s!size := 0
+    FOR i = 0 TO n DO s%i := v!i
+    RESULTIS size
+    $)
+
+
+AND ReadComment(Term) BE
+$(
+   RCh(Echo)
+   $(
+      IF IsCC(Ch)
+      THEN LineCount := linecount + 1
+      IF Ch='**' THEN
+      $(
+         RCh(Echo)
+         UNLESS Ch=Term LOOP
+         RCh(Echo)
+         RETURN
+      $)
+      IF Ch=EndStreamCh THEN Error("Endstreamch in comment*N")
+      RCh(Echo)
+   $) REPEAT
+$)
+
+AND LookUpWord(MakeNew) = VALOF
+$(1 LET P = @NameTree
+
+    WordNode := !P
+
+    UNTIL WordNode=0 DO
+    $( LET Cmp = CmpStr(WordV, WordNode+2)
+       IF Cmp=0 RESULTIS WordNode+2
+       P := WordNode + (Cmp<0->0,1)
+       WordNode := !P  $)
+
+    IF MakeNew THEN
+    $(
+       WordNode := NewVec(WordSize+2)
+       WordNode!0, WordNode!1 := 0, 0
+       FOR I = 0 TO WordSize DO WordNode!(I+2) := WordV!I
+        !P:=WordNode
+    $)
+    RESULTIS 0
+$)1
+
+AND CmpStr(S1, S2) = VALOF
+$(1 LET Len1, Len2 = GetByte(S1,0), GetByte(S2,0)
+    FOR I = 1 TO Len1 DO
+    $( LET Ch1, Ch2 = GetByte(S1,I), GetByte(S2,I)
+       IF I>Len2  RESULTIS 1
+       IF 'a'<=Ch1<='z' DO Ch1:=Ch1-'a'+'A'
+       IF 'a'<=Ch2<='z' DO Ch2:=Ch2-'a'+'A'
+       IF Ch1>Ch2 RESULTIS 1
+       IF Ch1<Ch2 RESULTIS -1  $)
+    IF Len1<Len2 RESULTIS -1
+    RESULTIS 0
+$)1
+
+AND DeclSysWords() BE
+$(1
+    D("ABS/AND/*
+      *BE/BREAK/BY/*
+      *CASE/*
+      *DO/DEFAULT/*
+      *EQ/EQV/ELSE/ENDCASE/*
+      *FALSE/FIX/FLOAT/FOR/FINISH/*
+      *GOTO/GE/GR/GLOBAL/GET/*
+      *IF/INTO/*
+      *LET/LV/LE/LS/LOGOR/LOGAND/LOOP/LSHIFT//")
+
+    D("MANIFEST/*
+      *NEEDS/NE/NOT/NEQV/*
+      *OR/*
+      *RESULTIS/RETURN/REM/RSHIFT/RV/*
+      *REPEAT/REPEATWHILE/REPEATUNTIL/*
+      *SECTION/SWITCHON/STATIC/*
+      *TO/TEST/TRUE/THEN/TABLE/*
+      *UNTIL/UNLESS/*
+      *VEC/VALOF/*
+      *WHILE//")
+
+$)1
+
+
+AND D(WordS) BE
+$(1 LET I, Length = 1, 0
+
+    $( LET Ch = GetByte(WordS, I)
+       TEST Ch='/'
+           THEN $( IF Length=0 RETURN
+                   CharV!0 := Length
+                   WordSize := PackString(CharV, WordV)
+                   LookUpWord(TRUE)
+                   Length := 0  $)
+           ELSE $( Length := Length + 1
+                   CharV!Length := Ch  $)
+       I := I + 1
+    $) REPEAT
+$)1
+
+
+
+AND RCh(Echo) BE
+$(
+   IF Echo WCh(Ch)
+   Ch:=RdCh()
+$)
+
+AND RdTag() BE
+    $( LET N = 1
+       CharV!1 := Ch
+
+       $( RCh(FALSE)
+          UNLESS 'A'<=Ch<='Z' |
+                 'a'<=Ch<='z' |
+                 '0'<=Ch<='9' |
+                  Ch='.' BREAK
+          N := N+1
+          CharV!N := Ch  $) REPEAT
+
+       CharV!0 := N
+       WordSize := PackString(CharV, WordV)  $)
+
+
+AND WriteTag() BE
+$(
+   LET Mode=LookUpWord(SetTag)
+   TEST Mode=0 THEN
+   $(
+      IF Upper THEN
+      $(
+         FOR I=1 TO CharV!0 DO
+         $(
+            LET Ch=CharV!I
+            IF 'a'<=Ch<='z' THEN CharV!I:=Ch-'a'+'A'
+         $)
+         PackString(CharV, WordV)
+      $)
+      IF Lower THEN FOR I=1 TO CharV!0 DO
+      $(
+         LET Ch=CharV!I
+         IF 'A'<=Ch<='Z' THEN CharV!I:=Ch-'A'+'a'
+      $)
+      IF Echo FOR I=1 TO CharV!0 DO WCh(CharV!I)
+   $)
+   ELSE IF Echo DO WriteS(Mode)
+$)
+
+
+
+AND AllUpperWrch(Ch) BE
+$(
+   IF 'a'<=Ch<='z' THEN Ch:=Ch-'a'+'A'
+   WrCh(Ch)
+$)
+
+AND ReadNumber(Radix) BE UNTIL Value(Ch)>=Radix DO RCh(Echo)
+
+AND Value(Ch) = '0'<=Ch<='9' -> Ch-'0',
+                'a'<=Ch<='f' -> Ch-'a'+10,
+                'A'<=Ch<='F' -> Ch-'A'+10,
+                100
+
+AND RdStrCh() = VALOF
+$(1 LET K = Ch
+
+    RCh(Echo)
+
+    IF K='*N' DO Error("Bad string")
+
+    IF K='**' DO
+       $( IF Ch='*N' | Ch='*S' | Ch='*T' DO
+          $( $( IF Ch='*N' DO LineCount := LineCount+1
+                RCh(Echo)
+             $) REPEATWHILE Ch='*N' | Ch='*S' | Ch='*T'
+             RCh(Echo)
+             RESULTIS RdStrCh()
+          $)
+
+          RCh(Echo)  $)
+
+    RESULTIS K
+$)1
+
+AND NewVec(N) = VALOF
+    $( TreeP := TreeP - N - 1
+       IF TreeP<=TreeVec DO
+       $( Error("Program too large")
+          FINISH  $)
+       RESULTIS TreeP  $)
+
+
+AND Error(Mess) BE
+$(
+   LET OldOut=Output()
+   SelectOutput(MStream)
+   WriteF("Line %N %S*N", LineCount, Mess)
+   SelectOutput(OldOut)
+$)
+
+AND Start() BE
+$(1 LET V1 = VEC 50
+    AND V2 = VEC 100
+    LET argv = VEC 40
+    AND InStream, OutStream = 0, 0
+    AND DictStream =0
+    mstream := output()
+    LineCount:=0
+    WordV := V1
+    CharV := V2
+    TreeVec := getvec(500)
+    treep   := treevec+500
+
+    IF treevec = 0
+    THEN $( writes("No space for tree*N"); RETURN $)
+
+    Upper, Lower, WCh := TRUE, FALSE, WrCh
+    IF rdargs("from/a,to/a,dict/k,u/s,l/s,a/s", argv, 40) = 0
+    THEN $( writes("Args no good*N"); RETURN $)
+
+   instream := findinput(argv!0)
+   IF instream = 0
+   THEN $( writef("Can't open %S*N", argv!0); RETURN $)
+
+   outstream := findoutput(argv!1)
+   IF outstream = 0
+   THEN $( writef("Can't open %S*N",argv!1); RETURN $)
+   selectoutput(outstream)
+
+   TEST argv!4 \= 0
+   THEN lower, upper := TRUE, FALSE
+   ELSE IF argv!5 \= 0
+        THEN wch := allupperwrch
+
+   TEST argv!2 = 0
+   THEN dictstream := 0
+   ELSE dictstream := findinput(argv!2)
+
+   NameTree:=0
+   DeclSysWords()
+   UNLESS DictStream=0
+   DO $( Echo:=FALSE; SetTag:=TRUE
+         SelectInput(DictStream)
+         RCh(FALSE)
+         ReadProg()
+         EndRead()
+      $)
+   Echo:=TRUE
+   SetTag:=FALSE
+   SelectInput(InStream)
+    RCh(FALSE)
+    ReadProg()
+    endread(); endwrite()
+    freevec(treevec)
+
+$)1
+
+

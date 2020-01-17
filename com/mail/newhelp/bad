@@ -1,0 +1,1520 @@
+SECTION "COMMAND"
+
+GET "header"
+GET "TERMHDR"
+GET "BCPL.SETTERMVEC"
+GET "bcp.find-key"
+$<SMALL'
+GET "BCPL.RMSSPLIB"
+$>SMALL'
+
+//*****************************************************************************
+//           ROUTINES TO IMPLEMENT THE MAIL SERVER USER COMMANDS             //
+//*****************************************************************************
+
+LET name.number(ch) = VALOF
+$(  SWITCHON capitalch(ch) INTO
+    $(  CASE '.':       RESULT2 := SELECTED+item1;                      ENDCASE
+        CASE 'F':       FOR I = 0 TO ((mail.count < ml.size) -> mail.count, ml.size)-1
+                        UNLESS mail.list!(I*ml.element.size+ml.entry.disp) = -1
+                        RESULT2 := i+item1 <>                           ENDCASE
+                        RESULT2 := item1-1;                             ENDCASE
+        CASE 'L':       FOR I = ((mail.count < ml.size) -> mail.count, ml.size)-1 TO 0 BY -1
+                        UNLESS mail.list!(I*ml.element.size+ml.entry.disp) = -1
+                        RESULT2 := I+item1 <>                           ENDCASE
+                        RESULT2 := item1-1;                             ENDCASE
+        CASE 'N':       FOR I = selected+1 TO ((mail.count < ml.size) -> mail.count, ml.size)-1
+                        UNLESS mail.list!(I*ml.element.size+ml.entry.disp) = -1
+                        RESULT2 := I+item1 <>                           ENDCASE
+                        RESULT2 := item1-1;                             ENDCASE
+        DEFAULT:        RESULTIS FALSE
+    $)
+    RESULTIS TRUE
+$)
+
+LET read.item.numbers (extra, number, v, v.upb) = VALOF
+$(  MANIFEST $( argv.upb        = 15 + 90/bytesperword
+                A.all           = 10
+             $)
+    LET argv.string.    = "Number,,,,,,,,,,ALL/s"
+    LET item            = 0
+    LET argv.string     = VEC argv.upb
+    LET argv            = VEC argv.upb
+
+    TEST extra=0
+    THEN argv.string := argv.string.
+    ELSE
+    $(  LET pos = argv.string.%0
+        FOR I = 1 TO pos        DO argv.string%     i  := argv.string.%i
+        FOR I = 1 TO extra%0    DO argv.string%(pos+i) := extra%i
+        argv.string%0 := pos+extra%0
+    $)
+
+    IF rdargs(argv.string, argv, argv.upb) = 0
+    $( WRITEF("Bad string for '%S'*N", argv.string); RESULTIS FALSE $)
+
+    UNLESS extra=0
+    $(  LET free        = v+number
+        LET free.too.big= v+v.upb  +1
+
+        FOR i = 0 TO number-1
+        $(  LET string  = argv!(A.all+1+i)
+            TEST string=TRUE | string=FALSE
+            THEN v!I := string
+            ELSE
+            $(  LET new = free + string%0 / BYTESPERWORD +1
+                IF new > free.too.big   THEN                    RESULTIS 0
+                V!I     := free
+                FOR i = 0 TO string%0 DO free%i := string%i
+                free    := new
+            $)
+        $)
+    $)
+
+    TEST argv!A.all
+    THEN FOR I = 0 TO ((mail.count < ml.size) -> mail.count, ml.size)-1
+         DO UNLESS mail.list!(I*ml.element.size+ml.entry.disp) = -1
+            $( item +:= 1; items!item := I $)
+    ELSE TEST argv!0 = 0
+         TEST selected < 0
+         $( WRITEF("Which items ?*N", argv.string); RESULTIS FALSE $)
+         ELSE item, items!1 := 1, selected
+    ELSE
+    TEST argv!0~=0 & argv!1=0 & compstring(argv!0, "**")=0 THEN RESULTIS TRUE
+    ELSE
+    FOR i = 0 TO A.all-1
+    $(  LET base        = 0
+        LET s           = argv!i
+        LET first       = -1
+
+        IF s=0                                                          LOOP
+        IF s%0 = 0
+        $( WRITEF("Null string, when number expected*N"); RESULTIS FALSE $)
+
+        FOR i = 1 TO s%0
+        $(  LET ch = s%i
+            TEST '0' <= ch <= '9'
+            THEN base := base*10 + ch - '0'
+            ELSE TEST base=0 & name.number(ch)
+            THEN base := RESULT2
+            ELSE
+            $(  UNLESS first=-1 & ch='-' & i<s%0
+                $(      WRITEF("Unexpected character '%C' in number*N", ch)
+                        RESULTIS FALSE
+                $)
+                first   := base
+                base    := 0
+            $)
+        $)
+        IF first = -1 THEN first := base
+        base := base-item1
+        first := first-item1
+        IF first > base
+        $( WRITEF("Negative range*N"); RESULTIS FALSE $)
+        IF base >= mail.count | base >= ml.size
+        $( WRITEF("Number too large*N"); RESULTIS FALSE $)
+        IF base < 0
+        $( WRITEF("Number too small*N"); RESULTIS FALSE $)
+
+        IF mail.list!(first*ml.element.size+ml.entry.disp) = -1 |
+           mail.list!(base *ml.element.size+ml.entry.disp) = -1
+        $( WRITEF("Invalid range*N"); RESULTIS FALSE $)
+
+        FOR i = first to base
+        UNLESS mail.list!(I *ml.element.size+ml.entry.disp) = -1
+        $(  item := item+1
+            IF item > max.items
+            $( WRITEF("Too many items*N"); RESULTIS FALSE $)
+            items!item := I
+        $)
+    $)
+    FOR i = 1 TO item
+    DO  IF items!I>=mail.count |
+           mail.list ! ((items!I) *ml.element.size+ml.entry.disp) = -1
+           $( WRITEF("Invalid number %N*N", items!I+item1);
+                RESULTIS FALSE
+           $)
+    items!0 := item
+    SELECTED := items!1 // NEW !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    RESULTIS TRUE
+$)
+
+
+//------------------------------------------------------------------------------
+// Get a decimal number from the given string.
+// The result is the number (if valid).  Result2 is set TRUE or FALSE
+// depending on success
+//------------------------------------------------------------------------------
+LET get.item.number (string, quiet) = VALOF
+$(  LET n = ?
+    LET r = FALSE
+
+    TEST string%0 = 0 & selected >= 0
+    $(  r := TRUE; n := SELECTED $)
+    ELSE
+    $(  IF string%0 = 1
+        TEST name.number(string%1)
+        THEN r, n := TRUE, RESULT2-item1
+        ELSE r, n := TRUE, string%1 - '0' - item1
+        IF string%0 = 2
+        $(  r := TRUE; n := (string%1 - '0')*10 + string%2-'0' - item1 $)
+    $)
+    IF (n<0) | (n>=ml.size) | (n>=mail.count) THEN r := FALSE
+
+    UNLESS r | Quiet THEN writes("*NInvalid item number*N")
+
+    IF r & (mail.list!(n*ml.element.size+ml.entry.disp) = -1)
+    $( r := false; UNLESS quiet writes("*NNo such item*N") $)
+
+    result2 := r
+    IF r THEN SELECTED := n     // NEW !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    RESULTIS n
+$)
+
+//=============================================================================
+$<SMALL'
+LET read.n(string, base) = VALOF
+$(  LET first = 1
+    LET hex(ch, base) = VALOF
+    $(  LET n = ('0' <= ch <= '9') -> (ch-'0'), (capitalch(ch)-'7') //'A'+10)
+        RESULTIS (n>= base) -> -1, n
+    $)
+
+    LET decode(string, first, value, base) = VALOF
+    $(  FOR i = first TO string%0
+        DO  TEST hex(string%i, base) >= 0
+            THEN value := value*base + hex(string%i, base)
+            ELSE $( RESULT2 := FALSE; RESULTIS 0 $)
+        RESULTIS value
+    $)
+    RESULT2 := TRUE
+    IF string%1 = '#' THEN first, base := 2, 16
+    RESULTIS decode(string, first, 0, base)
+$)
+
+//=============================================================================
+
+LET read.puid(s1,s2,s3,s4, puid) = VALOF
+$(      IF s1=0 & s2=0 & s3=0 & s4=0
+        $( FOR i = 0 TO 3 DO puid%%i := 0; RESULTIS 1 $)
+
+        FOR i = @s1 TO @s4
+        DO UNLESS (!I)%0 =4 | ((!I)%0=5 & (!I)%1='#')
+        $(  WRITEF("Numbers must be four digits*N"); RESULTIS FALSE $)
+
+        FOR i = 0 TO 3 DO
+        $(  puid%%i := read.n((@s1) ! I, 16)
+            UNLESS RESULT2
+            $(  WRITEF("Invalid number '%S'*N", (@s1) ! i)
+                RESULTIS FALSE
+            $)
+        $)
+        RESULTIS TRUE
+$)
+$>SMALL'
+//=============================================================================
+
+LET ms.select(direction) = direction=0 -> VALOF
+$(  LET argv            = VEC 20
+    LET argv.string     = "Item/a"
+
+    IF rdargs(argv.string, argv, 20) = 0
+    $( writef("Bad arg for '%S'*N", argv.string); RESULTIS FALSE $)
+
+    $(  LET n = get.item.number(argv!0, FALSE)
+        UNLESS result2 RESULTIS FALSE
+        Selected := n
+    $)
+    RESULTIS TRUE
+$) , VALOF
+$(  //                          IF extra.items() RESULTIS FALSE
+    FOR i = selected+1 TO mail.count-1
+    DO  UNLESS (mail.list!(i*ml.element.size+ml.entry.disp) = -1)
+        $( Selected := I; RESULTIS TRUE $)
+    WRITEF("No next item*N")
+    RESULTIS FALSE
+$)
+
+LET ms.Send ( reply ) = VALOF
+$(  MANIFEST
+    $(  Mode.none       = 1
+        Mode.file       = 2
+        Mode.stream     = 3
+
+        A.item          = 0
+        A.stream        = 1
+        A.cc            = 2
+        A.bcc           = 3
+        A.subj          = 4
+        A.none          = 5
+        A.file          = 6
+        A.err           = 6
+        A.ins           = 7
+        A.dang          = 8
+    $)
+    // Get the parameters for the call of the real "send" routine.
+
+    LET argv    = get.temp.vec(10 + 40/BYTESPERWORD + 255/BYTESPERWORD)
+    LET subj    = 0
+    LET forward = 1
+    LET reply.id= 0
+    LET text.file       = VEC file.desc.size
+    LET header.file     = VEC file.desc.size
+    LET rdargs.string   = dynamic -> (  (reply=TRUE) -> selected < 0 ->
+                "Item/a,/k,CC/k,BCC/k,ABOUT=SUBJECT/K,none/s",
+                "Item,/k,CC/k,BCC/k,ABOUT=SUBJECT/K,none/s",
+                                        (reply=FALSE) ->
+        "USER=USERS=INITIALS,/k,CC/k,BCC/k,ABOUT=SUBJECT/K,none/s",
+                                        selected < 0 ->
+        "Item/a,user,CC/k,BCC/k,ABOUT=SUBJECT/K,none/s,err/s,ins/s,dang/s",
+        "Item,user,CC/k,BCC/k,ABOUT=SUBJECT/K,none/s,err/s,ins/s,dang/s"
+                                     ) ,
+                                     ((reply~=FALSE) -> selected < 0 ->
+        "Item/a,from=stream,CC/k,BCC/k,ABOUT=SUBJECT/K,none/s,file/k",
+        "Item,from=stream,CC/k,BCC/k,ABOUT=SUBJECT/K,none/s,file/k",
+        "USER=USERS=INITIALS,from=stream,CC/k,BCC/k,ABOUT=SUBJECT/K,none/s,file/k"
+                                    )
+    LET mode    = Mode.stream
+    ms.fs.fail.level, ms.fs.fail.link   := level(), local.fs.fail.link
+
+    IF rdargs(rdargs.string,argv,80) = 0
+    $( writef("Bad args for %S*N", rdargs.string); RESULTIS FALSE $)
+
+    IF argv!A.none THEN mode := mode.none       // No file wanted !
+
+    UNLESS dynamic
+    $(  UNLESS argv!A.stream=0 | argv!A.file=0
+        $(  writef("Only supply one of FILE or STREAM*N", rdargs.string);
+            RESULTIS FALSE
+        $)
+        UNLESS argv!A.file=0 THEN mode, argv!A.stream := mode.file, argv!A.file
+    $)
+
+    UNLESS reply > 0 header.file, text.file := 0, 0     // No reason to send !
+
+    UNLESS reply=FALSE
+    $(  Let Number      = argv!0
+        LET mail.item   = ?
+
+        UNLESS reply=TRUE               // REPLY PB ==> REPLY current,PB
+        $(      get.item.number(number, TRUE)
+                UNLESS RESULT2
+                DO argv!A.stream, number := argv!0, 0
+        $)
+
+        Number := get.item.number(number=0 -> "", number, FALSE)
+        UNLESS RESULT2  RESULTIS FALSE
+
+        mail.item       :=  mail.list + ml.element.size * Number
+
+        TEST reply=TRUE
+        $(reply
+            argv!A.item := mail.item + ml.sender
+
+        $(  LET v = VEC 80/BYTESPERWORD
+            LET match   = "Reply-to"
+
+            TEST find.key(mail.item + ml.header.puid, 0, match, V, 80)
+            $(  LET len         = v%0
+                LET base        = match%0 + 1
+                LET recip       = ?
+                WHILE len < base | v%base=' ' | v%base=':' DO base := base+1
+                base    := base-1
+                len     := len-base
+                recip   := get.temp.vec(len/BYTESPERWORD)
+                recip%0 := len
+
+                FOR i = 1 TO len DO recip%i := v%(base+i)
+                argv!A.item := recip
+            $)
+            ELSE match := "Reply-to" <>
+            IF find.key(mail.item + ml.header.puid, 0, match, V, 80)
+            $(  LET len         = v%0
+                LET base        = match%0 + 1
+                LET recip       = ?
+                WHILE len < base | v%base=' ' | v%base=':' DO base := base+1
+                base    := base-1
+                len     := len-base
+                recip   := get.temp.vec(len/BYTESPERWORD)
+                recip%0 := len
+
+                FOR i = 1 TO len DO recip%i := v%(base+i)
+                argv!A.item := recip
+           $)
+
+            match := "Message-Id"
+            IF find.key(mail.item + ml.header.puid, 0, match, V, 80)
+            $(  LET len         = v%0
+                LET base        = match%0 + 1
+
+                WHILE len < base | v%base=' ' | v%base=':' DO base := base+1
+                base    := base-1
+                len     := len-base
+                reply.id        := get.temp.vec(len/BYTESPERWORD)
+                reply.id%0      := len
+
+                FOR i = 1 TO len DO reply.id%i := v%(base+i)
+           $)
+        $)
+
+        IF argv!A.subj = 0
+        $(  LET reply   = mail.item + ml.subject
+            LET base    = ?
+            LET len     = reply%0
+            LET match   = TRUE
+            LET re      = "Re: "
+
+            IF subj=0 THEN subj := get.temp.vec(255/BYTESPERWORD)
+            argv!A.subj := subj
+            FOR I = 1 TO re%0
+            $(  subj%i := re%i
+                UNLESS compch(re%i, reply%i)=0 MATCH := FALSE
+            $)
+            base        := MATCH -> 0, re%0
+
+            IF len+base > 255 THEN len := 255-base
+            FOR I = 1 TO len DO subj%(i+base) := reply%i
+            subj%0      := len+base
+        $)
+    $)reply
+        ELSE    // Forward !!
+        $(
+                argv!A.item     := argv!A.stream
+                argv!A.stream   := 0
+                zap.file(header.file)
+                header.file!cache.address := get.temp.vec(60/rwpw)
+                header.file!cache.size  := 60
+                header.file!next.read   := 50
+                copy.uid(mail.item+ml.header.puid,0,header.file+uid, 0) // Header !!
+
+                zap.file(text.file)
+                copy.uid(mail.item+ml.message.puid,0, text.file+uid, 0)
+
+                IF text.file!uid = 0
+                $(      WRITEF("No text to forward!*N")
+                        RESULTIS FALSE
+                $)
+                mode := mode.file
+                forward := (argv!A.dang) -> -3, (argv!A.err) -> 0,
+                                                (argv!A.ins) -> -2, 1// selected
+        $)
+    $)
+
+    TEST forward = -3
+    pp.z80send(0,
+                0, client.puid,
+                argv!A.item, argv!A.subj,
+                text.file, 0,
+                0,
+                argv!A.cc, argv!A.bcc,
+                mode,
+                0       /* Reply to     */,
+                argv!A.err -> 0, -2     /* forward      */,
+                0       /* bits         */,
+                0       /* inreply      */,
+                header.file,
+                0       /* Cap.header   */,
+                -1)
+        <> RESULTIS FALSE
+    ELSE
+    $(  LET res = new.send(dynamic -> text.file, argv!A.stream, TRUE,
+                                        argv!A.item, argv!A.cc, argv!A.bcc,
+                                        argv!A.subj, 0, mode, 0,forward,4,
+                                        header.file,
+                                        0,      // Free !! ?? !!
+                                        reply.id,
+                                        -1)
+        RESULTIS res = TRUE
+    $)
+
+local.fs.fail.link: WRITES(" --  Main loop re-entered  --*N"); RESULTIS FALSE
+$)
+
+//=============================================================================
+
+LET setbit(item, bit, set) = VALOF
+$(  LET ml.item         = mail.list + item * ml.element.size
+    LET delete          = (bit & md.deleted.flag) ~= 0
+    LET o.lev, o.link   = ms.fs.fail.level, ms.fs.fail.link
+    LET md.element      = VEC md.first.free/rwpw
+
+    ms.fs.fail.level, ms.fs.fail.link   := level(), local.fs.fail.link
+
+    // Read the entry that is about to be changed to check that the Demon
+    // has not moved it.
+    read.little.block(client.md, md.element,
+                                        ml.item!ml.entry.disp, md.first.free)
+
+    UNLESS compare.uid(ml.item+ml.umid, 0,  md.element, md.umid)
+    $(
+$<SMALL'        LET abandon = TRUE
+$>SMALL'
+        IF delete
+        $(
+$<SMALL'            IF trusted
+            $(  WRITEF(".... BOGGLE ....")
+                WRITE..uid(ml.item+ml.umid, 0)
+                write..uid(md.element, md.umid)
+                NEWLINE()
+            $)
+$>SMALL'
+            writes(
+"*NWARNING - You have been unlucky enough to use the mail system while the Demon *N*
+*was tidying up your files.  The delete has not been attempted. *N*
+*Try it again using the new mail list.*N")
+$<SMALL'
+            IF trusted
+            $(  RDCH()
+                WRITES("Still delete :*E")
+                abandon :=  capitalch(RDCH()) ~= 'Y'
+                UNRDCH()
+            $)
+$>SMALL'
+        $)
+$<SMALL'
+        IF abandon
+$>SMALL'
+        $(  IF delete THEN get.mail.list( TRUE, 0, (mbox.name%0=0) -> 0, mbox.puid, 0, -1 )
+            RESULTIS FALSE
+        $)
+    $)
+
+    UNLESS (set=TRUE)  -> ((ml.item!ml.flags & bit) = bit),
+           (set=FALSE) -> ((ml.item!ml.flags & bit) = 0),
+                           (ml.item!ml.flags = bit)
+    $(  ml.item!ml.flags := (set=TRUE)  ->      ml.item!ml.flags |  bit,
+                            (set=FALSE) ->      ml.item!ml.flags & ~bit,
+                                                                    bit
+        // Update the flag word in the file server file
+        write.tiny.block(client.md, ml.item!ml.flags,
+                                                ml.item!ml.entry.disp+md.flags)
+    $)
+
+    RESULTIS TRUE
+
+local.fs.fail.link:
+    ms.fs.fail.level, ms.fs.fail.link   := o.lev, o.link
+    WRITES(" --  Main loop re-entered  --*N")
+    RESULTIS FALSE
+$)
+
+//=============================================================================
+$<SMALL'
+LET ms.patch(patch) = VALOF
+$(  MANIFEST
+    $(  A.puid1         = 0
+        A.puid2         = A.puid1       +1
+        A.puid3         = A.puid2       +1
+        A.puid4         = A.puid3       +1
+        A.Puid5         = A.puid4       +1
+        A.Puid6         = A.puid5       +1
+        A.Puid7         = A.puid6       +1
+        A.Puid8         = A.puid7       +1
+        A.item          = A.puid8       +1
+        A.mbox          = A.item        +1
+        A.header        = A.mbox        +1
+        A.TRIPOS        = A.header
+        A.text          = A.header      +1
+        A.flags         = A.text        +1
+        A.string        = A.flags       +1
+        A.first.sw      = A.mbox
+        A.last.sw       = A.string
+
+        Argv.upb        = 14 + 80/bytesperword
+    $)
+
+    LET argv.s  = patch ->
+                  "value=puid1,puid2,puid3,puid4,puid5,puid6,puid7,puid8,*
+                  *item/k,mbox/k,header/s,text/s,flags/s,string/s",
+                  "puid1,puid2,puid3,puid4,puid5,puid6,puid7,puid8,*
+                  *tripos/s,name/k/a"
+    LET argv    = VEC Argv.upb
+    LET item    = selected
+    LET sw      = 0
+    LET values  = 0
+
+    IF rdargs(argv.s, argv, Argv.upb) = 0
+    $(  UNRDCH(); WRITEF("Bad args for '%S'*N", argv.s); RESULTIS FALSE $)
+    UNRDCH()
+
+    IF patch
+    $(  UNLESS argv!A.item=0
+        $(  item := get.item.number(argv!A.item)
+            UNLESS RESULT2 RESULTIS FALSE
+        $)
+
+        FOR i = A.first.sw TO A.last.sw
+        IF argv!I TEST sw = 0
+                  THEN sw := I
+                  ELSE $( WRITES("Only quote ONE switch*N"); RESULTIS FALSE $)
+        IF sw=0 WRITES("You must quote a switch*N") <> RESULTIS FALSE
+    $)
+    FOR i = A.puid1 TO A.puid4 UNLESS argv!I =0 values := values+1
+    FOR i = A.puid1 TO A.puid1+values-1
+    DO  UNLESS argv!I
+    $( WRITEF("Give consecutive PUID values!*N"); RESULTIS FALSE $)
+
+    SWITCHON sw INTO
+    $(  CASE A.header:
+        CASE A.text:    $(  LET name = sw=A.header -> "Header", "Text"
+                            LET V = VEC 7/BYTESPERWORD
+                            UNLESS values=4
+                            $(  WRITEF("%S takes four arguments*N", name)
+                                RESULTIS FALSE
+                            $)
+
+                            UNLESS read.puid(argv!A.puid1, argv!A.puid2,
+                                             argv!A.puid3, argv!A.puid4,
+                                                        v) = TRUE RESULTIS FALSE
+                            UNLESS dynamic
+                            $(  WRITEF("Cannot patch %S except on Dynamic system*N", name)
+                                RESULTIS FALSE
+                            $)
+
+                            IF validroutine(@insert.message)
+WRITEF("Vertual insert*N")
+//                          insert.message(0, 0, v-uid, v-uid, 0, 0, #X80000,
+//                                              "new", client.md, mbox.puid2, -1)
+                            DELAY(100)
+                        $)                                              ENDCASE
+
+        CASE A.flags:   UNLESS values=1
+                        $(  WRITES("Flags takes one argument*N"); RESULTIS FALSE $)
+                        $(  LET n = read.n(argv!A.Puid1, 10)
+                            UNLESS RESULT2
+                            $(  WRITEF("Bad number '%S'*N", argv!A.puid1)
+                                RESULTIS FALSE
+                            $)
+                            setbit(item, n, 1);                         ENDCASE
+                        $)
+        CASE 0:         // Makembox ...
+        CASE A.mbox:    UNLESS values=8 | values=4 |
+                                (values=0 & argv!A.TRIPOS & NOT patch)
+                        $(      WRITEF("Puids come in groups of 4 !*N");
+                                RESULTIS FALSE
+                        $)
+
+                        $(  LET dir.puid        = VEC 7/bytesperword
+                            LET index.puid      = VEC 7/bytesperword
+
+                            TEST values=0
+                            THEN FOR i = 0 TO 3
+                                 DO dir.puid %% i :=
+                                        (TABLE #XC, #X2aa1, #X8833, #X5690) !I
+                            ELSE UNLESS read.puid(
+                                                argv!A.puid1, argv!A.puid2,
+                                                argv!A.puid3, argv!A.puid4,
+                                                dir.puid)=TRUE  RESULTIS FALSE
+
+                            IF     read.puid(argv!A.puid5, argv!A.puid6,
+                                             argv!A.puid7, argv!A.puid8,
+                                                        index.puid) = FALSE
+                                                                RESULTIS FALSE
+                            WRITEF("[%X8]", insert.message(0,
+                                        0,
+                                        index.puid      - uid,
+                                        dir.puid        - uid,
+                                        0,
+                                        md.nm.type.mbox,
+                                        #X8000,
+                                        argv!A.mbox,
+                                        mbox.name%0=0 -> Dynamic -> 0,client.md,
+                                                (mbox.puid-uid),
+                                        mbox.name%0=0 -> 0, (mbox.puid2-uid),
+                                        (TABLE 1,2,3,4), -1)
+                                )
+                        $)
+                        ENDCASE
+        CASE A.string:
+                        $(  LET ml.item   = mail.list + item * ml.element.size
+                            LET md.element= VEC md.first.free/rwpw
+
+                            read.little.block(client.md, md.element,
+                                        ml.item!ml.entry.disp, md.first.free)
+
+                            UNLESS compare.uid(ml.item+ml.umid, 0,
+                                                        md.element, md.umid)
+                            $(  WRITES("File looks corrupt!*N");
+                                RESULTIS FALSE
+                            $)
+                            FOR i = 0 TO md.first.free
+                            DO WRITEF("%X4 ", md.element%%i)
+                            NEWLINE()
+                            WRITEF("String '%S'*N", argv!A.puid1)
+                        $)
+                        DELAY(100);                                     ENDCASE
+    $)
+
+    RESULTIS TRUE
+$)
+$>SMALL'
+//=============================================================================
+
+LET ms.type(printed, print) = VALOF
+$(  MANIFEST
+    $(  sw.upb = 5 + 80/bytesperword
+        A.titan = 0
+        A.mond  = 1
+        A.canon = 2
+        A.service=3
+        A.file  = 4
+    $)
+    // Type out a mail server item.
+    LET out             = output()
+    LET mail.entry      = ?
+    LET item.number     = ?
+    LET printed         = 0                     // Lines printed so far
+
+    ms.fs.fail.level, ms.fs.fail.link   := level(), local.fs.fail.link
+    $(Save.stack
+    LET switches        = VEC sw.upb
+    UNLESS read.item.numbers(print ->
+                dynamic ->
+                ",TITANROOM=DEFAULT.PRINT/s,MOND/s,CANON/s,service=to/k,/k",
+                ",TITANROOM=DEFAULT.PRINT/s,MOND/s,CANON/s,service=to/k,file/k",
+                0,
+                5, switches, sw.upb) RESULTIS 2
+
+    IF print
+    $(  LET STRING      = VEC (50 + 30)/BYTESPERWORD
+        LET where       = switches!A.file=0 ->
+                                switches!A.service=0 ->
+                                        switches!A.titan ->
+                                                "MONDPRINT",
+                                                switches!A.canon ->
+                                                        "CANONPRINT",
+                                                        "PRINT",
+                                        switches!A.service,
+                                switches!A.file
+        LET last.r2     = 0
+        LET in          = ?
+        LET out         = ?
+        LET add.string(string) BE
+        $(  LET pos = k%0
+            FOR I = 1 TO string%0 DO k%(i+pos) := string%i
+            k%0 := pos + string%0
+        $)
+
+        k := string
+        string%0        := 0
+        UNLESS Dynamic | switches!A.file ~= 0 DO add.string("BSP:")
+        add.string(where)
+        IF switches!A.service=0 & switches!A.file=0
+        $(  add.string("/MAIL for ")
+            add.string(lookat.name)
+            IF limited.access
+            $(  add.string(" readable by ")
+                add.string(client.name)
+            $)
+        $)
+
+        $(  in := (dynamic -> bsp.find.stream.pair, findoutput)(string)
+            out := RESULT2
+            UNLESS in=0 BREAK
+            UNLESS #XBFE0 <= out <= #XBFE3
+            $(  WRITEF("Failed to open print stream to %S  ==  *E", string)
+                myfault(out, TRUE)
+                RESULTIS 2
+            $)
+
+            UNLESS out = last.r2
+            $(  last.r2 := out
+                WRITEF( VALOF SWITCHON last.r2 INTO
+                $(  DEFAULT:    RESULTIS "Printer error %X4               "
+                    CASE #XBFE0:RESULTIS "Printer busy with a ring document"
+                    CASE #XBFE1:RESULTIS "Printer busy with a MOD1 document"
+                    CASE #XBFE2:RESULTIS "Printer offline                  "
+                    CASE #XBFE3:RESULTIS "Printer switched off             "
+                $) , last.r2 )
+                WRITES("  --  To abandon use break b   *C")
+            $)
+            Break.test()
+            delay(tickspersecond)
+            Break.test()
+        $) REPEAT
+        Selectoutput(dynamic -> out, in)
+    $)
+    $)Save.stack
+
+    FOR I = 1 TO items!0
+    $(
+        LET mail.file   = VEC file.desc.size
+        IF items!0 > 1
+        $( writes(
+"------------------------------------------------------------------------------*N"
+                             )
+           printed := printed+1
+        $)
+        mail.entry := mail.list + ((items!i) *ml.element.size)
+
+        // First type the error file (if it exists)
+        copy.uid(mail.entry+ml.error.puid,0, mail.file+uid, 0)
+$<TRACE if TRACE WRITEF("1: Got %X4*N", mail.file!uid) $>TRACE
+        UNLESS mail.file ! uid = 0
+        $(  printed := type.mail.file(mail.file, print -> 0,
+                                        terminal.depth, printed, NOT print)
+            newline();
+            printed := printed + 1
+        $)
+
+        // Then type the header file (if it exists)
+        copy.uid(mail.entry+ml.header.puid,0, mail.file+uid, 0)
+$<TRACE if TRACE WRITEF("2: Got %X4*N", mail.file!uid) $>TRACE
+
+        UNLESS mail.file ! uid = 0
+        $(  printed := type.mail.file(mail.file, print -> 0,
+                                        terminal.depth, printed, NOT print)
+            UNLESS mail.entry ! ml.message.puid = 0
+            $(  newline(); printed := printed + 1 $)
+        $)
+
+        // Now type the text file (if it exists)
+        copy.uid(mail.entry+ml.message.puid,0, mail.file+uid, 0)
+        IF mail.file!uid ~= 0
+        THEN printed := type.mail.file(mail.file, print -> 0,
+                                        terminal.depth, printed, NOT print)
+        UNLESS limited.access | trusted DO setbit(items!I, md.read.flag, TRUE)
+    $)
+    IF items!0 > 1 writes(
+"------------------------------------------------------------------------------*N"
+                         )
+    IF print $( ENDWRITE(); SELECTOUTPUT(out) $)
+    RESULTIS printed
+local.fs.fail.link: WRITES(" --  Main loop re-entered  --*N"); RESULTIS FALSE
+$)
+
+//=============================================================================
+$<SMALL'
+LET ms.move(move) = VALOF
+$(  MANIFEST $( sw.upb = 1 + 80/bytesperword $)
+    MANIFEST $( cache.dibytes   = 255 + 20 $)
+
+    // Type out a mail server item.
+    LET switches        = VEC sw.upb
+    LET string          = ?
+    LET to.mbox         = get.temp.vec ( mbox.name.bytes / BYTESPERWORD )
+    LET to.file         = VEC file.desc.size
+    LET to.index        = VEC file.desc.size
+    LET dest.base       = 0
+    LET slot            = 0
+    LET client.md.size  = client.md ! cache.size
+    LET client.cache    = client.md ! cache.address
+
+    ms.fs.fail.level, ms.fs.fail.link := level(), fs.fail.link
+
+    zap.file(to.file)
+    zap.file(to.index)
+
+    UNLESS read.item.numbers(",mbox=to/k/a", 1, switches, sw.upb) RESULTIS FALSE
+
+    UNRDCH()
+    string := switches!0
+
+    $(  LET chain       = mbox.chain
+        UNTIL chain=0
+        $(  IF compstring(string, chain+mbox.string)=0
+            $(  FOR i = 0 TO string%0
+                DO to.mbox%i := string%i
+                copy.uid(chain+mbox.md,    0, to.file  + uid, 0)
+                copy.uid(chain+mbox.index, 0, to.index + uid, 0)
+                IF to.index!uid = 0
+                $(  WRITEF("You do not have CREATE access for this mbox*N")
+                    RESULTIS FALSE
+                $)
+//              FOR I = 0 TO 4 DO WRITEF("%X4 ", (to.index+uid) %% i); NEWLINE()
+                BREAK
+            $)
+            chain := !chain
+        $)
+        IF chain=0 WRITEF("Mbox '%S' not found*N", string) <> RESULTIS FALSE
+    $)
+    IF compstring(mbox.name, to.mbox)=0
+    $(  WRITEF("You have to move to a DIFFERENT mbox!*N"); RESULTIS FALSE $)
+
+    FOR I = 1 TO items!0
+    $(  LET mail.start  = mail.list + (items!I)*ml.element.size
+
+        Insert.message(0,
+                        mail.start + ml.subject,
+                        mail.start + ml.header.puid -uid,
+                        mail.start + ml.message.puid-uid,
+                        mail.start ! ml.header.size,
+                        mail.start ! ml.message.size,
+                        mail.start ! ml.flags,
+                        mail.start + ml.sender,
+                        to.file, to.index,
+                        mail.start + ml.umid, -1)
+        IF move THEN setbit(items!I, md.deleted.flag, TRUE)
+    $)
+    IF move     THEN get.mail.list(TRUE, 0, mbox.name%0=0 -> 0, mbox.puid, 0, -1)
+    RESULTIS TRUE
+fs.fail.link:
+    WRITEF("FS FAIL trapped by %S*N", move -> "Move", "Copy")
+    RESULTIS FALSE
+$)
+$>SMALL'
+//=============================================================================
+
+LET ms.delete(delete) = VALOF
+$(  MANIFEST $( arg.words = 20/bytesperword $)
+    // Mark a Message Directory entry as "deleted".  (The entry will only be
+    // removed, and the associated message and header files deleted, when the
+    // mail system compress demon next runs.)
+
+    TEST delete
+    $(
+        LET md.element          = VEC md.first.free/rwpw
+
+        UNLESS read.item.numbers(0)     $( UNRDCH(); RESULTIS FALSE $)
+        unrdch()
+
+        // Get an interlock on the Message Directory during the delete.
+        open.file(client.md)
+
+        FOR I = 1 TO items!0
+            TEST setbit(items!I, md.deleted.flag, TRUE)
+            $(  (mail.list + (items!I) * ml.element.size) ! ml.entry.disp := -1
+                remaining.mail.count := remaining.mail.count-1
+            $)
+            ELSE
+            $(  get.mail.list( TRUE, 0, (mbox.name%0=0) -> 0, mbox.puid, 0, -1 )                //??????????????????????
+                RESULTIS FALSE
+            $)
+        RESULTIS TRUE
+    $)
+    ELSE
+    $(  LET md.chain    = ?
+        LET md.disp     = 0
+        LET md.cache    = client.md ! cache.address
+        LET flags       = ?
+
+        IF extra.items()        THEN RESULTIS FALSE
+
+        open.file(client.md)
+        read.cache(client.md, 0)
+
+        $(  IF (md.disp + md.first.free) >= (client.md!start.of.block +
+                                                          client.md!cache.size)
+            THEN read.cache(client.md, md.disp)
+
+            // End of entry chain ?
+            md.chain := md.cache %% (md.disp - client.md!start.of.block)
+            IF md.chain = #XFFFF THEN BREAK
+
+            Flags := md.cache %% (md.disp + md.flags - client.md!start.of.block)
+            IF (flags & md.notmail.flag)=0 UNLESS (flags & md.deleted.flag)=0
+            Write.tiny.block(client.md,
+                                flags & ~ md.deleted.flag,
+                                md.disp + md.flags)
+            md.disp := md.chain
+        $) REPEAT
+    $)
+    // Release the interlock
+    close.file(client.md)
+
+    IF delete=false THEN get.mail.list( TRUE, 0, (mbox.name%0=0) -> 0, mbox.puid, 0,-1 )
+
+    RESULTIS TRUE
+local.fs.fail.link: WRITES(" --  Main loop re-entered  --*N"); RESULTIS FALSE
+$)
+
+
+//=============================================================================
+
+LET ms.setbit(bit, set) = VALOF
+$(  MANIFEST $( arg.words = 20/bytesperword $)
+    // Mark a Message Directory entry.
+
+    LET md.element              = VEC md.first.free/rwpw
+
+    UNLESS read.item.numbers(0) $( UNRDCH(); RESULTIS FALSE $)
+    unrdch()
+
+    // Get an interlock on the Message Directory during the operation.
+    open.file(client.md)
+
+    FOR I = 1 TO items!0
+    TEST setbit(items!I, bit, set) IF set & bit=md.deleted.flag
+    $(  (mail.list + (items!I) * ml.element.size) ! ml.entry.disp := -1
+        remaining.mail.count := remaining.mail.count-1
+    $)
+    ELSE
+    $(  get.mail.list( TRUE, 0, (mbox.name%0=0) -> 0, mbox.puid, 0, -1 )
+        RESULTIS FALSE
+    $)
+    RESULTIS TRUE
+$)
+
+//=============================================================================
+
+LET ms.help() BE
+$(  MANIFEST $( arg.words = 16/bytesperword $)
+    // Print out the help file that corresponds to the command arguments.
+
+    LET help.file       = VEC file.desc.size
+    LET arg             =
+"send,read=type,terminal,delete,mail,finish,help=?,print,reply,undelete,group,*
+*new,select,next,syntax,lookat,testing,fullscreen,public,private,mbox,move,*
+*forward,create"
+    LET param           = VEC arg.words
+    LET index           = (rditem(param, arg.words)=1)-> findarg(arg, param)+2,0
+    ms.fs.fail.level, ms.fs.fail.link   := level(), local.fs.fail.link
+
+    TEST Dynamic
+    THEN retrieve.entry(root,root.help.index,help.file)
+    ELSE
+    $(  LET Puid = TABLE
+                        $<68000TRIPOS
+                                #X80102A70, #X5718DD27
+                        $>68000TRIPOS
+                        $<LSI4TRIPOS
+                                #X8010, #X2A70, #X5718, #XDD27
+                        $>LSI4TRIPOS
+        Copy.uid(Puid, 0, help.file+uid, 0)
+    $)
+
+    UNRDCH()
+    UNLESS RDCH() = '*N' RDARGS(",,,", param, arg.words)
+    retrieve.entry(help.file, index, help.file)
+    type.mail.file(help.file, 24, 0, TRUE /* expand */ )
+    RETURN
+
+local.fs.fail.link: WRITES(" --  Main loop re-entered  --*N")
+$)
+
+//=============================================================================
+$<SMALL'
+LET ms.demon() BE
+$(  MANIFEST
+    $(  A.opt=2
+        RM.uidset       = 2
+        RM.string       = 1
+    $)
+    // Do an SSP to the Resource Manager to load the Mail Demon for either the
+    // "Compress" or the "Send" function.
+/*      #X6500
+         Port
+         Fn11
+        #X020D  // Uidset !!!!!!!
+        demon.  // Which service
+        flags.  // TRACE ?
+        #X0000  // Pad ... * 10
+        #X01??  // String of what I want ....
+*/
+
+    LET rdargs.string   = "Send/s,Compress/s,Opt/s,sys/k"
+    LET argv            = VEC 30
+    LET txbuff          = VEC 30
+    LET dibyte          = bb.ssp.args
+    LET String          = "SYSDESC MAIL-DEMON 12 MCATTR LSI4"
+
+    IF rdargs(rdargs.string,argv,30) = 0
+    THEN $( UNRDCH(); WRITEF("Bad args*N", rdargs.string); RETURN $)
+
+    UNLESS argv!3 = 0 string := argv!3
+
+    UNRDCH()
+
+    $(  LET demon = -1
+        FOR I = 0 TO A.opt-1 DO IF argv!I
+        THEN TEST demon<0
+             THEN demon := I
+             ELSE
+             $( WRITEF("Quote only one demon of '%S'*N", rdargs.string);
+                RETURN
+             $)
+
+        IF demon < 0
+        $(  WRITEF("Specify one of the %N demons out of '%S'*N",
+                                                        A.opt, rdargs.string)
+            RETURN
+        $)
+        txbuff %% dibyte := (RM.UIDSET) << 8 | 13;              dibyte +:= 1
+        txbuff %% dibyte := demon;                              dibyte +:= 1
+        txbuff %% dibyte := argv!A.opt;                         dibyte +:= 1
+        FOR i = 2+1 TO 12 DO
+        txbuff %% dibyte := 0 <>                                dibyte +:= 1
+    $)
+
+    txbuff %% dibyte := ((RM.string)<<8) | (string%0)/2+2;dibyte +:= 1
+    FOR i=0 TO (string%0)/2
+    txbuff%%dibyte := string%%i <>                      dibyte +:= 1
+
+    $(  LET r2          = ?
+        LET nsvec       = VEC nsv.upb
+        LET rxbuff      = VEC 50
+//      UNLESS lookup.name("RMCOMMAND", nsvec)
+//      $(      lookup.name("RMSSP", nsvec)
+//              nsvec!3 := 11   // Command
+//      $)
+
+        FOR i=0 TO 10
+        $(  IF ssp("RMCOMMAND", txbuff, dibyte, rxbuff, 50, 0,
+                                                nsvec!3, nsvec!0, nsvec!2)
+            $(  TEST rmssp.find.string.param(rxbuff, RESULT2, 3)
+                $(      writes("'")
+                        FOR I = RESULT2+1 TO RESULT2+rxbuff%RESULT2
+                        DO WRCH(rxbuff%i)
+                        writes("'*N")
+                $)
+                ELSE WRITEF("<No string from RMSSP, but it worked!>*N")
+                RETURN
+            $)
+            r2 := result2
+            writef("RM SSP failed %X4: ", r2)
+            IF (r2<400) | (r2>499)
+            $(  TEST rmssp.find.string.param(rxbuff, 40 /*?*/, 1)
+                $(      writes("'")
+                        FOR I = RESULT2+1 TO RESULT2+rxbuff%RESULT2
+                        DO WRCH(rxbuff%i)
+                        writes("'")
+                $)
+                ELSE WRITEF("<No string from RMSSP, but it Failed!>")
+                NEWLINE()
+                RETURN
+            $)
+        $)
+        writef("SSP failing: %N*N", r2)
+    $)
+$)
+
+//=============================================================================
+
+LET header.decode(file, subject, umid, end) = VALOF
+$(      LET bytes       = ?
+        LET cache       = file ! cache.address
+        LET n           = ?
+        LET skip(a.bytes, upto, file, term) BE
+        $(      FOR i = !a.bytes TO upto
+                        IF read.byte.from.file(file) = term
+                        $(      !a.bytes := i; RETURN $)
+                !a.bytes := upto
+                RETURN
+        $)
+
+        file ! next.read        := 50
+        read.cache(file, 0)
+        bytes := cache %% 2
+        FOR pos = 1 TO bytes SWITCHON capitalch(read.byte.from.file(file)) INTO
+        $(      CASE 'S':
+                        WRITEF("How about 'S")
+                        FOR i = 1 TO 9 DO WRCH(read.byte.from.file(file)) <> pos +:= 1
+                        WRITEF("'*N")
+                        $( n := read.byte.from.file(file); pos +:= 1 $)
+                                REPEATWHILE n=' '
+                        IF n='*N' $( subject%0 := 0; ENDCASE $)
+                        subject%1 := n
+                        n := bytes-pos
+                        IF n > 40 THEN n := 40
+                        subject%0 := n
+                        FOR i = 2 TO n
+                        $(      subject%i := read.byte.from.file(file) <> pos +:= 1
+                                IF (subject%i) = '*N'
+                                $(      subject%0 := i-1
+                                        ENDCASE
+                                $)
+                        $)
+                        GOTO defalt
+
+                CASE 'D':
+                        WRITEF("How about 'D")
+                        FOR i = 1 TO 9 DO WRCH(read.byte.from.file(file)) <> pos +:= 1
+                        WRITEF("'*N")
+                DEFALT:
+                DEFAULT:        skip(@pos, bytes, file, '*N')
+        $)
+
+        RESULTIS TRUE
+$)
+
+LET ms.insert(real) = VALOF
+$(  MANIFEST
+    $(
+        argv.upb        = 180/BYTESPERWORD
+        cache.dibytes   = 120
+
+        A.p11           = 0
+        A.p12           = A.p11 +1
+        A.p13           = A.p12 +1
+        A.p14           = A.p13 +1
+        A.p21           = A.p14 +1
+        A.p22           = A.p21 +1
+        A.p23           = A.p22 +1
+        A.p24           = A.p23 +1
+        A.si            = A.p24 +1
+        A.entry         = A.si  +1
+        A.one           = A.entry+1
+        A.to            = A.one +1
+        A.do            = A.to  +1
+        A.su            = A.do  +1
+        A.into          = A.su  +1
+    $)
+
+        LET argv.string =
+"p11,p12,p13,p14,P21,P22,P23,P24,si/s,entry=offset=#/k,*
+*one/s,to/k,do/s,su=from/k,into/k"
+        LET argv        = VEC argv.upb
+        LET puid1       = VEC 17
+        LET puid2       = VEC 17
+
+    ms.fs.fail.level, ms.fs.fail.link   := level(), local.fs.fail.link
+        IF rdargs(argv.string, argv, argv.upb) = 0
+        $( UNRDCH(); WRITEF("Bad arg for '%S'*N", argv.string); RESULTIS FALSE $)
+
+    IF argv!A.p11~=0 & argv!A.p12=0 & argv!A.entry=0
+    $( argv!A.entry := argv!A.p11; argv!A.p11 := 0 $)
+
+    IF argv!A.su
+    $(  LET file        = VEC file.desc.size
+        LET index       = TABLE #X80142A9D, #X6B2705CB
+        LET old.index   = TABLE #X800D2AA8, #X7ED8B170
+        LET F.md        = VEC 8/BYTESPERWORD
+        LET F.index     = VEC 8/BYTESPERWORD
+        LET F.group     = VEC 8/BYTESPERWORD
+        LET F.group.index=VEC 8/BYTESPERWORD
+        LET n = ?
+
+        IF argv!A.into
+$(      n := read.n(argv!A.into, 10) *4
+        copy.uid(old.index,0, file+uid, 0)
+        retrieve.entry(file, n+2, file)
+        copy.uid(file+uid,0, fs.insert.index,0)
+        WRITEF("Group is currently %x4 %x4 %x4 %x4*N",
+                fs.insert.index %% 0,
+                fs.insert.index %% 1,
+                fs.insert.index %% 2,
+                fs.insert.index %% 3)
+        copy.uid(old.index,0, file+uid, 0)
+        retrieve.entry(file, n+3, file)
+        copy.uid(file+uid,0, fs.insert.index,0)
+        WRITEF("GroupIis currently %x4 %x4 %x4 %x4*N",
+                fs.insert.index %% 0,
+                fs.insert.index %% 1,
+                fs.insert.index %% 2,
+                fs.insert.index %% 3)
+        copy.uid(old.index,0, file+uid, 0)
+        retrieve.entry(file, n, file)
+        copy.uid(file+uid,0, fs.insert.index,0)
+        WRITEF("File  is currently %x4 %x4 %x4 %x4*N",
+                fs.insert.index %% 0,
+                fs.insert.index %% 1,
+                fs.insert.index %% 2,
+                fs.insert.index %% 3)
+        copy.uid(old.index,0, file+uid, 0)
+        retrieve.entry(file, n+1, file)
+        copy.uid(file+uid,0, fs.insert.index,0)
+        WRITEF("Index is currently %x4 %x4 %x4 %x4*N",
+                fs.insert.index %% 0,
+                fs.insert.index %% 1,
+                fs.insert.index %% 2,
+                fs.insert.index %% 3)
+$)
+        n := read.n(argv!A.su, 10) *4
+        copy.uid(index,0, file+uid, 0)
+        retrieve.entry(file, n+2, file)
+        copy.uid(file+uid,0, fs.insert.index,0)
+        copy.uid(file+uid,0, F.group,0)
+        WRITEF("Group is currently %x4 %x4 %x4 %x4*N",
+                fs.insert.index %% 0,
+                fs.insert.index %% 1,
+                fs.insert.index %% 2,
+                fs.insert.index %% 3)
+        copy.uid(index,0, file+uid, 0)
+        retrieve.entry(file, n+3, file)
+        copy.uid(file+uid,0, fs.insert.index,0)
+        copy.uid(file+uid,0, F.group.index,0)
+        WRITEF("GroupIis currently %x4 %x4 %x4 %x4*N",
+                fs.insert.index %% 0,
+                fs.insert.index %% 1,
+                fs.insert.index %% 2,
+                fs.insert.index %% 3)
+        copy.uid(index,0, file+uid, 0)
+        retrieve.entry(file, n, file)
+        copy.uid(file+uid,0, fs.insert.index,0)
+        copy.uid(file+uid,0, F.md,0)
+        get.mail.list(TRUE, 0, fs.insert.index, 0, -1)
+        WRITEF("File  is currently %x4 %x4 %x4 %x4*N",
+                fs.insert.index %% 0,
+                fs.insert.index %% 1,
+                fs.insert.index %% 2,
+                fs.insert.index %% 3)
+        copy.uid(index,0, file+uid, 0)
+        retrieve.entry(file, n+1, file)
+        copy.uid(file+uid,0, fs.insert.index,0)
+        copy.uid(file+uid,0, F.index,0)
+        argv!A.p11 := 0
+        argv!A.p21 := 0
+        argv!A.si  := TRUE
+        argv!A.entry:="0"
+        IF (argv!A.to)
+        $(      LET recip.puid = VEC 8/bytesperword
+                UNLESS convert.name.to.puid(argv!A.to, recip.puid)=convert.ok
+                WRITEF("Bad recipient name '%S'*N", argv!A.to) <> RESULTIS FALSE
+
+                WRITEF("'%S' as user %n gave %X4 %X4 %X4 %X4*N",
+                        argv!A.to,
+                        n/4,
+                        recip.puid %% 0,
+                        recip.puid %% 1,
+                        recip.puid %% 2,
+                        recip.puid %% 3)
+
+                IF argv!A.do
+                $(      create.message.directory(recip.puid,
+                                f.index         -uid,
+                                f.md            -uid,
+                                -1,
+                                n/4,
+                                f.group.index   -uid,
+                                f.group         -uid,
+                                -1)
+                $)
+        $)
+    $)
+
+    TEST (argv!A.p11)
+    $(  UNLESS read.puid(argv!A.p11, argv!A.p12, argv!A.p13, argv!A.p14, puid1)
+                WRITEF("BAD puid*N") <> RESULTIS FALSE
+        if (argv!A.si) THEN copy.uid(puid1,0, fs.insert.index,0)
+    $)
+    ELSE IF (argv!A.si)
+        $(      WRITEF("Index is currently %x4 %x4 %x4 %x4*N",
+                        fs.insert.index %% 0,
+                        fs.insert.index %% 1,
+                        fs.insert.index %% 2,
+                        fs.insert.index %% 3)
+        $)
+
+    IF (argv!A.p21)
+    $(  UNLESS read.puid(argv!A.p21, argv!A.p22, argv!A.p23, argv!A.p24, puid2)
+                WRITEF("BAD puid*N") <> RESULTIS FALSE
+    $)
+
+    UNLESS (argv!A.si~= 0 & argv!A.entry = 0)
+    TEST real
+    $(  LET f1          = VEC file.desc.size
+        LET f2          = VEC file.desc.size
+        LET file        = VEC file.desc.size
+        LET cache       = VEC (cache.dibytes/rwpw)
+        LET l.umid      = VEC 20
+        LET h.bytes     = ?
+        LET t.bytes     = ?
+        LET subject     = VEC 45/bytesperword
+        LET recip.puid  = VEC 8/bytesperword
+
+        zap.file(f1)
+        zap.file(f2)
+        zap.file(file)
+
+        file ! cache.address    := cache
+        file ! cache.size       := cache.dibytes
+        file ! next.read        := 50
+
+
+        IF (argv!A.to = 0)
+                WRITEF("No recipient given*N") <> RESULTIS FALSE
+        UNLESS convert.name.to.puid(argv!A.to, recip.puid)=convert.ok
+                WRITEF("Bad recipient name '%S'*N", argv!A.to) <> RESULTIS FALSE
+        WRITEF("Got %X4 %X4 %X4 %X4 from '%s'*N",
+                        recip.puid %% 0,
+                        recip.puid %% 1,
+                        recip.puid %% 2,
+                        recip.puid %% 3,
+                        argv!A.to)
+
+        TEST (argv!A.entry)
+        $(  LET index   = read.n(argv!A.entry, 10)
+            LET index.file      = VEC file.desc.size
+            copy.uid(fs.insert.index,0, index.file+uid, 0)
+            UNLESS (argv!A.one)
+                retrieve.entry(index.file, index+1, f1)
+            retrieve.entry(index.file, index, f2)
+        $)
+        ELSE TEST (argv!A.p11)
+        $(      copy.uid(puid1,0, f1+uid, 0)
+                IF (argv!A.p21) THEN copy.uid(puid2,0, f2+uid, 0)
+        $)
+        ELSE WRITEF("No entries given*N") <> RESULTIS FALSE
+
+        copy.uid(f1+uid,0, file+uid,0)
+        FOR i = 0 TO 20 DO subject%i := "Test subject"%i
+        header.decode(file, subject, l.umid, -1)
+        read.cache(file, 0)
+        h.bytes := cache %% 2
+        copy.uid(f2+uid,0, file+uid,0)
+        read.cache(file, 0)
+        t.bytes := cache %% 2
+
+        insert.message(recip.puid, subject, f1, f2, h.bytes, t.bytes, -1)
+        RESULTIS FALSE
+    $)
+    ELSE
+    $(  LET file        = VEC file.desc.size
+        TEST (argv!A.entry)
+        $(  LET index   = read.n(argv!A.entry, 10)
+            LET index.file      = VEC file.desc.size
+            copy.uid(fs.insert.index,0, index.file+uid, 0)
+
+            UNLESS (argv!A.one)
+            $(  retrieve.entry(index.file, index+1, file)
+                type.mail.file(file, terminal.depth, 0, TRUE)
+                NEWLINE()
+            $)
+            retrieve.entry(index.file, index, file)
+            type.mail.file(file, terminal.depth, 0, TRUE)
+        $)
+        ELSE
+        $(      copy.uid(puid1,0, file+uid, 0)
+                type.mail.file(file, terminal.depth, 0, TRUE)
+                IF (argv!A.p21)
+                $(      copy.uid(puid2,0, file+uid, 0)
+                        type.mail.file(file, terminal.depth, 0, TRUE)
+                $)
+        $)
+    $)
+    RESULTIS FALSE
+local.fs.fail.link: WRITES(" --  Main loop re-entered  --*N"); RESULTIS FALSE
+$)
+$>SMALL'
+//=============================================================================
+
+LET ms.terminal() = VALOF
+$(  LET argv.string     = "Type,Width/k,Depth/k,remote/s,local/s"
+    LET argv            = VEC 20
+    LET n               = 0
+    LET string          = ?
+    LET arg             = FALSE
+
+    IF rdargs(argv.string, argv, 20) = 0
+    $(  UNRDCH(); WRITEF("Bad arg for '%S'*N", argv.string); RESULTIS FALSE $)
+    UNRDCH()
+    string := argv!1
+    UNLESS string=0
+    $(  FOR I = 1 TO string%0
+        DO  TEST '0' <= string%i <= '9'
+            THEN n := n*10 + string%i - '0'
+            ELSE
+            $( WRITEF("Bad decimal number '%S'*N", string); RESULTIS FALSE $)
+        Terminal.depth := n
+    $)
+
+    String := argv!0
+    UNLESS string=0
+    $(  LET First       = "Cifer2632"
+        LET Width       = 80
+        LET depth       = 24
+        LET type        = TERM.2632
+
+        LET t           = "Cifer2605"
+        LET w           = 80
+        LET depth       = 24
+        LET t           = TERM.2605
+
+        LET t           = "Dumb"
+        LET w           = 80
+        LET depth       = 24
+        LET t           = TERM.VDU
+
+        LET t           = "BBC"
+        LET w           = 79
+        LET depth       = 24
+        LET t           = TERM.BBC
+
+        LET t           = "BBC32"
+        LET w           = 79
+        LET depth       = 31
+        LET t           = TERM.BBC32
+
+        LET last        = "Newbury7009"
+        LET Width       = 80
+        LET depth       = 24
+        LET type        = TERM.7009
+
+        arg := TRUE
+        FOR p = @FIRST TO @LAST BY 4
+        DO TEST COMPSTRING(string, !p)=0
+        $(  LET size    = string%0 / BYTESPERWORD
+            LET v       = GETVEC(TERM.VEC.SIZE)
+            LET name    = GETVEC(TERM.MIN.STRING<size -> TERM.MIN.STRING, size)
+            LET glob    = readtermvec()
+
+            UNLESS glob = 0
+            $(  unloadseg(glob!term.chain)
+                FREEVEC(glob ! TERM.STRING)
+//              FREEVEC(glob)
+            $)
+            FOR i = 0 TO TERM.VEC.SIZE  DO v!I          := 0
+            FOR I = 0 TO size           DO name!I       := STRING!I
+
+            v!TERM.STRING := name
+            v!TERM.WIDTH  := p!1
+            v!TERM.DEPTH  := p!2
+            v!TERM.NUMBER := p!3
+            Terminal.width:= p!1
+            Terminal.depth:= p!2
+            Terminal.type := p!3
+            Terminal.data := v
+//          TEST terminal.type=TERM.BBC
+//          THEN        writes("*226*203")
+//          ELSE IF terminal.type=TERM.BBC32
+//          THEN        writes("*226*360*340")
+            settermvec(v)
+            cur.init(TRUE, TRUE)
+            BREAK
+        $)
+        ELSE IF p=@last
+        $(      WRITEF("Unknown Terminal type - Try one of:*N")
+                FOR p = @FIRST TO @LAST BY 4 DO WRITEF("%S ", !p)
+                NEWLINE()
+                RESULTIS FALSE
+        $)
+    $)
+
+    string := argv!1
+    UNLESS string=0
+    $(  LET glob        = readtermvec()
+        arg := TRUE
+        FOR I = 1 TO string%0
+        DO  TEST '0' <= string%i <= '9'
+            THEN n := n*10 + string%i - '0'
+            ELSE
+            $( WRITEF("Bad decimal number '%S'*N", string); RESULTIS FALSE $)
+        Terminal.width := n
+        UNLESS glob=0 glob!TERM.WIDTH  := n
+    $)
+
+    string := argv!2
+    UNLESS string=0
+    $(  LET glob        = readtermvec()
+        arg := TRUE
+        FOR I = 1 TO string%0
+        DO  TEST '0' <= string%i <= '9'
+            THEN n := n*10 + string%i - '0'
+            ELSE
+            $( WRITEF("Bad decimal number '%S'*N", string); RESULTIS FALSE $)
+        Terminal.depth := n
+        UNLESS glob=0 glob!TERM.DEPTH  := n
+    $)
+
+    IF argv!3
+    $(  arg, Terminal.remote := TRUE, TRUE; SETSC(NOT terminal.remote) $)
+
+    IF argv!4
+    $(  arg, Terminal.remote := TRUE, FALSE; SETSC(NOT terminal.remote) $)
+
+    UNLESS arg
+    $(  LET glob = readtermvec()
+        WRITEF("Terminal is %S, width %N, depth %N, %S (%n,%N)*N",
+                                ((glob ~= 0) & validpointer(glob+term.string))->
+                                                glob!term.string, "??",
+                                terminal.width, terminal.depth,
+                                Terminal.remote -> "Remote", "Local",
+                                Terminal.remote, sc)
+        RESULTIS FALSE
+    $)
+    RESULTIS TRUE
+$)
+
+//=============================================================================
+
+

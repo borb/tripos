@@ -1,0 +1,17 @@
+.key sys,dest/k,b1/k,b2/k,comp/k,Ld/k,Md/k,opt/k,s2/k,ws/k,68000/s,link/s,tidy/s,ancilla/s,all/s,sc/s,la/s
+.def    sys     m68k
+.def    b1      g4:bcp.
+.def    b2      bcp.
+.def    cc      new
+.def    comp    bcp
+.def    dest    t:
+.def    opt     -wa
+<comp>  <b2>send     mobj:send    opt=ws<ws>/sl/<sc>cc:sc:<opt>
+<comp>  <b2>groups     mobj:groups    opt=ws<ws>/sl/<sc>cc:sc:<opt>
+
+syslink Mobj:sys-demon Mobj:mail-demon OPT fW16000
+:sys.ancilla mobj:mail-demon lsi4 name=M-D replace
+. syslink Mobj:system Mobj:testmail OPT fW18000
+. :sys.ancilla mobj:testmail name=debugmail lsi4 replace
+
+

@@ -1,0 +1,202 @@
+SECTION "TRN3"
+
+GET "TRNHDR"
+
+LET declnames(x) BE UNTIL x=0 SWITCHON h1!x INTO
+$(  DEFAULT:
+               transreport(102, currentbranch);                         BREAK
+
+    CASE s.vecdef: CASE s.valdef:
+               decldyn(h2!x);                                           BREAK
+
+    CASE s.rtdef: CASE s.fndef:
+                IF line.info
+                $(  linecount:=h6!x
+                    UNLESS (stflags & stf.debug) = 0
+                    $(  LET o = OUTPUT();       SELECTOUTPUT(listout);
+                        WRITEF("[l%N%S]", linecount, linecount < 0 -> x!h7, "")
+                        selectoutput(o)
+                    $)
+                    IF linecount<0    Linecount, Source.name := -Linecount, x!h7
+                $)
+                h5!x := nextparam()
+                declstat(h2!x, h5!x);                                   BREAK
+
+    CASE s.and:
+               declnames(h2!x)
+               x := h3!x;                                               LOOP
+$)
+
+
+AND decldyn(x) BE UNLESS x=0 SWITCHON h1!x INTO
+$( CASE s.name:
+           addname(x, s.local, ssp)
+           ssp := ssp + 1;                                              ENDCASE
+
+   CASE s.comma:
+           addname(h2!x, s.local, ssp)
+           ssp := ssp + 1
+           decldyn(h3!x);                                               ENDCASE
+
+   CASE s.commalist:
+           FOR h = 2 TO h2!x+1 DO decldyn(h!x);                         ENDCASE
+
+   DEFAULT:transreport(103, x)
+$)
+
+AND declstat(x, l) BE
+$( LET t = cellwithname(x)
+   TEST dvec!(t+1)=s.global
+   $( LET n = dvec!(t+2)
+      addname(x, s.global, n)
+      IF globdecls+1>=globdeclt DO transreport(-144, x, globdeclt)
+      FOR I = 0  TO globdecls-2 BY 2 DO IF globdecl!i = n
+               $( REPORTCOUNT := REPORTCOUNT-1; transreport(123, x, n); BREAK $)
+      globdecl!globdecls := n
+      globdecl!(globdecls+1) := l
+      globdecls := globdecls + 2
+   $)
+   ELSE
+   $( LET m = nextparam()
+      addname(x, s.label, m)
+      compdatalab(m)
+      out2(s.iteml, l)
+   $)
+$)
+
+AND decllabels(x) BE
+$( LET b = dvece
+   scanlabels(x)
+   checkdistinct(b, dvece)
+$)
+
+
+AND checkdistinct(p, q) BE FOR s = q-3 TO p BY -3
+$( LET n = dvec!s
+   FOR r = p TO s-3 BY 3 DO IF dvec!r=n DO transreport(142, n)
+$)
+
+AND addname(n, p, a) BE                                         // 26 March 82 ?
+//      For word addressed machines, put in a cludge
+//              BUFP actually points n (1000) words BELOW where it ought to be
+//              which enures that as BUFP is DECremented, it is still POSITIVE
+                                                // OBUFP falls !!!!!!!!!!!!!!!!!
+// IF ( (dvece+3) + (obuf.word.offset-obufp/BYTESPERWORD) ) >= trnspace
+$( LET free = trnspace - (dvece+3) - (obuf.word.offset-obufp/BYTESPERWORD)
+   IF free < free.trnspace THEN free.trnspace := free
+   IF free <= 0
+   DO transreport(-146, obuf.BYTE.OFFSET-obufp, trnspace, dvece)
+   dvec!dvece,dvec!(dvece+1),dvec!(dvece+2) := n,p,a
+   dvece := dvece + 3
+$)
+
+
+AND cellwithname(n) = VALOF
+$( LET x = dvece-3; $( IF x=0 \/ dvec!x=n RESULTIS x; x := x-3 $) REPEAT $)
+
+
+AND scanlabels(x) BE UNLESS x=0 DO SWITCHON h1!x INTO
+$( CASE s.colon:
+           h4!x := nextparam()
+           declstat(h2!x, h4!x)
+
+   CASE s.if: CASE s.unless: CASE s.while:
+   CASE s.until: CASE s.switchon: CASE s.case:
+           scanlabels(h3!x);                                            ENDCASE
+
+   CASE s.semicolonlist:
+           FOR h = 2 TO h2!x+1 DO scanlabels(h!x);                      ENDCASE
+
+   CASE s.semicolon:
+           scanlabels(h3!x)
+
+   CASE s.repeat: CASE s.repeatwhile:
+   CASE s.repeatuntil: CASE s.default:
+           scanlabels(h2!x);                                            ENDCASE
+
+   CASE s.test:
+           scanlabels(h3!x)
+           scanlabels(h4!x);                                            ENDCASE
+$)
+
+
+AND transdef(x) BE
+$(1 transdyndefs(x)
+    IF statdefs(x) DO
+    $( LET l, s= nextparam(), ssp
+       compjump(l)
+       transstatdefs(x)
+       ssp := s
+       out2(s.stack, ssp)
+       complab(l)
+    $)
+$)1
+
+
+AND transdyndefs(x) BE SWITCHON h1!x INTO
+$( CASE s.and:
+           transdyndefs(h2!x)
+           x := h3!x;                                                   LOOP
+
+   CASE s.vecdef:
+        $( LET n = evalconst(h3!x, FALSE)
+           out2(s.llp, vecssp+(((CGFLAGS & cgf.Backvec) ~= 0)->n, 0))
+           ssp := ssp + 1
+           vecssp := vecssp + 1 + n;                                    BREAK
+        $)
+
+   CASE s.valdef:
+           loadlist(h3!x);                                              BREAK
+
+   DEFAULT:                                                             BREAK
+$) REPEAT
+
+AND transstatdefs(x) BE
+$( WHILE h1!x=s.and DO $( transstatdefs(h2!x); x := h3!x $)
+
+   IF h1!x=s.fndef | h1!x=s.rtdef DO
+   $(2 LET a, c = dvece, dvecp
+       AND bl, ll = breaklabel, looplabel
+       AND rl, cb = resultlabel, caseb
+       linecount:=h6!x
+        UNLESS (stflags & stf.debug) = 0
+        $(  LET o = OUTPUT();           SELECTOUTPUT(listout);
+            WRITEF("[l%N%S]", linecount, linecount < 0 -> x!h7, "");
+            selectoutput(o)
+        $)
+       IF linecount < 0 THEN Linecount, Source.name := -Linecount, x!h7
+       breaklabel, looplabel := -1, -1
+       resultlabel, caseb := -1, -1
+
+       compentry(h2!x, h5!x)
+       ssp := savespacesize
+
+       dvecp := dvece
+       decldyn(h3!x)
+       checkdistinct(a, dvece)
+       decllabels(h4!x)
+
+       out2(s.save, ssp)
+       indent.do(1)
+       listnames(a)
+
+       TEST h1!x=s.fndef
+       THEN $( load(h4!x, TRUE); out1(s.fnrn)  $)                       //WELL??
+       ELSE $( trans(h4!x); out1(s.rtrn)  $)
+       indent.do(-1)
+
+       out2(s.endproc, 0)
+
+       breaklabel, looplabel := bl, ll
+       resultlabel, caseb := rl, cb
+       dvece, dvecp := a, c
+    $)2
+$)
+
+AND statdefs(x) = h1!x=s.fndef \/ h1!x=s.rtdef -> TRUE,
+                  h1!x NE s.and -> FALSE,
+                  statdefs(h2!x) -> TRUE,
+                  statdefs(h3!x)
+.
+
+

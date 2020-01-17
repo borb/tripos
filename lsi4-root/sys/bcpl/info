@@ -1,0 +1,215 @@
+/***********************************************************************
+**             (C) Copyright 1983  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+*                                                                      *
+*           ########  ##    ##  ########   ######                      *
+*           ########  ###   ##  ########  ########                     *
+*              ##     ####  ##  ##        ##    ##                     *
+*              ##     ## ## ##  ######    ##    ##     ##              *
+*              ##     ##  ####  ##        ##    ##     ##              *
+*              ##     ##  ####  ##        ##    ##                     *
+*           ########  ##   ###  ##        ########     ##              *
+*           ########  ##    ##  ##         ######      ##              *
+*                                                                      *
+************************************************************************
+**    Author:  Brian Knight                              June 1983    **
+***********************************************************************/
+
+
+// This program lives in SYS:H.INFO
+//
+// It implements the device INFO:string which can be opened for input.
+// The stream returned is the given string with substitutions made for
+// character pairs starting with %, as in the JOBMSG command.
+//
+//      Escape Sequence       Expands Into               Example Expansion
+//           %%           <percent>                      %
+//           %C           <reverse connection name>      RevCon-TITAN.VDU/7
+//           %D           <the date>                     25-Nov-81
+//           %I           <current task number>          8
+//           %K           <the machine kind>             LSI4
+//           %L           <name of loading machine>      TITAN.VDU/7
+//           %M           <the machine name>             ALPHA
+//           %P           <the user's PUID>              FF02B7A4415C1C3F
+//           %T           <the time>                     15:41:33
+//           %S           <the system type>              FM-Tripos
+//           %U           <the user's initials>          CGG
+//           %V           <terminal (Vdu) type>          Cifer2632
+//           %W           <the week day>                 Wednesday
+//
+// The special escape sequence "%=" has no expansion.  Any occurences of
+// %T, %W, %D or %U occuring after %= are forced to be re-evaluated however.
+// Escape sequences other than those given above will have an undefined
+// effect.
+
+// The routine P.WRITE is adapted from that in CGG's JOBMSG command.
+
+// Modifications:
+// 04 Jul 83 by BJK: %V implemented
+// 22 May 84 by BJK: %S implemented
+
+SECTION "INFO:"
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "RINGHDR"
+GET "IOHDR"
+GET "TERMHDR"
+GET "BCPL.READTERMVEC"
+GET "BCPL.FINDSTRINGOUT"
+GET "BCPL.SYNFIND"
+
+MANIFEST $( stringsize = 255/bytesperword $)
+
+LET start(dummy, action, scb, string) = VALOF
+    $(
+    LET oldin           = input()
+    LET oldout          = output()
+    LET newscb          = getvec(scb.upb + stringsize + 1)
+    LET expanded.string = 0
+    LET outstream       = 0
+    LET res             = 0
+    LET ptr             = 1
+    LET expstr.len      = 0
+
+    IF action \= act.findinput THEN $( result2 := 187; GOTO exit $) // Invalid output stream
+    IF newscb = 0 THEN GOTO exit // No store
+    expanded.string     := newscb + scb.upb + 1
+    ptr                 := splitname(expanded.string, ':', string, 1) // Find argument part of string
+
+    outstream   := findstringout(expanded.string, stringsize)
+    IF outstream=0 THEN GOTO exit
+    selectoutput(outstream)
+    p.write(string, ptr)
+    endwrite()
+
+    // Copy the string down one byte so that UNRDCH works properly on the stream.
+
+    expstr.len          := expanded.string%0
+    FOR i=1 TO expstr.len DO expanded.string%(i-1) := expanded.string%i
+
+    newscb!scb.buf      := expanded.string
+    newscb!scb.pos      := 0
+    newscb!scb.end      := expstr.len
+    newscb!scb.type     := 42
+    newscb!scb.id       := id.inscb
+    newscb!scb.func1    := 0           // replenish
+    newscb!scb.func2    := 0           // deplete
+    newscb!scb.func3    := 0           // endwrite
+
+    freevec(scb)
+    res := newscb
+
+exit:
+    IF res=0 THEN freevec(newscb)
+    synfind(0)
+    selectinput(oldin); selectoutput(oldout)
+    RESULTIS res
+    $)
+
+
+AND p.write(str, p) = VALOF
+$(
+    LET ans=FALSE
+    LET info = rootnode!rtn.info
+    WHILE p<=str%0 DO
+    $(  LET ch=str%p
+        LET dat.vec = TABLE 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0
+        STATIC
+        $(  dat.set = FALSE
+            users.name = -1
+        $)
+        p:=p+1
+        TEST ch\='%' THEN wrch(ch) ELSE
+        $(  LET key = capitalch(str%p)
+            SWITCHON key INTO
+            $(
+                CASE 'I':
+                     writen(taskid)
+                     ENDCASE
+                CASE 'T':
+                     UNLESS dat.set THEN
+                     $(  datstring(dat.vec)
+                         dat.set := TRUE
+                     $)
+                     writes(dat.vec+5)
+                     ENDCASE
+                CASE 'D':
+                     UNLESS dat.set THEN
+                     $(  datstring(dat.vec)
+                         dat.set := TRUE
+                     $)
+                     writes(dat.vec+0)
+                     ENDCASE
+                CASE 'W':
+                     UNLESS dat.set THEN
+                     $(  datstring(dat.vec)
+                         dat.set := TRUE
+                     $)
+                     writes(dat.vec+10)
+                     ENDCASE
+                CASE 'K':
+                     $(  LET mckind=info!info.mctype
+                         UNLESS mckind=0 THEN writes(mckind)
+                     $)
+                     ENDCASE
+
+                CASE 'S':
+                     $(  LET systype=info!info.systemtype
+                         UNLESS systype=0 THEN writes(systype)
+                     $)
+                     ENDCASE
+
+                CASE 'M':
+                     $(  LET mcname=info!rtninfo.ring!ri.myname
+                         UNLESS mcname=0 THEN writes(mcname)
+                     $)
+                     ENDCASE
+                CASE 'L':
+                     $(  LET loader = info!rtninfo.ring!ri.loaders.name
+                         IF loader\=0 THEN writes(loader)
+                     $)
+                     ENDCASE
+                CASE 'C':
+                     $(  LET revcon = info!rtninfo.ring!ri.term.revconn.name
+                         IF revcon\=0 THEN writes(revcon)
+                     $)
+                     ENDCASE
+                CASE 'U':
+                CASE 'P':
+                     $(  LET uidset=rootnode!rtn.info!rtninfo.ring!ri.uidset
+                         UNLESS uidset=0 THEN
+                         $(  LET puid = (uidset+1)+24/bytesperword
+                             IF key='U' & users.name=-1 THEN
+                             users.name := synfind(puid, to.name.domain, 0)
+                             TEST key='P' | (key='U' & users.name=0) THEN
+                                 writef("%X4%X4%X4%X4",
+                                     get2bytes(puid, 0), get2bytes(puid, 1),
+                                     get2bytes(puid, 2), get2bytes(puid, 3) )
+                             ELSE writes(users.name)
+                         $)
+                     $)
+                     ENDCASE
+                CASE 'V':
+                     $( LET termvec     = readtermvec()
+                        TEST termvec=0
+                        THEN writes("unset")
+                        ELSE writes(termvec ! term.string)
+                     $)
+                CASE '=':
+                     synfind(0)
+                     users.name := -1
+                     dat.set := FALSE
+                     ENDCASE
+                CASE '%':
+                DEFAULT:
+                     wrch(str%p)
+            $)
+            p:=p+1
+        $)
+     $)
+     RESULTIS ans
+$)
+
+

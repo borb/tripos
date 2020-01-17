@@ -1,0 +1,68 @@
+absmin   #X0000;
+absmax   #X00FF;
+storemin #X0100;
+storemax #XFFFB;
+memorysize   64;
+rootnode      8;
+tcbsize      17;
+mcaddrinc     1;
+
+info ( "LSI4",                  | Machine type
+       0,                       | Assignments list
+       (0,0,(-2,0,1),0,0,0,0,0),| Loaded devices indirection table
+       (0,0,0,0,0,0,0,0),       | Loaded handlers
+       "MAILSERVER",            | Spare
+       (0,                      | Used to hold taskid of ring handler
+        0,                      | This machine's ring address
+        "unset",                | This machine's ring name
+        0,                      | UIDset list
+        0,                      | M/c which caused loading of this one (number)
+        "unset",                | M/c which caused loading of this one (string)
+        0                       | Terminal number on above machine
+       ),
+       0,0,0,0,0                | Spare
+     );
+
+ seg lib1     :sys.obj.klib,:sys.obj.mlib;
+ seg lib2     :sys.obj.blib;
+|seg ms       MOBJ:TMS,MOBJ:msc;
+|seg ms       MOBJ:TMS1,MOBJ:TMS2;
+ seg    ms       MOBJ:command,
+                 MOBJ:fs,
+                 MOBJ:fsinput,
+                 MOBJ:groups,
+                 MOBJ:logon,
+                 MOBJ:mail,
+                 MOBJ:main,
+                 MOBJ:msc,
+                 MOBJ:report,
+                 MOBJ:readlin,
+                 MOBJ:send,
+                 MOBJ:trace,
+                 MOBJ:ummd,
+                 MOBJ:util;
+*seg msinit   MOBJ:MSINIT;
+|seg vthand   :sys.obj.rmvthand;
+ seg vthand   MOBJ:vt;
+ seg bsphand  :l.bsp-handler;
+ seg ringhand :sys.obj.type2-rh;
+
+tasktab 10;
+
+*task 1 stack 2000 priority 1000 segs lib1,lib2,ms,msinit;
+ task 3 stack  100 priority 4000 segs lib1,lib2,vthand;
+ task 5 stack  250 priority 5000 segs lib1,lib2,ringhand;
+ task 6 stack   70 priority 3400 segs lib1,lib2,bsphand;
+
+ driver ringtxdriv sys:sys.obj.t2-tx-driver;
+ driver ringrxdriv sys:sys.obj.t2-rx-driver;
+
+ dcb ringrxdcb sys:sys.obj.t2-rx-dcb;
+ dcb ringtxdcb sys:sys.obj.t2-tx-dcb;
+
+devtab 20;
+
+ dev -3 dcb ringtxdcb driver ringtxdriv;
+ dev -4 dcb ringrxdcb driver ringrxdriv;
+
+

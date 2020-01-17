@@ -1,0 +1,83 @@
+GET     "LIBHDR"
+GET     "MANHDR"
+GET     "IOHDR"
+
+GLOBAL $( deplete       : 1
+          close         : 2
+       $)
+
+LET start ( parm, act, scb, string ) = VALOF
+$(
+    LET nseg    = 0             // number of name segments found
+    LET segp    = VEC 16        // vector of separator pointers
+    LET ptr     = 1             // character pointer at string
+    LET nscb    = ?             // new scb allocated
+    LET save1   = [@globsize]!1 // current value of global 1
+    LET save2   = [@globsize]!2 // current value of global 2
+
+    UNLESS act=act.findoutput DO $( result2 := error.actionnotknown
+                                    RESULTIS 0
+                                 $)
+
+    UNTIL string%ptr = ':' DO ptr +:= 1
+
+    // having skipped the split: prefix above we scan through the name
+    // looking for '+' characters and noting their positions - the actual
+    // components will be extracted later
+    $( nseg      +:= 1
+       ptr       +:= 1
+       segp!nseg  := ptr
+       UNTIL string%ptr = '+' | ptr>string%0 DO ptr +:= 1
+    $) REPEATUNTIL ptr>string%0
+
+    // get a new scb and clear all our part of it to zeroes
+    nscb        := getvec ( scb.arg2 + nseg + 200/bytesperword + 1 )
+    FOR i = scb.arg1 TO scb.arg2 + nseg DO nscb ! i := 0
+
+    // now extract each of the components from the supplied string and try
+    // to open each of them for output - the resulting scbs are stored in
+    // the slots in the scb which will be returned.
+    FOR i = 1 TO nseg DO
+    $( LET name = VEC 256/bytesperword
+
+       FOR p = segp!i TO i=nseg -> string%0, segp![i+1]-1 DO
+                                             name%[p-segp!i+1] := string%p
+       name%0            := ( i=nseg -> string%0+1, segp![i+1]-1 ) - segp!i
+       nscb![scb.arg2+i] := findoutput ( name )
+
+       IF nscb![scb.arg2+i] = 0 THEN BREAK
+    $)
+
+    // check that all the opens succeeded and exit if any failed
+    IF VALOF $( FOR i = scb.arg2 + 1 TO scb.arg2 + nseg DO
+                        IF nscb ! i = 0 THEN RESULTIS TRUE
+                RESULTIS FALSE
+             $) THEN GOTO error.exit
+
+    // the actual implementation segment is now loaded and the routines
+    // located by globin - the original values of the globals can be
+    // restored after the routines have been noted
+    nscb!scb.arg1 := loadseg ( "sys:l.split-stream" )
+    nscb!scb.arg2 := nseg
+
+    IF nscb!scb.arg1 = 0 | NOT globin(nscb!scb.arg1) THEN GOTO error.exit
+
+    nscb!scb.func2 := deplete                   // deplete function
+    nscb!scb.func3 := close                     // close function
+    [@globsize]!1  := save1                     // restore global one
+    [@globsize]!2  := save2                     // restore global two
+    nscb!scb.buf   := nscb+scb.arg2+nseg+1      // character buffer
+    nscb!scb.pos   := 0                         // initial position
+    nscb!scb.end   := 200                       // buffer end
+    nscb!scb.id    := id.outscb                 // output scb
+    nscb!scb.type  := -taskid                   // fudged interactive
+
+    RESULTIS nscb
+
+    error.exit : unloadseg (nscb!scb.arg1)
+                 FOR i = scb.arg2 TO nscb!scb.args+nseg DO endstream (nscb!i)
+                 freevec(nscb)
+                 RESULTIS 0
+$)
+
+

@@ -1,0 +1,680 @@
+/*******************************************************************************
+**         (C) Copyright  Tripos Research Group 1980                          **
+**         University of Cambridge Computer Laboratory                        **
+********************************************************************************
+
+      ##    ##   ######   ##    ##  ########  ########   ######   #######
+      ###  ###  ########  ###   ##  ########  ########  ########  ########
+      ########  ##    ##  ####  ##     ##        ##     ##    ##  ##    ##
+      ## ## ##  ##    ##  ## ## ##     ##        ##     ##    ##  ########
+      ##    ##  ##    ##  ##  ####     ##        ##     ##    ##  #######
+      ##    ##  ##    ##  ##  ####     ##        ##     ##    ##  ##  ##
+      ##    ##  ########  ##   ###  ########     ##     ########  ##   ##
+      ##    ##   ######   ##    ##  ########     ##      ######   ##    ##
+
+********************************************************************************
+**      Author  : Piete Brooks                                                **
+**      Modified:  6 Jun 83     Task numbers up to 16                         **
+**      Modified: 19 Apr 86     mc name -> 10 chars. Addr in K                **
+*******************************************************************************/
+
+
+SECTION "Monitor"
+
+GET     "LIBHDR"
+GET     "CLIHDR"
+GET     "IOHDR"
+GET     "RINGHDR"
+GET     "TERMHDR"
+GET     "BCPL.readtermvec"
+
+GLOBAL
+$( X.pos        : UG+ 1
+   Y.pos        : UG+ 2
+   Stat.vec     : UG+ 3
+   Tasktab      : UG+ 4
+   Block.base   : UG+ 5
+   Cliseg       : UG+ 6
+   Cli.seg      : UG+ 6
+   Terminal.number: UG+ 7
+   Terminal.string: UG+ 8
+   Old.prio     : UG+ 9
+   Chunks       : UG+10
+   Max.free     : UG+11
+   Free.store   : UG+12
+   Com.vec      : UG+13
+   Tasks        : UG+14
+   Devices      : UG+15
+   Old.map      : UG+16
+   New.map      : UG+17
+   Wait         : UG+18
+   DATseg       : UG+19
+   In.task      : UG+20
+   Prio         : UG+21
+
+   Width        : UG+22
+   Depth        : UG+23
+
+   ch.p.l       : UG+24
+   grain        : UG+25
+   grain2       : UG+26
+   shift        : UG+27
+   shift.div    : UG+28
+   mult         : UG+29
+   chars        : UG+30
+
+   tasks.title.x: UG+35
+
+   tasks.x      : UG+36
+   dev.x        : UG+36
+   free.x       : UG+36
+   max.x        : UG+36
+   chunks.x     : UG+36
+   console.x    : UG+36
+
+   task.x       : UG+38
+   time.x       : UG+39
+   infoline.y   : UG+40
+   time.y       : UG+41
+
+   addr.format  : UG+42
+   addr.formatk : UG+43
+$)
+
+MANIFEST
+$( ESC          = '*E' + #X80
+
+   BBC.CLEAR    = #14
+   BBC.POS      = #37
+   BBC.UP       = 'K' - '@'
+
+   CIF.CLEAR    = 'J'
+   CIF.POS      = 'P'
+   CIF.FIX      = '='
+   CIF.LONG     = '7'
+   CIF.HIGH     = 'N'
+   CIF.HIGHOFF  = 'O'
+   CIF.HIGH1    = 'L'
+   CIF.HIGH1OFF = 'M'
+   CIF.EXT      = '^'
+
+   NEW.CLEAR    = #37
+   NEW.POS      = #26
+   NEW.BASE     = #40
+   NEW.PAGE     = #36
+   NEW.ROLL     = #34
+   NEW.HIGH1    = #05
+   NEW.HIGH1OFF = #06
+
+   bit.p.w      = 16    // bitsperword
+   addr.width   =  6
+   map.x        =  addr.width+1
+   right.size   = 2 + 7 + 4 + 2 // task, name, prio, spaces
+
+   map.words    = 100
+   max.tasks    = 15
+   time.size    = 9-1
+
+   map.y        =  1
+   tasks.y      =  1
+   dev.y        =  2
+   free.y       =  3
+   max.y        =  4
+   chunks.y     =  5
+   console.y    =  6
+   task.y       =  7    // => blank line
+
+   max.chunks   = $<68000 1000 $>68000 $<LSI4 750 $>LSI4        // Actual
+   chain.depth  = 2000
+
+   secword      = 12345
+   def.prio     =  1
+   def.delay    = 32
+   def.mult     = 100
+$)
+
+LET start() BE
+$(
+   LET old.map.         = VEC map.words
+   AND new.map.         = VEC map.words
+   LET com.vec.         = VEC max.tasks
+   AND old.prio         = tcb ! tcb.pri
+
+   com.vec             := com.vec.
+   new.map, old.map     := new.map., old.map.
+   init()
+   IF stat.vec = 0 $( writes("Can't get space*N"); stop(0) $)
+
+   $( LET max.com       = -1
+      LET up.lim        = ?
+
+      setup()
+      $( IF testflags(1) THEN tidyup()
+
+         up.lim := count.chunks()
+         inspect.chunks()
+
+         $( LET task = Tasktab! consoletask ! TCB.GBASE ! 187
+            UNLESS task=In.task In.task := put.num2(task, console.x, console.y)
+         $)
+
+         FOR i = (block.base>>shift)/shift.div TO (up.lim>>shift)/shift.div- 1
+         $( LET old.state = extract(old.map, i)
+            AND new.state = extract(new.map, i)
+
+            UNLESS old.state = new.state
+            $( poke(new.state = 0 -> '@', '.' , i)
+               insert(old.map, i, new.state)
+            $)
+         $)
+         count.tasks()
+         display.tasks()
+      end.cliscan :
+
+         pos(time.x, time.y)
+         $( LET DAT = VEC 14; mydatstring(dat); WRITES(DAT+5) $)
+         forceout()
+
+         IF testflags(1) tidyup()
+         DELAY(Wait)
+      $) REPEATUNTIL testflags(8)
+   $) REPEAT
+$)
+
+AND highlight(n, bool) BE SWITCHON Terminal.number INTO
+$( DEFAULT:             WRITES("Terminal not supported*N"); tidyup()
+   CASE TERM.2632:      do.esc(bool -> CIF.HIGH1, CIF.HIGH1OFF);        RETURN
+   CASE TERM.BBC:       WRITES(bool ->
+//BBC.HIGH1, BBC.HIGH1OFF
+"*221*160*140*221*370*341",
+"*221*201*221*370*340"
+);      RETURN
+   CASE TERM.7009:      sc  (bool -> NEW.HIGH1, NEW.HIGH1OFF);  RETURN
+$)
+
+AND highlights(bool) BE SWITCHON Terminal.number INTO
+$( DEFAULT:             UNLESS bool DO WRITES("Terminal not supported*N"); tidyup()
+   CASE TERM.2632:      do.esc(bool -> CIF.HIGH,        CIF.HIGHOFF)
+                        do.esc(bool -> CIF.HIGH1OFF,    CIF.HIGH1)
+   CASE TERM.BBC:
+   CASE TERM.7009:                                                      RETURN
+$)
+
+AND clear(bool) BE
+$( SWITCHON Terminal.number INTO
+   $( DEFAULT:          UNLESS BOOL DO WRITES("Terminal not supported*N"); tidyup()
+      CASE TERM.2632:   do.esc(CIF.CLEAR)
+                        do.esc(bool -> CIF.FIX, CIF.LONG)
+                        highlights(bool)
+                        do.esc(CIF.EXT)
+                        WRCH(bool->'4', '5');                           ENDCASE
+      CASE TERM.BBC:    sc(BBC.CLEAR); sc(0);
+                        delay(tickspersecond/2);                ENDCASE
+      CASE TERM.7009:   sc(bool -> NEW.PAGE, NEW.ROLL)
+                        IF bool THEN sc(NEW.CLEAR)
+   $)
+   X.pos, Y.pos := 0,0
+$)
+
+AND mydatstring(V) BE
+TEST datseg=0
+THEN
+$( v%0          := 0
+   (V+5)%0      := 0
+   (v+10)%0     := 0
+$)
+ELSE $( LET stamp = VEC 3; datstamp(stamp); start(stamp, v) $)
+
+AND forceout() BE WRCH('*E')
+
+AND sc(ch) BE WRCH(ch | #X100)
+//SENDPKT(NOTINUSE, CONSOLETASK, ACT.SC.WRITE, ?, ?, ch)
+
+AND Do.esc(ch) BE $( sc(ESC); sc(ch) $)
+
+AND pos(x, y) BE
+$( // Don't want to be interupted, now do we ....
+   IF (cos!SCB.POS)+20 > (cos!SCB.END) THEN forceout()
+   x.pos, y.pos := -1, -1
+   SWITCHON Terminal.number INTO
+   $( DEFAULT:          WRITES("Terminal not supported*N"); tidyup()
+      CASE TERM.BBC:
+                        $( LET bs = 0;
+                           LET up = 0;
+                           if (x=0) x, bs := 1, 1
+                           if (y=0) y, up := 1, 1
+                           sc(BBC.POS); sc(x); sc(y);
+                           if (bs) THEN wrch('*B')
+                           if (up) THEN wrch(BBC.UP)
+                        $)                                              RETURN
+      CASE TERM.2632:   do.esc(CIF.POS); //forceout();
+                                                sc  (x); sc  (y);       RETURN
+      CASE TERM.7009:   sc(NEW.POS);sc(NEW.BASE+x);sc(NEW.BASE+y);RETURN
+   $)
+$)
+
+AND extract(map, pos) = ((map ! (pos/bit.p.w)) >> (pos REM bit.p.w)) & #X0001
+
+AND insert (map, pos, state) BE
+$( LET word = map !(pos/bit.p.w)
+   AND mask = #X0001 << (pos REM bit.p.w)
+
+   map !(pos/bit.p.w):= state = 0 -> word & NOT mask, word | mask
+$)
+
+AND write.addr(n) BE  TEST (n & #X3FF) = 0 | (n > 999999)
+        THEN writef(addr.formatk, n/1024) ELSE writef(addr.format, n)
+AND put.addr(n, x, y)= VALOF
+$( pos(x, y); writef(addr.format, n); RESULTIS n $)
+AND put.num5(n, x, y)= VALOF
+$( pos(x+addr.width-5, y); writef("%U5", n); RESULTIS n $)
+AND put.num6(n, x, y)= VALOF
+$( pos(x+addr.width-6, y); writef("%U6", n); RESULTIS n $)
+AND put.num2(n, x, y)= VALOF
+$( pos(x+addr.width-2, y); writef("%U2", n); RESULTIS n $)
+
+AND poke(char, i) BE
+$( LET n.x, n.y =(i REM ch.p.l)+ map.x, map.y + i/ch.p.l
+
+   UNLESS(n.x =(x.pos + 1))&(n.y = y.pos) DO pos(n.x, n.y)
+   sc(char)
+
+   x.pos, y.pos := n.x, n.y
+$)
+
+
+AND taskpos(task) BE pos( task.x, task+task.y)
+//$( pos( (19 + [ task > 10 -> 38,      task >  5 -> 19, 0 ]),
+//      (17 + [ task > 10 -> task - 10, task >  5 -> task -  5, task ]) )
+
+AND display.tasks() BE
+$( LET clear = "                "
+FOR task = 1 TO max.tasks DO
+TEST tasktab!task = 0
+THEN UNLESS com.vec!task = 0
+     DO $( taskpos(task); writes (clear); com.vec!task:=0 $)
+ELSE
+$( LET tasktcb = tasktab ! task
+   LET cli      = FALSE
+   LET seg     = VALOF
+       $( LET segl = tasktcb ! tcb.seglist
+          FOR i = 3 TO segl ! 0 DO UNLESS segl!i = 0 RESULTIS segl!i
+          RESULTIS 0
+       $)
+   TEST seg = 0
+   THEN UNLESS com.vec!task = 0
+   $( com.vec!task:=0;taskpos(task);writes(clear) $)
+   ELSE
+   $( LET secname(sec) = (sec!2=secword) & ((sec+3)%0=17 | (sec+3)%0=19)->
+                                                sec+3, "???????"
+      LET ptr = secname(seg)
+
+      cli := seg=cliseg |
+        (compch(ptr%1, 'C')=0 & compch(ptr%2, 'L')=0 & compch(ptr%3, 'I')=0) |
+        (compch(ptr%1, 'S')=0 & compch(ptr%2, 'H')=0 & compch(ptr%3, 'E')=0 &
+         compch(ptr%4, 'L')=0 & compch(ptr%5, 'L')=0)
+      IF cli
+      $( seg := tasktcb ! tcb.gbase ! cli.module.gn
+         UNLESS seg=0 DO ptr := secname(seg)
+      $)
+
+      IF com.vec ! task \= ptr
+      $( com.vec ! task := ptr
+         taskpos(task)
+         writef("%I2 ", task)
+         IF cli THEN highlight(1, TRUE)
+         FOR i = 1 TO 7 DO WRCH(ptr % i)
+         IF cli THEN highlight(1, FALSE)
+//         IF ... enough room
+         writef(" %U4", tasktcb ! tcb.pri)
+         TEST task < 10 THEN mark.task(task+'0', task)
+         ELSE IF task < 16 THEN mark.task(task+'a'-10, task)
+      $)
+   $)
+$)
+$)
+
+AND count.tasks() BE
+$( LET task.tab = rootnode ! rtn.tasktab
+   AND  dev.tab = rootnode ! rtn.devtab
+   AND count    = 0
+   AND dev      = 0
+
+   FOR i = 1 TO task.tab!0 UNLESS task.tab!i = 0 count +:= 1
+   FOR i = 2 TO dev.tab !0 UNLESS dev.tab !i = 0 dev   +:= 1
+
+   UNLESS tasks  = count DO tasks   := put.num6(count, tasks.x, tasks.y)
+   UNLESS devices= dev   DO devices := put.num6(dev,   dev.x,   dev.y)
+$)
+
+AND inspect.chunks() BE
+$( LET block    = block.base
+   AND free     = 0
+   AND max      = 0
+   AND contig   = 0
+
+   FOR i = 1 TO chunks>max.chunks -> max.chunks, chunks DO
+   $( LET stat = stat.vec ! i
+      LET next = block +(stat >> 1)* 2
+
+      TEST(stat & #X0001)\= 0
+      $( free +:= stat - 1
+         contig     +:= stat
+         IF contig > max THEN max := contig
+      $)
+      ELSE contig := 0
+
+      UNLESS (block>>shift)/shift.div = (next>>shift)/shift.div
+      DO FOR j = (block>>shift)/shift.div TO (next>>shift)/shift.div-1
+         DO insert(new.map, j,(stat & #X0001)= 0 -> 0, 1)
+
+      block := next
+   $)
+   UNLESS free.store=free DO free.store := put.num6(free, free.x, free.y)
+   UNLESS max.free  =max  DO max.free   := put.num6(max,  max.x,  max.y)
+$)
+
+AND count.chunks() = VALOF
+$( LET block = block.base
+   LET count = 0
+   LET next  = block.base
+
+   IF testflags(1) THEN tidyup()
+   $( LET stat  = !next
+      block     := next
+      next      +:= (stat & ~1)
+      IF stat = 0
+      $( UNLESS chunks=count DO chunks := put.num6(count, chunks.x, chunks.y)
+         RESULTIS block
+      $)
+      count             +:= 1
+      IF count < max.chunks THEN stat.vec ! count := stat
+   $) REPEATUNTIL (count>chain.depth) | ((next>>1) <= (block>>1))
+   WRITEF("ERROR*E")
+   delay(10)
+$) REPEAT
+
+AND setup() BE
+$( MANIFEST $( INFO.SYSNAME = 4 $)
+   LET info     = ROOTNODE      ! RTN.INFO
+   LET mcname   = info          ! RTNINFO.RING  ! RI.MYNAME
+   LET mc       = info          ! INFO.MCTYPE
+   LET sys      = info          ! INFO.SYSNAME
+   LET dat      = VEC 14
+   LET terminal = "unset.term"
+   LET mem4     = (rootnode ! rtn.memsize) *256                 // -> +ve
+   LET mem      = ?
+   $( LET p=readtermvec()
+      TEST p=0
+      THEN Terminal.string, Terminal.number := Terminal, TERM.UNSET
+      ELSE
+      $( LET s = p!TERM.STRING
+         Terminal.string := s=0 -> terminal, s
+         Terminal.number := P!TERM.NUMBER
+         Width  := P!TERM.WIDTH
+         Depth  := P!TERM.DEPTH
+         If Terminal.number=TERM.UNSET
+         $( Writes("Use SETTERM to set the terminal type*N"); tidyup() $)
+      $)
+   $)
+
+/*
+ *      We now know the size of the terminal.
+ *      So 1)   Decide on the size of a chunk
+ *         2)   Decide how many chunks per line
+ *
+ *      Format is:
+ *            <---- ch.p.l -------->    | tasks.title.x
+ *            |map.x                   | task.x
+ *                                               |tasks.x
+ *      ________________________________________________
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@    tasks   nnnnnn| tasks.y, map.y
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@    dev     nnnnnn| dev.y
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@    free    nnnnnn| free.y
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@    contig  nnnnnn| max.y
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@    chunks  nnnnnn| chunks.y
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@    input task  nn| console.y
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@                  |
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@   nn SECNAME nnnn| task.y ^
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@   nn SECNAME nnnn|        |
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@   nn SECNAME nnnn|        |
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@   nn SECNAME nnnn|    max.tasks
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@   nn SECNAME nnnn|        |
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@   nn SECNAME nnnn|        |
+ *      nnnnnn @@@@@@@@@@@@@@@@@@@@@@   nn SECNAME nnnn|        v
+ *                      What where etc..               |
+ *      Command line                           hh:mm:ss| infoline.y, time.y
+ *      _______________________________________________|
+ *                                             |time.x
+ *
+ *      The number of characters on a line is
+ *
+ *              ch.p.l          = width - map.x - tasks.y -2
+ *
+ *      The number of characters on the screen is
+ *
+ *              chars           = ch.p.l * (infoline.y-map.y)
+ *
+ *      and each character represents
+ *
+ *              grain           = mem/chars
+ *
+
+ * //   with rounding up to a power of 2 gives
+ * //
+ * //           grain           = grain & -grain                // 2s comp
+ * //
+ * //   and the necc shift is
+ * //
+ * //           shift           = log2(grain)
+
+ *      must have AT LEAST one shift, so as to get it strictly +ve
+ *
+ *              grain           = (grain+1) & ~1
+ *
+ *      and the necc shift is
+ *
+ *              shift           = 1
+
+ *
+ *              shift.div       = grain/(1>>shift)
+ *
+ *      The number of characters on the screen is
+ *
+ *              chars           = mem/grain     = (mem>>shift)/shift.div
+ *
+ *      so the number of words used is
+ *
+ *              map.words       = chars/bitsperword
+ *
+ *
+ */
+
+        time.x          := width-time.size
+        tasks.title.x   := width-right.size
+        task.x          := width-right.size
+        tasks.x         := task.x+9
+        infoline.y      := depth-(Terminal.number=TERM.2632 -> 1, 2)
+        time.y          := depth-1
+        ch.p.l          := task.x - map.x;
+        chars           := ch.p.l * (infoline.y-map.y-1);
+        grain           := (mem4/chars )*4;
+        grain           := (grain +15) & ~15;
+//      grain           := (grain +1) & ~1;
+//
+//      now play .......
+//
+        UNLESS mult=1 FOR G = grain TO grain+9
+        $( LET cells = (mem4/G)*4               // Number of cells ...
+           FOR p.l=ch.p.l TO ch.p.l-9 BY -1
+           DO TEST p.l*(infoline.y-map.y-1) < cells
+              THEN BREAK                        // no use as not enough
+              ELSE IF ((G*p.l) REM mult) = 0    // mult of mult
+                   $( Grain, ch.p.l := G, p.l; GOTO found $)
+        $)
+found:
+        shift           := 1
+        shift.div       := grain /(1<<shift );
+        chars           := (mem4>>(shift -1)*2)/shift.div ;
+        grain2          := grain >> 1
+   mem := (((rootnode ! rtn.memsize) *256)/grain)*4
+   highlights(TRUE)
+   clear(TRUE)
+   mydatstring(dat)
+
+   FOR i = 0 TO max.tasks DO com.vec ! i := 0
+   pos(0, map.y)
+
+   FOR i = 0 TO (mem/ch.p.l)- 1
+   $(
+      write.addr(i * grain * ch.p.l)
+//      writef(addr.format, i * grain * ch.p.l)
+      WRCH(' ')
+      FOR j = 0 TO ch.p.l-1 DO WRCH('@')
+      FOR i=map.x+ch.p.l TO tasks.title.x DO WRCH(' ')
+      writes( VALOF SWITCHON I+1 INTO
+      $( DEFAULT:       RESULTIS "*N"
+        CASE tasks.y:   RESULTIS "tasks*N"
+        CASE dev.y:     RESULTIS "dev*N"
+        CASE free.y:    RESULTIS "free*N"
+        CASE max.y:     RESULTIS "contig*N"
+        CASE chunks.y:  RESULTIS "chunks*N"
+        CASE console.y: RESULTIS "input task*N"
+      $) )
+   $)
+   UNLESS mem REM ch.p.l = 0
+   $( write.addr( (mem/ch.p.l) * grain * ch.p.l )
+//    writef(addr.format, (mem/ch.p.l) * grain * ch.p.l)
+      WRCH(' ')
+      FOR j = 1 TO mem REM ch.p.l DO WRCH(' ')
+   $)
+   TEST Terminal.number = TERM.2632
+   $( do.esc(CIF.EXT)
+      WRCH(';')
+//      forceout()
+      sc(0)             // highlight
+      sc(7)             // start at
+      sc(63)            // len
+   $)
+   ELSE pos(0, infoline.y)
+   WRITEF("%T8 %TD %TA %TA %T8 %T9",
+                        mc=0            -> "",  mc,
+                        sys=0           -> "", sys,
+                        mcname=0        -> "", mcname,
+                        Terminal.string,
+                        dat+10, dat
+         )
+   forceout()
+
+   FOR i = 0 TO map.words DO old.map ! i , new.map ! i := 0, 0
+   mark.got('v', stat.vec)
+//   FOR i = (stat.vec>>shift)/shift.div TO ((stat.vec+400-grain)>> shift)/shift.div
+//      DO poke('v', i)
+   In.task, tasks, devices := 0, 0, 0
+   free.store, max.free, chunks := 0, 0, 0
+//   mark.task('m', taskid)
+   mark.seg('d', datseg)
+   mark.seg('C', cli.seg)
+   mark.seg('M', tcb!tcb.seglist!1)
+   mark.seg('B', tcb!tcb.seglist!2)
+$<68000
+   // Could be a VMEsystem with large hole(s) -- mark these.
+   $( LET block = block.base
+      LET next  = block.base
+      $( LET stat       = !next
+         block  := next
+         next   +:= (stat & ~1)
+         if (stat & 1) = 0 & (next & #X3FF) = 0 & ((block+2) & #X3ff) = 0
+            mark.got(' ', block+1)
+         IF stat = 0 break
+      $) REPEATUNTIL (next>>1) <= (block>>1)
+   $)
+$>68000
+$)
+
+AND mark.task(ch, task) BE
+$( LET seglist = tasktab ! task ! tcb.seglist
+   FOR I = 3 TO seglist!0 UNLESS seglist!I=cli.seg DO mark.seg(ch, seglist!I)
+   mark.seg(ch, tasktab!task!tcb.sbase)
+   mark.got(ch, tasktab!task!tcb.gbase)
+$)
+
+AND mark.seg(ch, seg) BE UNTIL seg = 0 DO $( mark.got(ch, seg); seg := !seg $)
+
+AND mark.got(ch, seg) BE UNLESS seg=0
+$( HIGHLIGHT(1, TRUE)
+   FOR i = (seg>>shift)/shift.div TO (seg+(seg!(-1))>> shift)/shift.div
+   DO poke(ch, i)
+   HIGHLIGHT(1, FALSE)
+$)
+
+AND init() BE
+$( MANIFEST $( A.delay=0; A.pri=1; A.mult=2 $)
+   LET V                = VEC 20
+   LET arg.string       = "delay=ticks,pri=1/k,mult=100/k"
+   IF Rdargs(arg.string, v, 20)=0 THEN err("Bad string for '%S'", arg.string)
+
+   datseg := LOADSEG("SYS:l.DAT-TO-STRINGS")
+   UNLESS datseg=0 GLOBIN(datseg)
+   addr.format  := "%U?";
+   addr.formatk := "%U?K";
+   addr.format%3:= '0' + map.x -1
+   addr.formatk%3:= '0' + map.x -2
+
+   TEST V!A.delay = 0
+   THEN wait := def.delay
+   ELSE
+   $( LET s = V!A.delay
+      wait := 0
+      FOR I = 1 TO s%0 TEST '0' <= s%i <= '9'
+                THEN wait := wait*10 + s%i - '0'
+                ELSE err("Bad char '%C' in delay", s%i)
+   $)
+   TEST V!A.pri = 0
+   THEN prio := def.prio
+   ELSE
+   $( LET s = V!A.pri
+      prio := 0
+      FOR I = 1 TO s%0 TEST '0' <= s%i <= '9'
+                THEN prio := prio*10 + s%i - '0'
+                ELSE err("Bad char '%C' in priority", s%i)
+   $)
+   TEST V!A.mult = 0
+   THEN mult := def.mult
+   ELSE
+   $( LET s = V!A.mult
+      mult := 0
+      FOR I = 1 TO s%0 TEST '0' <= s%i <= '9'
+                THEN mult := mult*10 + s%i - '0'
+                ELSE err("Bad char '%C' in mult", s%i)
+   $)
+   stat.vec     := getvec(max.chunks)
+   tasktab      := rootnode!rtn.tasktab
+   block.base   := rootnode!rtn.blklist
+   cliseg       := tasktab ! task.cli ! tcb.seglist ! 4
+   old.prio     := tcb     !tcb.pri
+   FOR i = prio TO prio+100 DO IF changepri(taskid, i)THEN BREAK
+$)
+
+AND err(s, a,b) BE $( WRITEF(s, a,b); newline(); stop(20) $)
+
+LET tidyup() BE
+$( FOR i = old.prio TO 1 BY -1 DO IF changepri(taskid, i) THEN BREAK
+   freevec(stat.vec)
+   unloadseg(DATseg)
+   tidyup := stop               // in case of error!
+   IF Terminal.number = TERM.2632
+   $( do.esc(CIF.EXT)
+      WRCH(';')
+      sc(0)             // highlight
+      sc(0)             // start at
+      sc(80)            // len
+      for i = 0 TO 79 DO WRCH(' ')
+      WRCH('*E')
+   $)
+   highlights(FALSE)
+   Clear(FALSE)
+   stop(0)
+$)
+
+

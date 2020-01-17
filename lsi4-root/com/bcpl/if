@@ -1,0 +1,94 @@
+/***********************************************************************
+**             (C) Copyright 1982  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+*                                                                      *
+*                          ########  ########                          *
+*                          ########  ########                          *
+*                             ##     ##                                *
+*                             ##     ######                            *
+*                             ##     ##                                *
+*                             ##     ##                                *
+*                          ########  ##                                *
+*                          ########  ##                                *
+*                                                                      *
+************************************************************************
+**    Author:  Adrian Aylward                                 1978    **
+***********************************************************************/
+
+// Modifications:
+// 24 Feb 82 by BJK: Addition of MCTYPE keyword enabling machine type
+//                   to be tested.
+// 20 Apr 82 by AJW: Addition of SYSTYPE keyword enabling system type
+//                   to be tested.
+// 11 May 82 by AJW: Addition of MCNAME keyword enabling machine name
+//                   to be tested.
+// 21 Apr 83 by MFR: Preservation of cli.result2 as well as returncode
+
+SECTION "IF"
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "RINGHDR"
+
+LET start() BE
+ $( LET v               = VEC 90
+    LET sw              = FALSE
+    LET r2              = cli.result2
+    LET rdargs.string   =
+        "NOT/S,WARN/S,ERROR/S,FAIL/S,EQ/K,,EXISTS/K,MCTYPE/K,SYSTYPE/K,MCNAME/K"
+
+    IF rdargs(rdargs.string, v, 90)=0 THEN GOTO badargs
+
+    sw := VALOF
+     $( IF v!1 & cli.returncode>= 5 RESULTIS TRUE
+        IF v!2 & cli.returncode>=10 RESULTIS TRUE
+        IF v!3 & cli.returncode>=20 RESULTIS TRUE
+
+        UNLESS v!4=0 DO
+         $( IF v!5=0 GOTO badargs
+            IF compstring(v!4, v!5)=0 RESULTIS TRUE
+         $)
+
+        UNLESS v!6=0 DO
+         $( LET s = locateobj(v!6)
+            UNLESS s=0 DO
+             $( freeobj(s)
+                RESULTIS TRUE
+             $)
+         $)
+
+        UNLESS v!7=0                       // MCTYPE
+        THEN IF compstring(v!7, rootnode ! rtn.info ! info.mctype)=0
+             THEN RESULTIS TRUE
+
+// SYSTYPE:
+        UNLESS v!8=0 THEN    IF (rootnode!rtn.info!info.systemtype \= 0)
+        THEN IF (compstring(v!8, rootnode!rtn.info!info.systemtype) = 0)
+             THEN RESULTIS TRUE
+
+// MCNAME:
+        UNLESS v!9=0
+        THEN IF (compstring(v!9, rootnode!rtn.info!info.ringinfo!ri.myname) = 0)
+             THEN RESULTIS TRUE
+
+        RESULTIS FALSE
+     $)
+
+
+
+    IF v!0 DO sw := NOT sw
+
+    UNLESS sw DO
+     $( LET ch = unrdch() -> rdch(), '*N'
+        UNTIL ch='*N' | ch=endstreamch DO ch := rdch()
+     $)
+
+    result2 := r2 ; stop(cli.returncode)
+
+badargs:
+    writef("Bad args for key string *"%S*"*N", rdargs.string)
+    stop(20)
+$)
+
+

@@ -1,0 +1,129 @@
+SECTION "READENV"
+
+GET     "LIBHDR"
+
+// This routine is CALLSEGed and passed a name of a device and
+// a vector of length 40.
+// If the result is TRUE then the vector is updated as follows
+// v!0    DeviceID slot in info vector
+// v!1    )
+// ..     )  Disc ENV information
+// v!11   )
+// v!12   Unit number
+// v!13   TRUE if device resident
+// v!14   File name of device if not resident
+
+STATIC $(  word = 0
+$)
+
+LET start (devname, resultv) = VALOF
+$(
+   let file = "SYS:INFO.MOUNT"
+   let v = VEC 10
+   let stream = ?
+   let oldstream = input()
+   let res = ?
+   word := v
+
+   stream := findinput ( file )
+
+   IF stream = 0 THEN resultis FALSE
+
+   selectinput ( stream )
+
+   res := readenv(devname,resultv)     // get result
+
+   endread()
+   selectinput( oldstream )
+   resultis res
+
+$)
+
+and readenv(devname,resultv) = valof
+$(
+   $(
+      LET ch  = 0
+      LET res = rdword ()
+
+      IF res < 0 THEN RESULTIS FALSE
+
+      IF res > 0 THEN
+         IF compstring ( word, devname ) = 0 THEN BREAK
+
+      ch := rdch () REPEATUNTIL ch = ';' | ch = endstreamch
+
+   $) REPEAT
+
+   $( if rdword() < 0 then RESULTIS FALSE
+   $) repeatuntil compstring( "driver", word )=0
+   // Get out resident information
+   rdword()
+   test compstring("res",word)=0 then resultv!13 := TRUE
+   else test compstring("nonres",word)=0 then resultv!13 := FALSE
+   else RESULTIS FALSE
+   // Device slot info
+   rdword()
+   unless compstring("devs",word)=0 do
+      RESULTIS FALSE
+   readn()  // ignore number of devices
+   resultv!0 := readn()    // offset
+   // If non resident, get file name
+   unless resultv!13 do
+   $( rdword()
+      unless compstring("file",word)=0 RESULTIS FALSE
+      rdword()
+      for i=0 to word%0 do (resultv+14)%i := word%i  // Copy name in
+   $)
+   // locate unit number
+   $( if rdword() < 0 then resultis FALSE
+   $) repeatuntil compstring( "unit", word )=0
+   resultv!12 := readn()
+   // fill in environment info
+   $( if rdword () < 0 then resultis FALSE
+   $) repeatuntil compstring( "env", word )=0
+
+   readn()  // ignore first value
+   for i=1 to 11 do
+   $( unless rdch()=',' RESULTIS FALSE
+      resultv!i := readn()
+   $)
+
+   resultis TRUE
+$)
+
+
+AND rdword () = VALOF
+$(
+   LET ch, len = 0, 0
+
+   $(
+      ch := rdch ()
+
+      IF ch = endstreamch RESULTIS -1
+
+      IF ch = '|' DO
+         ch := rdch () REPEATUNTIL
+                       ch = '*E' | ch = '*N' | ch = ';' | ch = endstreamch
+
+   $) REPEATWHILE ch = '*E' | ch = '*N' | ch = '*S'
+
+   $(
+      IF ch = endstreamch THEN RESULTIS -1
+
+      IF ch = ';' THEN BREAK
+
+      len := len + 1
+
+      word % len := ch
+      word % 0   := len
+      ch         := rdch ()
+
+   $) REPEATUNTIL ch = '*E' | ch = '*N' | ch = '*S' | ch = ';' | ch = ','
+
+   unrdch ()
+
+   RESULTIS len
+$)
+
+
+

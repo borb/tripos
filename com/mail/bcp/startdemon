@@ -1,0 +1,85 @@
+GET "libhdr"
+GET "ringhdr"
+GET "bcpl.ssplib"
+
+MANIFEST
+$(      A.opt   = 2
+        A.sys   = 3
+        A.time  = 4
+        A.all   = 5
+        argv.upb=20
+$)
+
+LET start() BE
+$(
+    // Do an SSP to the Resource Manager to load the Mail Demon for either the
+    // "Compress" or the "Send" function.
+
+    LET rdargs.string   = "Send/s,Compress/s,Opt/s,sys/k,time/k,all/k"
+    LET head            = "SYSDESC "
+    LET sys             = "MAIL-DEMON"
+    LET time            = "5"
+    LET tail            = " MCATTR LSI4"
+    LET argv            = VEC argv.upb
+    LET txbuff          = VEC 30
+
+    IF rdargs(rdargs.string,argv, argv.upb) = 0
+    THEN ERR("Bad args*N", rdargs.string)
+
+    $(  LET demon = -1
+        FOR I = 0 TO A.opt-1 DO IF argv!I
+        THEN TEST demon<0
+             THEN demon := I
+             ELSE ERR("Quote only one demon of '%S'*N", rdargs.string)
+        txbuff %% 3 := demon
+    $)
+    UNLESS argv!(A.opt+1) = 0 THEN sys  := argv!(A.opt+1)
+    UNLESS argv!(A.opt+2) = 0 THEN time := argv!(A.opt+2)
+
+    $(  LET len = 12
+        FOR i=1 TO head%0 DO txbuff%(len+i) := head%i
+        len := len + head%0
+        TEST argv!A.all=0
+        $(  FOR i=1 TO sys%0  DO txbuff%(len+i) := sys%i
+            len := len +  sys%0 + 1
+                            txbuff%(len  ) := ' '
+            FOR i=1 TO time%0 DO txbuff%(len+i) := time%i
+            len := len + time%0
+            FOR i=1 TO tail%0 DO txbuff%(len+i) := tail%i
+            len := len + tail%0
+        $)
+        ELSE
+        $(  LET tail = argv!A.all
+            FOR i=1 TO tail%0 DO txbuff%(len+i) := tail%i
+            len := len + tail%0
+        $)
+        txbuff%12 := len-12
+        WRITEF("Send off string '%S'*N", txbuff + 12/BYTESPERWORD)
+    $)
+
+    txbuff %% 4 := argv!A.opt
+
+    $(  LET r2          = ?
+        LET nsvec       = VEC 4
+        LET rxbuff      = VEC 50
+        lookup.name("RMSSP",nsvec)
+        FOR i=0 TO 10
+        $(  IF ssp(0, txbuff, 30, rxbuff, 50, 0, 3, nsvec!0, nsvec!2)
+            $(  writes(@rxbuff!3)
+                writes(" allocated*N")
+                RETURN
+            $)
+            r2 := result2
+            IF (r2<400) | (r2>499)
+            $(  writes("RM SSP fails: ")
+                TEST r2>0 THEN writes(@rxbuff!3) ELSE writehex(r2,4)
+                ERR("*N")
+            $)
+        $)
+        writef("SSP failing: %N*N", r2)
+    $)
+$)
+
+AND ERR(s, a,b,c) BE $( WRITEF(S, a,b,c); STOP(20) $)
+
+

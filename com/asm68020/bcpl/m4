@@ -1,0 +1,1235 @@
+//****************************************************************************
+//*                                                                          *
+//*        M68KASM  -  Assembler for the MC68000 family  -  Section 4        *
+//*                                                                          *
+//*                       Special Instruction Handling                       *
+//*                                  Part 2                                  *
+//*                                                                          *
+//****************************************************************************
+//*     I. D. Wilson    -    Last Modified    -    IDW    -    18/11/86      *
+//****************************************************************************
+
+
+
+SECTION "M4"
+
+
+
+GET "LIBHDR"
+GET "M68KHDR"
+
+
+
+LET instr19()  BE
+$(
+//  RTM    Rx
+
+    LET ad  =  0
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    TEST  op.ea = am.Dr  THEN  ad  :=  0  ELSE
+    TEST  op.ea = am.Ar  THEN  ad  :=  1  ELSE
+
+        complain( 199 )
+
+    codeword( instr.mask      |
+              (ad  <<  3)     |
+              (exp)           )
+$)
+
+
+
+AND instr20()  BE
+$(
+//  TRAPcc
+//  TRAPcc.W   #code
+//  TRAPcc.L   #code
+
+    LET opmode  =  0
+
+    checkinstrsize()
+
+    opmode  :=  instr.size = ts.word  ->  #B010,
+                instr.size = ts.long  ->  #B011,
+                instr.size = ts.none  ->  #B100,
+                                          complain( 0 )
+
+    UNLESS  instr.size = ts.none  DO
+    $(
+        //  A size has been given, so we are expecting some sort of
+        //  immediate operand.
+
+        nextsymb()
+
+        effective.address()
+        checkfor( s.none, 12 )
+
+        IF  (op.ea & am.imm) = 0  THEN  complain( 25 )
+    $)
+
+    IF  pass2  &  instr.size = ts.word  &  NOT wordsized( exp )  THEN
+        warning( 175 )
+
+    codeword( instr.mask          |
+              (source.ea  <<  8)  |
+              (opmode)            )
+
+    IF  instr.size  = ts.long  THEN  codeword( exp >> 16 )
+    IF  instr.size \= ts.none  THEN  codeword( exp & #XFFFF )
+$)
+
+
+
+AND instr21()  BE
+$(
+//  CHK2, CMP2
+//
+//  Operands are:    <ea>,Rn
+
+    LET rn     =  0
+    LET ad     =  0
+    LET extra  =  0
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    IF  (op.ea & am.contr) = 0  THEN  complain( 200 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    UNLESS  op.ea = am.Dr  |  op.ea = am.Ar  DO  complain( 192 )
+
+    rn     :=  exp
+    ad     :=  op.ea = am.Ar  ->  1, 0
+
+    extra  :=  source.ea = 0  ->  #X0800,  /* CHK2 */
+               source.ea = 1  ->  #X0000,  /* CMP2 */
+                                  complain( 0 )
+
+    swapoperands()
+
+    codeword( instr.mask                         |
+              (sizefield( instr.size )  <<  9)   |
+              (eafield())                        )
+
+    codeword( extra                              |
+              (ad  <<  15)                       |
+              (rn  <<  12)                       )
+
+    genea()
+$)
+
+
+
+AND instr22()  BE
+$(
+//  CHK
+//
+//  Operands are:    <ea>,Dn
+
+    LET dn  =  0
+    LET sz  =  0
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    IF  (op.ea & am.data) = 0  THEN  complain( 13 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    UNLESS  op.ea = am.Dr  DO  complain( 22 )
+
+    dn  :=  exp
+    sz  :=  instr.size = ts.word  ->  #B110,
+            instr.size = ts.long  ->  #B100,
+            instr.size = ts.none  ->  #B110,
+                                      complain( 0 )
+
+    swapoperands()
+
+    codeword( instr.mask    |
+              (dn  <<  9)   |
+              (sz  <<  6)   |
+              (eafield())   )
+
+    genea()
+$)
+
+
+
+AND instr23()  BE
+$(
+//  CAS, CAS2
+//
+//  Operands are:    Dc,Du,<ea>
+//                   Dc1:Dc2,Du1:Du2,(Rn1):(Rn2)
+
+    checkinstrsize()
+    nextsymb()
+
+    TEST  source.ea = 0  THEN
+    $(
+        //  This is the CAS form of the instruction.  This is distinctly
+        //  easier than the next form, so we should make the most of it
+        //  while it lasts.
+
+        LET dc  =  0
+        LET du  =  0
+        LET sz  =  0
+
+        effective.address()
+        checkfor( s.comma, 10 )
+
+        UNLESS  op.ea = am.Dr  DO  complain( 14 )
+
+        dc  :=  exp
+
+        effective.address()
+        checkfor( s.comma, 11 )
+
+        UNLESS  op.ea = am.Dr  DO  complain( 22 )
+
+        du  :=  exp
+
+        effective.address()
+        checkfor( s.none, 12 )
+
+        IF  (op.ea & am.mem.alt) = 0  THEN  complain( 201 )
+
+        sz  :=  instr.size = ts.byte  ->  #B01,
+                instr.size = ts.word  ->  #B10,
+                instr.size = ts.long  ->  #B11,
+                instr.size = ts.none  ->  #B10,
+                                          complain( 0 )
+
+        codeword( instr.mask    |
+                  (sz  <<  9)   |
+                  (eafield())   )
+
+        codeword( (du  <<  6)   |
+                  (dc)          )
+
+        genea()
+    $)
+    ELSE
+
+    TEST  source.ea = 1  THEN
+    $(
+        //  The CAS2 case.  This is staggeringly complicated, since it needs
+        //  six separate operands!
+
+        LET dc1  =  0
+        LET dc2  =  0
+        LET du1  =  0
+        LET du2  =  0
+        LET rn1  =  0
+        LET rn2  =  0
+        LET ad1  =  0
+        LET ad2  =  0
+        LET sz   =  0
+
+        //  The first operand is a pair of data registers ...
+
+        effective.address()
+        checkfor( s.colon, 202 )
+
+        UNLESS  op.ea = am.Dr  DO  complain( 14 )
+
+        dc1  :=  exp
+
+        effective.address()
+        checkfor( s.comma, 10 )
+
+        UNLESS  op.ea = am.Dr  DO  complain( 14 )
+
+        dc2  :=  exp
+
+        //  The second operand is also a pair of data registers ...
+
+        effective.address()
+        checkfor( s.colon, 203 )
+
+        UNLESS  op.ea = am.Dr  DO  complain( 22 )
+
+        du1  :=  exp
+
+        effective.address()
+        checkfor( s.comma, 11 )
+
+        UNLESS  op.ea = am.Dr  DO  complain( 22 )
+
+        du2  :=  exp
+
+        //  Now comes the tricky bit!  What follows is a pair of registers
+        //  within parentheses.  (An) is a valid effective address, but (Dn)
+        //  is not.  As a result, we have to decode this by hand.
+
+        checkfor( s.bra, 205 )
+        effective.address()
+        checkfor( s.ket, 205 )
+
+        checkfor( s.colon, 204 )
+
+        UNLESS  op.ea = am.Dr  |  op.ea = am.Ar  DO  complain( 205 )
+
+        rn1  :=  exp
+        ad1  :=  op.ea = am.Ar  ->  1, 0
+
+        checkfor( s.bra, 205 )
+        effective.address()
+        checkfor( s.ket, 205 )
+
+        checkfor( s.none, 12 )
+
+        UNLESS  op.ea = am.Dr  |  op.ea = am.Ar  DO  complain( 205 )
+
+        rn2  :=  exp
+        ad2  :=  op.ea = am.Ar  ->  1, 0
+
+        //  Wow!  We now have all the relevant information to enable us to
+        //  generate the code for this instruction.  I hope somebody uses
+        //  it after all this!
+
+        sz  :=  instr.size = ts.word  ->  #B10,
+                instr.size = ts.long  ->  #B11,
+                instr.size = ts.none  ->  #B10,
+                                          complain( 0 )
+
+        codeword( instr.mask       |
+                  (sz  <<  9)      )
+
+        codeword( (ad1  <<  15)    |
+                  (rn1  <<  12)    |
+                  (du1  <<  6)     |
+                  (dc1)            )
+
+        codeword( (ad2  <<  15)    |
+                  (rn2  <<  12)    |
+                  (du2  <<  6)     |
+                  (dc2)            )
+    $)
+
+    ELSE  complain( 0 )
+$)
+
+
+
+AND instr24()  BE
+$(
+//  CALLM
+//
+//  Operands are:    #<data 8>,<ea>
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    IF  (op.ea & am.imm) = 0  THEN  complain( 27 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    IF  (op.ea & am.contr) = 0  THEN  complain( 207 )
+
+    IF  pass2  THEN
+        UNLESS  0 <= op1.exp <= 255  DO
+            warning( 206 )
+
+    codeword( instr.mask     |
+              (eafield())    )
+
+    codeword( op1.exp & #XFF )
+
+    genea()
+$)
+
+
+
+AND instr25()  BE
+$(
+//  BFCHG, BFCLR, BFSET, BFTST
+//
+//  Operands are:    <ea>{offset:width}
+
+    LET extra  =  0
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+
+    UNLESS  op.ea = am.Dr  |  (op.ea & am.contr.alt) \= 0  DO  complain( 209 )
+
+    swapoperands()
+
+    //  Now, read the bit field, and build up the extension word which we must
+    //  put out after the opcode.
+
+    extra  :=  readbitfield()
+
+    checkfor( s.none, 12 )
+
+    //  Nothing for it but to generate the code.
+
+    swapoperands()
+
+    codeword( instr.mask    |
+              (eafield())   )
+
+    codeword( extra         )
+
+    genea()
+$)
+
+
+
+AND instr26()  BE
+$(
+//  BFEXTS, BFEXTU, BFFFO, BFINS
+//
+//  Operands are:    <ea>{offset:width},Dn    (source.ea = 0)
+//                   Dn,<ea>{offset:width}    (source.ea = 1)
+
+    LET dn     =  0
+    LET extra  =  0
+
+    checkinstrsize()
+    nextsymb()
+
+    TEST  source.ea = 0  THEN
+    $(
+        //  The EXT and FFO cases.  Read the effective address, which can be
+        //  data register or control mode.  Then read the data register.
+
+        effective.address()
+
+        UNLESS  op.ea = am.Dr  |  (op.ea & am.contr) \= 0  DO  complain( 210 )
+
+        swapoperands()
+
+        extra  :=  readbitfield()
+
+        checkfor( s.comma, 10 )
+
+        effective.address()
+        checkfor( s.none, 12 )
+
+        UNLESS  op.ea = am.Dr  DO  complain( 22 )
+
+        dn  :=  exp
+    $)
+
+    ELSE
+
+    TEST  source.ea = 1  THEN
+    $(
+        //  The INS case.  This is the same as above, except that the operands
+        //  come in the opposite order, and the effective address must be
+        //  data register or control alterable.
+
+        effective.address()
+        checkfor( s.comma, 10 )
+
+        UNLESS  op.ea = am.Dr  DO  complain( 14 )
+
+        dn  :=  exp
+
+        effective.address()
+
+        UNLESS  op.ea = am.Dr  |  (op.ea & am.contr.alt) \= 0  DO
+            complain( 211 )
+
+        swapoperands()
+
+        extra  :=  readbitfield()
+
+        checkfor( s.none, 12 )
+    $)
+
+    ELSE  complain( 0 )
+
+    //  Having read the operands, we can generate the code for them.
+
+    swapoperands()
+
+    codeword( instr.mask    |
+              (eafield())   )
+
+    codeword( extra         |
+              (dn  <<  12)  )
+
+    genea()
+$)
+
+
+
+AND instr27()  BE
+$(
+//  BKPT
+//
+//  Operands are:    #<data 3>
+
+    checkinstrsize()
+    nextsymb()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    IF  (op.ea & am.imm) = 0  THEN  complain( 25 )
+
+    IF  pass2  &  NOT (0 <= exp <= 7)  THEN  complain( 219 )
+
+    codeword( instr.mask    |
+              (exp)         )
+$)
+
+
+
+AND instr28()  BE
+$(
+//  General format floating point instructions.  The possible arguments are:
+//
+//      a)  xxxx.<fmt>  <ea>,FPn
+//      b)  xxxx.X      FPm,FPn
+//      c)  xxxx.X      FPn
+//
+//  Case "c" is only allowed for those instructions where a monadic operand
+//  is meaningful.
+
+    IF  instr.size = ts.none  THEN  complain( 226 )
+
+    nextsymb()
+    effective.address()
+
+    TEST  op.ea = am.FPr  THEN
+    $(
+        //  This is one of cases "b" or "c".  Check the instruction size given
+        //  to make sure that it is "X".
+
+        LET FPm  =  exp
+        LET FPn  =  0
+
+        UNLESS  instr.size = ts.extended  DO  complain( 223 )
+
+        TEST  symb = s.none  THEN
+        $(
+            //  Monadic case.  Check that this is allowed, and then set the
+            //  two registers to be the same.
+
+            UNLESS  source.ea = 0  DO  complain( 224 )
+
+            FPn  :=  FPm
+        $)
+        ELSE
+        $(
+            //  Dyadic case.  Check for the separating comma, and then for the
+            //  presence of another floating point register.
+
+            checkfor( s.comma, 10 )
+
+            effective.address()
+            checkfor( s.none, 12 )
+
+            UNLESS  op.ea = am.FPr  DO  complain( 225 )
+
+            FPn  :=  exp
+        $)
+
+        //  We have checked the operands, so generate the code for them.
+
+        codeword( fp.mask         |
+                  (fp.id  <<  9)  )
+
+        codeword( instr.mask      |
+                  (FPm  <<  10)   |
+                  (FPn  <<  7)    )
+    $)
+    ELSE
+    $(
+        //  First operand is not a floating point register, so this must be
+        //  case "a".  We should read the effective address, and then check
+        //  for the destination register.
+
+        LET FPn   =  0
+        LET mode  =  fpmode( instr.size )
+        LET spec  =  fpspec( instr.size )
+
+        checkfor( s.comma, 10 )
+
+        IF  (op.ea & mode) = 0  THEN  complain( 8 )
+
+        swapoperands()
+
+        effective.address()
+        checkfor( s.none, 12 )
+
+        UNLESS  op.ea = am.FPr  DO  complain( 225 )
+
+        FPn  :=  exp
+
+        swapoperands()
+
+        codeword( fp.mask         |
+                  (fp.id  <<  9)  |
+                  (eafield())     )
+
+        codeword( instr.mask      |
+                  (1     <<  14)  |
+                  (spec  <<  10)  |
+                  (FPn   <<  7)   )
+
+        genea()
+    $)
+$)
+
+
+
+AND instr29()  BE
+$(
+//  FSINCOS instruction.  The arguments are:
+//
+//    a)  FSINCOS.<fmt>  <ea>,FPc:FPs
+//    b)  FSINCOS.X      FPm,FPc:FPs
+
+    LET FPc  =  0
+    LET FPs  =  0
+
+    IF  instr.size = ts.none  THEN  complain( 226 )
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.colon, 203 )
+
+    UNLESS  op.ea = am.FPr  DO  complain( 225 )
+
+    FPc  :=  exp
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    UNLESS  op.ea = am.FPr  DO  complain( 225 )
+
+    FPs  :=  exp
+
+    swapoperands()
+
+    TEST  op.ea = am.FPr  THEN
+    $(
+        //  This is case "b".  The size specifier must be "X".
+
+        UNLESS  instr.size = ts.extended  DO  complain( 223 )
+
+        codeword( fp.mask         |
+                  (fp.id  <<  9)  )
+
+        codeword( instr.mask      |
+                  (1    <<  14)   |
+                  (exp  <<  10)   |
+                  (FPs  <<  7)    |
+                  (FPc)           )
+    $)
+    ELSE
+    $(
+        //  This is case "a".  Make sure that the effective address mode
+        //  is reasonable.
+
+        LET mode  =  fpmode( instr.size )
+        LET spec  =  fpspec( instr.size )
+
+        IF  (op.ea & mode) = 0  THEN  complain( 8 )
+
+        codeword( fp.mask         |
+                  (fp.id  <<  9)  |
+                  (eafield())     )
+
+        codeword( instr.mask      |
+                  (spec  <<  10)  |
+                  (FPs   <<  7)   |
+                  (FPc)           )
+
+        genea()
+    $)
+$)
+
+
+
+AND instr30()  BE
+$(
+//  FTST instruction.  The possible arguments are:
+//
+//    a)  FTST.<fmt>  <ea>
+//    b)  FTST.X  FPm
+
+    IF  instr.size = ts.none  THEN  complain( 226 )
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    TEST  op.ea = am.FPr  THEN
+    $(
+        //  Case "b".  Check that the size specifier given is "X".
+
+        UNLESS  instr.size = ts.extended  DO  complain( 223 )
+
+        codeword( fp.mask         |
+                  (fp.id  <<  9)  )
+
+        codeword( instr.mask      |
+                  (exp  <<  10)   )
+    $)
+    ELSE
+    $(
+        //  The "a" form of the instruction.  Make sure that the effective
+        //  address mode is sensible.
+
+        LET mode  =  fpmode( instr.size )
+        LET spec  =  fpspec( instr.size )
+
+        IF  (op.ea & mode) = 0  THEN  complain( 7 )
+
+        codeword( fp.mask         |
+                  (fp.id  <<  9)  |
+                  (eafield())     )
+
+        codeword( instr.mask      |
+                  (1  <<  14)     |
+                  (spec  <<  10)  )
+
+        genea()
+    $)
+$)
+
+
+
+AND instr31()  BE
+$(
+//  The FMOVE instructions.  The possible arguments are:
+//
+//    a)  FMOVE.<fmt>  <ea>,FPn
+//    b)  FMOVE.<fmt>  FPm,<ea>
+//    c)  FMOVE.X  FPm,FPn
+//
+//    d)  FMOVE.P  FPm,<ea>{Dn}
+//    e)  FMOVE.P  FPm,<ea>{#k}
+//
+//    f)  FMOVE.L  <ea>,FPcr
+//    g)  FMOVE.L  FPcr,<ea>
+
+    IF  instr.size = ts.none  THEN  complain( 226 )
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    swapoperands()
+    effective.address()
+    swapoperands()
+
+    //  Having read the operands, we must look for the special cases which
+    //  we can deal with immediately.
+
+    TEST  op.ea = am.special  |  op1.ea = am.special  THEN
+    $(
+        //  This is the "move control" case.  Whichever of the two
+        //  operands is the special register, check that it is a valid
+        //  floating point control register.
+
+        LET dr   =  0
+        LET reg  =  0
+
+        checkfor( s.none, 12 )
+
+        UNLESS  instr.size = ts.long  DO  complain( 232 )
+
+        TEST  op.ea = am.special  THEN
+        $(
+            //  First operand is control register.  Check its type, and
+            //  then check the effective address.
+
+            UNLESS  exp = s.FPIAR  |  exp = s.FPSR  |  exp = s.FPCR  DO
+                complain( 230 )
+
+            reg  :=  fpcontrol( exp )
+            dr   :=  1
+
+            swapoperands()
+
+            checkfpcr( reg, TRUE )
+        $)
+        ELSE
+        $(
+            //  Second operand is the control register.  As for the previous
+            //  case, check its type, and then check the effective address.
+
+            swapoperands()
+
+            UNLESS  exp = s.FPIAR  |  exp = s.FPSR  |  exp = s.FPCR  DO
+                complain( 231 )
+
+            reg  :=  fpcontrol( exp )
+            dr   :=  0
+
+            swapoperands()
+
+            checkfpcr( reg, FALSE )
+        $)
+
+        //  If we reach this point, then the arguments are consistent and
+        //  so we can generate some code.
+
+        codeword( fp.mask         |
+                  (fp.id  <<  9)  |
+                  (eafield())     )
+
+        codeword( (1    <<  15)   |
+                  (dr   <<  13)   |
+                  (reg  <<  10)   )
+
+        genea()
+    $)
+    ELSE
+
+    TEST  op.ea = am.FPr  THEN
+    $(
+        //  This is a move from a floating point register.  We must look at
+        //  the size specifier to see if we must cope with the Packed case.
+
+        LET FPm  =  exp
+
+        swapoperands()
+
+        TEST  op.ea = am.FPr  THEN
+        $(
+            //  This is the easiest of the cases, since it is simply a
+            //  copy from one register to another.
+
+            checkfor( s.none, 12 )
+
+            UNLESS  instr.size = ts.extended  DO  complain( 223 )
+
+            codeword( fp.mask         |
+                      (fp.id  <<  9)  )
+
+            codeword( (FPm  <<  10)   |
+                      (exp  <<  7)    )
+        $)
+        ELSE
+        $(
+            //  We have filtered out the simple cases, so we should
+            //  look to see if this is a "packed" case.  If so, we ought
+            //  to look for "k" factor.
+
+            LET mode     =  fpmode( instr.size )  &  am.alt
+            LET spec     =  fpspec( instr.size )
+            LET kfactor  =  0
+
+            IF  (op.ea & mode) = 0  THEN  complain( 9 )
+
+            IF  instr.size = ts.packed  &  symb = s.cbra  THEN
+            $(
+                //  We have been given a "k" factor, so we should read it
+                //  and alter the parameters accordingly.
+
+                swapoperands()
+
+                readsymb()
+
+                effective.address()
+                checkfor( s.cket, 227 )
+
+                TEST  op.ea = am.Dr  THEN
+                $(
+                    //  Dynamic "k" factor.  Set the register number in the
+                    //  "kfactor" field, and alter the specification.
+
+                    kfactor  :=  exp << 4
+                    spec     :=  #B111
+                $)
+                ELSE
+
+                TEST  (op.ea & am.imm) \= 0  THEN
+                $(
+                    //  Static "k" factor.  Make sure that it is in the
+                    //  correct range.
+
+                    IF  pass2  THEN
+                        UNLESS  -64 <= exp <= +63  DO
+                            complain( 228 )
+
+                    kfactor  :=  exp  &  #B1111111
+                $)
+                ELSE
+
+                    //  Not a valid item as the "k" factor, so we should
+                    //  complain about it.
+
+                    complain( 229 )
+
+                swapoperands()
+            $)
+
+            checkfor( s.none, 12 )
+
+            codeword( fp.mask         |
+                      (fp.id  <<  9)  |
+                      (eafield())     )
+
+            codeword( (1     <<  14)  |
+                      (1     <<  13)  |
+                      (spec  <<  10)  |
+                      (FPm   <<  7)   |
+                      (kfactor)       )
+
+            genea()
+        $)
+    $)
+    ELSE
+    $(
+        //  This is somewhat easier, being the "a" case.  Check that the
+        //  second operand is a floating point register, and then generate
+        //  the code.
+
+        LET FPm   =  0
+        LET mode  =  fpmode( instr.size )
+        LET spec  =  fpspec( instr.size )
+
+        IF  (op.ea & mode) = 0  THEN  complain( 8 )
+
+        checkfor( s.none, 12 )
+
+        UNLESS  op1.ea = am.FPr  DO  complain( 225 )
+
+        FPm  :=  op1.exp
+
+        //  We are now in a position to generate some code for this
+        //  instruction.
+
+        codeword( fp.mask         |
+                  (fp.id  <<  9)  |
+                  (eafield())     )
+
+        codeword( (1     <<  14)  |
+                  (spec  <<  10)  |
+                  (FPm   <<  7)   )
+
+        genea()
+    $)
+$)
+
+
+
+AND instr32()  BE
+$(
+//  The FMOVEM instructions.  These cope with the moving of general purpose
+//  or control register.  The possible arguments are:
+//
+//    a)  FMOVEM.X  <list>,<ea>
+//    b)  FMOVEM.X  Dn,<ea>
+//    c)  FMOVEM.X  <ea>,<list>
+//    d)  FMOVEM.X  <ea>,Dn
+//
+//    e)  FMOVEM.L  <list>,<ea>
+//    f)  FMOVEM.L  <ea>,<list>
+
+    IF  instr.size = ts.none  THEN  complain( 226 )
+
+    nextsymb()
+
+    TEST  instr.size = ts.extended  THEN
+    $(
+        //  This is the "general purpose" form of the instruction.  look at
+        //  the first symbol, as this will tell us what to do.
+
+        LET dr       =  0
+        LET rlist    =  0
+        LET mode     =  0
+        LET dynamic  =  0
+
+        TEST  symb = s.Dr  |  symb = s.FPr  |  symb = s.FPgreg  THEN
+        $(
+            //  The mask is the first item, so read it now, and then go on
+            //  to read the effective address.
+
+            LET bits  =  0
+            LET type  =  0
+
+            TEST  symb = s.Dr  THEN
+            $(
+                //  The register list is dynamic, being in a data register.
+
+                effective.address()
+
+                bits     :=  exp  <<  4
+                dynamic  :=  TRUE
+            $)
+            ELSE
+            $(
+                //  The register list is static, so we should read it.
+
+                bits  :=  readregisters()
+                type  :=  result2
+
+                UNLESS  type = s.FPgreg  DO  complain( 233 )
+
+                dynamic  :=  FALSE
+            $)
+
+            //  When we drop out of there, we have read the register list,
+            //  and are about to read the effective address.
+
+            checkfor( s.comma, 10 )
+
+            effective.address()
+            checkfor( s.none, 12 )
+
+            TEST  (op.ea & am.contr.alt)  \=  0  THEN  rlist  :=  bits  ELSE
+            TEST  (op.ea & am.Ar.pd)  \=  0      THEN  rlist  :=  reverse( bits, 8 )
+                ELSE  complain( 9 )
+
+            dr  :=  1
+        $)
+        ELSE
+        $(
+            //  The mask is not the first operand, so we should read the
+            //  effective address, and then the mask.
+
+            LET bits  =  0
+            LET type  =  0
+
+            effective.address()
+            checkfor( s.comma, 10 )
+
+            bits  :=  readregisters()
+            type  :=  result2
+
+            UNLESS  type = s.FPgreg  DO  complain( 233 )
+
+            checkfor( s.none, 12 )
+
+            rlist    :=  bits
+            dynamic  :=  FALSE
+
+            TEST  (op.ea & am.contr)  \=  0  THEN  rlist  :=  bits  ELSE
+            TEST  (op.ea & am.Ar.pi)  \=  0  THEN  rlist  :=  bits  ELSE
+
+                complain( 8 )
+
+            dr  :=  0
+        $)
+
+        //  This is now common code for both directions of the move.
+
+        TEST  op.ea = am.Ar.pd
+            THEN  mode  :=  dynamic  ->  #B01,  #B00
+            ELSE  mode  :=  dynamic  ->  #B11,  #B10
+
+        codeword( fp.mask         |
+                  (fp.id  <<  9)  |
+                  (eafield())     )
+
+        codeword( (1     <<  15)  |
+                  (1     <<  14)  |
+                  (dr    <<  13)  |
+                  (mode  <<  11)  |
+                  (rlist)         )
+
+        genea()
+    $)
+    ELSE
+
+    TEST  instr.size = ts.long  THEN
+    $(
+        //  The floating point control register version of FMOVEM.  Look
+        //  at the first symbol, as this will tell us which way round
+        //  the operands are.
+
+        LET dr     =  0
+        LET rlist  =  0
+
+        TEST  symb = s.FPIAR  |  symb = s.FPSR  |  symb = s.FPCR  |  symb = s.FPcreg  THEN
+        $(
+            //  The register list is first.  Read it, and then make sure that
+            //  the effective address mode is OK.
+
+            LET bits  =  readregisters()
+            LET type  =  result2
+
+            UNLESS  type = s.FPcreg  DO  complain( 233 )
+
+            checkfor( s.comma, 10 )
+
+            effective.address()
+            checkfor( s.none, 12 )
+
+            IF  (op.ea & am.alt) = 0  THEN  complain( 9 )
+
+            dr     :=  1
+            rlist  :=  bits
+        $)
+        ELSE
+        $(
+            //  The effective address is first.  Read it, and then read
+            //  the register list.
+
+            LET bits  =  0
+            LET type  =  0
+
+            effective.address()
+            checkfor( s.comma, 10 )
+
+            bits  :=  readregisters()
+            type  :=  result2
+
+            UNLESS  type = s.FPcreg  DO  complain( 233 )
+
+            checkfor( s.none, 12 )
+
+            IF  (op.ea & am.all) = 0  THEN  complain( 8 )
+
+            dr     :=  0
+            rlist  :=  bits
+        $)
+
+        //  The rest is common code.  We should check for the special
+        //  cases where there is a data or address register involved.
+
+        IF  op.ea = am.Dr  THEN
+            UNLESS  rlist = #B001  |  rlist = #B010  |  rlist = #B100  DO
+                complain( 236 )
+
+        IF  op.ea = am.Ar  THEN
+            UNLESS  rlist = #B001  DO
+                complain( 237 )
+
+        codeword( fp.mask         |
+                  (fp.id  <<  9)  |
+                  (eafield())     )
+
+        codeword( (1      <<  15) |
+                  (dr     <<  13) |
+                  (rlist  <<  10) )
+
+        genea()
+    $)
+    ELSE
+
+        //  Not one of the sizes we are expecting, so we should complain
+        //  about it in no uncertain terms.
+
+        complain( 6 )
+$)
+
+
+
+AND fpmode( size )  =  VALOF
+$(
+//  Return the addressing mode expected depending on the size.
+
+    SWITCHON  size  INTO
+    $(
+        CASE ts.long     :
+        CASE ts.single   :
+        CASE ts.word     :
+        CASE ts.byte     :  RESULTIS  am.data
+
+        CASE ts.extended :
+        CASE ts.packed   :
+        CASE ts.double   :  RESULTIS  am.mem
+
+        DEFAULT          :  complain( 0 )
+    $)
+$)
+
+
+
+AND fpspec( size )  =  VALOF
+$(
+//  Return the specification bits for the given size.
+
+    SWITCHON  size  INTO
+    $(
+        CASE ts.long     :  RESULTIS  #B000
+        CASE ts.single   :  RESULTIS  #B001
+        CASE ts.extended :  RESULTIS  #B010
+        CASE ts.packed   :  RESULTIS  #B011
+        CASE ts.word     :  RESULTIS  #B100
+        CASE ts.double   :  RESULTIS  #B101
+        CASE ts.byte     :  RESULTIS  #B110
+
+        DEFAULT          :  complain( 0 )
+    $)
+$)
+
+
+
+AND fpcontrol( reg )  =  reg = s.FPIAR  ->  #B001,
+                         reg = s.FPSR   ->  #B010,
+                         reg = s.FPCR   ->  #B100,
+                                            complain( 0 )
+
+
+
+AND checkfpcr( mask, tomemory )  BE
+$(
+//  Check for the consistency of the current effective address given
+//  the mask for the floating point control registers.
+
+    LET mode  =  fpcrmode( mask )
+
+    IF  tomemory  THEN  mode  :=  mode & am.alt
+
+    IF  (op.ea & mode) = 0  THEN  complain( tomemory  ->  9, 8 )
+$)
+
+
+
+AND fpcrmode( mask )  =  VALOF
+$(
+//  Return the address mode corresponding to the control register mask
+//  given.
+
+    SWITCHON  mask  INTO
+    $(
+        CASE #B001 :  RESULTIS am.all
+        CASE #B010 :  RESULTIS am.data
+        CASE #B011 :  RESULTIS am.mem
+        CASE #B100 :  RESULTIS am.data
+        CASE #B101 :  RESULTIS am.mem
+        CASE #B110 :  RESULTIS am.mem
+        CASE #B111 :  RESULTIS am.mem
+
+        DEFAULT    :  complain( 0 )
+    $)
+$)
+
+

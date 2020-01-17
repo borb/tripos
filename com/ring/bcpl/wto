@@ -1,0 +1,116 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+                      ##    ##  ########   ######
+                      ##    ##  ########  ########
+                      ##    ##     ##     ##    ##
+                      ##    ##     ##     ##    ##
+                      ## ## ##     ##     ##    ##
+                      ########     ##     ##    ##
+                      ###  ###     ##     ########
+                      ##    ##     ##      ######
+
+************************************************************************
+**    Author:   Brian Knight                        December 1979     **
+***********************************************************************/
+
+
+// Program to send operator messages via the ring
+// WTO  <machine-name>  <message>
+//
+// Modifications:
+//
+// Dec 1980 by BJK: SSPLIB included, CALLSEGs removed.
+// Dec 1982 by NJO: Made byte-order independent
+// Jul 1983 by CGG: Copes with Project Universe type names
+
+SECTION "WTO"
+
+GET "libhdr"
+GET "ringhdr"
+GET "BCPL.ssplib"
+GET "BCPL.u-svc-nm"
+
+
+MANIFEST
+    $(
+    maxlen        = 121               // Chars in longest message
+    wto.name.size = 30
+    $)
+
+
+LET start() BE
+    $(
+    LET nsvec     = VEC 3
+    LET ns.string = VEC wto.name.size/bytesperword
+    LET wto.string= VEC wto.name.size/bytesperword
+    LET nspos     = 0
+    LET r         = ?
+    LET tx.block  = VEC 63 // Max size of SSP block
+    LET len       = 0
+    LET rx.block  = VEC 3
+    LET argv      = VEC 50
+    LET rc         = 20
+    LET ch         = rdch()
+
+    WHILE ch=' ' DO ch := rdch()
+
+    ns.string%0 := wto.name.size
+    wto.string%0 := wto.name.size
+
+    // Construct name for name server
+      $( // Loop
+      IF ch='*n' | ch= '*e' | ch=endstreamch | ch=';' THEN BREAK
+
+      nspos := nspos+1
+      IF nspos > wto.string%0
+      THEN
+        $(
+        writes("Machine name too long*n")
+        GOTO exit
+        $)
+
+      wto.string%nspos := ch
+      ch := rdch()
+      $) REPEATUNTIL ch = ' '
+
+    wto.string%0 := nspos
+    
+    UNLESS u.svc.nm(ns.string, wto.string, "wto") THEN
+    $(  writes("Service name too long*N")
+        GOTO exit
+    $)
+
+    // Read message into ring SSP block
+
+    WHILE ch=' ' DO ch := rdch()
+
+    UNTIL ch='*n' | ch='*e' | ch=endstreamch | ch=';'
+    DO $(
+       IF len >= maxlen
+       THEN $( writes("Message truncated*n"); BREAK $)
+
+       len := len+1
+       byteput(tx.block, bb.ssp.args*2 + len, ch)
+       ch := rdch()
+       $)
+
+    byteput(tx.block, bb.ssp.args*2, len)
+
+    UNLESS ssp(ns.string, tx.block, 4 + len/2, rx.block, 4, nsvec)
+    THEN
+      $(
+      LET r2    = result2
+      writes("WTO failed: ")
+      fault(r2)
+      GOTO exit
+      $)
+
+    rc := 0 // Successful completion if we drop through label
+exit:
+    stop(rc)
+    $)
+  
+

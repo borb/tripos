@@ -1,0 +1,228 @@
+SECTION "LCG2"
+
+GET "LCGHDR"
+
+LET scan() BE  // Switch on all possible OCODE operators
+  $( SWITCHON op INTO
+       $( err:
+          DEFAULT:
+            cgerror(0, "in scan: unexpected ocode op %N", op)
+            ENDCASE
+
+          CASE 0:
+            RETURN // end of file reached
+
+//        CASE s.debug:
+//          debugging := NOT debugging
+//          ENDCASE
+
+          CASE s.section:       // Not supported under tripos!
+            CGERROR(0, "Multiple section names. Program may not be run ASIS")
+          CASE s.needs:
+            $(  LET len = rdn()
+                LET v   = dp - 4
+                LET w   = op=s.section -> 1, ext.ref
+                LET p   = 0
+                dp      := v - 1
+                checkspace()
+                !dp      := needslist
+                needslist := dp
+                FOR i = 1 TO (len < 7 -> 7, len)
+                $(  LET c = i > len -> ' ', rdn()
+                    w := (w << 8) + c
+                    UNLESS i <= 7 & (i & 1) = 0
+                    $( v ! p := w; p := p + 1 $)
+                $)
+            $)
+            ENDCASE
+
+          CASE s.lp:
+            loadt(k.loc, rdn());   ENDCASE
+          CASE s.lg:
+            loadt(k.glob, rdgn()); ENDCASE
+          CASE s.ll:
+            loadt(k.lab, rdl());   ENDCASE
+          CASE s.ln:
+            loadt(k.numb, rdn());  ENDCASE
+
+          CASE s.lstr:
+            cgstring(rdn()); ENDCASE
+
+          CASE s.true:
+            loadt(k.numb, -1); ENDCASE
+          CASE s.false:
+            loadt(k.numb, 0); ENDCASE
+
+          CASE s.llp:
+            loadt(k.lvloc, rdn());   ENDCASE
+          CASE s.llg:
+            loadt(k.lvglob, rdgn()); ENDCASE
+          CASE s.lll:
+            loadt(k.lvlab, rdl());   ENDCASE
+
+          CASE s.sp:
+            storein(k.loc, rdn());   ENDCASE
+          CASE s.sg:
+            storein(k.glob, rdgn()); ENDCASE
+          CASE s.sl:
+            storein(k.lab, rdl());   ENDCASE
+          CASE s.stind:
+            storei(); ENDCASE
+          CASE s.putbyte:
+            cgpendingop()
+            cgputbyte(); ENDCASE
+
+          CASE s.rv:
+            cgrv(); ENDCASE
+
+          CASE s.mult:    CASE s.div:     CASE s.rem:
+          CASE s.plus:    CASE s.minus:   CASE s.neg:
+          CASE s.eq:      CASE s.ne:      CASE s.ls:
+          CASE s.gr:      CASE s.le:      CASE s.ge:
+          CASE s.lshift:  CASE s.rshift:  CASE s.abs:
+          CASE s.logand:  CASE s.logor:   CASE s.getbyte:
+          CASE s.eqv:     CASE s.neqv:    CASE s.not:
+            cgpendingop()
+            pendingop := op
+            ENDCASE
+
+          CASE s.jump:
+            cgpendingop()
+            store(0, ssp-1)
+            genjmp(rdl())
+            ENDCASE
+
+          CASE s.endfor:
+            cgpendingop()
+            pendingop := s.minus
+            cgpendingop()
+            loadt(k.numb, 0)
+            pendingop := s.le
+            op := s.jt
+            // Simulate 'LN 0 LE JT Ln'
+
+          CASE s.jt:  CASE s.jf:
+            cgbranch(op, rdl())
+            countflag := profcounting
+            ENDCASE
+
+          CASE s.goto:
+            cgpendingop()
+            store(0, ssp-2)
+            gengoto(f.jmp, f.jmpe)
+            incode := no
+            stack(ssp-1)
+            ENDCASE
+
+          CASE s.query:
+            cgpendingop()
+            stack(ssp+1)
+            ENDCASE
+
+          CASE s.lab:
+            cgpendingop()
+            store(0, ssp-1)
+            forgetall()
+            cglab(rdl(), 20)
+            incode := procstkp > 0
+            countflag := profcounting
+            ENDCASE
+
+          CASE s.stack:
+            cgpendingop()
+            stack(rdn())
+            ENDCASE
+
+          CASE s.store:
+            cgpendingop()
+            store(0, ssp-1)
+            ENDCASE
+
+          CASE s.entry:
+            cgentry()
+            ENDCASE
+
+          CASE s.save:
+            cgsave(rdn())
+            procstk!procstkp := maxssp
+            IF ((CGFLAGS & cgf.Stkchking) ~= 0) THEN
+              $( chkrefs(2)
+                 gens(f.jst, 0, a.stkchk)
+                 procstk!(procstkp+1) := stvp
+                 code(0, 0)
+              $)
+            procstkp := procstkp+2
+            IF procstkp>=procstkt GOTO err
+            maxssp := ssp
+            ENDCASE
+
+          CASE s.fnap:  CASE s.rtap:
+            cgapply(op, rdn())
+            ENDCASE
+
+          CASE s.rtrn:  CASE s.fnrn:
+            cgreturn(op)
+            ENDCASE
+
+          CASE s.endproc:
+            $( LET n = rdn()
+               procstkp := procstkp-2
+               IF ((CGFLAGS & cgf.Stkchking) ~= 0) DO
+                 procstk!(procstkp+1)!stv := maxssp
+               maxssp := procstk!procstkp
+               cgstatics(no)
+               ENDCASE
+            $)
+
+          CASE s.res:
+            cgpendingop()
+            store(0, ssp-2)
+            movetor(arg1, r.a)
+            genjmp(rdl())
+            forgetall()
+            stack(ssp-1)
+            ENDCASE
+
+          CASE s.rstack:
+            initstack(rdn())
+            loadt(k.reg, r.a)
+            ENDCASE
+
+          CASE s.finish:
+            cgpendingop()
+            // Simulate STOP(0)
+            stack(ssp + 2)
+            loadt(k.numb, 0)
+            loadt(k.glob, 2)
+            cgapply(s.rtap,ssp - 4)
+            incode := no
+            forgetall()
+            ENDCASE
+
+          CASE s.switchon:
+            $( LET n = 2 * rdn() - 1
+               switchspace := getvec(n)
+               IF switchspace = 0
+               THEN cgerror(20, "can't get workspace for SWITCHON")
+               cgswitch(switchspace, n)
+               freevec(switchspace)
+               switchspace := 0
+               ENDCASE
+            $)
+
+          CASE s.global:
+//          $( LET ng = rdn()
+//             IF ng > 0 THEN any.globals := yes
+//             cgglobal(ng)
+//          $)
+            cgglobal(rdn())
+            RETURN
+
+          CASE s.datalab:
+            cgdatawords(rdl())
+            LOOP
+       $)
+     op := rdn()
+  $) REPEAT
+
+

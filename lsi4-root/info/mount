@@ -1,0 +1,327 @@
+  *: slot allocation as follows                                         ;
+  *:     14     VOT:    ISLAND voice translator                 STD
+  *:     13     FM:     Filing Machine                          ANY     ;
+  *:     12     VMESIO68901:VME SIO 68901 (nrjb1)               VME     ;
+  *: /   11     VMESIO: VME SIO 68564 (pb)                      VME     ;
+  *: \   11     LSW:    VME SCC Z8530 (idw)                     VME     ;
+  *:     10     VMEPI:  VME PI  68230 (pb)                      VME     ;
+  *:      9     conductor: ISLAND conductor                     STD     ;
+  *:      8     <fh5>:  All FH5 disc handlers                   ANY     ;
+  *:      7     <fh4>:  All FH4 disc handlers                   ANY     ;
+  *:      6     mt:     MagTape handler                         STD     ;
+  *:      5     core:   Core handler                            STD     ;
+  *:      4     pipe:   Pipe handler                            STD     ;
+  *:      3     preload:Preload Handler                         STD     ;
+  *:      2     df<n>:  FH3 disc handler                        STD     ;
+  *:      1     VT:     VT connection into running system       STD     ;
+  *:      0     window: WS process buffer handler               STD     ;
+
+
+  conductor: handler nonres file island:demos.conductor.conductor
+                            hand 9
+                            init $
+                            pri  400   stack 500
+                            unit 0
+                            env  0
+            ;
+
+
+  vot: handler nonres file island:demos.translator.obj.translator
+                            hand 14
+                            init $
+                            pri  400   stack 500
+                            unit 0
+                            env  0
+            ;
+
+
+  window:   handler nonres  file idw:ws-process.obj.cohand
+                            hand 0
+                            init idw:ws-process.obj.window
+                            pri  1500   stack 500
+                            unit 0
+                            env  0
+            ;
+
+
+  VT:       handler nonres file sys:l.vt-handler
+                           hand 14
+                           init $
+                           pri  3000  stack 500
+                           unit 0
+                           env  0
+            ;
+
+
+  df0:      driver  nonres devs 1 2
+                           file sys:d.dfdriver
+            handler nonres file sys:l.fh-handler
+                           hand 2
+                           init sys:l.fh-handler-init
+                           pri  1400   stack 200
+                           unit 0
+                           env  0,256,1,1,4,6,1,0,2,0,76,5
+                           mode update read
+            ;
+
+
+  df1:      driver  nonres devs 1 2
+                           file sys:d.dfdriver
+            handler nonres file sys:l.fh-handler
+                           hand 2
+                           init sys:l.fh-handler-init
+                           pri  1400   stack 200
+                           unit 1
+                           env  0,256,1,1,4,6,1,0,2,0,76,5
+                           mode update read
+            ;
+
+
+  preload:  handler nonres file sys:l.preload-handler
+                           hand 3
+                           init $
+                           pri  2500  stack 500
+                           unit 0
+                           env  0
+            ;
+
+
+  pipe:     handler nonres file sys:l.pipe-handler
+                           hand 4
+                           init $
+                           pri  1399  stack 200
+                           unit 0
+                           env  10
+            ;
+
+
+  core:     handler nonres file sys:l.core-handler
+                           hand 5
+                           init sys:l.core-init
+                           pri  1400   stack 250
+                           unit 0
+                           env  0,512,1024
+            ;
+
+
+  mt:       handler nonres file  sys:l.tape-handler
+                           hand  6
+                           init  $
+                           pri   3000  stack 500
+                           unit  0
+                           env   0
+            ;
+
+
+  orbisfh4: driver  nonres devs  1 3
+                           file  sys:idw.winchester.obj.device
+            handler nonres file  sys:sys.fh4.m68k.handler
+                           hand  7
+                           init  sys:sys.fh4.m68k.init
+                           pri   3000  stack 500
+                           unit  0
+                           env   0,513,20480,513,128,16,2,64,4,1
+            ;
+
+
+ *: envec - 1 : lowest available disc key               513     or -ve ;
+ *:         2 : highest available disc key              87039/131072 or -ve;
+ *:         3 : root block disc key                     40960   or - key block;
+ *:         4 : disc block size in machine words        128     ;
+ *:         5 : number of cache buffers to allocate     16      or -ve;
+ *:         6 : number of work coroutines               2       or -ve;
+ *:         7 : blocks per cylinder                     >131072 ;
+ *:         8 : surfaces                                1       ;
+ *:         9 : sectors per block                       1       or -ve;
+
+
+  VMEFH4:   driver  nonres devs  1 3
+                           file  sys:d.wd1002-shd
+            handler nonres file  sys:sys.fh4.m68k.handler
+                           hand  7
+                           init  sys:sys.fh4.m68k.init
+                           pri   3000  stack 500
+                           unit  0
+                           env   0,513,87039,40960,128,16,2,131072,1,1
+            ;
+
+
+  VMEFH4n:  driver  nonres devs  1 3
+                           file  sys:d.wd1002-shd
+            handler nonres file  sys:sys.fh4.m68k.handler
+                           hand  7
+                           init  sys:sys.fh4.m68k.init
+                           pri   3000  stack 500
+                           unit  0
+                           env   0,-1,-1,-513,-1,-1,-1,131072,1,-1
+            ;
+
+
+  VMEFH4o:  driver  nonres devs  1 3
+                           file  sys:d.wd1002-shd
+            handler nonres file  sys:sys.fh4.m68k.handler
+                           hand  7
+                           init  sys:sys.fh4.m68k.init
+                           pri   3000  stack 500
+                           unit  0
+                           env   0,-1,-1,-513,-1,-1,-1,131072,1,-1
+            ;
+
+
+  VMEPI:    handler nonres file  sys:l.pi68230
+                           hand  10
+                           init  $
+                           pri   250 
+                           stack 1000
+                           unit  0
+                           env   0
+                           mode  probe centronics long short
+            ;
+
+
+  VMEPIT:   handler nonres file  vme:vmesys.vme-obj.pi68230
+                           hand  10
+                           init  $
+                           pri   250 
+                           stack 1000
+                           unit  1
+                           env   0
+                           mode  probe centronics long short
+            ;
+
+  VMESIO:   handler nonres file sys:l.sio68564
+                           hand  11
+                           init  $
+                           pri   250 
+                           stack 1000
+                           unit  0
+                           env   0
+            ;
+
+
+  VMESIO68901:     driver  nonres devs 2 0 1
+                           file vme:vmesys.vme-obj.68901-read-dcb-driver
+                                vme:vmesys.vme-obj.68901-write-dcb-driver
+            handler nonres file sys:68000sys.68000-obj.vtlike-cohand
+                           hand 12
+                           init $
+                           pri  1500   stack 500
+                           unit 0
+                           env  0
+            ;
+
+
+  fm:       handler nonres file sys:l.fm-handler
+                           hand 13
+                           init sys:l.fm-init
+                           pri  1398  stack 200
+                           unit 0
+                           env  0,0,10,128,2
+            ;
+
+
+*  ----------------------------------------------------  ;
+*  Stuff which is specific to the Olivetti Research Lab  ;
+*  ----------------------------------------------------  ;
+
+
+  lsw:      handler nonres file sys:68000sys.68000-obj.lsw-handler
+                           hand 11
+                           init $
+                           pri  1500   stack 500
+                           unit 0
+                           env  0
+            ;
+
+
+*  Mount information for the new IDW FH5 file handler.              ;
+*                                                                   ;
+*  The meaning of the environment vector is as follows:             ;
+*                                                                   ;
+*      0     Unit number                                            ;
+*      1     Bytes per block  (also Blocks per Region)              ;
+*      2     Partition base                                         ;
+*      3     Number of regions                                      ;
+*      4     Expected maximum number of open files                  ;
+*      5     Number of coroutines                                   ;
+*      6     Merge/cluster factor  (0 for default action)           ;
+*                                                                   ;
+*  IDW  -  05/05/87                                                 ;
+
+
+  scsi:     driver  nonres devs  1 8
+                           file  sys:68000sys.drivers.disc.scsi.obj.device
+            handler nonres file  sys:sys.fh5.obj.fh5
+                           hand  8
+                           init  $
+                           pri   3000 
+                           stack 200
+                           unit  0
+                           env   0,512,416,540,10,5,0
+                           mode  update read
+            ;
+
+
+  sasi:     driver  nonres devs  1 9
+                           file  sys:68000sys.drivers.disc.wd1002.obj.device
+            handler nonres file  sys:sys.fh5.obj.fh5
+                           hand  8
+                           init  $
+                           pri   3000 
+                           stack 200
+                           unit  0
+                           env   0,512,512,271,10,5,6
+                           mode  update read
+            ;
+
+
+  scsi1:    driver  nonres devs  1 10
+                           file  sys:68000sys.drivers.disc.scsi.obj.device1
+            handler nonres file  sys:sys.fh5.obj.fh5
+                           hand  8
+                           init  $
+                           pri   3000 
+                           stack 200
+                           unit  0
+                           env   0,512,416,540,10,5,0
+                           mode  update read
+            ;
+
+
+  sasi1:    driver  nonres devs  1 11
+                           file  sys:68000sys.drivers.disc.wd1002.obj.device1
+            handler nonres file  sys:sys.fh5.obj.fh5
+                           hand  8
+                           init  $
+                           pri   3000 
+                           stack 200
+                           unit  0
+                           env   0,512,512,271,10,5,6
+                           mode  update read
+            ;
+
+  rodime:    driver  nonres devs  1 11
+                           file  sys:68000sys.drivers.disc.wd1002.obj.device
+            handler nonres file  sys:sys.fh5.obj.fh5
+                           hand  8
+                           init  $
+                           pri   3000 
+                           stack 200
+                           unit  0
+                           env   0,512,512,169,10,5,6
+                           mode  update read
+            ;
+
+  rodime1:    driver  nonres devs  1 11
+                           file  sys:68000sys.drivers.disc.wd1002.obj.device1
+            handler nonres file  sys:sys.fh5.obj.fh5
+                           hand  8
+                           init  $
+                           pri   3000 
+                           stack 200
+                           unit  0
+                           env   0,512,512,169,10,5,6
+                           mode  update read
+            ;
+
+

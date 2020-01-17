@@ -1,0 +1,258 @@
+/****************************************************************************\
+*                           Systems Research Group                           *
+******************************************************************************
+
+
+     ########   ######   ########  ##    ##  ##        ########  #######
+     ########  ########  ########  ###   ##  ##        ########  ########
+        ##     ##    ##     ##     ####  ##  ##           ##     ##    ##
+        ##     ##    ##     ##     ## ## ##  ##           ##     #######
+        ##     ##    ##     ##     ##  ####  ##           ##     ##    ##
+        ##     ##    ##     ##     ##  ####  ##           ##     ##    ##
+     #####     ########  ########  ##   ###  ########  ########  ########
+     ####       ######   ########  ##    ##  ########  ########  #######
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   21/08/86            *
+\****************************************************************************/
+
+
+
+SECTION "JOINLIB"
+
+
+
+GET "LIBHDR"
+
+
+
+GLOBAL
+$(
+    sysout              :  ug + 0
+    errorlevel          :  ug + 1
+    errorlabel          :  ug + 2
+    errorcode           :  ug + 3
+    outputstream        :  ug + 4
+    broken              :  ug + 5
+    inputbuffer         :  ug + 6
+$)
+
+
+
+MANIFEST
+$(
+    a.from0             =  0
+    a.from9             =  9
+    a.to                =  10
+
+    buffersize          =  1000
+$)
+
+
+
+LET start()  BE
+$(
+//  Main routine of the "JOINLIB" program.
+
+    LET args       =  "FROM/A,,,,,,,,,,AS/A/K"
+    LET argv       =  VEC 150
+
+    LET fromfile   =  0
+    LET tofile     =  0
+
+    sysout         :=  output()
+
+    errorlevel     :=  level()
+    errorlabel     :=  label
+
+    errorcode      :=  0
+    outputstream   :=  0
+    inputbuffer    :=  0
+
+    broken         :=  FALSE
+
+    UNLESS  rdargs( args, argv, 150 )  DO
+        error( "Bad arguments for *"%S*"", args )
+
+    tofile  :=  argv!a.to
+
+    //  Open the output file.
+
+    outputstream  :=  findoutput( tofile )
+
+    IF  outputstream = 0  THEN
+        error( "Cannot open TO file *"%S*"", tofile )
+
+    selectoutput( outputstream )
+
+    //  Now, allocate the storage we require for the rest of the
+    //  program.
+
+    inputbuffer  :=  getvec( buffersize )
+
+    IF  inputbuffer = 0  THEN  error( "Not enough store" )
+
+    FOR  i = a.from0  TO  a.from9  DO  handlefile( argv!i )
+
+label:
+
+    UNLESS  inputbuffer = 0    DO  freevec( inputbuffer )
+    UNLESS  outputstream = 0   DO  endstream( outputstream )
+
+    stop( errorcode )
+$)
+
+
+
+AND handlefile( file )  BE  UNLESS  file = 0  DO
+$(
+//  Handle the joining of either a single file or a list of files.
+
+    LET oldlevel  =  errorlevel
+    LET oldlabel  =  errorlabel
+
+    LET filel     =  file % 0
+    LET oldin     =  input()
+    LET stream    =  0
+
+    IF  filel > 1  THEN
+
+        IF  file % 1  =  '!'  THEN
+        $(
+            //  This the name of a file containing a list of files, so we
+            //  should open the file, and handle each of the files in the
+            //  list.
+
+            LET buffer  =  0
+
+            FOR  i = 1  TO  filel-1  DO
+                file % i  :=  file % (i + 1)
+
+            file % 0    :=  filel - 1
+
+            errorlevel  :=  level()
+            errorlabel  :=  label
+
+            //  We are now in a state to open the list of files, and allocate
+            //  the buffer.
+
+            stream  :=  findinput( file )
+
+            IF  stream = 0  THEN  error( "Cannot open *"%S*"", file )
+
+            buffer  :=  getvec( 256/bytesperword )
+
+            IF  buffer = 0  THEN  error( "No more store" )
+
+            //  Having got this far, we can read the file and extract the
+            //  list of filenames from it.
+
+            selectinput( stream )
+
+            UNTIL  broken  DO
+            $(
+                LET length  =  0
+                LET ch      =  rdch()
+
+                IF  testflags( #B0001 )  THEN
+                $(
+                    broken  :=  TRUE
+
+                    error( "BREAK" )
+                $)
+
+                UNTIL  ch = '*N'  |  ch = endstreamch  THEN
+                $(
+                    IF  length = 255  THEN  error( "Input line too long" )
+
+                    length           :=  length + 1
+                    buffer % length  :=  ch
+                    ch               :=  rdch()
+                $)
+
+                IF  length = 0  &  ch = endstreamch  THEN  BREAK
+
+                //  We have now extracted a line from the file, so call
+                //  ourselves recursively to handle it.
+
+                buffer % 0  :=  length
+
+                handlefile( buffer )
+            $)
+
+        label:
+
+            UNLESS  buffer = 0  DO  freevec( buffer )
+            UNLESS  stream = 0  DO  endstream( stream )
+
+            errorlevel  :=  oldlevel
+            errorlabel  :=  oldlabel
+
+            RETURN
+        $)
+
+    //  If we are not handling a list of files, then things are somewhat
+    //  easier.
+
+    errorlevel  :=  level()
+    errorlabel  :=  label
+
+    stream  :=  findinput( file )
+
+    IF  stream = 0  THEN  error( "Cannot open *"%S*"", file )
+
+    selectinput( stream )
+    joinfile()
+
+label:
+
+    UNLESS  stream = 0  DO  endstream( stream )
+
+    selectinput( oldin )
+
+    errorlevel  :=  oldlevel
+    errorlabel  :=  oldlabel
+$)
+
+
+
+AND joinfile()  BE
+$(
+//  Read the file, copying it to the output stream.
+
+    LET size  =  ABS readwords( inputbuffer, buffersize )
+
+    UNTIL  size = 0  DO
+    $(
+        IF  testflags( #B0001 )  THEN
+        $(
+            broken  :=  TRUE
+
+            error( "BREAK" )
+        $)
+
+        writewords( inputbuffer, size )
+
+        size  :=  ABS readwords( inputbuffer, buffersize )
+    $)
+$)
+
+
+
+AND error( format, arg1, arg2 )  BE
+$(
+//  Print out an error message.
+
+    selectoutput( sysout )
+
+    writes( "****** JOINLIB:  " )
+    writef( format, arg1, arg2 )
+    newline()
+
+    errorcode  :=  20
+
+    longjump( errorlevel, errorlabel )
+$)
+
+

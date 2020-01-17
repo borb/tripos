@@ -1,0 +1,23 @@
+.key sys,dest/k,b1/k,b2/k,comp/k,Ld/k,Md/k,opt/k,s2/k,ws/k,68000/s,link/s,tidy/s,ancilla/s,all/s,sc/s,la/s
+.def    sys     m68k
+.def    b1      m:bcp.
+.def    b2      bcp.
+.def    cc      new
+.def    comp    bcp
+.def    dest    t:
+.def    opt     -wa
+<comp>  <b1>fs       mobj:fs        opt=ws<ws><sl><sc>cc:sc:<opt>
+. <comp>  <b2>send     mobj:send      opt=ws<ws><s2><sc>cc:sc:<opt>
+. <comp>  <b2>send     mobj:csend     opt=ws<ws><s2><sc>cc:sc:<opt>:cc:command:
+. <comp>  <b2>logon    mobj:logon     opt=ws<ws><sl><sc>cc:sc:<opt>
+. IF NOT MCTYPE=LSI4; SKIP NODEMON
+. <comp>  <b1>demon    mobj:demon     opt=ws<ws><sl><sc>cc:sc:<opt>
+. <comp>  <b1>dinit    mobj:dinit     opt=ws<ws><sl><sc>cc:sc:<opt>
+. <comp>  <b1>sender   mobj:sender    opt=ws<ws><sl><sc>cc:sc:<opt>
+. <comp>  <b1>compres  mobj:compres   opt=ws<ws><sl><sc>cc:sc:<opt>
+. LAB NODEMON
+syslink Mobj:system Mobj:newmail-system OPT fW18000
+. LAB ancilla
+:<68000>sys.ancilla mobj:newmail-system name=TESTMAIL <sys> REPLACE
+
+

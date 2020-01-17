@@ -1,0 +1,1669 @@
+/*************************************************
+*         GCODE-to-PostScript Converter          *
+**************************************************
+*                                                *
+*  Copyright (c) 1986                            *
+*    University of Cambridge Computing Service   *
+*                                                *
+* Philip Hazel, April 1986.                      *
+*   Last Modified: May 1986                      *
+*************************************************/
+
+// Part II: System-independent code
+
+GET "LIBHDR"
+GET "GTOPSHDR"
+
+
+/*************************************************
+*           Gcode reading rdch                   *
+*************************************************/
+
+LET grdch() = VALOF
+$(proc
+LET c = sysrdch()
+IF interupted() THEN moan(18)
+WHILE c = '*N' DO
+  $(1
+  glinecount +:= 1
+  c := sysrdch()
+  $)1
+RESULTIS c
+$)proc
+
+
+
+/*************************************************
+*       Check for GCODE and comment              *
+*************************************************/
+
+/* This procedure checks that the input is indeed a GCODE
+file, and outputs the initial comment to the current
+output stream. */
+
+AND initialcomment() BE
+$(proc
+LET lastwasspace = TRUE
+LET count = 0
+LET savewrch = wrch
+UNLESS verbose DO wrch := null
+ch := rdch()
+UNLESS ch = Gcode.Flag.Char DO moan(2)
+writelogo()
+ch := rdch()    // version number
+ch := rdch()    // first comment char
+UNTIL ch = '\' DO
+  $(1
+  TEST ch = ' ' THEN
+    $(2
+    UNLESS lastwasspace DO
+      $(3
+      IF count > 74 THEN
+        $(4
+        wrch('*N')
+        count := 0
+        $)4
+      wrch(' ')
+      count +:= 1
+      lastwasspace := TRUE
+      $)3
+    $)2
+  ELSE
+    $(2
+    wrch(ch)
+    count +:= 1
+    lastwasspace := FALSE
+    $)2
+  ch := rdch()
+  $)1
+wrch('*N')
+wrch := savewrch
+$)proc
+
+
+
+/*************************************************
+*            Read GCODE and translate            *
+*************************************************/
+
+AND readpages() BE
+$(proc
+pamphletform := pf.unset    // for pamphlet checking
+underlining := FALSE
+
+// Set up first block
+
+pblock := getstore(pblocksize/bytesperword)
+pptr := 0
+IF lastwantedpage = 0 | pamphlet = 0 THEN
+  lastwantedpage := maxpage    // read to eof
+
+// Read page 0
+
+rdpage(0, save)
+
+/* Now read requested pages, checking in the case
+of the PAMPHLET option that they are all the same
+physical size. */
+
+lastpage := 0
+FOR i = 1 TO lastwantedpage DO
+  $(1
+  IF eof THEN
+    $(2
+    IF pamphlet = 0 THEN pamphlet := i - 1
+    BREAK
+    $)2
+  TEST wantpage(i) THEN
+    $(2
+    rdpage(i, save)
+    lastpage := i
+    UNLESS pamphlet < 0 DO
+      $(3
+      LET head = pageindex!i
+      LET thisform = pformat OF head
+      TEST thisform = pf.A4toA5 THEN thisform := pf.A5
+        ELSE IF thisform = pf.A4toA6 |
+          thisform = pf.A5toA6 THEN thisform := pf.A6
+      TEST pamphletform = pf.unset THEN
+        pamphletform := thisform ELSE
+          UNLESS pamphletform = thisform DO
+            moan(17,pamphletform,thisform)
+      $)3
+    $)2
+  ELSE rdpage(i, NOT save)
+  $)1
+
+/* Round pamphlet count to multiple of 4 for A5
+or multiple of 8 for A6 -- or cancel for A4! */
+
+UNLESS pamphlet < 0 DO
+  TEST pamphletform = pf.A4 THEN pamphlet := -1 ELSE
+    $(2
+    LET round = (pamphletform = pf.A5) -> 4, 8
+    pamphlet := ((pamphlet + round - 1)/round)*round
+    $)2
+endread()
+main.input := 0
+$)proc
+
+
+
+/*************************************************
+*          Check whether page is wanted          *
+*************************************************/
+
+AND wantpage(p) = VALOF
+$(proc
+TEST pages = 0 THEN RESULTIS TRUE ELSE
+  $(1
+  LET byte = p/bitsperbyte
+  LET bit  = p REM bitsperbyte
+  RESULTIS ((pagemap%byte) & (bits!bit)) \= 0
+  $)1
+$)proc
+
+
+
+/*************************************************
+*       Read in page and save if wanted          *
+*************************************************/
+
+AND rdpage(pnum, saveflag) BE
+$(proc
+xmove := 0
+ymove := 0
+crneeded := FALSE
+instring := FALSE
+setnldepth := 9999
+pschcount := 0
+spacing := -1
+lastchar := '*N'
+
+TEST saveflag THEN
+  $(1
+  wrch := savewrch
+  UNLESS pptr < pblocksize - pheadsize*2 DO
+    $(2
+    pblock := getstore(pblocksize/bytesperword)
+    pptr := 0
+    $)2
+  phead := pblock + pptr/bytesperword
+  pageindex!pnum := phead
+  IF pnum = 0 THEN pagezerohead := phead
+  phead!pflags := 0
+  IF landscape THEN plandscape OF phead := on
+  pformat OF phead := pageformat
+  phead!plength := 0
+  phead!pcont := 0
+  pptr +:= pheadsize
+  $)1
+ELSE wrch := null
+
+SWITCHON ch INTO
+  $(1
+  CASE endstreamch:
+  flushstring(force)
+  eof := TRUE
+  BREAK
+
+  CASE '*N':
+  ch := rdch()
+  ENDCASE
+
+  CASE '\':
+  UNLESS rdgcodecmd() = continue BREAK
+  ENDCASE
+
+  DEFAULT:
+  tstack!tptr := ch
+  tptr +:= 1
+  ch := rdch()
+  ENDCASE
+  $)1
+REPEAT
+
+  // Round pointer to full word
+  $(1
+  LET round = pptr REM bytesperword
+  UNLESS round = 0 DO
+    pptr +:= bytesperword - round
+  $)1
+
+wrch := syswrch
+$)proc
+
+
+
+/*************************************************
+*            Flush saved up string               *
+*************************************************/
+
+AND flushstring(spaceforce) BE
+  IF spaceforce | tptr > 0 THEN
+
+$(proc
+LET addspace = FALSE
+
+// Deal with accumulated positioning
+
+IF crneeded THEN
+  $(1
+  TEST ymove = nldepth THEN
+    $(2
+    UNLESS setnldepth = nldepth DO
+      $(3
+      writefixed(nldepth)
+      pswrites("snl")
+      setnldepth := nldepth
+      $)3
+    pswrites("nl")
+    ymove := 0
+    $)2
+  ELSE pswrites("cr")
+  crneeded := FALSE
+  $)1
+
+TEST xmove \= 0 THEN
+  TEST ymove \= 0 THEN
+    $(2
+    writefixed(xmove)
+    wrch(' ')
+    writefixed(ymove)
+    pswrites("r")
+    $)2
+  ELSE
+    $(2
+    IF spacing < 0  & xmove > 0 THEN spacing := xmove
+    TEST xmove = spacing THEN addspace := TRUE ELSE
+      $(3
+      writefixed(xmove)
+      pswrites("x")
+      $)3
+    $)2
+
+ELSE UNLESS ymove = 0 DO
+  $(1
+  writefixed(ymove)
+  pswrites("y")
+  $)1
+
+xmove, ymove := 0, 0
+
+/* Now the characters of the string, adding an
+extra space at the start if the outstanding x
+movement was equal to the string spacing. */
+
+IF tptr > 0 | addspace DO
+  $(1
+  ensurechars(2)
+  wrch('(')
+  instring := TRUE
+  IF addspace THEN wrch(' ')
+  FOR i = 0 TO tptr - 1 DO writechar(tstack!i)
+  ensurechars(2)
+  wrch(')')
+  instring := FALSE
+  writesorw()    // write print command
+  $)1
+
+tptr := 0
+spacing := -1
+$)proc
+
+
+
+/*************************************************
+*      Write individual string char              *
+*************************************************/
+
+AND writechar(c) BE
+$(proc
+TEST c < 256 THEN    // printing character
+  TEST c = '\' | c = '(' | c = ')' THEN
+    $(2
+    ensurechars(3)
+    writef("\%C", c)
+    $)2
+  ELSE
+    $(2
+    ensurechars(2)
+    wrch(c)
+    $)2
+ELSE     // ascii font character number + 256
+  $(1
+  ensurechars(5)
+  wrch('\')
+  wrch(((c & #O300) >> 6) + '0')
+  wrch(((c & #O70) >> 3) + '0')
+  wrch((c & 7) + '0')
+  $)1
+$)proc
+
+
+
+/**************************************************
+*       Write print command (s or w)              *
+**************************************************/
+
+/* The command is S (show) for no space stretching;
+W (widthshow) for space stretching. In both cases,
+U may be added for underlining. */
+
+AND writesorw() BE
+$(proc
+TEST spacing >= 0 THEN
+  $(1
+  writefixed(spacing)
+  pswrites(underlining -> "wu", "w")
+  $)1
+ELSE pswrites(underlining -> "su", "s")
+$)proc
+
+
+
+/*************************************************
+*           Write PS command string              *
+*************************************************/
+
+AND pswrites(s) BE
+$(proc
+ensurechars(s%0+1)
+UNLESS lastchar = ' ' | lastchar = '*N' |
+  lastchar = ')' DO wrch(' ')
+writes(s)
+$)proc
+
+
+
+/*************************************************
+*           Ensure space on output line          *
+*************************************************/
+
+AND ensurechars(n) BE
+$(proc
+IF pschcount + n > pslinelen THEN
+  TEST instring THEN
+    $(2
+    $<SPLITSTRINGS
+    writes("\*N")
+    $>SPLITSTRINGS
+
+    $<SPLITSTRINGS'
+    writes(")*N")
+    writesorw()
+    writes(" (")
+    $>SPLITSTRINGS'
+    $)2
+  ELSE wrch('*N')
+$)proc
+
+
+
+/*************************************************
+*           Write fixed-point number             *
+*************************************************/
+
+AND writefixed(n) BE
+$(proc
+LET i, f = ?, ?
+ensurechars(10)
+UNLESS lastchar = ' ' | lastchar = '*N' |
+  lastchar = ')' DO wrch(' ')
+IF n < 0 THEN $( wrch('-'); n := -n $)
+
+i := n/onepoint
+f := n REM onepoint
+writen(i)
+UNLESS f = 0 DO
+  $(1
+  LET d = onepoint/10
+  wrch('.')
+  UNTIL f = 0 DO
+    $(2
+    LET c = f/d
+    wrch(c + '0')
+    f -:= c*d
+    d := d/10
+    $)2
+  $)1
+$)proc
+
+
+
+/*************************************************
+*        'WRCH' to save chars in store           *
+*************************************************/
+
+AND savewrch(c) BE
+$(proc
+IF lastchar = '*N' & c = ' ' & NOT instring THEN RETURN
+IF pptr >= pblocksize THEN
+  $(1
+  pblock := getstore(pblocksize/bytesperword)
+  phead!pcont := pblock
+  phead := pblock
+  phead!plength := 0
+  phead!pflags := 0
+  phead!pcont := 0
+  pptr := pheadsize
+  $)1
+pblock%pptr := c
+pptr +:= 1
+phead!plength +:= 1
+TEST c = '*N' THEN pschcount := 0
+  ELSE pschcount +:= 1
+lastchar := c
+$)proc
+
+
+
+/*************************************************
+*          Deal with Gcode command               *
+*************************************************/
+
+/* This procedure is entered when the initial '\'
+has been read. Its yield is CONTINUE unless the end
+of the page has been reached. On return, the next
+character should be in CH. */
+
+AND rdgcodecmd() = VALOF
+$(proc
+LET arg1, arg2 = ?, ?
+ch := rdch()
+SWITCHON ch INTO
+  $(1
+  CASE endstreamch:
+  RESULTIS NOT continue
+
+  CASE '\':
+  tstack!tptr := ch
+  tptr +:= 1
+  ENDCASE
+
+  CASE Gcode.null:
+  ENDCASE
+
+  CASE Gcode.formfeed:
+  ch := rdch()
+  RESULTIS NOT continue
+
+  CASE Gcode.dcs:
+  flushstring(force)
+  obeydcs()
+  ENDCASE
+
+  CASE Gcode.newline:
+  flushstring(NOT force)
+  ymove +:= nldepth
+  xmove := 0
+  crneeded := TRUE
+  ENDCASE
+
+  CASE Gcode.bs:
+  IF tptr = 0 THEN moan(9)
+    $(2
+    LET previouschar = tstack!(tptr-1)
+    flushstring(force)
+    ensurechars(6)
+    wrch('(')
+    writechar(previouschar)
+    wrch(')')
+    pswrites("gw neg x")
+    $)2
+  ENDCASE
+
+  CASE Gcode.apc:
+  flushstring(force)
+  obeyapc()
+  ENDCASE
+
+  DEFAULT:
+  UNLESS chartable%ch = ch.digit | ch = '.' DO moan(8)
+  arg1 := (ch = '.') -> 0, grdnum()
+  TEST ch = '.' THEN
+    $(2
+    LET d = onepoint
+    ch := rdch()
+    arg2 := 0
+    WHILE chartable%ch = ch.digit DO
+      $(3
+      d /:= 10
+      arg2 +:= (ch - '0')*d
+      ch := rdch()
+      $)3
+    $)2
+
+  ELSE arg2 := -1
+
+  SWITCHON ch INTO
+    $(2
+    CASE Gcode.bft:
+    UNLESS arg2 < 0 DO moan(11, arg1, arg2)
+    bindfont(arg1)
+    ENDCASE
+
+    CASE Gcode.vsi:
+    arg1 *:= onepoint
+    IF arg2 > 0 THEN arg1 +:= arg2
+    nldepth := arg1
+    ENDCASE
+
+    CASE Gcode.ssu:
+    IF arg2 >= 0 THEN moan(11)
+    IF arg1 < 1 | arg1 > 2 THEN moan(12, arg1)
+    IF arg1 = 2 THEN
+      addtopagezero("*N72 72.27 div dup scale ")
+    ENDCASE
+
+    CASE Gcode.rpr:
+    arg1 *:= onepoint
+    IF arg2 > 0 THEN arg1 +:= arg2
+    TEST tptr > 0 | underlining THEN
+      TEST spacing = -1 | arg1 = spacing THEN
+        $(4
+        tstack!tptr := ' '
+        tptr +:= 1
+        spacing := arg1
+        $)4
+      ELSE
+        $(4
+        flushstring(NOT force)
+        TEST underlining THEN
+          $(5
+          tstack!tptr := ' '
+          tptr +:= 1
+          spacing := arg1
+          $)5
+        ELSE xmove := arg1
+        $)4
+    ELSE xmove +:= arg1
+    ENDCASE
+
+    CASE Gcode.lpr:
+    arg1 *:= onepoint
+    IF arg2 > 0 THEN arg1 +:= arg2
+    flushstring(NOT force)
+    xmove -:= arg1
+    ENDCASE
+
+    CASE Gcode.gdpr:
+    CASE Gcode.dpr:
+    arg1 *:= onepoint
+    IF arg2 > 0 THEN arg1 +:= arg2
+    flushstring(NOT force)
+    ymove +:= arg1
+    ENDCASE
+
+    CASE Gcode.gupr:
+    CASE Gcode.upr:
+    arg1 *:= onepoint
+    IF arg2 > 0 THEN arg1 +:= arg2
+    flushstring(NOT force)
+    ymove -:= arg1
+    ENDCASE
+
+    CASE Gcode.sgr:
+    UNLESS arg2 < 0 DO moan(11, arg1, arg2)
+      $(3
+      LET ul = (arg1 & 2) \= 0
+      IF ul NEQV underlining THEN
+        $(4
+        flushstring(force)
+        underlining := ul
+        $)4
+      $)3
+    ENDCASE
+
+    CASE Gcode.fnt:
+    UNLESS arg2 < 0 DO moan(11, arg1, arg2)
+    flushstring(NOT force)
+    ensurechars(5)
+    UNLESS lastchar = ' ' | lastchar = '*N' |
+      lastchar = ')' DO wrch(' ')
+    writef("%N f", arg1)
+    ENDCASE
+
+    CASE Gcode.chr:
+    UNLESS arg2 < 0 DO moan(11, arg1, arg2)
+    tstack!tptr := arg1 + 256
+    tptr +:= 1
+    ENDCASE
+
+    DEFAULT: moan(8)
+    $)2
+  ENDCASE
+  $)1
+
+ch := rdch()
+RESULTIS continue
+$)proc
+
+
+
+/*************************************************
+*              Read Gcode number                 *
+*************************************************/
+
+/* This procedure is called with the first digit
+already in CH. */
+
+AND grdnum() = VALOF
+$(proc
+LET n = 0
+  $(1
+  n := n*10 + ch - '0'
+  ch := rdch()
+  $)1
+  REPEATWHILE chartable%ch = ch.digit
+RESULTIS n
+$)proc
+
+
+
+/*************************************************
+*           Deal with DCS strings                *
+*************************************************/
+
+/* The rather strange specification is for historical
+compatibility. The DCS string must contain
+PostScript. If it starts off with either of the
+strings "<n> extendfont" or "font", then it is
+assumed to be some sort of font manipulation,
+and is accordingly moved to page zero. Otherwise
+it is left in place. */
+
+AND obeydcs() BE
+$(proc
+LET usepagezero = FALSE
+LET tstring = VEC gstringsize
+readgcodestring(tstring, Gcode.dcs, '*N')
+str := tstring    // set up for decoding procs
+sptr := 2
+send := tstring%0+1
+
+readword()
+TEST isword("FONT") THEN usepagezero := TRUE ELSE
+  $(1
+  sptr := 2
+  IF read.number(NOT star) >= 0 DO
+    $(2
+    readword()
+    IF isword("EXTENDFONT") THEN
+      $(3
+      extendfontneeded := TRUE
+      usepagezero := TRUE
+      $)3
+    $)2
+  $)1
+TEST usepagezero THEN
+  $(1
+  LET len = tstring%0
+  tstring%(len+1) := '*N'
+  tstring%0 := tstring%0 + 1
+  addtopagezero(tstring)
+  $)1
+ELSE FOR i = 1 TO tstring%0 DO wrch(tstring%i)
+$)proc
+
+
+
+/*************************************************
+*           Deal with APC strings                *
+*************************************************/
+
+AND obeyapc() BE
+$(proc
+LET tstring = VEC gstringsize
+readgcodestring(tstring, Gcode.apc, 0)
+AnalyzeStringArg(tstring, NOT isopt)
+$)proc
+
+
+
+/*************************************************
+*            Read Gcode String (DCS or APC)      *
+*************************************************/
+
+/* An optional additional leading character can be
+supplied. This is used to start each DCS string
+with '*N'. Note that the escape conventions are
+a bit sordid. '\' is a general GCODE escape; the
+only currently legal combinations inside these
+strings are '\\' and '\' followed by the terminating
+character. However, at a higher level, '\' is an
+escape within the string. In order to get a genuine
+'\' into the data, '\\\\' is actually encoded! */
+
+AND readgcodestring(string, term, firstchar) BE
+$(proc
+LET n = 0
+UNLESS firstchar = 0 DO
+  $(1
+  n := 1
+  string%1 := firstchar
+  $)1
+
+  // Main Loop
+
+  $(1
+  ch := rdch()
+  IF ch = '\' THEN
+    $(2
+    ch := rdch()
+    IF ch = term THEN BREAK
+    UNLESS ch = '\' DO moan(10)
+    ch := rdch()    // high level escape
+    IF ch = '\' THEN
+      $(3
+      ch := rdch()
+      UNLESS ch = '\' DO moan(10)
+      $)3
+
+    SWITCHON ch INTO
+      $(3
+      CASE '\':
+      ENDCASE
+
+      CASE 'S': CASE 's':
+      ch := ' '
+      ENDCASE
+
+      CASE 'N': CASE 'n':
+      ch := '*N'
+      ENDCASE
+
+      DEFAULT:
+      moan(10)
+      ENDCASE
+      $)3
+    $)2
+
+  n +:= 1
+  string%n := ch
+  $)1
+  REPEAT
+
+string%0 := n
+$)proc
+
+
+
+/*************************************************
+*            Deal with font binding              *
+*************************************************/
+
+AND bindfont(num) BE
+$(proc
+LET fontname = VEC wordsize
+LET mag = ?
+
+ch := rdch()
+UNLESS chartable%ch = ch.digit DO moan(13)
+mag := grdnum()
+UNLESS ch = Gcode.fdl DO moan(13)
+ch := rdch()
+readfontstring(word, '/')
+ch := rdch()
+readfontstring(fontname, Gcode.fdl)
+
+IF returncode = 0 THEN
+  $(1
+  TEST isword("Diablo") | isword("FX80") |
+     isword("am") | isword("cm") | isword("QMS")
+  THEN
+    $(2
+    LET savewrch = wrch
+    wrch := syswrch
+    writef("*N*****
+           * GTOPS warning: *"%s/%s*" does not look like a*
+           * PostScript font name -*N", word, fontname)
+    $<MVS'
+    writes("are you sure you used the correct*
+           * GCAL style?*N*N")
+    $>MVS'
+    $<MVS
+    writes("check GCAL style.*N*N")
+    $>MVS
+    returncode := rc.warning
+    wrch := savewrch
+    $)2
+  ELSE IF mag < 3000 THEN
+    $(2
+    LET savewrch = wrch
+    wrch := syswrch
+    writef("*N*****
+           * GTOPS warning: font %N (*"%S/%S*") is specified*
+           * at a size*Nof ", num, word, fontname)
+    writefixed(mag)
+    writes(" point")
+    UNLESS mag = 1000 DO wrch('s')
+    writes(". This is probably too small to*
+           * be legible - *N")
+    $<MVS'
+    writes("are you sure you used the correct*
+           * GCAL style?*N*N")
+    $>MVS'
+    $<MVS
+    writes("check GCAL style.*N*N")
+    $>MVS
+    returncode := rc.warning
+    wrch := savewrch
+    $)2
+  $)1
+
+  // Add font binding information to page zero
+
+  $(1
+  LET savephead = phead
+  LET savepblock = pblock
+  LET savepptr = pptr
+  LET savepschcount = pschcount
+  LET savelastchar = lastchar
+
+  pblock :=
+    getstore((20+fontname%0+pheadsize)/bytesperword+1)
+  phead := pblock
+  pptr := pheadsize
+  pschcount := 0
+  phead!pflags := 0
+  phead!plength := 0
+  phead!pcont := 0
+  pagezerohead!pcont := phead
+  pagezerohead := phead
+  writef("%N", num)
+  writefixed(mag)
+  writef("/%S bft*N", fontname)
+  pschcount := savepschcount
+  phead := savephead
+  pblock := savepblock
+  pptr := savepptr
+  lastchar := savelastchar
+  $)1
+$)proc
+
+
+
+/*************************************************
+*            Read font name string               *
+*************************************************/
+
+AND readfontstring(string, term) BE
+$(proc
+LET n = 0
+UNTIL ch = term DO
+  $(1
+  n +:= 1
+  string%n := ch
+  ch := rdch()
+  $)1
+string%0 := n
+$)proc
+
+
+
+/*************************************************
+*           Add string to page zero              *
+*************************************************/
+
+AND addtopagezero(string) BE
+$(proc
+LET head =
+  getstore((string%0+pheadsize)/bytesperword+1)
+LET ptr = pheadsize
+head!pflags := 0
+head!pcont := 0
+head!plength := string%0
+FOR i = 1 TO string%0 DO
+  $(1
+  head%ptr := string%i
+  ptr +:= 1
+  $)1
+
+pagezerohead!pcont := head
+pagezerohead := head
+$)proc
+
+
+
+/*************************************************
+*             Write out pages                    *
+*************************************************/
+
+AND outputpages() BE
+$(proc
+LET head = pageindex!0
+selectoutput(main.output)
+inputpagecount := 0
+outputpagecount := 0
+
+/* First output heading comments a la Adobe's
+comment convention. */
+
+writef("%%!*N")
+UNLESS A4needed DO writef("%%!Needs A4*N")
+writef("%%%%Creator: GTOPS (%N)*N", version)
+writef("%%%%CreationDate: %S*N", currentdate)
+writef("%%%%Pages: (atend)*N")
+
+/* Next read and output the header file. There is
+a mandatory part, followed by optional parts.
+Skip text from % to *N, and compress multiple
+spaces and newlines. Mandation of the existence
+of the head (and tail) input should be done in
+the system-specific initialization. */
+
+UNLESS head.input = 0 DO
+  $(1
+  selectinput(head.input)
+  readuntil(copy)    // copies mandatory part
+
+    // Loop, copying required optionals
+
+    $(2
+    IF isword("") THEN BREAK
+    TEST isword("A4") & A4needed THEN
+      readuntil(copy) ELSE
+    TEST isword("EXTENDFONT") & extendfontneeded THEN
+      readuntil(copy) ELSE
+    TEST isword("A5ONA4") & A5onA4needed THEN
+      readuntil(copy) ELSE
+    TEST isword("A6ONA4") & A6onA4needed THEN
+      readuntil(copy)
+    ELSE readuntil(NOT copy)
+    $)2
+    REPEAT
+
+  endread()
+  head.input := 0
+  $)1
+
+/* Next output the PostScript operator to select
+the paper size. Currently only A4 is supported.
+Note that the operator is called "a4" and not
+"A4" -- this is the Americans not understanding
+the Europeans once again. */
+
+writes("a4*N")
+
+/* Next output "page zero". The first test string
+contains any "non-special" text that was found on
+page zero -- this might be user PostScript, but is
+normally null. The second & subsequent strings
+contain font bindings etc. abstracted from this
+and other pages. */
+
+writes("ptop*N")
+UNTIL head = 0 DO
+  $(1
+  FOR j = pheadsize TO pheadsize+head!plength-1 DO
+    $(2
+    IF interupted() THEN moan(18)
+    wrch(head%j)
+    $)2
+  head := head!pcont
+  $)1
+wrch('*N')
+
+IF copies > 1 THEN writef("/#copies %N def*N", copies)
+
+writef("%%%%EndProlog*N")    // Why "Prolog"??
+
+// Now do the normal pages, as requested
+
+logicalpage := 1
+lastpagestyle := pstyle.unset
+
+TEST pamphlet = -1 THEN
+
+  // Not pamphlet style
+
+  $(1
+  TEST pages = 0 THEN
+
+    // No page selection made
+
+    TEST reverse THEN
+      FOR i = lastpage TO 1 BY -1 DO
+        UNLESS pageindex!i = 0 DO
+          shippage(i, NOT invert)
+    ELSE FOR i = 1 TO lastpage DO
+      UNLESS pageindex!i = 0 DO
+        shippage(i, NOT invert)
+
+  ELSE
+
+    // Specific pages selected
+
+    $(2
+    LET p = pages
+
+    IF reverse THEN
+      $(3
+      LET q = p!page.link
+      p!page.link := 0
+      WHILE TRUE DO
+        $(4
+        LET temp = p!page.start
+        p!page.start := p!page.end
+        p!page.end := temp
+        IF q = 0 BREAK
+        temp := q!page.link
+        q!page.link := p
+        p := q
+        q := temp
+        $)4
+      $)3
+
+    UNTIL p = 0 DO
+      $(3
+      LET next = p!page.start
+      LET last = p!page.end
+      LET inc = (next > last) -> -1, +1
+      WHILE TRUE DO
+        $(4
+        UNLESS pageindex!next = 0 DO
+          shippage(next, NOT invert)
+        IF next = last THEN BREAK
+        next +:= inc
+        $)4
+      p := p!page.link
+      $)3
+    $)2
+  $)1
+
+ELSE
+
+  // Pamphlet style
+
+  $(1
+  LET top = pamphlet
+  LET bot = 1
+  LET top2 = top/2
+  LET end = (pamphletform = pf.A5) -> top/2, (top*3)/4
+  LET flip = TRUE
+
+  // must set page parms in case first is dummy
+
+  lastpagestyle := (pamphletform = pf.A5) ->
+    pstyle.A5, pstyle.A6
+  maxsubpage := lastpagestyle = pstyle.A4 -> 1,
+    lastpagestyle = pstyle.A5 -> 2, 4
+
+  // Now do the pages, 2 or 4 at a time
+
+  WHILE top > end DO
+    $(2
+    LET a = flip -> top, bot
+    LET b = flip -> bot, top
+
+    TEST pamphletform = pf.a5 THEN
+      UNLESS pageindex!a = 0 & pageindex!b = 0 DO
+        $(4
+        pshippage(a, NOT invert)
+        pshippage(b, NOT invert)
+        $)4
+    ELSE
+      $(3
+      LET c = b + (flip -> top2, -top2)
+      LET d = a + (flip -> -top2, top2)
+      UNLESS pageindex!a = 0 & pageindex!b = 0 &
+             pageindex!c = 0 & pageindex!d = 0
+      DO
+        $(4
+        pshippage(a, NOT invert)
+        pshippage(b, NOT invert)
+        pshippage(c, invert)
+        pshippage(d, invert)
+        $)4
+      $)3
+
+    top -:= 1
+    bot +:= 1
+    flip := NOT flip
+    $)2
+  $)1
+
+// Write check for incomplete physical page
+
+writef("ppend {showpage} if*N%%%%Trailer*N")
+
+// Now output a tail file if required
+
+UNLESS tail.input = 0 DO
+  $(1
+  selectinput(tail.input)
+  readuntil(copy)
+  endread()
+  tail.input := 0
+  $)1
+
+writef("%%%%Pages: %N*N", outputpagecount)
+endwrite(); main.output := 0
+selectoutput(error.output)
+$)proc
+
+
+
+/*************************************************
+*         Write out a single page                *
+*************************************************/
+
+AND shippage(pnum, invertflag) BE
+$(proc
+LET head = pageindex!pnum
+inputpagecount +:= 1
+
+// Flush previous if change of style
+
+TEST pformat OF head = pf.A5 |
+  pformat OF head = pf.A4toA5 THEN
+    checkpagestyle(pstyle.A5) ELSE
+      TEST pformat OF head = pf.A6 |
+        pformat OF head = pf.A4toA6 |
+          pformat OF head = pf.A5toA6 THEN
+            checkpagestyle(pstyle.A6) ELSE
+              checkpagestyle(pstyle.A4)
+
+// Deal with start of real page
+
+IF logicalpage = 1 THEN
+  $(1
+  outputpagecount +:= 1
+  writef("*N%%%%Page: %N %N*N", pnum, outputpagecount)
+  $)1
+
+/* Output appropriate set up, selecting the
+appropriate subpage, applying a scaling factor
+and changing to landscape if necessary. */
+
+writef("/ppend true def /pagesave save def")
+
+TEST lastpagestyle = pstyle.A5 THEN
+  writef(" %N A5t", logicalpage)
+ELSE IF lastpagestyle = pstyle.A6 THEN
+  writef(" %N A6t", logicalpage)
+
+TEST pformat OF head = pf.A4toA5 |
+  pformat OF head = pf.A5toA6 THEN
+    writes(" 0.5 sqrt pscale")
+ELSE IF pformat OF head = pf.A4toA6 THEN
+  writes(" 0.5 pscale")
+
+IF plandscape OF head = on THEN writes(" ls")
+IF invertflag THEN writes(" inv")
+writes(" ptop*N")
+
+// Now the page's data
+
+UNTIL head = 0 DO
+  $(1
+  FOR j = pheadsize TO pheadsize+head!plength-1 DO
+    $(2
+    IF interupted() THEN moan(18)
+    wrch(head%j)
+    $)2
+  head := head!pcont
+  $)1
+
+// Tidy up at the foot
+
+writes("*Npagesave restore")
+TEST logicalpage < maxsubpage THEN logicalpage +:= 1
+  ELSE $( writes(" xpage"); logicalpage := 1 $)
+wrch('*N')
+$)proc
+
+
+
+/*************************************************
+*      Ship page for pamphlet style              *
+*************************************************/
+
+// Page may in fact be a dummy
+
+AND pshippage(pnum, invertflag) BE
+$(proc
+TEST pageindex!pnum = 0 THEN
+  $(1
+  IF logicalpage = 1 THEN
+    $(2
+    outputpagecount +:= 1
+    writef("*N%%%%Page: %N %N*N", pnum, outputpagecount)
+    $)2
+  TEST logicalpage < maxsubpage THEN logicalpage +:= 1
+    ELSE $( writes("xpage*N"); logicalpage := 1 $)
+  $)1
+ELSE shippage(pnum, invertflag)
+$)proc
+
+
+
+/*************************************************
+*         Check style same as previous           *
+*************************************************/
+
+AND checkpagestyle(style) BE
+$(proc
+UNLESS lastpagestyle = style DO
+  $(1
+  UNLESS logicalpage = 1 DO
+    $(2
+    writes("xpage*N")
+    logicalpage := 1
+    $)2
+  lastpagestyle := style
+  maxsubpage := style = pstyle.A4 -> 1,
+    style = pstyle.A5 -> 2, 4
+  $)1
+$)proc
+
+
+/*************************************************
+*        Read head/tail PostScript file          *
+*************************************************/
+
+/* Reading is terminated by end-of-file or by
+a line starting %End. After the latter, the file
+is read until the next %<name> is found, and <name>
+is returned in WORD. It is null at end-of-file.
+The lines are copied to the output, with comments
+removed and spaces and newlines compressed, if the
+flag is TRUE. */
+
+AND readuntil(copyflag) BE
+$(proc
+LET lastwasspace = TRUE
+LET lastwasnl = TRUE
+LET c = rdch()
+word%0 := 0
+
+UNTIL c = endstreamch DO
+  $(1
+  IF interupted() THEN moan(18)
+  TEST lastwasnl & c = '%' THEN
+    $(2
+    c := readhtword()
+    TEST isword("END") THEN BREAK
+      ELSE UNTIL c = '*N' DO c := rdch()
+    $)2
+  ELSE UNLESS (c = ' ' | c = '*N') & lastwasspace DO
+    TEST c = '%' THEN
+      $(3
+      UNTIL c = '*N' DO c := rdch()
+      UNLESS lastwasnl DO wrch('*N')
+      lastwasspace := TRUE
+      lastwasnl := TRUE
+      $)3
+    ELSE
+      $(3
+      IF copyflag THEN wrch(c)
+      lastwasspace := (c = ' ' | c = '*N')
+      lastwasnl := c = '*N'
+      $)3
+
+  c := rdch()
+  $)1
+
+// Find next optional part name
+
+UNLESS c = endstreamch DO
+  $(1
+  UNTIL c = '*N' | c = endstreamch DO c := rdch()
+  c := rdch()
+  IF c = endstreamch THEN BREAK
+  IF c = '%' THEN
+    $(2
+    c := readhtword()
+    UNTIL c = '*N' | c = endstreamch DO c := rdch()
+    BREAK
+    $)2
+  $)1
+  REPEAT
+$)proc
+
+
+
+/*************************************************
+*        Read word after % in head/tail file     *
+*************************************************/
+
+AND readhtword() = VALOF
+$(proc
+LET n = 0
+LET c = rdch()
+WHILE c = ' ' DO c := rdch()
+UNTIL c = ' ' | c = '*N' | c = endstreamch DO
+  $(1
+  n +:= 1
+  word%n := c
+  c := rdch()
+  $)1
+word%0 := n
+RESULTIS c
+$)proc
+
+
+
+/*************************************************
+*             Output final comment               *
+*************************************************/
+
+AND finalcomment() BE IF verbose THEN
+$(proc
+writef("%n page%s converted to PostScript",
+  inputpagecount, inputpagecount = 1 -> "", "s")
+UNLESS inputpagecount = outputpagecount DO
+  writef(" (%n physical page%s)", outputpagecount,
+    outputpagecount = 1 -> "", "s")
+writes(".*N")
+UNLESS copies = 1 DO
+  writef("%N copies of each page to be printed.*N",
+    copies)
+$)proc
+
+
+
+/*************************************************
+*           Analyze argument/command string      *
+*************************************************/
+
+/* If OPTFLAG is FALSE, then the string must begin
+with 'POSTSCRIPT:'. Otherwise use the whole string.
+Some options are only permitted when OPTFLAG is
+TRUE, and some only when it is FALSE. Options that
+set the input format are ignored in the GCODE
+if there has been an over-riding value set in OPT.
+The globals STR, SPTR, and SEND are used to reference
+the string, to save passing arguments to the various
+item reading routines. */
+
+AND AnalyzeStringArg(string, optflag) BE
+$(proc
+str := string
+sptr := 1            // points to next char
+send := str%0 + 1    // points past last char
+UNLESS optflag DO
+  $(1
+  readword()
+  UNLESS isword("POSTSCRIPT") & iterm = ':' RETURN
+  $)1
+
+  // Main loop
+  $(1
+  readword()
+  TEST isword("") THEN UNLESS iterm = ';' DO
+    TEST iterm = ' ' THEN BREAK ELSE moan(3)
+
+  ELSE TEST isword("PAGES")|isword("PAGE") THEN
+    $(2
+    UNLESS optflag DO moan(15, word)
+    UNLESS iterm = '=' | iterm = ' ' DO moan(4)
+    AnalyzePagesArg(NOT allstring)
+    $)2
+
+  // A5ONA4 is a relic; treat as FORMAT=A5
+
+  ELSE TEST isword("FORMAT") | isword("A5ONA4") THEN
+    $(2
+    UNLESS iterm = '=' | iterm = ' ' DO moan(3)
+    UNLESS isword("A5ONA4") DO readword()
+    IF optflag | NOT optinputstyle DO
+      $(3
+      IF optflag THEN optinputstyle := TRUE
+      TEST isword("A4") THEN pageformat := pf.A4
+      ELSE TEST isword("A5") | isword("A5ONA4") THEN
+        pageformat := pf.A5
+      ELSE TEST isword("A6") THEN pageformat := pf.A6
+      ELSE TEST isword("A5TOA6") THEN
+        pageformat := pf.A5toA6
+      ELSE TEST isword("A4TOA5") THEN
+        pageformat := pf.A4toA5
+      ELSE TEST isword("A4TOA6") THEN
+        pageformat := pf.A4toA6
+      ELSE moan(14, word)
+      $)3
+    $)2
+
+  ELSE TEST isword("REVERSE") THEN
+    $(2
+    UNLESS optflag DO moan(15,word)
+    reverse := TRUE
+    $)2
+
+  ELSE TEST isword("COPIES") THEN
+    $(2
+    UNLESS optflag DO moan(15,word)
+    UNLESS iterm = '=' | iterm = ' ' DO moan(4)
+    copies := read.number(NOT star)
+    IF copies < 0 THEN moan(4)
+    $)2
+
+  ELSE TEST isword("LANDSCAPE") THEN
+    landscape := TRUE
+
+  ELSE TEST isword("PORTRAIT") THEN
+    landscape := FALSE
+
+  ELSE TEST isword("PAMPHLET") THEN
+    $(2
+    UNLESS optflag DO moan(15, word)
+    UNLESS iterm = '=' | iterm = ' ' DO moan(4)
+    pamphlet := read.number(NOT star)
+    IF pamphlet = -1 THEN pamphlet := 0
+    $)2
+
+  ELSE TEST isword("FONT") THEN
+    $(2
+    IF optflag THEN moan(16, word)
+    UNLESS iterm = '=' | iterm = ' ' DO moan(4)
+    writef("*N%N f ",read.number(NOT star))
+    $)2
+
+  ELSE TEST isword("GET") THEN
+    $(2
+    LET ich = ?
+    LET n = 0
+    IF optflag THEN moan(16, word)
+    TEST iterm = ' ' | iterm = '=' THEN
+      WHILE sptr < send & str%sptr = ' ' DO
+        sptr +:= 1
+    ELSE
+      $(3
+      n +:= 1
+      word%n := iterm
+      $)3
+    UNTIL sptr >= send |
+      str%sptr = ' ' | str%sptr = ';'
+    DO
+      $(3
+      n +:= 1
+      word%n := str%sptr
+      sptr +:= 1
+      $)3
+    word%0 := n
+    readterminator()
+
+    wrch('*N')
+    selectinput(openget(word))    // hard error on fail
+    ich := sysrdch()
+    UNTIL ich = endstreamch DO
+      $(3
+      wrch(ich)
+      ich := sysrdch()
+      $)3
+    wrch('*N')
+    endread()
+    selectinput(main.input)
+    $)2
+
+  ELSE moan(5)
+
+  UNLESS sptr >= send | iterm = ';' | iterm = ' '
+    DO moan(6)
+  $)1
+  REPEAT
+
+IF pageformat = pf.A4toA5 | pageformat = pf.A5 THEN
+  A5onA4needed := TRUE
+IF pageformat = pf.A4toA6 | pageformat = pf.A5toA6 |
+  pageformat = pf.A6 THEN A6onA4needed := TRUE
+$)proc
+
+
+
+/*************************************************
+*         Analyze pages sub-argument             *
+*************************************************/
+
+/* ALLFLAG should be set TRUE when passing a string
+that contains ONLY the PAGES sub-argument, in
+systems when the keyword splitting is done at a
+high level. If FALSE, this routine stops when it
+can't understand any more, assuming that the caller
+will process the rest of the string. */
+
+AND AnalyzePagesArg(allflag) BE
+$(proc
+LET p = @pages
+UNTIL !p = 0 DO p := !p
+
+  // Main loop
+  $(1
+  LET s = read.number(star)
+  LET t = s
+  IF s < 0 THEN moan(4)
+  IF s > lastwantedpage THEN lastwantedpage := s
+
+  IF iterm = '-' THEN
+    $(2
+    t := read.number(star)
+    IF t < 0 THEN moan(4)
+    IF t > lastwantedpage THEN lastwantedpage := t
+    $)2
+
+  !p := getstore(pagecbsize)
+  p := !p; !p := 0
+  p!page.start := s
+  p!page.end := t
+
+  IF s > t THEN
+    $( LET temp = s; s := t; t := temp $)
+  FOR i = s TO t DO
+    $(2
+    LET byte = i/bitsperbyte
+    LET bit = i REM bitsperbyte
+    pagemap%byte := pagemap%byte | bits!bit
+    $)2
+
+  TEST iterm = ' ' & sptr >= send THEN RETURN ELSE
+    UNLESS iterm = ',' DO
+      TEST allflag THEN moan(7) ELSE RETURN
+  $)1
+  REPEAT
+$)proc
+
+
+
+/*************************************************
+*               Read next word                   *
+*************************************************/
+
+AND readword() BE
+$(proc
+LET n = 0
+WHILE sptr < send & str%sptr = ' ' DO sptr +:= 1
+IF sptr < send THEN
+  $(1
+  LET c = str%sptr
+  IF chartable%c = ch.letter THEN
+    $(2
+    n +:= 1
+    word%n := c
+    sptr +:= 1
+    TEST sptr < send THEN c := str%sptr
+      ELSE c := ' '
+    $)2
+    REPEATWHILE chartable%c = ch.letter |
+                chartable%c = ch.digit
+  $)1
+
+word%0 := n
+readterminator()
+$)proc
+
+
+
+/*************************************************
+*                Read terminator                 *
+*************************************************/
+
+AND readterminator() BE
+$(proc
+WHILE sptr < send & str%sptr = ' ' DO sptr +:= 1
+TEST sptr >= send THEN iterm := ' ' ELSE
+  $(1
+  LET c = str%sptr
+  TEST chartable%c = ch.letter | chartable%c = ch.digit
+    THEN iterm := ' '
+      ELSE $( iterm := c; sptr +:= 1 $)
+  $)1
+$)proc
+
+
+
+/*************************************************
+*           Read a number                        *
+*************************************************/
+
+/* Returns -1 if no number found; if STARFLAG is
+true, * can appear instead of a number. */
+
+AND read.number(starflag) = VALOF
+$(proc
+LET n = -1
+WHILE sptr < send & str%sptr = ' ' DO sptr +:= 1
+IF sptr < send THEN
+  $(1
+  LET c = str%sptr
+  TEST chartable%c = ch.digit THEN
+    $(2
+    n := 0
+      $(1
+      n := n*10 + c - '0'
+      sptr +:= 1
+      TEST sptr < send THEN c := str%sptr
+        ELSE c := ' '
+      $)1
+      REPEATWHILE chartable%c = ch.digit
+    $)2
+  ELSE IF c = '**' & starflag THEN
+    $(2
+    n := starnumber
+    sptr +:= 1
+    $)2
+  $)1
+readterminator()
+RESULTIS n
+$)proc
+
+
+
+/*************************************************
+*           Compare strings (words)              *
+*************************************************/
+
+AND isword(s) = VALOF
+$(proc
+FOR i = 0 TO s%0 DO
+  $(1
+  LET a = s%i
+  LET b = word%i
+  UNLESS uctable%a = uctable%b RESULTIS FALSE
+  $)1
+RESULTIS TRUE
+$)proc
+
+// End of GTOPS part II
+
+

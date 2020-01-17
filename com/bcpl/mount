@@ -1,0 +1,721 @@
+/*******************************************************************************
+**              (C) Copyright  Tripos Research Group 1980                     **
+**             University of Cambridge Computer Laboratory                    **
+********************************************************************************
+
+                ##    ##   ######   ##    ##  ##    ##  ########
+                ###  ###  ########  ##    ##  ###   ##  ########
+                ########  ##    ##  ##    ##  ####  ##     ##
+                ## ## ##  ##    ##  ##    ##  ## ## ##     ##
+                ##    ##  ##    ##  ##    ##  ##  ####     ##
+                ##    ##  ##    ##  ##    ##  ##  ####     ##
+                ##    ##  ########  ########  ##   ###     ##
+                ##    ##   ######    ######   ##    ##     ##
+
+********************************************************************************
+**      Author : mike richardson                                     1980     **
+*******************************************************************************/
+
+//  Modifications:
+//
+//  05-Jul-82  IDW  Change to the DEVICE argument, to allow device names of
+//                  the form "dev:string".  The string is passed to the
+//                  initialisation code on startup, and its use was designed
+//                  for the quoting of tape volume labels.
+//  26-Aug-82  MFR  Arranged to be callseg-able with device passed as arg.
+//                  If this is done then the arguement must be a string of the
+//                  for "dev:", and all other command argumements are defaulted
+//  09-Mar-84  MAJ  Bug fix - check for residency of handler moved after reading
+//                  of handler number
+//  18-Jun-84  BJK  Bug fix - CALL.EXLAB used to be a global which was set by
+//                  GLOBIN before the globals were saved. Hence one global of
+//                  any program CALLSEGing this code was zapped. It is now set
+//                  by the program.
+//  24-Apr-86  PB   increase size of vector to hold file name
+//  26-Jan-87  PB   allow negative numbers in environment variables.
+
+SECTION "MOUNT"
+
+GET     "LIBHDR"
+GET     "IOHDR"
+GET     "MANHDR"
+
+GLOBAL
+$(
+   info       : ug +  0      // info vector
+   dev.res    : ug +  1      // resident devices
+   dev1       : ug +  2      // device one number
+   dev2       : ug +  3      // device two number
+   file.dev1  : ug +  4      // device one file
+   file.dev2  : ug +  5      // device two file
+   hand.res   : ug +  6      // resident handler
+   hand       : ug +  7      // handler task number
+   file.hand  : ug +  8      // handler file
+   init.hand  : ug +  9      // handler init file
+   prio       : ug + 10      // handler priority
+   stack      : ug + 11      // handler stack
+   envec      : ug + 12      // environment vector
+   mode       : ug + 13      // startup mode
+   file       : ug + 14      // mount info file
+   stream     : ug + 15      // mount info file stream
+   name       : ug + 16      // mount info file name
+   word       : ug + 17      // result of rdword
+   ass        : ug + 18      // assignment
+   num.dev    : ug + 19      // number of devices
+   d1.loaded  : ug + 20      // device one loaded
+   d2.loaded  : ug + 21      // device two loaded
+   h.loaded   : ug + 22      // handler loaded
+   segl       : ug + 23      // handler segment list
+   task       : ug + 24      // new handler task
+   unit       : ug + 26      // unit
+   string     : ug + 27      // string argument to MOUNT
+   is.comm    : ug + 28      // running as command
+   old.cis    : ug + 29      // old input stream
+   old.cos    : ug + 30      // old output stream
+   call.exlev : ug + 31      // callseg exit level
+   call.exlab : ug + 32      // callseg exit label
+$)
+
+MANIFEST
+$(
+
+   devinfo.dev     = 0
+   devinfo.cnt     = 2
+
+   handinfo.seg    = 1
+   handinfo.cnt    = 2
+$)
+
+LET start ( dev.arg ) = VALOF
+$(
+   LET co = createco ( main, 1000 )
+
+   TEST co = 0 THEN RESULTIS main ( dev.arg )
+               ELSE $( LET res = callco ( co, dev.arg )
+                       deleteco(co)
+                       RESULTIS res
+                    $)
+$)
+
+AND main  ( dev.arg ) = VALOF
+$(
+   LET v1    = VEC 80 / bytesperword
+   LET v2    = VEC 50
+   LET v3    = VEC 30
+   LET v4    = VEC 80 / bytesperword
+   LET v5    = VEC 80 / bytesperword
+   LET v6    = VEC 80 / bytesperword
+   LET v7    = VEC 80 / bytesperword
+   LET v8    = VEC 80 / bytesperword
+   LET argv  = VEC 50
+   LET size  = 0
+   LET vs    = VEC 4
+   LET pos   = 0
+   LET len   = 0
+   LET gsave = VEC 40
+
+   FOR i = 0 TO 40 DO gsave!i := [@globsize]![ug+i]
+
+   call.exlab := exlab    // This setup must be done AFTER globals are saved.
+   call.exlev := level()
+   old.cis    := input ()
+   old.cos    := output()
+   info       := rootnode ! rtn.info
+   file       := "SYS:INFO.MOUNT"
+   stream     := 0
+   name       := v1
+   word       := v2
+   envec      := v3
+   file.dev1  := v4
+   file.dev2  := v5
+   file.hand  := v6
+   init.hand  := v7
+   string     := v8
+   ass        := 0
+   mode       := 0
+   dev1       := 0
+   dev2       := 0
+   hand       := 0
+   d1.loaded  := FALSE
+   d2.loaded  := FALSE
+   h.loaded   := FALSE
+   segl       := vs
+   is.comm    := dev.arg=0
+
+   TEST is.comm
+        THEN IF rdargs ( "DEV/A,MODE,FROM/K,VER/K", argv, 50 ) = 0 THEN
+                error  ("Bad args*N")
+        ELSE $( argv!0 := dev.arg
+                argv!1 := 0
+                argv!2 := 0
+                argv!3 := 0
+             $)
+
+   pos  :=  splitname ( name, ':', argv ! 0, 1 )
+
+   IF pos = 0  THEN  error( "Illegal device name*N" )
+
+   FOR  i = pos  TO  argv!0 % 0  DO
+   $(
+       len           :=  len + 1
+       string % len  :=  argv!0 % i
+   $)
+
+   string % 0  :=  len
+
+   UNLESS devicetask ( argv ! 0 ) = 0 DO
+          error ( "Device is already mounted*N" )
+
+   IF argv ! 2 \= 0 THEN file := argv ! 2
+
+   stream := findinput ( file )
+
+   IF stream = 0 THEN error ( "Failed to open %S*N", file )
+
+   // first the mount information file is searched for the requested
+   // device and the relevant information extracted - although all
+   // this may not be required it is easier and convenient to do it
+   // this way
+
+
+   FOR i = 0 TO 4 DO segl ! i := 0
+
+   selectinput ( stream )
+
+   $(
+      LET ch  = 0
+      LET res = rdword ()
+
+      IF res < 0 THEN
+         error ( "Device %S: not recognised*N", name )
+
+      //  The word we have just read in, should be of the form "DEV:", and
+      //  the name we have is just "DEV".
+
+      IF res > 0 THEN
+         IF compdevname ( word, name ) = 0  THEN  BREAK
+
+      ch := rdch () REPEATUNTIL ch = ';' | ch = endstreamch
+
+   $) REPEAT
+
+   rdword ()
+
+   TEST compstring ( "driver", word ) = 0
+   THEN
+     $(
+        rdword ()
+
+        TEST compstring ( "nonres", word ) = 0
+        THEN
+          $( // non-resident devices
+
+             checkword ( "devs" )
+
+             num.dev := rdnumb ()
+
+             SWITCHON num.dev INTO
+             $(
+                DEFAULT : error ( "Invalid number of devices*N" )
+
+                CASE 1  : dev1 := rdnumb ()
+
+                          ENDCASE
+
+                CASE 2  : dev1 := rdnumb ()
+                          dev2 := rdnumb ()
+
+                          ENDCASE
+             $)
+
+             checkword ( "file" )
+
+             rdword ()
+
+             FOR i = 0 TO word % 0 DO file.dev1 % i := word % i
+
+             IF num.dev = 2 THEN
+             $(
+                rdword ()
+
+                FOR i = 0 TO word % 0 DO file.dev2 % i := word % i
+             $)
+             dev.res := FALSE
+          $)
+        ELSE
+          $( // resident devices
+
+             checkword ( "devs" )
+
+             num.dev := rdnumb ()
+
+             UNLESS 1 <= num.dev <= 2 DO
+                    error ( "Invalid number of devices*N" )
+
+             dev1    := rdnumb ()
+
+             IF num.dev = 2 THEN dev2 := rdnumb ()
+
+             IF ( info ! info.devices ! dev1 = 0 ) |
+                ( [ num.dev = 2 ] & [ info ! info.devices ! dev2 = 0 ] )
+                THEN
+                     error ( "Resident device not loaded*N" )
+
+             dev.res := TRUE
+          $)
+        rdword ()
+     $)
+   ELSE num.dev := 0
+
+   UNLESS compstring ( "handler", word ) = 0 DO
+               error ( "word *"handler*" expected but %S found*N", word )
+
+
+   rdword ()
+
+   hand.res := TRUE
+
+   IF compstring ( "nonres", word ) = 0 THEN
+   $(
+      checkword ( "file" ) ; rdword ()
+
+      FOR i = 0 TO word % 0 DO file.hand % i := word % i
+
+      IF argv ! 3 \= 0 THEN
+      $(
+         LET hpos = file.hand % 0 + 1
+
+         file.hand % hpos := '-'
+
+         FOR i = 1 TO argv ! 3 % 0 DO file.hand % ( hpos + i ) := argv ! 3 % i
+
+         file.hand % 0 := hpos + argv ! 3 % 0
+      $)
+
+      hand.res := FALSE
+   $)
+
+   checkword ( "hand" ) ; hand := rdnumb ()
+
+   IF hand.res & ( info ! info.handlers ! hand = 0 ) THEN
+      error ( "Resident handler not loaded*N" )
+
+   checkword ( "init" ) ; rdword ()
+
+   FOR i = 0 TO word % 0 DO init.hand % i := word % i
+
+   IF [ argv ! 3 \= 0 ] & [ compstring ( init.hand, "$" ) \= 0 ] THEN
+   $(
+      LET hpos = init.hand % 0 + 1
+
+      init.hand % hpos := '-'
+
+      FOR i = 1 TO argv ! 3 % 0 DO init.hand % ( hpos + i ) := argv ! 3 % i
+
+      init.hand % 0 := hpos + argv ! 3 % 0
+   $)
+
+   checkword ( "pri"    ) ; prio := rdnumb ()
+   checkword ( "stack"  ) ; stack := rdnumb ()
+   checkword ( "unit" ) ; unit := rdnumb ()
+   checkword ( "env" ) ; rdenv ()
+
+   mode := 1
+
+   IF argv ! 1 \= 0 THEN
+   $(
+      checkword ( "mode" )
+
+      $(
+         IF rdword () = 0 THEN
+            error ( "mode not found*N" )
+
+         IF compstring ( argv ! 1, word ) = 0 THEN BREAK
+
+         mode := mode + 1
+
+      $) REPEAT
+   $)
+
+   endread ()
+
+   stream := 0
+
+   // at this stage
+   // dev.res      -> resident, non-resident
+   // num.dev      -> 1 or 2
+   // dev1         -> device one offset into device info vector
+   // dev2         -> device two .....
+   // hand.res     -> resident, non-resident
+   // hand         -> handler offset into handler info vector
+   // prio         -> handler priority
+   // stack        -> handler stack size
+   // envec        -> startup environment vector
+   // mode         -> startup mode
+   // file.dev1    -> device one code file
+   // file.dev2    -> device two code file
+   // file.hand    -> handler code file
+   // init.hand    -> handler init code
+   // string       -> string argument to the device
+
+
+   // next stage is to get everything loaded
+   // and set the information into the infoormation structure
+
+   UNLESS num.dev = 0 DO
+   $(
+      TEST info ! info.devices ! dev1 = 0
+      THEN
+           loaddevice ( dev1, file.dev1 )
+      ELSE
+           info ! info.devices ! dev1 ! devinfo.cnt :=
+                  info ! info.devices ! dev1 ! devinfo.cnt + 1
+
+      d1.loaded := TRUE
+
+      IF dev2 \= 0 THEN
+         TEST
+              info ! info.devices ! dev2 = 0
+         THEN
+              loaddevice ( dev2, file.dev2 )
+         ELSE
+              info ! info.devices ! dev2 ! devinfo.cnt :=
+                     info ! info.devices ! dev2 ! devinfo.cnt + 1
+
+      IF dev2 \= 0 THEN d2.loaded := TRUE
+   $)
+
+   TEST info ! info.handlers ! hand = 0
+   THEN
+        loadhandler ( hand, file.hand )
+   ELSE
+        info ! info.handlers ! hand ! handinfo.cnt :=
+               info ! info.handlers ! hand ! handinfo.cnt + 1
+
+   segl ! 0 := 4
+   segl ! 1 := tcb ! tcb.seglist ! 1
+   segl ! 2 := tcb ! tcb.seglist ! 2
+   segl ! 3 := info ! info.handlers ! hand ! handinfo.seg
+
+
+   IF compstring ( init.hand, "$" ) \= 0 THEN
+     $(
+        LET iseg = loadseg ( init.hand )
+
+        IF iseg = 0 THEN error ( "Can't load init segment*N" )
+
+        segl ! 4 := iseg
+     $)
+
+   FOR p = prio TO prio - 100 BY -1 DO
+   $(
+      task := createtask ( segl, stack, p )
+
+      IF task \= 0 THEN BREAK
+   $)
+
+   IF task = 0 THEN error ( "Can't create hander task*N" )
+
+   // we have now loaded and initialised the devices
+   // and created the handler task - all that remains
+   // is to start it up
+
+
+   $(
+      LET devvec = VEC 1
+
+      devvec ! 0 := info ! info.devices ! dev1 ! devinfo.dev
+      devvec ! 1 := info ! info.devices ! dev2 ! devinfo.dev
+
+      IF sendpkt ( notinuse, task, action.startup, ?, ?,
+                   devvec,
+                   unit,
+                   envec, mode,
+                   string
+                 ) = 0 THEN error ( "Error in device start-up*N" )
+   $)
+
+   $(
+      LET assvec = getvec ( ass.name + name % 0 / 2 + 1 )
+
+      assvec ! ass.link   := info ! info.assignments
+      assvec ! ass.task   := task
+      assvec ! ass.dir    := 0
+
+      FOR i = 0 TO name % 0 DO ( assvec + ass.name ) % i := name % i
+
+      info ! info.assignments := assvec
+   $)
+
+   TEST is.comm
+        THEN stop(0)
+        ELSE $( selectoutput(old.cos)
+                selectinput (old.cis)
+                FOR i = 0 TO 40 DO [@globsize]![ug+i] := gsave!i
+                stop (TRUE)
+             $)
+
+   exlab :      selectoutput(old.cos)
+                selectinput (old.cis)
+                FOR i = 0 TO 40 DO [@globsize]![ug+i] := gsave!i
+                stop (FALSE)
+$)
+
+
+
+AND compdevname( devname, string )  =  VALOF
+$(
+    LET v  =  VEC 30 / bytesperword
+
+    splitname( v, ':', devname, 1 )
+
+    RESULTIS  compstring( v, string )
+$)
+
+
+
+AND loaddevice ( num, file ) BE
+$(
+   LET infovec = getvec ( devinfo.cnt )
+   AND devseg  = ?
+
+   devseg := loadseg ( file )
+
+   infovec ! devinfo.cnt := 1
+
+   TEST devseg = 0
+   THEN
+     $(
+        freevec ( infovec )
+        error   ( "Can't load device %S*N", file )
+     $)
+   ELSE
+     $(
+        infovec ! devinfo.dev := createdev ( devseg )
+
+        IF infovec ! devinfo.dev = 0 THEN
+        $(
+           unloadseg ( devseg )
+           freevec   ( infovec )
+           error     ( "Can't create device %S*N", file )
+        $)
+     $)
+
+   info ! info.devices ! num := infovec
+$)
+
+
+AND loadhandler ( num, file ) BE
+$(
+   LET infovec = getvec ( handinfo.cnt )
+
+   infovec ! handinfo.seg := loadseg ( file )
+   infovec ! handinfo.cnt := 1
+
+   IF infovec ! handinfo.seg = 0 THEN
+   $(
+      freevec ( infovec )
+      error   ( "Can't load handler %S*N", file )
+   $)
+
+   info ! info.handlers ! num := infovec
+$)
+
+
+AND rdword () = VALOF
+$(
+   MANIFEST $( max = 51 * bytesperword - 1 $)
+
+   LET ch, len = 0, 0
+
+   $(
+      ch := rdch ()
+
+      IF ch = endstreamch RESULTIS -1
+
+      IF ch = '|' DO
+         ch := rdch () REPEATUNTIL
+                       ch = '*E' | ch = '*N' | ch = ';' | ch = endstreamch
+
+   $) REPEATWHILE ch = '*E' | ch = '*N' | ch = '*S'
+
+   $(
+      IF ch = endstreamch THEN RESULTIS -1
+
+      IF ch = ';' THEN BREAK
+
+      len := len + 1
+
+      IF len > max THEN
+         formerror ( "word too long", file )
+
+      word % len := ch
+      word % 0   := len
+      ch         := rdch ()
+
+   $) REPEATUNTIL ch = '*E' | ch = '*N' | ch = '*S' | ch = ';'
+
+   unrdch ()
+
+   RESULTIS len
+$)
+
+
+AND rdnumb () = VALOF
+$(
+   LET res = rdword ()
+   LET num = 0
+   LET neg = FALSE
+
+   UNLESS res > 0 DO
+          formerror ( "number expected", file )
+
+   FOR pos = 1 TO word % 0 DO
+   $(
+      LET ch = word % pos
+
+      IF ch = '-' & pos = 1 THEN
+      $(
+         neg := TRUE
+
+         LOOP
+      $)
+
+       UNLESS '0' <= ch <= '9' DO
+              formerror ( "invalid number", file )
+
+      num := num * 10 + ch - '0'
+   $)
+
+   IF neg THEN num := - num
+
+   RESULTIS num
+$)
+
+
+AND rdenv () BE
+$(
+   LET pos, len, cnt, ch = 0, 0, 0, 0
+   LET neg = ?
+
+   rdword () ; len := word % 0
+
+   FOR i = 0 TO 30 DO envec ! i := 0
+
+   WHILE pos < len DO
+   $(
+      pos := pos + 1
+      ch  := word % pos
+
+   loop1:
+
+      IF ch = ',' THEN
+      $(
+         cnt := cnt + 1
+
+         IF cnt > 30 THEN GOTO err
+
+         LOOP
+      $)
+
+      neg := (ch = '-')
+      IF neg THEN
+      $( pos := pos+1
+         ch := word%pos
+      $)
+
+      IF '0' <= ch <= '9' THEN
+      $(
+         $(
+            envec ! cnt := envec ! cnt * 10 + ch - '0'
+
+            pos := pos + 1
+
+            IF pos > len THEN 
+            $( IF neg THEN envec ! cnt := - (envec ! cnt)
+               RETURN
+            $)
+
+            ch := word % pos
+
+         $) REPEATWHILE '0' <= ch <= '9'
+
+         IF neg THEN envec ! cnt := - (envec ! cnt)
+
+         GOTO loop1
+      $)
+
+ err: formerror ( "invalid environment" )
+
+   $)
+$)
+
+
+AND error ( f, a, b ) BE
+$(
+   LET r2  =  result2
+
+   IF is.comm THEN writef ( f, a, b )
+
+   UNLESS stream = 0 DO
+   $(
+      selectinput ( stream )
+      endread     ()
+   $)
+
+   IF d1.loaded THEN unloaddev   ( dev1 )
+   IF d2.loaded THEN unloaddev   ( dev2 )
+   IF h.loaded  THEN unloadhand  ( hand )
+
+   result2  :=  r2
+
+   TEST is.comm THEN stop     ( 20 )
+                ELSE longjump ( call.exlev, call.exlab )
+$)
+
+
+AND unloaddev ( num ) BE
+$(
+   LET lvslot = info ! info.devices + num
+   LET infov  = ! lvslot
+
+   infov ! devinfo.cnt := infov ! devinfo.cnt - 1
+
+   IF NOT dev.res & infov ! devinfo.cnt = 0 THEN
+   $(
+      unloadseg ( deletedev ( infov ! devinfo.dev ) )
+      freevec   ( infov )
+      ! lvslot := 0
+   $)
+$)
+
+
+AND unloadhand ( num ) BE
+$(
+   LET lvslot = info ! info.handlers + num
+   LET infov  = ! lvslot
+
+   infov ! handinfo.cnt := infov ! handinfo.cnt - 1
+
+   IF NOT hand.res & infov ! handinfo.cnt = 0 THEN
+   $(
+      unloadseg ( infov ! handinfo.seg )
+      freevec   ( infov )
+      ! lvslot := 0
+   $)
+$)
+
+
+AND formerror ( s ) BE
+    error ( "Error in %S - %S*N", file, s )
+
+
+AND checkword ( string ) BE
+$(
+   rdword ()
+
+   UNLESS compstring ( word, string ) = 0 DO
+          error ( "*"%S*" expected but not found*N", string )
+$)
+
+

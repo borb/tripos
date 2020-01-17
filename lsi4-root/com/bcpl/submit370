@@ -1,0 +1,86 @@
+section "SUBMIT370"
+
+get "libhdr"
+get "iohdr"
+get "ringhdr"
+get ":ring.bcpl.bsplib"   // for bsp.test.reset
+
+  // This command sends the specified files to the 370 through
+  // the SUBMIT-CS facility.
+  // Tim King Feb 81
+
+let start() be
+$(  let argv = vec 100    // Note rather large
+    let cons.in, cons.out = input(), output()
+    let bs.in, bs.out = ?, ?
+    let file.in = ?
+    let broken, failed = false, false
+
+    if rdargs(",,,,,,,,,",argv, 100 ) = 0 | argv!0=0 THEN
+    $( writes("Bad arguments*N")
+       stop(16)
+    $)
+
+    bs.in := findinput("BSP:SUBMIT-CS")
+    if bs.in = 0 then
+    $( writes("Unable to connect to 370*N")
+       stop(16)
+    $)
+    bs.out := result2
+
+    selectoutput( bs.out )
+    FOR i=0 TO 9 DO
+    $( IF (argv!i=0) | broken | failed THEN BREAK  // no more files to be sent
+       file.in := findinput(argv!i)
+       if file.in=0 then
+       $( endwrite()  // on the bytestream
+          selectinput(cons.in)
+          selectoutput(cons.out)
+          writef("Unable to open %S*NJob not sent*N",argv!i)
+          stop(16)
+       $)
+       // now copy input file to the job stream
+       selectinput(file.in)
+       $( let ch = rdch()
+          if bsp.test.reset(bs.in) then
+          $( failed := true; break $)
+          if testflags(1)
+          $( broken := true; break $)
+          if ch=endstreamch break
+          wrch(ch)
+       $) repeat
+       endread()
+    $)
+
+    // signal this is the end of the job
+
+    IF broken THEN
+    $( endwrite()  // the BSP - this will cause job to be deleted
+       selectinput(cons.in)
+       selectoutput(cons.out)
+       writes("Job deleted*N")
+       stop(8)
+    $)
+
+    unless failed do bsp.request.close( bs.out )
+
+    // get ready to accept response from 370
+    selectinput(bs.in)
+    selectoutput(cons.out)
+
+    $( let ch = rdch()     // from the 370
+       test bsp.test.reset(bs.in) then
+         writes("Job sent*N")
+       else test ch=endstreamch then break
+       else wrch(ch)
+    $) repeat
+
+    endread()   // the BSP
+    selectinput(cons.in)
+    if failed then
+    $( writes("Job not sent*N")
+       stop(8)
+    $)
+$)
+
+

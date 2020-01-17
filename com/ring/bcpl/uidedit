@@ -1,0 +1,849 @@
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*************************************************************************
+*  (C) Copyright 1981  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*            U I D   -   S E T     L I S T     E D I T O R              *
+*                                                                       *
+*************************************************************************
+**  C  Gray  Girling      COMPUTER LAB,  CAMBRIDGE           28.01.81  **
+*************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*/
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.ringhdr"
+GET "BCPL.ring"
+
+
+GLOBAL
+$(  item.space          : ssp.ug+0      // space for strings
+    item.size           : ssp.ug+1      // size of the above
+    prompting           : ssp.ug+2      // TRUE when prompting
+    aot                 : ssp.ug+3      // Active Object Table Service address
+
+// UIDset list management:
+
+    uid.list.size       : ssp.ug+4      // size = uid.list.size(l)
+    find.index          : ssp.ug+5      // i = find.index(i, l, u)
+    remove.uidset       : ssp.ug+6      // bool = remove.uidset(i, u, l)
+    insert.uidset       : ssp.ug+7      // i = insert.uidset(i, u, l)
+    equal               : ssp.ug+8      // bool = equal(v1, v2, size)
+
+// commands:
+
+    getarg              : ssp.ug+10     // bool = getarg(argspec)
+    move                : ssp.ug+11     // i = move(u, i, l)     in these specs
+    put                 : ssp.ug+12     // i = put(u, i, l)      the following
+    type                : ssp.ug+13     // type(l)               key can be used
+    type.current        : ssp.ug+14     // type.current(i, u)
+    remove              : ssp.ug+15     // i = remove(i, c, l)   i : index
+    edit                : ssp.ug+16     // i = edit(i, c, l)     u : uidset
+    refresh.current     : ssp.ug+17     // refresh.current(u)    l : uidset list
+    gettuid.current     : ssp.ug+18     // gettuid.current(u, l) p : password
+    enhance.current     : ssp.ug+19     // enhance.current(u)    t : tag
+    password            : ssp.ug+20     // password(p)
+    output.uidset       : ssp.ug+21     // output.uidset(u, p)
+    input.uidset        : ssp.ug+22     // i = input.uidset(i, c, l, p)
+    repeat.command      : ssp.ug+23     // repeat.command()
+    help.command        : ssp.ug+24     // help.command(commands.string)
+$)
+.
+
+
+
+
+SECTION "UIDedit1"
+GET ""
+GET "BCPL.ringssp"
+
+
+
+
+
+
+LET start() BE
+$(  LET arg = VEC 30
+    TEST rdargs("service", arg, 30)=0 THEN
+    writef("Illegal command line syntax*N") ELSE
+    TEST 0~=dr.rctype(dr.initialise()) THEN
+    writes("ring handler not loaded!*N") ELSE
+    $(  LET aot.space = VEC sv.upb
+        LET aot.name = (arg!0=0 | arg!0%0=0 -> "AOT-1", arg!0)
+        LET uidsetlist = rootnode!rtn.info!rtninfo.ring + ri.uidset
+        aot := aot.space
+        TEST !uidsetlist=0 THEN
+        writes("no one logged on*N") ELSE
+        TEST 0=dr.lookup(aot.name, aot) THEN dr.writeringerror(dr.result2) ELSE
+        $(  LET prompt="*C="
+            LET commands="m=move,p=put,t=type,c=current,rem=remove,ed=edit,*N*
+                         *   =r=refresh,g=gettuid,e=enhance,pw=password,*N*
+                         *   =o=output,i=input,rep=repeat,q=quit,?=help"
+            LET pw = TABLE 0,0,0  // 'pw' is a three element vector holding nine
+                                  // characters of a password in Radix 50 format
+            LET current = VEC capsize-1
+            LET current.index = 1
+            LET quiting = FALSE
+            LET item = VEC 40
+            LET default.tag = consoletask
+            find.index(current.index, !uidsetlist, current)
+            item.space := item
+            item.size := 40
+            prompting := TRUE
+            writes("UID set editor*N")
+            WHILE ~quiting DO
+            $(  quiting := ~ask(prompt, item, item.size)
+                UNLESS quiting THEN
+                SWITCHON findarg(commands, item) INTO
+                $(  CASE -1:
+                        getarg("no such command! nothing")
+                        writes("unknown command*N")
+                        ENDCASE
+                    CASE 0:     // move
+                        current.index :=
+                            move(current, current.index, !uidsetlist)
+                        ENDCASE
+                    CASE 1:     // put
+                        current.index :=
+                            put(current, current.index, !uidsetlist)
+                        ENDCASE
+                    CASE 2:     // type
+                        type(!uidsetlist)
+                        ENDCASE
+                    CASE 3:     // current
+                        type.current(current.index, current)
+                        ENDCASE
+                    CASE 4:     // remove
+                        current.index :=
+                            remove(current.index, current, !uidsetlist)
+                        ENDCASE
+                    CASE 5:     // edit
+                        current.index :=
+                            edit(current.index, current, !uidsetlist)
+                        ENDCASE
+                    CASE 6:     // refresh
+                        refresh.current(current)
+                        ENDCASE
+                    CASE 7:     // gettuid
+                        gettuid.current(current, default.tag, !uidsetlist)
+                        ENDCASE
+                    CASE 8:     // enhance
+                        enhance.current(current, default.tag, !uidsetlist)
+                        ENDCASE
+                    CASE 9:     // password
+                        password(pw)
+                        ENDCASE
+                    CASE 10:    // output
+                        output.uidset(current, pw)
+                        ENDCASE
+                    CASE 11:    // input
+                        current.index :=
+                           input.uidset(current.index, current, default.tag,
+                                        !uidsetlist, pw)
+                        ENDCASE
+                    CASE 12:    // repeat
+                        repeat.command()
+                        ENDCASE
+                    CASE 13:    // quit
+                        getarg("goodbye")
+                        quiting := TRUE
+                        ENDCASE
+                    CASE 14:    // help
+                        help.command(commands, default.tag)
+                        ENDCASE
+                    DEFAULT:
+                        writes("strange command code! quitting")
+                        quiting := TRUE
+                $)
+            $)
+            tidyup()
+        $)
+    $)
+$)
+
+
+
+AND ask(prompt, item, item.size) = VALOF
+$(  // request line with prompt 'prompt', put first string on reply
+    // line in 'item' (which has size 'item.size' words).
+    LET needs.prompt = (unrdch() -> rdch()='*N', TRUE)
+    LET eof = FALSE
+    LET rc=?
+    $(  IF needs.prompt & prompting THEN writef("%S *E",prompt)
+    $) REPEATUNTIL VALOF
+    $(  rc := rditem(item, item.size)
+        needs.prompt := FALSE
+        IF rc=0 THEN
+        $(  LET ch=rdch()
+            needs.prompt := (ch='*N')
+            eof:=(endstreamch=ch)
+        $)
+        IF (rc<0 | rc=2) & ~eof THEN getarg("illegal item! nothing")
+        IF rc<0 | rc=2 THEN writes("illegal item*N")
+        RESULTIS rc=1 | eof
+    $)
+    UNLESS rc=1 THEN writes("End Of File*N")
+    RESULTIS ~eof
+$)
+
+
+
+
+
+//
+//                      UID  list   manipulation
+//
+
+
+
+
+
+AND uid.list.size(uid.list.root) = VALOF
+$(  // returns the number of UID sets in the list 'uid.list.root'
+    // This must be done indivisably since the list might be being
+    // modified elsewhere.
+    LET old.priority = tcb!tcb.pri
+    LET number.of.sets=0
+    changepri(taskid, maxint)
+    WHILE uid.list.root~=0 DO
+    $(  number.of.sets := number.of.sets + 1
+        uid.list.root := !uid.list.root
+    $)
+    WHILE 0=changepri(taskid, old.priority) DO old.priority := old.priority+1
+    RESULTIS number.of.sets
+$)
+
+
+
+AND find.index(index, uid.list.root, uidset) = VALOF
+$(  // returns the address of the 'index'th UID set in the
+    // list 'uid.list.root' or zero if there is no 'index'th entry.
+    // 'uid.list.root' is guaranteed not to be zero.
+    // This operation must be done indivisably.
+    LET old.priority = tcb!tcb.pri
+    changepri(taskid, maxint)    // this bit must be uninterruptable!
+    WHILE index>1 & uid.list.root~=0 DO
+    $(  index := index-1
+        uid.list.root := !uid.list.root
+    $)
+    IF uid.list.root~=0 THEN
+    FOR i=0 TO capsize-1 DO uidset!i := (uid.list.root+1)!i
+    WHILE 0 = changepri(taskid, old.priority) DO old.priority := old.priority+1
+    RESULTIS (uid.list.root=0 -> 0, uid.list.root+1)
+$)
+
+
+
+AND remove.uidset(index, uidset, uid.list.root) = (index<=1 -> FALSE, VALOF
+$(  // Takes the UID set 'uidset' which is checked to be
+    // the 'index'th element in the list 'uid.list.root'
+    // out of the list.
+    // It is illegal to remove the first element from this
+    // list because it is the user's identification.
+    // This operation must also be done atomically.
+    LET old.priority = tcb!tcb.pri
+    LET ans=FALSE               // TRUE if removal successfull
+    LET found.uidset = ?
+    LET dump = VEC capsize-1    // vector to write found info in (not used)
+    changepri(taskid, maxint)   // to make this operation indivisable
+    found.uidset := find.index(index-1, uid.list.root, dump)
+    UNLESS found.uidset=0 | (found.uidset-1)!0=0 THEN
+    IF equal((found.uidset-1)!0 + 1, uidset, capsize) THEN
+    $(  (found.uidset-1)!0 := !((found.uidset-1)!0)
+        ans:=TRUE
+    $)
+    WHILE 0=changepri(taskid, old.priority) DO old.priority := old.priority+1
+    RESULTIS ans
+$) )
+
+
+
+
+AND insert.uidset(uidset, uid.list.root) = VALOF
+$(  // Inserts the UID set 'uidset' at the end of the UID set list
+    // 'uid.list.root' and returns the its index number.
+    // This operation must be done indivisably.
+    // 'uid.list.root' is guarenteed not to be zero.
+    LET old.priority = tcb!tcb.pri
+    LET new.uidsetlist = getvec(capsize)
+    LET delete.new = FALSE
+    LET index = 1
+    changepri(taskid,maxint)        // for indivisablity
+    WHILE !uid.list.root~=0 & ~equal((uid.list.root+1), uidset, capsize) DO
+    $(  index := index + 1
+        uid.list.root := !uid.list.root
+    $)
+    TEST equal((uid.list.root+1), uidset, capsize) THEN delete.new := TRUE ELSE
+    TEST new.uidsetlist = 0 THEN index:=-1 ELSE
+    $(  new.uidsetlist!0 := 0
+        FOR i=1 TO capsize DO new.uidsetlist!i := uidset!(i-1)
+        !uid.list.root := new.uidsetlist
+        index := index+1
+    $)
+    WHILE 0=changepri(taskid, old.priority) DO old.priority := old.priority+1
+    IF delete.new THEN freevec(new.uidsetlist)
+    RESULTIS index
+$)
+
+
+
+
+AND equal(v1, v2, size) = VALOF
+$(  LET i=0
+    WHILE i<size & v1!i = v2!i DO i:=i+1
+    RESULTIS i=size
+$)
+
+
+
+
+
+
+
+.
+
+
+SECTION "UIDedit2"
+
+GET ""
+GET "BCPL.synfind"
+GET "BCPL.uidtostring"
+GET "BCPL.gethex"
+GET "String-To-Number"
+
+
+
+
+
+
+//
+//                        Command  Procedures
+//
+
+
+
+
+
+LET getarg(arg.string) = VALOF
+$(  // uses the globals 'item.space' and 'item.size' as space
+    // for "rdargs" string.  Returns TRUE if call is successfull
+    LET rc = (0~=rdargs(arg.string, item.space, item.size))
+    IF ~rc THEN writes("Syntax error*N")
+    RESULTIS rc
+$)
+
+
+
+AND help.command(commands, tag) BE
+$(  MANIFEST $( allow.logging = #X02 $)   // HELP option bit
+    TEST rdargs(",,,,,,,,,,,,,", item.space+3, item.size-3)=0 THEN
+        writes("Too many arguments for HELP*N") ELSE
+    $(  item.space!0 := 16           // maximum number of keys
+        item.space!1 := "UIDEDIT"
+        item.space!2 := "COMMAND"
+        TEST item.space!3=0 THEN
+        $(  writes("Briefly the commands are as follows:*N")
+            writef("%S*N", commands)
+            writes("Try HELP <command> for more background or*N")
+            writes("<command> ?  for syntax (RDARGS string)*N")
+            writef("Default user tag is %N*N", tag)
+        $) ELSE
+        // call HELP with 16 potential arguments, the default HELP
+        // directory, no listing file, no tracing and allowing logging
+        // of unsucessfull requests
+        callseg("SYS:C.HELP", item.space, 0, 0, allow.logging)
+    $)
+$)
+
+
+
+
+AND repeat.command() BE
+$(  STATIC $(  repeats=0  $)
+    IF getarg("times") THEN
+    IF item.space!0=0 | VALOF
+    $(  LET ans = string.to.number(item.space!0)
+        UNLESS ans THEN
+        writef("'%S' is not a valid repeat count*N",item.space!0)
+        RESULTIS ans
+    $) THEN
+    $(  LET repeat.count = (item.space=0 -> 0, result2)
+        TEST testflags(1) | testflags(2) THEN
+        $(  writes("****** BREAK*N")
+            repeats:=0
+        $) ELSE
+        $(  IF repeats=0 THEN repeats:=repeat.count
+            repeats := repeats-1
+            UNLESS repeats=0 THEN WHILE unrdch() DO LOOP
+        $)
+        prompting := (repeats=0)
+    $)
+$)
+
+
+
+
+AND move(current, current.index, uid.list.root) = VALOF
+$(  // fills UIDset 'current' with the Nth UID in 'uid.list.root'
+    // 'N' is read from the command line.
+    // 'Current' is the 'current.index'th UID in the list.
+    IF getarg("UIDsetNumber/a") THEN
+    TEST string.to.number(item.space!0) THEN
+    $(  LET index=result2
+        LET new.current =
+            (index>0 -> find.index(index, uid.list.root, current), 0)
+        TEST new.current=0 THEN writef("%N out of range*N",index)
+        ELSE current.index := index
+    $) ELSE writef("'%S' is not a number*N", item.space!0)
+    RESULTIS current.index
+$)
+
+
+
+AND put(current, current.index, uid.list.root) = VALOF
+$(  // puts UIDset 'current' which was the 'current.index'th UID in
+    // 'uid.list.root' into that list.
+    LET tag = current!cap.usertag
+    IF getarg("tag") THEN
+    IF (item.space!0=0 -> TRUE, VALOF
+    $(  LET ok = TRUE
+        TEST string.to.number(item.space!0) THEN tag := result2 ELSE
+        $(  writef("'%S' is not a number*N", item.space!0)
+            ok := FALSE
+        $)
+        RESULTIS ok
+    $)) THEN
+    $(  LET index = ?
+        LET save.tag = current!cap.usertag
+        current!cap.usertag := tag
+        index := insert.uidset(current, uid.list.root)
+        TEST index<=0 THEN writes("insertion failed*N") ELSE
+        current.index := index
+        current!cap.usertag := save.tag
+    $)
+    RESULTIS current.index
+$)
+
+
+
+AND type(uid.list.root) BE
+$(  // types out each UID set in the list 'uid.list.root'
+    // care is taken to ensure that tragedy does not result
+    // if the list is being simultaneously updated elsewhere
+    getarg("nothing")
+    FOR i=1 TO uid.list.size(uid.list.root) DO
+    $(  LET uidset = VEC capsize-1
+        LET found = (0~=find.index(i, uid.list.root, uidset))
+        IF found THEN type.uidset(i, uidset, FALSE)
+    $)
+$)
+
+
+
+AND type.current(index, uidset) BE
+$(  // types out just the UID set 'uidset' optionally displaying its
+    // secret parts!
+    IF getarg("Tuid=All/s") THEN
+    $(  LET all = (item.space!0 ~= 0)
+        type.uidset(index, uidset, all)
+        IF all THEN
+        $(  LET tuid = uidset+cap.tuid
+            LET tpuid = uidset+cap.tpuid
+            writef("     TUID  %X4%X4%X4%X4              TPUID  %X4%X4%X4%X4*N",
+                    get2bytes(tuid, 0), get2bytes(tuid, 1),
+                    get2bytes(tuid, 2), get2bytes(tuid, 3),
+                    get2bytes(tpuid, 0), get2bytes(tpuid, 1),
+                    get2bytes(tpuid, 2), get2bytes(tpuid, 3))
+        $)
+    $)
+$)
+
+
+
+
+AND type.uidset(index, uidset, all.hex) BE
+TEST index<0 THEN writef("no current UID set*N") ELSE
+$(  TEST index=0 THEN writes("<c>: ") ELSE writef("%i3: ",index)
+    write.puid(uidset, 17, all.hex)
+    write.auty(uidset, 17, all.hex)
+    write.tuid(uidset, 17)
+    writes(", ")
+    write.tpuid(uidset, 17)
+    writef(" TAG %N*N", uidset!cap.usertag)
+$)
+
+
+
+AND write.puid(uidset, len, all.hex) BE
+    (all.hex -> writehexp, writep)(uidset+cap.puid, len)
+
+
+
+AND write.auty(uidset, len, all.hex) BE
+    (all.hex -> writehexp, writep)(uidset+cap.auty, len)
+
+
+
+AND write.tuid(uidset, len) BE
+$(  IF verify(aot, uidset)=#XDFD0 THEN writes("not ")
+    writes("verifiable")
+$)
+
+
+
+AND write.tpuid(uidset, len) BE
+$(  LET tpuid=uidset+cap.tpuid
+    TEST tpuid!0=0 & tpuid!1=0 & tpuid!2=0 & tpuid!3=0 THEN
+    writes("not owned") ELSE
+    $(  writes("TPUID ")
+        IF identify(aot, uidset)~=0 THEN writes("not ")
+        writes("valid")
+   $)
+$)
+
+
+
+AND writep(puid, len) BE
+$(  LET string = synfind(puid, to.name.domain, uidtostring(puid))
+    writes(string)
+    FOR i=string%0+1 TO len DO wrch('*S')
+$)
+
+
+
+AND writehexp(puid, len) BE
+$(  LET string = uidtostring(puid)
+    writes(string)
+    FOR i=string%0+1 TO len DO wrch('*S')
+$)
+
+
+
+AND remove(index, uidset, uid.list.root) = VALOF
+$(  // removes the UID set 'uidset' from the list 'uid.list.root'
+    // checking first that it is the 'index'th set in the list
+    LET success = remove.uidset(index, uidset, uid.list.root)
+    getarg("nothing")
+    IF ~ success THEN writes("removal unsucessfull*N")
+    RESULTIS (success -> 0, index)
+$)
+
+
+
+AND refresh.current(current) BE
+$(  // refreshes 'current' with a hex number of seconds read off the
+    // command line.
+    LET timeout = VEC 1
+    IF getarg("HexNumberOfSeconds/a") THEN
+    TEST gethex(item.space!0, timeout, 4/bytesperword) THEN
+        IF 0~=refresh(aot, current, timeout) THEN dr.writeringerror(dr.result2)
+    ELSE writes("'%S' is not a 24 bit hex number*N", item.space!0)
+$)
+
+
+
+AND gettuid.current(current, tag, uid.list.root) BE
+$(  // uses the UID set 'current' to get a UID set for a PUID read from
+    // the command line under its authentity, the UID set given is put into the
+    // list 'uid.list.root'.  The PUID to be activated is found from
+    // the command line.  The timeout is also specified.
+    LET timeout = VEC 1
+    IF getarg("PUID/a,HexNumberOfSeconds/a") THEN
+    $(  LET new.uidset = VEC capsize
+        TEST get.puid(item.space!0, new.uidset+cap.puid) THEN
+            TEST gethex(item.space!1, timeout, 4/bytesperword) THEN
+                TEST 0~=gettuid(aot, new.uidset, current, 
+                                timeout!(4/bytesperword-1) & #XFFFF) THEN
+                    dr.writeringerror(dr.result2)
+                ELSE 
+                $(  new.uidset!cap.usertag := tag
+                    IF insert.uidset(new.uidset, uid.list.root)<=0 THEN
+                    writes("insertion failed*N")
+                $)
+            ELSE writef("'%S' is not a 24 bit hex number*N", item.space!1)
+        ELSE writef("'%S' is not a valid PUID*N", item.space!0)
+    $)
+$)
+
+
+
+AND enhance.current(current, tag, uid.list.root) BE
+$(  // enhances the UID set refered to by an index number with a PUID read
+    // from the command line under the authentity UID set given in 'current'.
+    // The timeout is also specified.
+    LET timeout = VEC 1
+    IF getarg("UIDset=Index/a,PUID/a,HexNumberOfSeconds/a") THEN
+    TEST ~string.to.number(item.space!0) THEN
+    writef("'%S' is not an index number*N", item.space!0) ELSE
+    $(  LET index = result2
+        LET enhcee = VEC capsize        // UID set being enhanced
+        LET priv = VEC capsize          // UID set being created
+        LET found =
+            (index>0 -> 0~=find.index(index, uid.list.root, enhcee), FALSE)
+        TEST ~found THEN
+        writes("Can't find UID set to be enhanced*N") ELSE
+        TEST get.puid(item.space!1, priv+cap.puid) THEN
+            TEST gethex(item.space!2, timeout, 4/bytesperword) THEN
+                TEST 0~=enhance(aot, enhcee, priv, current, 
+                                timeout!(4/bytesperword-1) & #XFFFF) THEN
+                dr.writeringerror(dr.result2) ELSE
+                $(  priv!cap.usertag := tag
+                    IF insert.uidset(priv, uid.list.root)<=0 THEN
+                    writes("insertion failed*N")
+                $)
+            ELSE writef("'%S' is not a 24 bit hex number*N", item.space!2)
+        ELSE writef("'%S' is not a valid PUID*N", item.space!1)
+    $)
+$)
+
+
+
+AND edit(index, current, uid.list.root) = VALOF
+$(  // used to manualy create a UID set for the list in 'current'
+    // or to edit the UID set already there.
+    IF getarg("TUID,TPUID,AUTY,PUID,TAG") THEN
+    $(  LET changed = FALSE
+        LET uid = TABLE cap.tuid, cap.tpuid, cap.auty, cap.puid, cap.usertag
+        LET proc = VEC 4
+        LET error = VEC 4
+        proc!0, proc!1, proc!2, proc!3, proc!4 := 
+            get.tuid, get.tuid, get.puid, get.puid, get.tag
+        error!0, error!1, error!2, error!3, error!4 := 
+            "TUID", "TPUID", "AUTY", "PUID", "TAG"
+        FOR arg=0 TO 4 DO
+        TEST item.space!arg~=0 & ~(proc!arg)(item.space!arg, current+uid!arg)
+        THEN writef("Bad %S*N", error!arg) ELSE
+        changed := changed | (item.space!arg~=0)
+        IF changed THEN index := 0
+    $)
+    RESULTIS index
+$)
+
+
+
+AND password(pw) BE
+$(  // manages a password which is used in coding and decoding
+    // UID sets sent too and from files.
+    // Password is expected in two halves to maximise likelyhood of
+    // filling the password vector 'pw'
+    // If neither PW1 nor PW2 are set a null password is assumed.
+    // A null password gives all zeroes.
+    IF getarg("Check/s") THEN
+    $(  LET check = (item.space!0~=0)
+        writes("Password: *E")
+        IF getarg("PW1=Password,PW2=Password") THEN
+        $(  LET new.pw = VEC 2
+            item.space!0 := (item.space!0=0 -> "", item.space!0)
+            item.space!1 := (item.space!1=0 -> "", item.space!1)
+            TEST ~getpwval(item.space!0, item.space!1, new.pw) THEN
+            writes("Syntax error in password*N") ELSE
+            TEST ~check THEN
+            FOR i=0 TO 2 DO pw!i := new.pw!i ELSE
+            TEST equal(new.pw, pw, 3) THEN
+            writes("password matches*N") ELSE
+            writes("bad password*N")
+        $)
+    $)
+$)
+
+
+
+
+
+AND pack(ch, index, packvec) = VALOF
+$(  LET chval= ('A'<=ch<='Z' -> ch-'A'+11,
+                'a'<=ch<='z' -> ch-'a'+11,
+                '0'<=ch<='9' -> ch-'0'+1,
+                ch='*S' -> 0,
+                ch='.'  -> 37,
+                ch='-'  -> 38,
+                ch='**' -> 39, -1)
+    LET i = index/3
+    UNLESS chval<0 THEN packvec!i := 40*packvec!i + chval
+$)
+
+
+
+AND getpwval(pw1, pw2, packvec) = VALOF
+$(  LET i=1
+    LET max.size = pw1%0 + pw2%0
+    LET max = (9 > max.size -> max.size, 9)
+    LET badch = FALSE
+    LET starti = i
+    LET arg = 0
+    LET strvec = VEC 2
+    strvec!0, strvec!1, strvec!2 := pw1, pw2, "            "
+    WHILE ~badch & i<=max & arg<3 DO
+    $(  LET string = strvec!arg
+        WHILE ~badch & i<=max & i-starti+1<=string%0 DO
+        $(  badch := pack(string%(i-starti+1), i, packvec)
+            i := i+1
+        $)
+        starti := i
+        arg := arg+1
+    $)
+    RESULTIS ~badch
+$)
+
+
+
+AND output.uidset(current, pw) BE
+$(  // writes UID set 'current' out to a file (given on the command line).
+    // it is coded with 'pw' for security.
+    IF getarg("File/a") THEN
+    $(  LET saveout = output()
+        LET out = findoutput(item.space!0)
+        TEST out=0 THEN writef("Can't open '%S' for output*N",item.space!0) ELSE
+        $(  LET temp = VEC capsize-1    // holds coded version of 'current'
+            LET tuid = temp+cap.tuid
+            LET tpuid = temp+cap.tpuid
+            FOR i=0 TO capsize-1 DO temp!i := current!i
+            FOR i=1 TO 3 DO put2bytes(tuid, i, get2bytes(tuid, i) + pw!(i-1))
+            FOR i=1 TO 3 DO put2bytes(tpuid, i, get2bytes(tpuid, i) + pw!(i-1))
+            selectoutput(out)
+            FOR i=0 TO capsize-1 DO
+            $(  LET t = get2bytes(temp, i)
+                wrch(t >> 8)
+                wrch(t & #XFF)
+            $)
+            endwrite()
+            selectoutput(saveout)
+        $)
+    $)
+$)
+
+
+
+AND input.uidset(index, current, tag, uid.list.root, pw) = VALOF
+$(  // reads a UID set from a given file, decoding it with
+    // 'pw' for security.  'Current' is changed to point at
+    // the new UID set if the transfer was a success.
+    LET success = FALSE
+    IF getarg("File/a") THEN
+    $(  LET savein = input()
+        LET in = findinput(item.space!0)
+        TEST in=0 THEN writef("Can't open '%S' for input*N",item.space!0) ELSE
+        $(  LET temp = VEC capsize-1    // for keeping possibly dud UID set
+            LET tuid = temp+cap.tuid
+            LET tpuid= temp+cap.tpuid
+            selectinput(in)
+            FOR i=0 TO capsize-1 DO
+            $(  LET t = rdch()
+                t := (t<<8) + rdch()
+                put2bytes(temp, i, t)
+            $)
+            TEST rdch()=endstreamch THEN
+            $(  success := TRUE
+                index := 0
+                FOR i=1 TO 3 DO put2bytes(tuid, i, get2bytes(tuid, i) - pw!(i-1))
+                FOR i=1 TO 3 DO put2bytes(tpuid, i, get2bytes(tpuid, i)- pw!(i-1))
+                FOR i=0 TO capsize-1 DO current!i := temp!i
+                current!cap.usertag := tag
+            $)
+            ELSE writes("Bad input file*N")
+            endread()
+            selectinput(savein)
+        $)
+    $)
+    RESULTIS index
+$)
+
+
+
+AND get.puid(string, uid) = VALOF
+$(  LET ans = gethex(string, uid, uidsize)
+    UNLESS ans THEN
+    $(  LET u = synfind(string, from.name.domain, 0)
+        UNLESS u=0 THEN
+        $(  ans:=TRUE
+            FOR i=0 TO uidsize-1 DO uid!i := u!i
+        $)
+    $)
+    RESULTIS ans
+$)
+
+
+
+AND get.tuid(string, uid) = gethex(string, uid, uidsize)
+
+
+
+AND get.tag(string, lv.tag) = VALOF
+$(  LET ans = string.to.number(string)
+    IF ans THEN !lv.tag := result2
+    RESULTIS ans
+$)
+
+
+
+
+AND tidyup() = synfind(0)
+
+
+
+
+
+.
+
+
+
+SECTION "UIDedit3"
+
+GET ""
+
+
+
+//
+//                 A O T   Interface   Procedures
+//
+
+
+GET "BCPL.writeerror"
+GET "BCPL.verify"
+GET "BCPL.identify"
+GET "BCPL.refresh"
+GET "BCPL.gettuid"
+GET "BCPL.enhance"
+                      
+

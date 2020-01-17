@@ -1,0 +1,20 @@
+.k from/a,dir,to/a/k
+edit sys:s.copyall t:copyall1
+g/^fr^/<from>/ g/^to^/<to>/  df/.k dir/  f/.k a/ o t:copyall2  w
+c t:copyall1 <from><dir>
+delete t:copyall1 t:copyall2 t:1 t:2
+.dot `
+Quit
+.k dir/a
+ex <dir> to t:1
+.bra `
+edit t:1
+nb\\.k zzz/k.def zzz \sb\\8>'9>10# e\^fr^\\pa\"\'60#nb\\c t:copyall2 "<zzz>"\0"
+w
+c t:1
+.k a##,b##,c##,,,,,,,,
+.def c## +
+IF NOT EQ <c##> dir;copy ^fr^<a##>.<b##> ^to^<a##>.<b##>
+IF EQ <c##> dir;createdir ^to^<a##>.<b##>;c t:copyall1 ^fr^<a##>.<b##>
+
+

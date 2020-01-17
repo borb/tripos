@@ -1,0 +1,1431 @@
+                SECTION "SEND"
+
+$<COMMAND       NEEDS "RDFORM"          $>COMMAND
+
+                GET "header"
+                GET "TERMHDR"
+//$<COMMAND'
+                GET "CURHDR"            //$>COMMAND'
+                GET "iohdr"
+$<COMMAND       GET "MANHDR"            $>COMMAND
+//$<COMMAND'    GET "bcp.rdform"        $>COMMAND'
+$<COMMAND       GET "BCPL.puidoffile"
+$>COMMAND       GET "BCPL.findstringin"
+$$SMALL         := $$LSI4TRIPOS & $$COMMAND
+$$FEWHEADERS    := $$LSI4TRIPOS
+//------------------------------------------------------------------------------
+//
+//      This code is awful, but it is still a single source.
+//
+//      There are three modes of operation:
+//              1)      As a TRIPOS command             $$COMMAND = TRUE
+//              2)      As the mailserver
+//              3)      As a mail demon                 $$DEMON   = TRUE,
+//                                                      INTERACTIVE = FALSE
+//
+//      Note that the TRIPOS command does not do Distribution list expansion,
+//      and does not generate PUIDS.
+//
+//      Except as a demon, the action is:
+//              Read the header,
+//              read the text, during which the header may be altered,
+//              process the header (i.e. make the SSP for TRIPOS, or PUIDS)
+//      This is controlled by expand.puids .late/.early
+//
+//------------------------------------------------------------------------------
+$<COMMAND'
+STATIC $( draft.exists = 0 $)
+$>COMMAND'
+MANIFEST
+$(      y.to            = 0
+        y.cc            = y.to          +1
+        y.bcc           = y.cc          +1
+        y.replyto       = y.bcc         +1
+        y.switches      = y.replyto     +1
+$<FEWHEADERS
+        y.subject       = y.switches    +1
+        y.after.last    = y.subject     +1
+$>FEWHEADERS
+$<FEWHEADERS'
+        y.subject.min   = y.switches    +1
+        y.comment       = y.switches    +1
+        y.from          = y.comment     +1
+        y.subject.max   = y.from        +1
+        y.after.last.min= y.subject.min +1
+        y.after.last.max= y.subject.max +1
+$>FEWHEADERS'
+$)
+
+LET new.send(Text.file, interactive, users, cc, bcc, subject, immed,
+        mode, replyto, forward, bits, header, messageid, replyid, via.name, 
+        from, comment, end) = VALOF
+$(   MANIFEST
+    $(  expand.puids.early      = TRUE
+        expand.puids.late       = FALSE
+        expand.puids.now        = 1
+    $)
+    // Carry out a mail server send command.  "Interactive" is a boolean
+    // specifying whether the command has been called by the mail Demon (with
+    // no logged on user) or by the dynamic mailserver (with a normal BSP
+    // session).  If "interactive" is true then the message text file will
+    // be prompted for from the console, otherwise "text.file" should describe
+    // a suitable file.
+    //
+    // MODE is used by the command version -
+    //    1)    No file at all
+    //    2)    user gave PUID
+    //    3)    This program created T:MAIL-SEND-Tdd from *
+    //    4)    This program created T:MAIL-SEND-Tdd from a file
+    //    5)    Existing file used ...
+    //
+    //    3)    This program created :RING.MAIL.Sxx-Tdd from *
+    //    4)    This program created :RING.MAIL.Sxx-Tdd from a file
+    //
+    // "Users", "cc", "bcc" and "subject" should point to appropriate strings.
+    //
+    // "immed" is the text file as a string.
+    //
+    // "Replyto" is the person to whom all reples are sent.
+    //
+    // "forward" is ???. (currently use to indicate that HEADER is FORWARD(+ve),
+    // ERROR(0), or INSERT(-2)
+
+    //
+    // "header" is a file descriptor with the PUID only filled in, if a header
+    // was supplied, else Zero.
+    // May be used in FORWARD mode, or if (temp) forward=0 -> ERROR mode.
+    // In the first case, copy it in, otherwise, put header.file in ERROR,
+    // and header in header.file !!
+    //
+    // messageid is Zero, or is the offset of the messageid required to be
+    // forwarded, within the SSP block. If so, look up that message in the
+    // user's space (if it's still there !!), and send it, prefixed as necc.
+    //
+    // replyid is Zero, or the string for 'In-reply-to:'
+    //
+    // The result is false only if the send cannot be attempted (due to the
+    // map service being down).
+    // For TRIPOS, it may be false if IMMED and TEXT given.
+    // If interactive -> the user abandoned
+
+    // Expand.puid may be .late -> Not yet, .early -> now
+    //  .now ->
+    // .? -> NOT SC, so DO read it all in the first time round
+
+    LET char            = ?
+    LET best.subject    = 0
+    LET out             = $<COMMAND 0 $>COMMAND $<COMMAND' ? $>COMMAND'
+    LET switches        = ?
+    LET file.name       = ?
+    LET resent          = FALSE
+$<COMMAND'
+    LET null.file       = VEC file.desc.size
+    LET remote.file     = VEC file.desc.size
+    LET name            = VEC 80
+    LET many.sends.to.one.user  = FALSE
+    LET expand.puids    = expand.puids.late
+    LET i               = 0
+    LET user.count      = 0
+    LET s               = ?
+    LET header.size     = 0
+    LET text.size       = 0
+    LET error.bytes     = 0     // Also indicates ERROR file present
+
+    Zap.file(null.file)
+    Zap.file(remote.file)
+    remote.machines.bits        := 0
+$>COMMAND'
+$<COMMAND
+    LET txbuff          = get.temp.vec ( 100/rwpw )
+    LET tripos.file     = VEC 3/rwpw
+    LET saveout         = output()
+    LET workfile.created= FALSE
+    LET tlen            = 2
+    LET source.stream   = 0
+    LET rc              = 0
+    LET err.string      = "??"
+    LET base.y          = terminal.depth-Remaining.mail.count-6-
+                                (mail.count>ml.size -> 1,0) + (mail.count=0-> 2,0)
+    LET problem         = users=0 -> base.y, base.y-3
+
+//R LET workfile        = ":RING.MAIL.Sxx-tdd"
+    LET workfile        = "T:mail-send-tdd"
+
+    workfile % (workfile%0)     := taskid REM 10 + '0'
+    workfile % (workfile%0-1)   := taskid  /  10 + '0'
+//R $(  LET station     = ROOTNODE ! RTN.info ! rtninfo.ring ! ri.myaddr
+//R     LET hex (ch) = ch<10 -> (ch+'0'), (ch+'A'-10)
+//R     workfile % (workfile%0-4)       := hex( station         & 15)
+//R     workfile % (workfile%0-5)       := hex((station >> 4)   & 15)
+//R $)
+
+    UNLESS immed=0
+    $(  UNLESS text.file=0
+        $(  Writef("You can Either have immediate data Or a file*N")
+            cur.init(FALSE)
+            RESULTIS FALSE
+        $)
+        mode := 1                       // No file ....
+    $)
+$>COMMAND
+
+    // End of argument list is marked with -1 for future expansion.
+    FOR i = @users to @end
+                IF !I = -1 $( FOR ptr = I TO @end DO !ptr := 0; BREAK $)
+    switches    := 0    //bits=4 -> "PUBLIC ", 0
+$<COMMAND'
+    // Use existing work file caches and "list.puidfile" but create a new
+    // "header.file"
+    // "Send.file" will contain the whole message for interactive sessions, but
+    // only the header otherwise.
+    create.file(root, workfile.base+workfile.remote.slot, remote.file, FALSE)
+    remote.file!next.write      := 50     // Leave romm for tripos 25 word remote
+    remote.file!cache.address   := get.temp.vec(100/bprw)
+    remote.file!cache.size      := 100
+    remote.file!cache.address%%1:= 0
+
+    create.file(root, workfile.base+workfile.header.slot, header.file, FALSE)
+    header.file!next.write      := 50     // Leave romm for tripos 25 word header
+    header.file!cache.address%%1:= 0
+
+    expanded.groups.file!next.write             := 0
+    expanded.groups.file!start.of.block         := 0
+
+    recipients.puids.file!next.write            := 0
+    recipients.puids.file!start.of.block        := 0
+
+    // Set up first part of header
+IF TRACE THEN WRITEF("Send: Header=%N, forward=%N*N", header, forward)
+$<DEMON <> flush.cache(report.file) $>DEMON
+    UNLESS header=0
+        TEST forward <= 0       // Header supplied -> FORWARD, INSERT or ERROR!!
+    $(  MANIFEST $(     Line.upb        = 100 $)
+        LET tbuff = VEC 200/bytesperword
+        LET line        = VEC line.upb/BYTESPERWORD
+        LET pos         = 0
+
+        header!cache.address    := tbuff
+        header!cache.size       := 200/bprw
+
+        if forward < 0  // Really an insert ........
+        $(      UNLESS replyto = 0
+                $(      for i = 0 TO replyto%0 DO client.name%i := replyto%i
+                        replyto := 0
+                $)
+                write.string.to.file(header.file, "Via:     ")
+                IF via.name = 0 THEN via.name := client.name;
+                write.string.to.file(header.file, via.name)
+                FOR i = via.name%0 TO 7
+                DO write.byte.to.file(header.file, ' ')
+                write.string.to.file(header.file, "; ")
+$<DEMON'
+                UNLESS interactive=FALSE
+                $(      // Set datestamp in unique message ID.
+                        z80timestamp(new.umid)
+                $)
+$>DEMON'
+                new.umid %% 3 := rootnode!rtn.ticks
+                set.date.header(FALSE)
+                write.string.to.file(header.file, " (MailDemon @ CAMRING)*N")
+        $)
+
+        read.cache(header, 0)
+        header ! next.read := 50
+        error.bytes             := (header!cache.address) %% 2
+        for i = 1 TO error.bytes
+        $(      LET ch = read.byte.from.file(header)
+                IF pos < line.upb $( line%pos := ch; pos +:= 1 $)
+
+                IF forward < 0 write.byte.to.file(header.file, ch)
+
+                IF ch = '*N'            // Is it a Subject line ?
+                $(      LET p   = 0
+                        pos -:= 2       // 1 + *N ?
+                        // Skip white space ....
+                        WHILE p<pos & ((line%p=' ') | (line%p='*T')) p +:= 1
+                        // Got SUBJ ?
+                        IF capitalch(line% p   )='S' &
+                           capitalch(line%(p+1))='U' &
+                           capitalch(line%(p+2))='B' &
+                           capitalch(line%(p+3))='J'
+                        $(      UNTIL (p>pos) | line%p=':' DO p +:= 1
+                                p +:= 1
+                                // Skip white space ....
+                                WHILE p<pos &
+                                        ((line%p=' ') | (line%p='*T')) p +:= 1
+
+                                best.subject := get.temp.vec(pos-p/bytesperword)
+                                best.subject%0 := pos-p+1
+                                FOR i = p TO pos
+                                DO best.subject%(i-p+1) := line%i
+//                              BREAK                   // NO!!! 25/2/84 PB
+                        $)
+                        pos := 0
+                $)
+        $)
+    $)
+    ELSE        // True forward .....
+    $(  LET size        = ?
+        LET pos         = 0
+        LET line        = VEC 100/bytesperword
+        
+        resent := TRUE
+$<DEMON'
+        UNLESS interactive=FALSE
+        $(      // Set datestamp in unique message ID.
+                z80timestamp(new.umid)
+        $)
+$>DEMON'
+        new.umid %% 3 := rootnode!rtn.ticks
+
+        read.cache(header, 0)
+        header ! next.read := 50
+        size    := (header!cache.address) %% 2
+        FOR i = 1 TO size
+        $(
+                LET ch = read.byte.from.file(header)
+                IF pos < 100 $( line%pos := ch; pos +:= 1 $)
+
+                IF ch = '*N'            // Is it a Subject line ?
+                $(      LET p   = 0
+                        pos -:= 2
+                        WHILE p<pos & ((line%p=' ') | (line%p='*T')) p +:= 1
+                        IF capitalch(line% p   )='S' &
+                           capitalch(line%(p+1))='U' &
+                           capitalch(line%(p+2))='B' &
+                           capitalch(line%(p+3))='J'
+                        $(      UNTIL (p>pos) | line%p=':' DO p +:= 1
+                                p +:= 1
+                                WHILE p<pos &
+                                        ((line%p=' ') | (line%p='*T')) p +:= 1
+                                best.subject := get.temp.vec(pos-p/bytesperword)
+                                best.subject%0 := pos-p+1
+                                FOR i = p TO pos
+                                DO best.subject%(i-p+1) := line%i
+                        $)
+                        pos := 0
+                $)
+                write.byte.to.file(header.file, ch)
+        $)
+    $)
+
+    // Convert the user name list to a list of PUIDs
+    RESULT2 := 0                // for many.....
+
+$<DEMON
+/*IF TRACE THEN WRITEF("Send: Suspect 1*N") <> flush.cache(report.file)*/
+    // In case there is a non-existant user, ensure that we have a data file ...
+    // For Demon only .....
+    IF interactive = FALSE TEST text.file=0
+    THEN TEST immed = 0
+        THEN text.file, text.size := null.file, 0       // No data AT ALL!!
+        ELSE                                            // Make IMMED -> FILE
+        $(      create.file(root, workfile.base+workfile.send.slot, send.file,
+                                                                        FALSE)
+draft.exists := TRUE
+                send.file!next.write            := 50
+                send.file!cache.address%%1      := 0
+                text.file                       := send.file
+                text.size                       := immed%0
+                (send.file!cache.address) %% 2 := text.size
+                write.string.to.file(text.file, immed)
+                flush.cache(send.file)
+        $)
+    ELSE                                                // Real data !!
+    $(  LET buff = ?
+        read.little.block(text.file, @buff, 2, 1)
+        text.size := (@buff) %% 0
+    $)
+/*IF TRACE THEN WRITEF("Send: Suspect 1 done*N") <> flush.cache(report.file)*/
+$>DEMON
+$>COMMAND'
+
+$<DEMON'
+    UNLESS interactive = FALSE
+    $(  LET users.      = get.temp.VEC (80/bytesperword)
+        LET cc.         = get.temp.VEC (80/bytesperword)
+        LET bcc.        = get.temp.VEC (80/bytesperword)
+        LET subject.    = get.temp.VEC (80/bytesperword)
+        LET switches.   = get.temp.VEC (80/bytesperword)
+        LET replyto.    = get.temp.VEC (80/bytesperword)
+$<FEWHEADERS'
+        LET from.       = get.temp.VEC (80/bytesperword)
+        LET comment.    = get.temp.VEC (80/bytesperword)
+$>FEWHEADERS'
+
+        LET copystring(s1, s2) BE TEST s1=0
+            THEN s2%0   := 0
+            ELSE FOR i = 0 TO s1%0 DO s2%i := s1%i
+        cur.init(TRUE)
+
+        copystring(users, users.)
+        copystring(cc, cc.)
+        copystring(bcc, bcc.)
+        copystring(subject, subject.)
+        copystring(switches, switches.)
+        copystring(replyto, replyto.)
+
+        users , cc , bcc , subject, switches, replyto
+                        := users., cc., bcc., subject., switches., replyto.
+$<FEWHEADERS'
+        copystring(from, from.)
+        from := from.
+        copystring(comment, comment.)
+        comment := comment.
+$>FEWHEADERS'
+
+$<LSI4TRIPOS IF TRACE WRITEF("GO...*N") $>LSI4TRIPOS
+        TEST sc THEN UNLESS read.form(users, cc, bcc, subject, replyto, switches,
+                        @bits,
+                        terminal.depth-Remaining.mail.count-6-
+                        (mail.count>ml.size -> 1,0) +
+                        (mail.count=0-> 2, 0),
+                        users%0=0 -> y.to,
+                                $<FEWHEADERS  y.subject,     $>FEWHEADERS
+                                $<FEWHEADERS' y.subject.min, $>FEWHEADERS'
+                        header
+                        $<FEWHEADERS' , 0,0/*from, comment*/ $>FEWHEADERS') = TRUE
+                RESULTIS FALSE
+        ELSE    // Well, ask the user for an initial set at least ...
+        $(      $(      WHILE users%0=0
+                        DO UNLESS Read.arg("To:      ",
+                                                "Type a list of recipients",
+                                                users)
+                                RESULTIS 1
+                        IF check.user.list(users) THEN BREAK
+                        users%0 := 0
+                $) REPEAT
+
+                WHILE subject%0=0
+                DO UNLESS Read.arg("Subject: ", "Type the subject matter",
+                                                                        subject)
+                        RESULTIS 1
+        $)
+
+        $<COMMAND' expand.puids := expand.puids.late $>COMMAND'
+    $)
+$>DEMON'
+
+$<COMMAND'
+Perform.expand.puids:
+    UNLESS expand.puids = expand.puids.late
+    $(Expand.puids
+IF TRACE THEN WRITEF("Send: Expandp 1*N")
+$<DEMON <> flush.cache(report.file) $>DEMON
+
+    IF header=0 | resent | forward=0 /* ERRORs SHOULD have 'From:'  */
+    $(  write.string.to.file(header.file, (resent) ->   "Resent-From: ",
+                                                        "From:    ")
+$<FEWHEADERS'
+        UNLESS (from = 0) UNLESS from%0 = 0
+        $(      write.string.to.file(header.file, from);
+                write.string.to.file(header.file, (resent) ->   "*NResent-Sender: ",
+                                                                "*NSender:  ")
+        $)
+$>FEWHEADERS'
+        write.string.to.file(header.file, client.name)
+        write.string.to.file(header.file, "@CAMRING")
+        forward := 1                    // -> Normal insertion
+    $)
+
+IF TRACE THEN WRITEF("Send: Process.to*N")
+$<DEMON <> flush.cache(report.file) $>DEMON
+      $(Process.to
+        LET n.users     =       ?
+$<DEMON'
+        IF (users=0 | users%0=0) & INTERACTIVE ~= FALSE
+        TEST Read.arg("To:      ", "Type a list of recipients", name)
+        THEN users, interactive := name, 1
+        ELSE RESULTIS 1
+$>DEMON'
+
+        $(
+IF TRACE THEN WRITEF("Send:Add.to*N")
+$<DEMON <> flush.cache(report.file) $>DEMON
+                n.users         := Add.user.list(users, interactive,
+                                (resent) -> "Resent-To: ", "To:      ",
+                                forward<0, text.file, remote.file, header.file, -1)
+IF TRACE THEN WRITEF("Send:Added.to*N")
+$<DEMON <> flush.cache(report.file) $>DEMON
+
+                IF n.users >= 0         BREAK
+
+$<DEMON'
+                //--------------------------------------------------------------
+                //      If it's a demon, then hard luck - give up !!
+                //--------------------------------------------------------------
+                UNLESS /*DEMON(interactive=FALSE)-> TRUE, DEMON*/
+                //--------------------------------------------------------------
+                //      This shouldn't really happen!
+                //
+                //      If it is the final expansion of an interactive
+                //      incantation then they should all be OK, 'cos each one's
+                //      been tested as it was read in !
+                //
+                //      This -> temporary MAP failure ?
+                //      Therefore ask the user !!
+                //--------------------------------------------------------------
+                        ask("The MAP service seems to have failed. Retry? ", 0)
+$>DEMON'
+                $(      writes("*NSEND abandoned*N");
+                        RESULTIS n.users=-1 -> 1, FALSE
+                $)
+        $) REPEAT
+        user.count      := user.count + n.users
+        IF RESULT2=-1   THEN many.sends.to.one.user     := TRUE
+
+        IF user.count > 0 BREAK                 // Normal exit
+
+$<DEMON
+        //----------------------------------------------------------------------
+        //      The demon has failed to find any recipients. Log it and return
+        //----------------------------------------------------------------------
+IF TRACE THEN WRITEF("Send: No recip 1*N") <> flush.cache(report.file)
+/*DEMON IF interactive = FALSE  DEMON*/
+        $(      WRITES("No recipients !!*N");
+                WRITEF("users '%S'*N", users=0 -> "<none>", users)
+                WRITEF("cc '%S'*N", cc=0 -> "<none>", cc)
+                WRITEF("bcc '%S'*N", bcc=0 -> "<none>", bcc)
+                WRITEF("subject '%S'*N", subject=0 -> "<none>", subject)
+                WRITEF("replyto '%S'*N", replyto=0 -> "<none>", replyto)
+$<FEWHEADERS'   WRITEF("from '%S'*N", from=0 -> "<none>", from) 
+                WRITEF("comment '%S'*N", comment=0 -> "<none>", comment)
+$>FEWHEADERS'
+                WRITEF("bits %X8*N", bits)
+                RESULTIS 1
+        $)
+$>DEMON
+
+        Writes("No Recipients given - try again.   To quit type q*N")
+IF TRACE THEN WRITEF("Send:Repeat...*N")
+$<DEMON <> flush.cache(report.file) $>DEMON
+    $)Process.to REPEAT
+IF TRACE THEN WRITEF("Send: ccs 1*N")
+$<DEMON <> flush.cache(report.file) $>DEMON
+
+    IF interactive > 0 | cc ~= 0 | bcc ~= 0 | replyto ~= 0
+    THEN FOR I = 0 TO 2
+    $(Process.copies
+        LET prompt = (resent) ->
+                i=0 -> "Resent-cc: ", i=1 -> "bcc:     ", "Resent-Reply-to:",
+                i=0 -> "cc:      ", i=1 -> "bcc:     ", "Reply-to:"
+$<DEMON'
+        TEST interactive > 0
+        THEN UNLESS Read.arg(prompt,    i=0 ->
+                        "Type a list of carbon copy recipients",
+                                        i=1 ->
+                        "Type a list of blind copy recipients",
+                        "Type recipients of replies",
+                        name)
+             DO RESULTIS 1
+        ELSE
+$>DEMON'
+             name := i=0 -> cc, i=1 -> bcc, replyto
+
+        $(      users           := Add.user.list(name, interactive,
+                                        prompt, i=1, text.file, remote.file, header.file, -1)
+
+                UNLESS users<0                                  BREAK
+$<DEMON'
+                UNLESS (interactive=FALSE)-> TRUE,
+                        ask("The MAP service seems to have failed. Retry? ", 0)
+$>DEMON'
+                $(      UNLESS interactive WTO.mc("file", "send Abandoned - cc/bcc")
+                        writes("*NSEND abandoned*N")
+                        RESULTIS users=-1 -> 1, FALSE
+                $)
+        $) REPEAT
+
+        IF RESULT2=-1   THEN many.sends.to.one.user     := TRUE
+        user.count      := user.count + users
+    $)Process.copies
+
+$<DEMON'
+    IF many.sends.to.one.user & interactive ~= FALSE
+    THEN writes(
+"WARNING - The mail server is only sending one copy of your message to the*N*
+*user(s) you have specified several times.*N")
+
+    IF (subject=0) & interactive ~= FALSE
+    $(  subject := name
+        $( UNLESS Read.arg("Subject: ", "Type the subect field", subject)
+            DO RESULTIS 1
+        $) REPEATUNTIL (subject%0>0) | header=0
+    $)
+$>DEMON'
+
+    $(  LET null = TRUE
+        FOR I=1 TO subject%0 UNLESS subject%i=' ' | subject%i='*T'   null:=FALSE
+        IF null THEN subject := 0
+    $)
+
+
+
+    TEST subject=0 | subject%0=0 | forward < 0
+    THEN TEST best.subject=0
+         THEN subject := 0
+         ELSE subject := best.subject
+    ELSE
+    $(  // Set the subject line of the header.
+        write.string.to.file(header.file,"*NSubject: ")
+        write.string.to.file(header.file,subject)
+        IF subject%0 > 40 THEN subject%0 := 40
+    $)
+
+$<FEWHEADERS'
+    UNLESS comment=0 UNLESS comment%0=0
+    $(  write.string.to.file(header.file, "*NComment: ")
+        write.string.to.file(header.file, comment)
+    $)
+$>FEWHEADERS'
+    UNLESS forward < 0
+    $(Not.Ins
+    IF header = 0 | error.bytes > 0
+    $(  
+$<DEMON'
+        UNLESS interactive=FALSE
+        $(      // Set datestamp in unique message ID.
+                z80timestamp(new.umid)
+        $)
+$>DEMON'
+        new.umid %% 3 := rootnode!rtn.ticks
+        set.date.header(TRUE, resent)
+    $)
+
+    write.string.to.file(header.file, (resent) -> "*NResent-Message-ID:<",
+                                                        "*NMessage-ID:<")
+    set.date.header(1)  //FALSE)
+    write.string.to.file(header.file, " ")
+    write.string.to.file(header.file, client.name)
+    write.string.to.file(header.file, "@CAMRING>")
+    unless replyid=0
+    $(  write.string.to.file(header.file, "*NIn-reply-to:")
+        write.string.to.file(header.file, replyid)
+    $)
+    // Terminate .......
+    write.string.to.file(header.file, "*N")
+    $)Not.Ins
+
+    header.size := header.file!next.write - 50 +
+                                        (bprw * header.file!start.of.block)
+
+/*IF TRACE THEN WRITEF("Send: Length 1*N") <> flush.cache(report.file)*/
+    TEST header.file!start.of.block = 0
+    $(  // Header is still in cache.
+        (header.file!cache.address) %% 2 := header.size
+        flush.cache(header.file)
+    $)
+    ELSE
+    $(  // Header has been written out
+        flush.cache(header.file)
+        (header.file!cache.address) %% 2 := header.size
+        // Do a one word write of the file size to the header.
+        write..little.block(header.file, 2, 2, 1)
+    $)
+    // Header file finished with ... now for the text file ...
+
+    UNLESS expand.puids = expand.puids.early GOTO all.done
+    $)Expand.puids
+$>COMMAND'
+
+$<DEMON'
+    UNLESS interactive = FALSE
+    DO  UNLESS mode=1                   // No file at all !!
+        TEST mode=2                     // Already given !
+        $(      LET buff = VEC 2
+$<COMMAND'      read.little.block(text.file, @buff, 2, 1)
+                text.size := (@buff) %% 0
+$>COMMAND'
+        $)
+        ELSE
+    $(INTERACTIVE.READ
+retry:
+    $(  MANIFEST
+        $(      A.name          = 0
+                A.file          = 1
+                A.stream        = 2
+                A.none          = 3
+                A.draft         = 4
+                A.quit          = 5
+                A.first.sw      = A.file
+                A.last.sw       = A.draft
+                A.LAST          = A.quit
+                File.title.bytes= 60
+                argv.upb        = (file.title.bytes/BYTESPERWORD) + A.last +1
+        $)
+        LET count       = 0
+        LET name        = ?
+        LET argv        = VEC argv.upb
+        LET argv.string =
+        $<COMMAND'    "name,/s,from=stream=default/s,none/s,draft/s,quit=q/s" $>COMMAND'
+        $<COMMAND "name,file/s,from=stream=default/s,none/s,/k,quit=q/s" $>COMMAND
+        WRITES("Source:  *E")
+
+/***/
+        char := cur.rdch()
+        UNLESS  0 <= char <= #X7F SWITCHON char INTO
+        //------------------------------------------------------------------
+        //      A fancy command.
+        //------------------------------------------------------------------
+        $(  DEFALT:
+            DEFAULT:            WRCH(7);        LOOP
+            CASE CUR.HELP:
+                                                WRITES("*
+**NYou are entering a source stream. Either type a name, OR one of*N*
+*");                                            WRITES("*
+*  CLEAR SCREEN ESC c   Redisplay the screen*N*
+*  ABANDON      ESC a   Abandon the send operation*N*
+*  Keypad 3     ESC 3   Completed (i.e. no text)*N*
+*  Keypad 7     ESC 7   Edit the header*N*
+*");                                            WRITES("*
+*Type any character to continue...*E*
+*");                                            CUR.RDCH();     LOOP
+
+        CASE CUR.CLEAR.SCREEN: CUR.init(TRUE, TRUE);            LOOP
+
+        CASE CUR.ABANDON:
+                WRITEF("*NBreak in.  Abandoning send*N")
+                RESULTIS FALSE
+
+//                          CASE CUR.UP:
+//                          CASE CUR.DOWN:
+//                          CASE CUR.FN2:
+//                          CASE CUR.FN8:
+//                          CASE CUR.FN5:
+        CASE CUR.FN3:
+                mode := 1;                                              BREAK
+
+        CASE CUR.FN7:
+                cur.wrch(CUR.CLEAR.SCREEN)
+                cur.init(TRUE)
+                UNLESS cur.pos(0, 23-1) DO NEWLINE()
+                UNLESS read.form(users, cc, bcc, subject, replyto,
+                        switches, @bits, 23-1, y.cc, header     /*Y*/
+                        $<FEWHEADERS' , from, comment $>FEWHEADERS' ) =TRUE
+                $( BREAK $)
+                LOOP
+        $)
+        unrdch();
+        readline(TRUE)
+        IF testflags(1)
+        $(  WRITEF("*NBreak in.  Abandoning send*N"); RESULTIS FALSE $)
+
+        IF rdargs(argv.string, argv, argv.upb) = 0
+        $(  WRITEF("Bad string for '%S'*N", argv.string); RESULTIS FALSE $)
+
+        IF argv!A.quit | testflags(1)
+        $(  WRITEF("%SAbandoning send*N", argv!A.quit -> "", "*NBreak in.  ");
+            RESULTIS FALSE
+        $)
+
+        // So what have we here ........
+        FOR I = A.first.sw TO A.last.sw IF argv!I THEN count +:= 1
+        IF count > 1
+        $( WRITEF("Too many switches for '%S'*N",argv.string); RESULTIS FALSE $)
+        name := argv!A.name
+
+        TEST argv!A.none
+        $(  UNLESS name=0 $( WRITEF("Name given*N"); LOOP $)
+            mode := 1
+        $)
+        ELSE TEST argv!A.draft  // Use existing (??) draft .....
+        $(  UNLESS name=0 $( WRITEF("Name given*N"); LOOP $)
+            UNLESS draft.exists $( WRITEF("No draft exists yet*N"); LOOP $)
+            mode := 5
+        $)
+        ELSE TEST name = 0      // No arg - use FS input
+        $(  UNLESS count=0 $( WRITEF("No name given*N"); LOOP $)
+            mode := 3
+        $)
+        ELSE    // FILE or STREAM
+        $(  IF name = 0 $( WRITEF("No name given*N"); LOOP $)
+            file.name   := get.temp.VEC (name%0 / BYTESPERWORD)
+            FOR i = 0 TO name%0 DO file.name%i := name%i
+            mode := (argv!A.stream | (count=0)) -> 4,
+                                                // Do FINDINPUT to workfile
+                    2                           // Read it straight ...
+        $)
+        BREAK
+    $) REPEAT
+
+    $<COMMAND UNLESS $>COMMAND $<COMMAND' TEST $>COMMAND' mode=1
+    $<COMMAND'
+    $(  text.size := 0
+        text.file := null.file
+    $)
+    ELSE TEST mode=5
+    $(  LET buff = ?
+        retrieve.entry(root, workfile.base+workfile.send.slot, send.file)
+        text.file                       := send.file
+        read.little.block(text.file, @buff, 2, 1)
+        text.size := (@buff) %% 0
+    $)
+    ELSE
+    $>COMMAND'
+    $<COMMAND
+    TEST mode=2
+    THEN workfile := file.name
+    ELSE
+    $>COMMAND
+    $(  LET in          = ?
+        LET BROKEN      = FALSE
+$<COMMAND
+        LET saveout     = output()
+$>COMMAND
+$<COMMAND'
+        create.file(root, workfile.base+workfile.send.slot, send.file, FALSE)
+draft.exists := TRUE
+        send.file!next.write            := 50     // Leave romm for tripos 25 word send
+        send.file!cache.address%%1      := 0
+        text.file := send.file
+$>COMMAND'
+
+        in      := mode=4 ->
+                $<COMMAND'      bsp.find.stream.pair(file.name), $>COMMAND'
+                $<COMMAND       findinput(file.name),            $>COMMAND
+                                fs.findinput(0, CUR.FN7,
+                        "   keypad 7      ESC 7  Edit header of message", -1,-1)
+$<COMMAND' out  := RESULT2 $>COMMAND'
+        IF in = 0
+        $(  WRITEF("Failed to find input '%S'  ==  ", file.name)
+            myfault(RESULT2, TRUE)
+            GOTO retry
+        $)
+$<COMMAND
+        out := findoutput(workfile)
+        IF out=0
+        $(  WRITEF("Failed to find output '%S'  ==  ", workfile)
+            myfault(result2, TRUE)
+            ENDSTREAM(in)
+            GOTO retry
+        $)
+$>COMMAND
+
+        selectinput(in)
+
+$<TRACE IF timing THEN time.trace() $>TRACE
+        IF mode=3
+        $(
+            WRITEF("Type text terminated by CTRL/D*N")
+        $)
+        TEST rdch()=endstreamch
+        $(      $<COMMAND' text.size := 0
+                           text.file := null.file
+                $>COMMAND'
+                mode      := 1
+        $)
+        ELSE
+        $(      unrdch()
+                IF testflags(1) THEN $( broken := TRUE; GOTO broken.lab $)
+                char := '*N'
+                $(  LET ch = RDCH()
+                    IF ch=endstreamch THEN BREAK
+                    IF testflags(1) $( BROKEN := TRUE; BREAK $)
+                    TEST ch = CUR.VTCH
+                    $(  LET r2=RDCH()<<8
+                        r2 := r2 | RDCH()
+                        SELECTINPUT(norm.input)
+                        cur.wrch(CUR.CLEAR.SCREEN)
+                        cur.init(TRUE)
+                        UNLESS cur.pos(0, 23-1) DO NEWLINE()
+                        UNLESS read.form(users, cc, bcc, subject, replyto,
+                                switches, @bits, 23-1, y.cc, header     /*Y*/
+                                 $<FEWHEADERS' , from, comment $>FEWHEADERS' ) =TRUE
+                        $( Broken := TRUE; BREAK $)
+                        in!scb.func2 := -1      // Re display please!
+                        SELECTINPUT(in)
+                    $)
+                    ELSE UNLESS ch = CUR.NODATA
+                    $(  char := ch
+$<COMMAND'              write.byte.to.file(send.file,char)
+$>COMMAND'
+$<COMMAND               selectoutput(out)
+                        wrch(ch)
+                        selectoutput(saveout)
+$>COMMAND           $)
+                $) REPEAT
+        $)
+broken.lab:
+        UNLESS broken | mode=3 $( cur.pos(0,0); cur.wrch('*N') $)
+        ENDSTREAM( $<COMMAND' mode=4 -> out, $>COMMAND' in)
+        selectinput(norm.input)
+        cis!4, cis!5 := 1,1
+        IF broken THEN setflags(taskid, 1) $<COMMAND <> ENDSTREAM(out) $>COMMAND
+        break.test()
+
+$<COMMAND'
+        UNLESS text.file = null.file
+        $(REAL.FILE
+            start.time := rootnode!rtn.ticks
+            UNLESS char = '*N'
+            DO write.byte.to.file(send.file,'*N')
+
+            // Terminate "send.file" and write its length to the appropriate word
+            // in the Tripos format header:
+            text.size := send.file!next.write - 50 +
+                                        (bprw * send.file!start.of.block)
+            TEST send.file!start.of.block = 0
+            $(  // Header is still in cache.
+                (send.file!cache.address) %% 2 := text.size
+                flush.cache(send.file)
+            $)
+            ELSE
+            $(  // Header has been written out
+                write.tiny.block(send.file, text.size, 2)
+                flush.cache(send.file)
+//              (send.file!cache.address) %% 2 := text.size
+//              // Do a one word write of the file size to the header.
+            $)
+        $)REAL.FILE
+$>COMMAND'
+    $)
+    $)INTERACTIVE.READ
+$>DEMON'
+
+$<COMMAND'
+/*IF TRACE THEN WRITEF("Send: exp p 2*N") <> flush.cache(report.file)*/
+    IF expand.puids = expand.puids.late
+    $(  expand.puids := expand.puids.now
+        GOTO perform.expand.puids
+    $)
+all.done:
+IF TRACE THEN WRITEF("Send: all done*N")
+$<DEMON <> flush.cache(report.file) $>DEMON
+
+    // Terminate PUID list
+    bytes.to.file(recipients.puids.file,(TABLE 0,0,0,0),8) // Overkill on 32bit but OK
+    rewind.file(recipients.puids.file)
+
+$<DEMON'
+    IF interactive
+    $(  cur.pos(0,0)
+        WRITEF("*C*L          ... Processing ...*c")
+    $)
+$>DEMON'
+
+    // Insert message file for each puid in list:
+    FOR Loop.count = 1 TO MAXINT
+    $(  LET puid = VEC 7/bytesperword
+        bytes.from.file(recipients.puids.file, puid, 8)
+        IF puid!0 = 0 THEN BREAK
+$<DEMON'
+        IF interactive THEN WRITEF("  %I2*c", loop.count)
+$>DEMON'
+IF TRACE THEN WRITEF("Forward = %N:  ", forward)
+$<DEMON <> flush.cache(report.file) $>DEMON
+        TEST forward ~= 0
+        THEN insert.message(puid, subject, header.file, text.file,
+                                      header.size, text.size, bits, -1)
+        ELSE insert.message(puid, subject, header, text.file,
+                                      error.bytes, text.size, bits,
+                                      0,0,0,0,0,0,
+                                      header.file, header.size,
+                                      -1)
+<> IF TRACE THEN WRITEF("So TRIPLE !!*N")
+    $)
+IF TRACE THEN WRITEF("Send: all done!!*N")
+$<DEMON <> flush.cache(report.file) $>DEMON
+
+    UNLESS remote.machines.bits = 0
+    $(  LET remote.size = ?
+        LET puid        = VEC 15/BYTESPERWORD
+
+        UNLESS remote.file=0
+                write.string.to.file(remote.file, "*N*N")
+        remote.size := (remote.file=0) -> 0, remote.file!next.write - 50 +
+                                        (bprw * remote.file!start.of.block)
+        write.tiny.block(remote.file, remote.size, 2)
+        Flush.cache(remote.file)
+        FOR i = 0 TO 7
+        $(  LET bit = 1<<i
+            UNLESS (remote.machines.bits & bit) = 0
+            $(  LET name = VALOF SWITCHON bit INTO      //        PNAME
+                $(      CASE remote.machine.camjenny:   RESULTIS "JENNY"
+                        CASE remote.machine.cagr:       RESULTIS "CAGR"
+                        CASE remote.machine.camsteve:   RESULTIS "STEVE"
+                        CASE remote.machine.cuedvax:    RESULTIS "CUEDVAX"
+                        CASE remote.machine.phx:        RESULTIS "PHOENIX"
+                        CASE remote.machine.SERC:       RESULTIS "CAGA"
+                        CASE remote.machine.TRIPOS:     RESULTIS "TRIPOS"
+                        DEFAULT:                        RESULTIS 0
+                $)
+                LET ssp.name = VALOF SWITCHON bit INTO  //        NAESERVER
+                $(      CASE remote.machine.camjenny:   RESULTIS "NEWMAIL-JENNY"
+                        CASE remote.machine.cagr:       RESULTIS "NEWMAIL-CAGR"
+                        CASE remote.machine.camsteve:   RESULTIS "NEWMAIL-CAMSTEVE"
+                        CASE remote.machine.cuedvax:    RESULTIS "NEWMAIL-CUEDVAX"
+                        CASE remote.machine.phx:        RESULTIS "NEWMAIL-PHX"
+                        CASE remote.machine.SERC:       RESULTIS "NEWMAIL-SERC"
+                        CASE remote.machine.TRIPOS:     RESULTIS 0
+                        DEFAULT:                        RESULTIS "<error>"
+                $)
+$<DEMON'
+                IF interactive WRITEF("  %S*C", name)
+$>DEMON'
+// <=============================================================== RC ? =======
+// <=============================================================== RC ? =======
+                convert.name.to.puid(name, puid)        // <======= RC ? =======
+// <=============================================================== RC ? =======
+// <=============================================================== RC ? =======
+
+                TEST forward ~= 0
+                THEN insert.message(puid, subject, header.file, text.file,
+                                              header.size, text.size, bits,
+                                0,0,0,0,        // First.string, user.dir, user.?, umid
+                                remote.file,    remote.size,
+                                -1)
+                ELSE insert.message(puid, subject, header, text.file,
+                                        error.bytes, text.size, bits,
+                                        0,0,0,0,
+                                        remote.file, remote.size,
+                                        header.file, header.size,
+                                              -1)
+                UNLESS ssp.name=0
+                $(      LET data = TABLE 0,0
+                        LET reply= VEC 4
+                        LET nsvec= VEC 4        // ns.upb ??
+                        ssp(ssp.name, data, 2, reply, 4, nsvec)
+                $)
+            $)
+        $)
+//      IF interactive delay(tickspersecond)
+    $)
+$<DEMON'
+    IF interactive WRITEF("                         *C")
+$>DEMON'
+
+$>COMMAND'
+$<COMMAND
+    IF interactive
+    $(  LET mode        = 0
+        cur.pos(0,0)
+        TEST cur.attr(2, TRUE)
+        THEN mode := 2
+        ELSE IF cur.attr(3, TRUE) THEN mode := 3
+        WRITEF("*C*LAttempt to send ...*C*L")
+        UNLESS mode=0 cur.attr(mode, FALSE)
+    $)
+
+    // Set up the rest of the SEND SSP parameters.
+    // Set Tripos file parameter
+    TEST mode=1
+    THEN tripos.file := 0
+    ELSE UNLESS puidoffile(workfile, out!scb.arg1, tripos.file)
+        $(  WRITES("Failed to find the file's puid !!!!*N")
+            endstream(out)
+            RESULTIS FALSE
+        $)
+
+    endstream(out)              // May be 0    // UNLESS out=0
+
+    $(  MANIFEST $( cap.file = 0 $)
+        LET r2 = ?
+        IF z80send(0, uidset()+tuid.offset, uidset()+Puid.offset,
+                        users, Subject,
+                        tripos.file, cap.file, immed,
+                        cc%0=0 -> 0, cc,
+                        bcc%0=0 -> 0, bcc,
+                        0,                              // No MODE
+                        replyto%0 = 0 -> 0, replyto,
+                        forward,
+                        bits,
+                        replyid,
+                        -1)
+        $(  LET delete = TRUE
+            IF mode=2
+            //UNLESS immed=0
+            DO delete := ask("Delete %S ? [if not, it must not be altered] ",
+                                                        FALSE, workfile)
+            IF delete THEN deleteobj(workfile)
+            RESULTIS TRUE
+        $)
+
+        R2      := RESULT2
+        WRITEF("Send failed - *E", RESULT2); MYFAULT(R2, TRUE)
+        IF ask("Retry send ?", TRUE) THEN LOOP
+
+        IF mode=3       //      text.file. = 0 & immed=0
+        WRITEF("File is in %S*N", workfile)
+        RESULTIS FALSE
+    $) REPEAT
+$>COMMAND
+
+    RESULTIS TRUE
+$)
+
+AND read.form(users, cc, bcc, subject, replyto, switches, lv.bits,
+        base.y, problem, header $<FEWHEADERS' , from, comment $>FEWHEADERS') = VALOF
+$(  LET err.string      = ?
+$<FEWHEADERS'
+    LET full            = (from ~= 0)
+    LET y.subject       = (full) -> y.subject.max, y.subject.min
+    LET y.after.last    = (full) -> y.after.last.max, y.after.last.min
+$>FEWHEADERS'
+    problem := base.y-problem
+        $(rdform
+            LET rdform.rc = rdform(base.y, problem, TRUE /* return on return */,
+                                1, "You are filling in a mail item header form",
+                                        -1, -1,
+                "To:      ", users,     0, users,
+                "cc:      ", cc,        0, cc,
+                "bcc:     ", bcc,       0, bcc,
+                "Reply-to:", replyto,   0, replyto,
+                "Switches:", switches,  0, switches,
+$<FEWHEADERS'   "From:    ", from,      0, from,        
+                "Comment: ", comment,   0, comment,     
+$>FEWHEADERS'
+                "Subject: ", subject,   0, subject,
+                -1
+        )
+
+            IF compstring(users,"q")=0 | compstring(cc,         "q")=0 |
+                compstring(bcc, "q")=0 | compstring(subject,    "q")=0 |
+                                         compstring(replyto,    "q")=0 |
+                                         compstring(switches,   "q")=0 |
+$<FEWHEADERS'                            compstring(from,       "q")=0 |
+                                         compstring(comment,    "q")=0 |
+$>FEWHEADERS'
+                rdform.rc       = CUR.ABANDON
+            $(  UNLESS cur.pos(0, base.y-y.after.last) newline()        
+                RESULTIS FALSE
+            $)
+
+            problem := -1
+
+            IF subject%0=0 & header=0
+            THEN problem, err.string := base.y-y.subject, "No subject"  
+
+            IF users%0  =0
+            THEN problem, err.string := base.y-y.to,      "No recipients" 
+            TEST switches%0=0
+            THEN !lv.bits := 4
+            ELSE
+            $(  LET in = findstringin(switches)
+                UNLESS in=0
+                $(      MANIFEST $( argv.upb    = 40/BYTESPERWORD $)
+                        LET i           = input()
+                        LET argv.s      = "PRIVATE/S,PUBLIC/s"
+                        LET argv        = VEC argv.upb
+
+                        SELECTINPUT(in)
+                        TEST RDARGS(argv.s, argv, argv.upb)=0
+                        $( err.string := "Bad switches  - only PUBLIC & PRIVATE"
+                           problem      := base.y - y.switches  
+                        $)
+                        ELSE
+                        $(  LET bits    = !lv.bits
+                            IF argv!0   THEN bits := bits & (~ 4)
+                            IF argv!1   THEN bits := bits |    4
+                            !lv.bits    := bits
+                        $)
+                        ENDREAD()
+                        SELECTINPUT(i)
+                $)
+            $)
+
+            IF problem < 0
+            $(  WRCH(cur.pos(0, base.y-y.after.last) -> '*E', '*N')
+
+                UNLESS users%0=0 | problem > 0
+                UNLESS check.user.list(users)
+                $( err.string := "Bad recipient list"; problem := base.y-y.to $)
+
+                UNLESS cc%0=0
+                UNLESS check.user.list(cc)
+                $( err.string := "Bad cc";   problem := base.y - y.cc $)
+
+                UNLESS bcc%0=0
+                UNLESS check.user.list(bcc)
+                $( err.string := "Bad bcc";  problem := base.y - y.bcc $)
+
+                UNLESS replyto%0=0
+                UNLESS check.user.list(replyto)
+                $( err.string := "Bad replyto";  problem := base.y - y.replyto $)
+
+                IF problem < 0 RESULTIS TRUE
+                WRITES("*NType any character to continue...*E")
+                cur.rdch()
+            $)
+            cur.wrch(cur.clear.screen)
+            cur.init(TRUE)
+            UNLESS cur.pos(0, base.y+1) newline()
+            WRITEF("****** Error: ")
+            WRITEF(err.string)
+            newline()
+        $)rdform REPEAT
+$)
+
+
+//------------------------------------------------------------------------------
+//      Non SC/FS way of reding in an argument.
+//
+//      Prompt, then read in a line
+//
+//      RETURNs FALSE if the user want to give up
+//------------------------------------------------------------------------------
+
+AND read.arg(Prompt, secondary, v) = VALOF
+$(  WRITES(prompt)
+    WRCH('*E')
+    readline(TRUE)              // If SC, read in the line & reflect it ........
+    read.line(v, 50)
+    UNLESS v%0 = 1 RESULTIS TRUE        // Special ones are '?' and 'q'.
+    TEST compstring(v, "?") = 0
+    THEN WRITEF("%S*N", secondary)
+    ELSE TEST compstring(v, "q") = 0 THEN RESULTIS FALSE
+    ELSE RESULTIS TRUE
+$) REPEAT
+
+
+//------------------------------------------------------------------------------
+//      Just see if these WOULD be OK.
+//
+//      RETURNs TRUE if they are all 'OK'.
+//------------------------------------------------------------------------------
+AND check.user.list(list) =
+add.user.list(list, TRUE, 0, TRUE, -1, -1, 0, -1) $<COMMAND' > 0 $>COMMAND'
+
+
+//------------------------------------------------------------------------------
+// UGH!!
+//      Add the users in <list> to header.file, unless No.log is specified (bcc)
+//
+//      If a name is bad, log the bad ones, and make bad.names non zero.
+//      This also causes the names in question to be displayed,
+//      unless interactive=FALSE (demon).
+//      If a MAP interaction fails .... Give up !!
+//
+//      text = 0 -> Don't actually log it, just check it.
+//
+//      Remote.file is zero (-> disabled) or a file for the text of all remote
+//      machines needed.
+//
+//      In command mode, the user is asked if the names are distibution lists.
+//      If he says 'NO', then it's an error, so the resultis FALSE. Else TRUE.
+//
+//      Otherwise a non-negative RC     ->      that many users,
+//      -1                              ->      MAP failed,
+//                                              (-n)-2 users + some bad.
+//------------------------------------------------------------------------------
+
+AND add.user.list(list, interactive, text, No.log,
+                text.file, remote.file, header.file) = list=0 -> 0, VALOF
+$(  LET length          = list%0
+    LET many.sends.to.one.user = FALSE
+    LET bad.names       = FALSE
+    LET user.count      = 0
+    LET l.pos           = ?
+    LET n.pos           = ?
+IF TRACE THEN WRITEF("Add: '%s'*N", list)
+$<DEMON <> flush.cache(report.file) $>DEMON
+
+    IF length=0                         RESULTIS 0
+
+$<COMMAND'
+    UNLESS No.log       DO write.string.to.file(header.file, "*N")
+    UNLESS No.log       DO write.string.to.file(header.file, text)
+$>COMMAND'
+
+
+//------------------------------------------------------------------------------
+//      Now look for user names, seperated by ',' or end of line
+//
+//      Formats are:
+//              PHRASE
+//              PHRASE [% HOST]* (@|at) HOST
+//              PHRASE < PHRASE (@|at) HOST >
+//
+//      End up with name containing:
+//
+//              word ... word %
+//
+//------------------------------------------------------------------------------
+    l.pos := 0
+    WHILE l.pos < length                                // Loop for a user name
+    $(  LET AT          = 0
+        LET start       = ?
+        LET name        = VEC 80/BYTESPERWORD
+        LET inspace     = FALSE
+        LET inbraket    = FALSE
+$<COMMAND LET puid      = VEC  7/BYTESPERWORD $>COMMAND
+        start := l.pos    // Note start position of name
+        l.pos +:= 1
+        n.pos  := 1
+        WHILE (l.pos <= length) & (list%l.pos ~= ',')           // '+', ' '.....
+        $(  LET ch = list%l.pos
+            l.pos +:= 1
+            TEST inbraket
+            THEN IF ch = ')' THEN inbraket := FALSE
+            ELSE
+            $(  IF ch = '@' THEN at := n.pos
+                TEST ch = ' ' | ch = '*T'
+                $(      IF inspace      LOOP
+                        inspace := TRUE
+                        ch := ' '
+                $)
+                ELSE inspace := FALSE
+                IF ch = '(' THEN inbraket, inspace := TRUE, FALSE
+            $)
+            name%n.pos := ch
+            n.pos +:= 1
+        $)
+        name%0 := n.pos-1
+
+$<COMMAND'
+        UNLESS start=0 | No.log DO write.byte.to.file(header.file,',')
+        UNLESS No.log           DO write.string.to.file(header.file, name)
+        user.count := user.count + 1
+$>COMMAND'
+$<COMMAND
+        //----------------------------------------------------------------------
+        //      Look for <text>@<mc>
+        //----------------------------------------------------------------------
+look.for.name:
+        UNLESS at=0
+        $(  LET machine = VEC 20
+            LET len     = ?
+            WHILE name%(at+1) = ' ' | name%(at+1) = '*T' DO at +:= 1
+            len := name%0 - at
+            FOR pos = 1 TO len
+            $(  LET ch = name%(at+pos)
+                SWITCHON ch INTO
+                $(      DEFAULT:        machine%pos := ch;      LOOP
+                        CASE '>': CASE '(': CASE ' ': CASE '*T':
+                        len := pos-1;                           break
+                $)
+            $)
+            machine%0   := len
+
+            TEST        compstring(machine, "CAMRING")  =0      |
+                        compstring(machine, "RING")=0
+            $(  at -:= 1 REPEATWHILE name%at = ' ' | name%at='*T'
+                name   %0       := at
+                at              := 0
+                FOR i = name%0 TO 1 BY -1
+                $(      LET ch = name%i
+                        TEST ch='@' THEN at := i <> BREAK
+                        ELSE IF ch='%' THEN at, name%i := i, '@' <> BREAK
+                $)
+                GOTO look.for.name
+            $)
+            ELSE TEST   compstring(machine, "CAMJENNY") =0      |
+                        compstring(machine, "CAMPHX")   =0      |
+                        compstring(machine, "CAGA")     =0      |
+                        compstring(machine, "SERC")     =0
+            $(  UNLESS text=0 | remote.file=0
+                $(
+                        write.string.to.file(remote.file, name)
+                        write.string.to.file(remote.file, ",*N ")
+                $)
+                //--------------------------------------------------------------
+                //      Done our bit - So loop!!
+                //--------------------------------------------------------------
+                LOOP
+            $)
+            ELSE        //      Unrecognised Mc
+            $(
+/**/            TEST bad.names=0
+                THEN writef("I do not understand  %S", name)
+                ELSE writef(", %S", name)
+                bad.names := bad.names + 1
+/**/
+/*              UNLESS interactive=FALSE
+ *              $(      UNLESS bad.names THEN writes("*nUnknown name(s):  ")
+ *                      writef("%S ", name)
+ *                      bad.names := TRUE
+ *              $)
+ */             LOOP
+            $)
+        $)
+$>COMMAND
+
+        //----------------------------------------------------------------------
+        // Depending on whether the name has a PUID, either add its PUID to the
+        // list or print an error message.
+        //----------------------------------------------------------------------
+
+IF TRACE THEN WRITEF("call carn with HF=%N*N", header.file)
+IF TRACE THEN WRITEF("Add: c&r.n(%s), hf=%n*N", name, header.file)
+$<DEMON <> flush.cache(report.file) $>DEMON
+        SWITCHON
+$<COMMAND'       check.and.record.name(name, text=0 -> 0, 1,
+                interactive=FALSE -> text.file, -1, remote.file, header.file)
+$>COMMAND'
+$<COMMAND       convert.name.to.puid(name, puid) // Message if it fails:
+$>COMMAND INTO
+        $(      CASE convert.ok:
+                        ENDCASE
+
+                CASE convert.bad.name:
+$<COMMAND               TEST bad.names=0
+                THEN writef("I do not understand  %S", name)
+                ELSE writef(", %S", name)
+                bad.names := bad.names + 1
+$>COMMAND
+$<COMMAND'      UNLESS interactive=FALSE
+                $(      UNLESS bad.names THEN writes("*nUnknown name(s):  ")
+                        writef("%S ", name)
+                        bad.names := TRUE
+                $)
+$>COMMAND'      ENDCASE
+
+        CASE convert.no.map:
+            // Return immediately on failure to contact MAP service
+            UNLESS interactive=FALSE writes(text.file=-1 ->
+$<COMMAND
+                        "*nUser check failed - unable to contact MAP service*N",
+                        "*nSEND ABANDONED - unable to contact MAP service*N")
+$>COMMAND
+$<COMMAND'
+                        "*nUser check failed - unable to convert name*N",
+                        "*nRECIPEINT CHECK ABANDONED - unable to convert name*N")
+$>COMMAND'
+            RESULTIS -1
+        $)
+    $)
+IF TRACE THEN WRITEF("Add: added*N")
+$<DEMON <> flush.cache(report.file) $>DEMON
+
+$<COMMAND
+    // If any of the names were wrong then fail
+    UNLESS bad.names = 0
+    $(  newline()
+        Resultis ask(bad.names=1 -> "Is it a distribution list ? (Y or N) ",
+                                    "Are they distribution lists ? (Y or N) ",
+                                    FALSE)
+    $)
+
+    RESULTIS TRUE
+$>COMMAND
+$<COMMAND'
+    RESULT2 := many.sends.to.one.user
+    IF bad.names RESULTIS  - (user.count+2)
+    RESULTIS user.count
+$>COMMAND'
+$)
+
+
+//------------------------------------------------------------------------------
+//      Ask the question string, and read in a reply line.
+//      Valid reply lines strart with a 'y', 'n' or '*N'.
+//      Otherwise reprompt.
+//
+//      '*N' -> use defalt
+//------------------------------------------------------------------------------
+
+AND ask(string, defalt, a,b,c,d,e) = VALOF
+$(  LET ch      = ?
+    LET rc      = ?
+
+    WRITEF(string, a,b,c,d,e)
+    WRCH('*E')                                  // UGH!!
+    readline(TRUE)
+    ch  := rdch()
+    rc  := (capitalch(ch) = 'Y') -> TRUE,
+                (ch = '*N' | capitalch(ch) = 'N') -> FALSE, 1
+    UNTIL ch='*N' | ch=ENDSTREAMCH DO ch := RDCH()
+    UNLESS rc=1 DO RESULTIS rc
+    IF ch=ENDSTREAMCH   RESULTIS defalt
+$) REPEAT
+
+

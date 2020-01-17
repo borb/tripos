@@ -1,0 +1,118 @@
+.key sys,dest/k,b1/k,b2/k,comp/k,Ld/k,Md/k,opt/k,s2/k,ws/k,68000/s,link/s,tidy/s,ancilla/s,all/s,sc/s,la/s
+.def    sys     m68k
+.def    b1      m:bcp.
+.def    b2      bcp.
+.def    cc      new
+.def    comp    bcp
+.def    dest    t:
+.def    opt     :
+. .def  s2      /<sl>/
+.
+. called as
+.       make    make into default dest, default ancilla slot
+.
+. Only DEST, link, tidy should need to be used.
+. Otherwise please modify this
+.
+
+IF EQ <la$nola> la; SKIP linkINGDONE
+IF EQ <link$nolink> link; SKIP link
+IF EQ <tidy$notidy> tidy; SKIP tidy
+IF EQ <ancilla$anc> ancilla; SKIP ancilla
+
+<comp>  <b1>misccom  mobj:misccom   opt=ws<ws><s2><sc>cc:sc:<opt>
+<comp>  <b1>miscser  mobj:miscser   opt=ws<ws><s2><sc>cc:sc:<opt>
+<comp>  <b2>util     mobj:util      opt=ws<ws><s2><sc>cc:sc:<opt>
+<comp>  <b2>ummd     mobj:ummd      opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b1>server   mobj:server    opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b1>fs       mobj:fs        opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b2>send     mobj:send      opt=ws<ws><s2><sc>cc:sc:<opt>
+<comp>  <b2>send     mobj:csend     opt=ws<ws><s2><sc>cc:sc:<opt>:cc:command:
+<comp>  <b1>main     mobj:main      opt=ws<ws><s2><sc>cc:sc:<opt>
+<comp>  <b2>main     mobj:cmain     opt=ws<ws><s2><sc>cc:sc:<opt>:cc:command:
+<comp>  <b2>report   mobj:report    opt=ws<ws><s2><sc>cc:sc:<opt>
+<comp>  <b2>msinit   mobj:msinit    opt=ws<ws><s2><sc>cc:sc:<opt>
+<comp>  <b1>bsppair  mobj:bsppair   opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b2>mail     mobj:mail      opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b1>com      mobj:com       opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b2>command  mobj:command   opt=ws<ws><s2><sc>cc:sc:<opt>
+<comp>  <b2>fsinput  mobj:fsinput   opt=ws<ws><s2><sc>cc:sc:<opt>
+<comp>  <b2>groups   mobj:groups    opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b2>rdform   mobj:rdform    opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b1>readlin  mobj:readlin   opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b2>logon    mobj:logon     opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b2>trace    mobj:trace     opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b2>vt       mobj:vt        opt=ws<ws><sl><sc>cc:sc:<opt>
+IF NOT MCTYPE=LSI4; SKIP NODEMON
+<comp>  <b1>demon    mobj:demon     opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b2>send     mobj:dsend     opt=ws<ws><s2><sc>cc:sc:<opt>:cc:demon:
+<comp>  <b2>groups   mobj:dgroups   opt=ws<ws><s2><sc>cc:sc:<opt>:cc:demon:
+<comp>  <b1>dinit    mobj:dinit     opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b2>sender   mobj:sender    opt=ws<ws><sl><sc>cc:sc:<opt>
+<comp>  <b2>compres  mobj:compres   opt=ws<ws><sl><sc>cc:sc:<opt>
+. <comp>  <b1>r        mobj:r         opt=ws<ws><s2><sc>cc:sc:<opt>
+
+LAB NODEMON
+. <comp>        <b1>rmail    mobj:rmail     opt=ws<ws><s2><sc>cc:sc:<opt>
+. <comp>  <b1>rmessage mobj:rmessage  opt=ws<ws><s2><sc>cc:sc:<opt>
+. <comp>  <b1>rsend    <dest>rsend    opt=ws<ws><s2><sc>cc:sc:<opt>
+
+LAB link
+. obj must be assigned to :PB.MOBJ on M68000s, and :PB.LOBJ on LSI4s
+FAILAT 30
+IF MCTYPE=68000;assign pb: :pb.mobj; IF NOT FAIL; echo "OBJ: assignment made"
+IF MCTYPE=LSI4; assign pb: :pb.lobj; IF NOT FAIL; echo "OBJ: assignment made"
+FAILAT 10
+
+IF NOT MCTYPE=68000; SKIP NOT68000
+. as LSI4s need to do post-processing but 68000s don't, move rmail and rmessage.
+. copy mobj:rmail    <dest>rmail
+. copy mobj:rmessage <dest>rmessage
+
+. link together the MAIL program
+pb:link com mobj: CMAIN CSEND to <dest>mail
+SKIP linkingdone
+
+LAB NOT68000
+. As they're so big, RMAIL and RMESSAGE are linked from two sections on LSI4s.
+. join mobj:rmail    mobj:r as <dest>rmail
+. join mobj:rmessage mobj:r as <dest>rmessage
+
+. As machines can only read address space/2 bytes at a time, make MAIL two segs.
+IF EXISTS MOBJ:COM-2; SKIP compiled
+<comp>  <b1>com-1    mobj:com-1     opt=<opt>SN
+<comp>  <b1>com-2    mobj:com-2     opt=<opt>SN
+LAB compiled
+. pb:link com-1     mobj:             to t:com-1
+. pb:link com-2     mobj: CMAIN CSEND to t:com-2
+. join t:com-1  t:com-2 as <dest>mail
+. delete t:com-1 t:com-2
+
+LAB LINKINGDONE
+. Now make the dynamic system
+syslink Mobj:system Mobj:newmail-system OPT fW18000
+
+LAB ancilla
+:<68000>sys.ancilla mobj:newmail-system name=TESTMAIL <sys> REPLACE
+delete mobj:newmail-system
+
+QUIT 0
+
+LAB tidy
+. Clean up
+FAILAT 30
+IF MCTYPE=LSI4; protect mobj:n.sys-demon RW; protect mobj:sys-demon RW
+                    protect mobj:n.system    RW; protect mobj:system    RW
+ECHO "Please update make"
+QUIT 10
+scratch dir=mobj:n
+IF EQ selective <all$selective>; SKIP safe
+scratch dir=mobj:
+QUIT 0
+
+LAB safe
+DELETE mobj:n.trmail mobj:n.tcom mobj:n.trsend mobj:n.trmessage
+DELETE mobj:mail-system mobj:newmail-system mobj:mail-demon mobj:newmail-demon
+
+
+

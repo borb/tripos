@@ -1,0 +1,85 @@
+// Simple program to covert leading spaces/tabs into tabs/spaces
+// Piete Brooks Nov 81
+
+GET "LIBHDR"
+
+MANIFEST $( argvupb = 50; tab.ch='*T' $)
+
+GLOBAL $( SYSIN:UG; SYSOUT:UG+1; in:UG+2; out:UG+3 $)
+
+LET START() BE
+$( LET argv             = VEC argvupb
+   LET arg.string       = "From/a,to/a,untab/s,full/s"
+   LET saved            = 0
+   LET i                = 0
+   LET pos              = 0
+   LET full             = ?
+   LET tab              = ?
+
+   SYSIN, SYSOUT        := INPUT(), OUTPUT()                    // for TIDYUP(n)
+   in, out              := 0, 0
+
+   IF   RDARGS(arg.string, argv, argvupb)=0
+   THEN err("Rdargs for %S failed*N", arg.string)
+
+   in := findinput(argv!0)
+   IF in = 0 THEN err("Failed to open input %S - %N*N", argv!0, RESULT2)
+
+   out := findoutput(argv!1)
+   IF out= 0
+   $( endstream(in); err("Failed to open output %S - %N*N", argv!1, RESULT2) $)
+
+   tab  := argv!2  = 0
+   full := argv!3 ~= 0
+
+   SELECTINPUT(in)
+   SELECTOUTPUT(out)
+
+   $( LET ch=rdch()
+      pos := i
+      WHILE ch='*S' | ch=tab.ch         // Group together all tabs and spaces
+      $( LET inc = (ch=tab.ch) -> VALOF
+         $( saved := saved-7+(i REM 8); RESULTIS 8-(i REM 8) $) , 1
+         i := i+inc
+         ch := rdch()
+         IF testflags(1) THEN err("******BREAK from Tab*N")
+      $)
+
+                                        // Got them all - now output them
+      IF tab FOR j= (pos>>3) +1 TO i>>3 // If Tabs are allowed, then use them
+        $( LET newpos = j<<3
+           WRCH(tab.ch);
+           saved := saved+ newpos-pos -1
+           pos := newpos                // (later we need less spaces)
+        $)      // Saved is WRONG
+      FOR J = pos TO i-1 DO WRCH(' ')   // Output pending spaces
+
+      UNLESS full UNTIL ch='*C' | ch='*N' | ch='*P' | ch=ENDSTREAMCH
+      $( WRCH(ch); ch := RDCH();
+         IF testflags(1) THEN err("******BREAK from Tab2*N")
+      $)
+      IF ch=ENDSTREAMCH BREAK
+      WRCH(ch)
+      i := i+1
+      IF ch='*B' THEN i := i-2
+      IF ch='*C' | ch='*N' | ch='*P' THEN i := 0
+   $) REPEAT
+
+   SELECTOUTPUT(sysout)
+   UNLESS saved=0
+   DO WRITEF("%N chars %S*N", ABS saved, saved<0 -> "added", "saved")
+   tidyup(0)
+$)
+
+AND err(s, a,b,c) BE
+$( SELECTOUTPUT(sysout); WRITEF(s, a,b,c); tidyup(20) $)
+
+AND tidyup(n) BE
+$( UNLESS in=0  WRITEF("ENDSTREAM %N*N", in) <> ENDSTREAM(in)
+   UNLESS out=0 WRITEF("ENDSTREAM %N*N", out) <> ENDSTREAM(out)
+   SELECTOUTPUT(SYSOUT)
+   SELECTINPUT(SYSIN)
+   STOP(n)
+$)
+
+

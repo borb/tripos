@@ -1,0 +1,695 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+        #####    ######             #######     ####      #####   ##    ## 
+       #######  ########            ########   ######    #######  ##   ##  
+      ##        ##                  ##    ##  ##    ##  ##        ##  ##   
+      ##        #######             #######   ########  ##        ####     
+      ##              ##            ##        ##    ##  ##        ## ##    
+      ##              ##            ##        ##    ##  ##        ##  ##   
+       #######  ########            ##        ##    ##   #######  ##   ##  
+        #####    ######             ##        ##    ##    #####   ##    ## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   23/12/85             *
+\*****************************************************************************/
+
+
+
+SECTION "CS-PACK"
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+GET "BCPL.OBJINFO"
+
+
+GLOBAL
+$(
+    datetostring       :  1                // START for loaded segment
+
+    sysout             :  ug + 0
+    filelist           :  ug + 1
+    quiet              :  ug + 2
+    fileinfo           :  ug + 3
+    timeinfo           :  ug + 4
+    broken             :  ug + 5
+    valid              :  ug + 6
+$)
+
+
+MANIFEST
+$(
+    a.dir              =  0
+    a.to               =  1
+    a.index            =  2
+    a.quiet            =  3
+
+    fl.link            =  0
+    fl.seq             =  1
+    fl.length          =  2
+    fl.valid           =  3
+    fl.days            =  4
+    fl.mins            =  5
+    fl.ticks           =  6
+    fl.name            =  7
+    fl.size            =  7
+
+    exco.stacksize     =  500
+    maxlength          =  256
+
+    size.exinfo        =  dirent.size + file.header.size - 1
+    exinfo.name        =  dirent.name
+$)
+
+
+LET start()  =  VALOF
+$(
+    LET argv         =  VEC  100
+    LET args         =  "DIR/A,TO/A,INDEX/K,QUIET/S"
+    LET datev        =  VEC  15
+    LET seg          =  0
+    LET dir          =  0
+    LET file         =  0
+    LET seq          =  0
+    LET exco         =  0
+    LET tofile       =  0
+    LET tostream     =  0
+    LET indexfile    =  0
+    LET indexstream  =  0
+
+    UNLESS  rdargs( args, argv, 100 )  DO
+    $(
+        writef( "CS-PACK:  Bad args for string *"%S*"*N", args )
+        RESULTIS  20
+    $)
+
+    indexfile  :=  argv!a.index
+
+    IF  indexfile = 0  THEN  indexfile  :=  "nil:"
+
+    indexstream  :=  findoutput( indexfile )
+
+    IF  indexstream = 0  THEN
+    $(
+        writef( "CS-PACK:  Cannot open INDEX file *"%S*"*N", indexfile )
+        RESULTIS  20
+    $)
+
+
+    //  Load the overlay segment to translate dates into strings
+
+    seg  :=  loadseg( "sys:l.dat-to-strings" )
+
+    IF  seg = 0  THEN
+    $(
+        writes( "CS-PACK:  Cannot load the *"dat-to-strings*" overlay*N" )
+        endstream( indexstream )
+        RESULTIS  20
+    $)
+
+    UNLESS  globin( seg )  DO
+    $(
+        writes( "CS-PACK:  Cannot initialise the *"dat-to-strings*" overlay*N" )
+        unloadseg( seg )
+        endstream( indexstream )
+        RESULTIS  20
+    $)
+
+    sysout      :=  output()
+    filelist    :=  0
+    broken      :=  FALSE
+
+    datev       :=  datetostring( rootnode+rtn.days, datev )
+    quiet       :=  argv!a.quiet
+
+    dir         :=  argv!a.dir
+
+    //  We must now get the file name of the first file to be transferred
+    //  from the "examine" coroutine.
+
+    exco  :=  createco( examine, exco.stacksize )
+
+    IF  exco = 0  THEN
+    $(
+        writes( "CS-PACK:  Cannot create the EXAMINE coroutine*N" )
+        unloadseg( seg )
+        endstream( indexstream )
+        RESULTIS  20
+    $)
+
+    file  :=  callco( exco, dir )
+
+    //  If the return from the first call of the coroutine were zero, then
+    //  this was a bit of a failure, and we may as well pack up!
+
+    IF  file = 0  THEN
+    $(
+        deleteco( exco )
+        unloadseg( seg )
+        endstream( indexstream )
+        RESULTIS  20
+    $)
+
+
+    tofile     :=  argv!a.to
+    tostream   :=  findoutput( tofile )
+
+    IF  tostream = 0  THEN
+    $(
+        writef( "CS-PACK:  Cannot open output stream *"%S*":  ", tofile )
+        fault( result2 )
+        deleteco( exco )
+        unloadseg( seg )
+        endstream( indexstream )
+        RESULTIS  20
+    $)
+
+
+    UNTIL  file = 0  |  broken  DO
+    $(
+        LET fullname  =  joinstrings( dir, file )
+        LET stream    =  0
+        LET ch        =  0
+        LET entry     =  0
+        LET lines     =  0
+
+        //  Ready to send the file.  We had better put an entry into
+        //  our internal index chain.  The global "fileinfo" points to
+        //  the file info vector for the file with name "file".
+
+        seq    :=  seq + 1
+        entry  :=  newentry( 0, seq, fullname )
+
+        UNLESS  quiet  DO  writef( "  %I3    %S *E", seq, fullname )
+
+        stream  :=  findinput( fullname )
+
+        IF  stream = 0  THEN        //  Should never happen...
+        $(
+            writef( "*NCS-PACK:  Cannot open *"%S*":  ", fullname )
+            fault( result2 )
+            freevec( entry )
+            freevec( fullname )
+            file  :=  callco( exco )
+
+            LOOP
+        $)
+
+        selectinput( stream )
+        selectoutput( tostream )
+
+        writes( "./ ADD NAME=TF" )
+        write0( seq, 4 )
+        writef( "     %S %S*N", dir, file )
+
+        $(  //  Loop to read the file, and copy lines down the byte stream.
+
+            LET line    =  getvec( maxlength / bytesperword )
+            LET length  =  0
+
+            IF  line = 0  THEN
+            $(
+                endread()
+                selectoutput( sysout )
+
+                writes( "*NCS-PACK:  Cannot get line buffer*N" )
+                BREAK
+            $)
+
+            valid   :=  TRUE
+            length  :=  readline( fullname, line )
+
+            $(  //  Repeat loop to read lines from the file.
+                //  We have been given a buffered line back from readline,
+                //  as a string, so we had better test to see if it is indeed
+                //  an IEBUPDTE control record.
+
+                //  Check for user BREAK
+
+                IF  testflags( #B0001 )  THEN
+                $(
+                    //  User Break  -  Print out a message and finish
+
+                    selectoutput( sysout )
+                    writes( "*N*N****** BREAK*N" )
+                    broken  :=  TRUE
+                    BREAK
+                $)
+
+                IF  testflags( #B1000 )  THEN
+                $(
+                    //  CTRL-E  -  how many lines of this fila have we
+                    //  transferred ?
+
+                    LET o  =  output()
+
+                    selectoutput( sysout )
+
+                    IF  quiet  THEN  writef( "  %I3    %S ", seq, fullname )
+
+                    writef( "  %N lines packed*N", lines )
+
+                    UNLESS  quiet  DO  writef( "  %I3    %S *E", seq, fullname )
+
+                    selectoutput( o )
+                $)
+
+                IF  length = endstreamch  THEN  BREAK
+
+                UNLESS  length = 0  DO
+                    IF  (line % 1  =  '.')  THEN  wrch( '.' )
+
+                writef( "%S*N", line )
+
+                lines   :=  lines + 1
+                length  :=  readline( fullname, line )
+            $)
+            REPEAT
+
+            freevec( line )
+        $)
+
+        entry!fl.length  :=  lines
+        entry!fl.valid   :=  valid  &  NOT broken
+
+        addtolist( @filelist, entry )
+
+        endread()
+
+        selectoutput( sysout )
+
+        IF  entry!fl.valid  THEN  UNLESS  quiet  DO  writes( "*C**" )
+
+        UNLESS  quiet  DO  newline()
+
+        freevec( fullname )
+        file  :=  callco( exco )
+    $)
+
+
+    //  On dropping through here, we have finished sending the files,
+    //  and can wind the jolly show up!
+
+    deleteco( exco )
+
+    UNLESS  broken  DO
+    $(
+        writes( "End of files.*N" )
+
+        selectoutput( tostream )
+
+        //  We can now write the index out to a file called INDEX,
+        //  freeing the space it is taking up as we go.
+
+        writes( "./ ADD NAME=INDEX INDEX INDEX*N" )
+
+        writef( "  TRIPOS Archive of *"%S*" on %S at %S*N*N",
+                   dir, datev+0, datev+5 )
+
+        selectoutput( indexstream )
+
+        writef( "  TRIPOS Archive of *"%S*" on %S at %S*N*N",
+                   dir, datev+0, datev+5 )
+
+        selectoutput( tostream )
+
+        writes( "  Seq        Creation Date        Length    File Name*N*N" )
+
+        selectoutput( indexstream )
+
+        writes( "  Seq        Creation Date        Length    File Name*N*N" )
+
+        UNTIL  filelist = 0  DO
+        $(
+            LET ptr  =  filelist
+            LET dv   =  VEC  15
+            LET dt   =  dv + 0
+            LET tm   =  dv + 5
+
+            dv  :=  datetostring( filelist+fl.days, dv )
+
+            selectoutput( tostream )
+
+            writef( "%C %I3     %S  %S     %I6    %S*N",
+                     filelist!fl.valid -> '**', ' ', filelist!fl.seq, dt, tm,
+                     filelist!fl.length, filelist+fl.name )
+
+            selectoutput( indexstream )
+
+            writef( "%C %I3     %S  %S     %I6    %S*N",
+                     filelist!fl.valid -> '**', ' ', filelist!fl.seq, dt, tm,
+                     filelist!fl.length, filelist+fl.name )
+
+            filelist  :=  filelist!fl.link
+            freevec( ptr )
+        $)
+
+        selectoutput( tostream )
+
+        writes( "./ ENDUP*N" )
+    $)
+
+    selectoutput( tostream )
+    endwrite()
+
+    selectoutput( indexstream )
+    endwrite()
+
+    selectoutput( sysout )
+    newline()
+
+    unloadseg( seg )
+
+    RESULTIS  0
+$)
+
+
+
+
+AND readline( file, line )  =  VALOF
+$(
+    LET ch      =  rdch()
+    LET length  =  0
+
+    UNTIL  ch = '*N'  |  ch = endstreamch  DO
+    $(
+        LET isbad    =  badch( ch )
+        LET toolong  =  length = maxlength
+
+        IF  isbad  |  toolong  THEN
+        $(
+            //  Invalid file (probably binary)
+
+            LET o   =  output()
+
+            selectoutput( sysout )
+            
+            UNLESS  quiet  DO  newline()
+            
+            writef( "CS-PACK:  File *"%S*" - ", file )
+
+            TEST  toolong  THEN
+                  writef( "record length >%N characters*N", maxlength )
+            ELSE  writef( "unprintable ASCII character #X%X2*N", ch )
+
+            selectoutput( o )
+
+            line % 0  :=  0
+            valid     :=  FALSE
+
+            RESULTIS  endstreamch
+        $)
+
+        length         :=  length + 1
+        line % length  :=  ch
+        ch             :=  rdch()
+    $)
+
+    line % 0  :=  length
+
+    IF  ch = endstreamch  THEN
+        TEST  length = 0  THEN  RESULTIS  endstreamch
+        ELSE  unrdch()
+
+    RESULTIS  length
+$)
+
+
+
+AND badch( ch )  =  VALOF
+$(
+//  Returns true if the character is not a printable  member of the ascii
+//  character set.
+
+    LET c  =  ch & #X7F
+    LET w  =  ch >> 4
+    LET b  =  ch & #X0F
+
+    LET t  =  TABLE   #B0011111110000000,  // SI  to NUL
+                      #B0000100000000000,  // DLE to US
+                      #B1111111111111111,  // /   to SP
+                      #B1111111111111111,  // ?   to 0
+                      #B1111111111111111,  // O   to @
+                      #B1111111111111111,  // _   to P
+                      #B1111111111111111,  // o   to `
+                      #B0111111111111111   // DEL to p
+
+    RESULTIS  (((t!w >> b) & 1) = 0)   |   (ch \= c)
+$)
+
+
+
+AND write0( n, d )  BE
+$(
+    IF  d > 1  THEN  write0( n/10, d-1 )
+    wrch( n REM 10  +  '0' )
+$)
+
+
+
+AND newentry( link, seq, file )  =  VALOF
+$(
+//  Create a new entry into which we can put the file name, sequence
+//  number, etc.
+
+    LET length    =  file % 0
+    LET wlen      =  length / bytesperword
+    LET entry     =  getvec( fl.size + wlen )
+    LET name      =  0
+
+    IF  entry = 0  THEN
+    $(
+        writes( "CS-PACK:  Cannot get buffer for File List*N" )
+
+        RESULTIS  link
+    $)
+
+    entry!fl.link  :=  link
+    entry!fl.seq   :=  seq
+    entry!fl.days  :=  timeinfo!0
+    entry!fl.mins  :=  timeinfo!1
+    entry!fl.ticks :=  timeinfo!2
+    name           :=  entry + fl.name
+
+    FOR  i = 0  TO  file % 0  DO  name % i  :=  file % i
+
+    RESULTIS  entry
+$)
+
+
+
+AND examine( directory )  =  VALOF
+$(
+//  Coroutine to handle the examining of a particular directory.
+//  When called, it creates an entry info table for the directory,
+//  and examines the first entry of the directory.  From then on,
+//  it calls the "examine next" operation, until no more entries
+//  exist.
+
+    LET entryinfo  =  VEC size.exinfo
+    LET datetime   =  VEC 2
+    LET type       =  0
+    LET fhtask     =  0
+    LET exco       =  0
+    LET lock       =  locateobj( directory )
+
+    //  Check to see that the object really does exist...
+
+    IF  lock = 0  THEN
+    $(
+        writef( "CS-PACK:  Cannot archive *"%S*": ", directory )
+        fault( result2 )
+
+        RESULTIS  0
+    $)
+
+    fhtask  :=  lock!lock.task
+
+
+    //  Get an "examine object" of the first entry in the directory.
+
+    UNLESS  examine.obj( fhtask, lock, entryinfo )  DO
+    $(
+        writef( "CS-PACK:  Cannot examine *"%S*": ", directory )
+        fault( result2 )
+        freeobj( lock )
+
+        RESULTIS  0
+    $)
+
+    objinfo.ex( objinfo.type, lock, entryinfo, @type )
+
+    UNLESS  type = type.dir  DO
+    $(
+        //  If this is a FILE, then we must treat it as a directory,
+        //  and return back its name.  Unfortunately its name is what
+        //  we are calling the directory name, and so the FILE name is null.
+
+        fileinfo  :=  entryinfo
+        cowait( "" )
+        freeobj( lock )
+
+        RESULTIS  0
+    $)
+
+
+    //  Ok.  We can now start the main loop of the coroutine, returning
+    //  information about the current directory.
+
+    UNTIL  broken  DO
+    $(
+        UNLESS  examine.nextobj( fhtask, lock, entryinfo )  DO  BREAK
+
+        //  This must be a file for the examine to be meaningful, so
+        //  check this.
+        
+        objinfo.ex( objinfo.type, lock, entryinfo, @type )
+
+        UNLESS  type = type.file  DO
+        $(
+            //  This is a sub-directory, which we must also archive.
+
+            LET name  =  entryinfo+exinfo.name
+            LET buff  =  0
+            LET file  =  0
+
+            exco  :=  createco( examine, exco.stacksize )
+
+            IF  exco = 0  THEN
+            $(
+                writef( "CS-PACK:  Cannot create EXAMINE coroutine*N" )
+                LOOP
+            $)
+
+            buff  :=  joinstrings( directory, name )
+
+            UNLESS  quiet  DO
+                    writef( "*NCS-PACK:  Sub Directory *"%S*"*N", buff )
+
+            file  :=  callco( exco, buff )
+
+            UNTIL  file = 0  DO
+            $(
+                LET fullname  =  joinstrings( name, file )
+
+                cowait( fullname )
+                freevec( fullname )
+
+                file  :=  callco( exco )
+            $)
+
+            UNLESS  quiet  DO  newline()
+
+            deleteco( exco )
+            freevec( buff )
+
+            LOOP
+        $)
+
+        //  Otherwise, this is a perfectly good file, and so we should
+        //  have a go at archiving it.
+
+        fileinfo  :=  entryinfo
+        timeinfo  :=  datetime
+
+        objinfo.ex( objinfo.date, lock, fileinfo, timeinfo )
+
+        cowait( entryinfo+exinfo.name )
+    $)
+
+    freeobj( lock )
+
+    RESULTIS  0
+$)
+
+
+
+AND examine.obj( fhtask, lock, entryinfo )  =
+    sendpkt( notinuse, fhtask, action.examineobject, ?, ?, lock, entryinfo )
+
+
+
+AND examine.nextobj( fhtask, lock, entryinfo )  =  VALOF
+$(
+    LET ok  =  sendpkt( notinuse, fhtask, action.examinenext, ?, ?, lock, entryinfo, TRUE )
+
+    UNLESS  ok  DO
+    $(
+        IF  result2 = error.nomoreentries  THEN  RESULTIS  FALSE
+
+        //  Otherwise, print out a message, and try again.
+
+        writef( "****** Error in entry *"%S*":  ", entryinfo+exinfo.name )
+        fault( result2 )
+
+        LOOP
+    $)
+
+    RESULTIS  ok
+$)
+REPEAT
+
+
+
+AND isdevice( dir )  =  dir % (dir % 0)  =  ':'       //  Naive!!
+
+
+
+AND addtolist( ptr, entry )  BE
+$(
+    UNTIL  ptr!fl.link = 0  DO  ptr  :=  ptr!fl.link
+
+    ptr!fl.link  :=  entry
+$)
+
+
+
+AND joinstrings( directory, name )  =  VALOF
+$(
+    LET l.dir   =  directory % 0
+    LET l.name  =  name % 0
+    LET nodot   =  (l.dir = 0)  |  (l.name = 0)  |  isdevice( directory )
+    LET len     =  l.dir + l.name + (nodot  ->  0, 1)
+    LET buff    =  getvec( len / bytesperword )
+    LET ptr     =  1
+
+    IF  buff = 0  THEN
+    $(
+        writef( "CS-PACK:  Cannot join strings *"%S*" and *"%S*"*N",
+                 directory, name )
+
+        RESULTIS  "ERROR"
+    $)
+
+    FOR  i = 1  TO  l.dir  DO
+    $(
+        buff % ptr  :=  directory % i
+        ptr         :=  ptr + 1
+    $)
+
+
+    UNLESS  nodot  DO                  //  Horrible, but necessary!
+    $(
+        buff % ptr      :=  '.'
+        ptr             :=  ptr + 1
+    $)
+
+
+    FOR  i = 1  TO  l.name  DO
+    $(
+        buff % ptr  :=  name % i
+        ptr         :=  ptr + 1
+    $)
+
+    buff % 0  :=  len
+
+    RESULTIS  buff
+$)
+
+

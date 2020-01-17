@@ -1,0 +1,674 @@
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*************************************************************************
+*  (C) Copyright 1983  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*                        R I N G P R I N T                              *
+*                                                                       *
+*************************************************************************
+**  C  Gray  Girling      COMPUTER LAB,  CAMBRIDGE           25.04.83  **
+*************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*/
+
+
+
+
+
+SECTION "Ringprint"
+GET "libhdr"
+GET "ringhdr"
+
+
+
+MANIFEST
+$(  default.pw = 136            // for unknown printer types
+    maxlen = 35                 // words of LSI4 BSP filestring
+    extra.header.ch = 'x'       // character in extra file headers
+    printersize = 30            // number of characters in printer name
+    max.open.files = 25         // maximum number of concurrent open files
+    // output file descriptors:
+    f.offset  = 0               // offset spacing when file is printed
+    f.lineno  = 1               // TRUE if line numbers are needed
+    f.stream  = 2               // opened file
+    f.quiet   = 3               // no verification
+    f.newpage = 4               // start file listing on a new page
+    f.str     = 5               // offset of start of file title
+    // offsets in options vector
+    opt.linenos  = 0            // use Line numbers ?
+    opt.offset   = 1            // offset of first column on page
+    opt.quiet    = 2            // print any verification ?
+    opt.newpage  = 3            // start file listing on a new page
+    optsize      = 4            // size of options vector
+$)
+
+
+
+GLOBAL
+$(  printer      : ug+0         // device name of chosen printer
+    printer.vec  : ug+1         // space to hold above name if necessary
+    head         : ug+2         // heading string
+    header       : ug+3         // stream name for findinput
+    image.file   : ug+4         // name of a stream for alternative output
+    print        : ug+5         // print stream itself
+    sysout       : ug+6         // initial output stream
+    first.write  : ug+7         // TRUE until output has been generated
+    error.stream : ug+8         // stream to which errors can be sent
+    multi.files  : ug+9         // TRUE if more than one file
+    pw           : ug+10        // page width of selected printer
+    use.spooler  : ug+11        // use spooled version of server
+    printer.init : ug+12        // procedure for initialising chosen printer
+$)
+
+
+
+
+// Enhancements to be made:
+//    a)  change FILE list to a list instead of a vector
+//    b)  allow up to MAX.OPEN.FILES to be opened
+
+
+
+
+LET start() BE
+$(  LET ch = ?
+    LET arg = VEC 50
+    LET v = VEC printersize/bytesperword+1
+    printer.vec := v
+    result2:=0
+    error.stream := output()
+    printer.init := default.printer.init
+    TEST 0=rdargs("File,Opt/k,To=Printer/k,Heading/k,Image/k",arg,50) THEN
+        bungle("Bad arguments*N") ELSE
+    TEST testflags(1) THEN bungle("BREAK*N") ELSE
+    $(  LET h = VEC maxlen
+        LET options = VEC optsize-1
+        options!opt.linenos:=FALSE  // no line numbers by default
+        options!opt.offset :=-1     // -1 is the default (= centred)
+        options!opt.quiet  :=FALSE  // print out verification info
+        options!opt.newpage:=FALSE  // don't start with a page throw
+        sysout := output()
+        header := h
+        head := arg!3
+        image.file := arg!4
+        print := 0
+        first.write := TRUE
+        IF setup.printer(arg!2) THEN
+        IF decode.opt(arg!1, options) THEN
+        $(  LET files = VEC max.open.files
+            IF make.file.list(arg!0, options, files, max.open.files) THEN
+            $(  LET i = 1
+                selectoutput(print)
+                multi.files := (files!0 > 1)
+                IF print.file.list(arg!0, files) THEN
+                WHILE i <= files!0 & write.file(files!i, sysout) DO i:=i+1
+            $)
+            delete.file.list(files)
+            UNLESS print=0 THEN
+            $(  selectoutput(print)
+                endwrite()
+            $)
+            selectoutput(sysout)
+        $)
+    $)
+$)
+
+
+
+
+
+AND setup.printer(printer.name) = VALOF
+$(  LET found.printer = TRUE
+    pw := default.pw
+    use.spooler := FALSE
+    printer.init := default.printer.init
+    TEST printer.name=0 | 0=compstring(printer.name, "DEFAULT") THEN 
+        printer:="LP:" ELSE
+    TEST 0=compstring(printer.name, "MOND") THEN
+    $(  printer:="MP:"
+        pw := 136
+    $) ELSE
+    TEST 0=compstring(printer.name, "CCANON") THEN
+    $(  printer:="CP:"
+        pw := 190
+        printer.init := ccanon.init
+    $) ELSE
+    TEST 0=compstring(printer.name, "CANON") THEN
+    $(  printer:="CP:"
+        pw := 97
+    $) ELSE
+    TEST 0=compstring(printer.name, "TITAN") THEN
+    $(  printer:="TP:"
+        pw := 136
+    $) ELSE
+    printer:=printer.name  // as default
+    IF printer%(printer%0)\=':' & printer%(printer%0)\='/' THEN
+    $(  bungle("*"%S*" is not a valid printer name*N", printer)
+        found.printer := FALSE
+    $)
+    RESULTIS found.printer
+$)
+
+
+
+
+
+AND default.printer.init() BE RETURN
+
+
+
+AND ccanon.init() BE wrch(#X11)
+
+
+
+AND decode.opt(s, opts) = VALOF
+$(  LET error=FALSE
+    LET temp = ?
+    LET lastbool = 0
+    // defaults for options have already been set up
+    UNLESS s=0 DO FOR p=1 TO s%0 DO
+    $(  SWITCHON capitalch(s%p) INTO
+        $(  CASE 'W':
+              /* page width */
+              temp := @pw
+              ENDCASE
+            CASE 'O':
+              // first column offset
+              temp := opts+opt.offset
+              ENDCASE
+            CASE 'Q':
+              // verification output required
+              opts!opt.quiet := TRUE
+              lastbool := opts+opt.quiet
+              LOOP
+            CASE 'P':
+              // start output with a page throw
+              opts!opt.newpage := TRUE
+              lastbool := opts+opt.newpage
+              LOOP
+            CASE 'N':
+              // print with line numbers
+              opts!opt.linenos:=TRUE
+              lastbool := opts+opt.quiet
+              LOOP
+            CASE 'S':
+              // use spooled version of PRINT service
+              use.spooler := TRUE
+              lastbool := @use.spooler
+              LOOP
+            CASE '-':
+              TEST lastbool=0 THEN 
+              $(  bungle("No flag to invert with '-'*N")
+                  error := TRUE
+              $) ELSE !lastbool := NOT !lastbool
+              LOOP
+            CASE ',': CASE '/': CASE '*S':
+              LOOP
+            DEFAULT:
+              bungle("Unknown option - *'%C*'*N",s%p)
+              error:=TRUE
+              LOOP
+        $)
+        // read in a number and put it in the location
+        // indicated by temp:
+        $(  LET flag = TRUE
+            !temp := 0
+            $(rpt
+                p := p+1
+                UNLESS p>s%0 DO SWITCHON s%p INTO
+                $(  CASE '1': CASE '2': CASE '3': CASE '4': CASE '5':
+                    CASE '6': CASE '7': CASE '8': CASE '9': CASE '0':
+                      !temp := 10*!temp + s%p - '0'
+                      flag  := FALSE
+                      LOOP
+                    CASE '*S': IF flag LOOP
+                $)
+                IF FLAG DO !temp := -1
+                BREAK
+            $)rpt REPEAT
+            p := p-1
+        $)
+    $)
+    IF pw<39 THEN
+    $(  bungle("Bad options given*N")
+        error := TRUE
+    $)
+    RESULTIS NOT error
+$)
+
+
+
+
+AND get.print(file) = VALOF
+TEST print\=0 THEN selectoutput(print) ELSE
+$(  LET dummy.opts = VEC optsize
+    LET try.to.find.printer = TRUE
+    LET options.ok = ?
+    WHILE try.to.find.printer DO
+    $(  LET v = VEC 14
+        LET big = FALSE
+        LET namebuf = rootnode!rtn.info!rtninfo.ring!ri.myname
+        LET heading = (head=0 -> file, head)
+        header%0 := 0
+        TEST image.file=0 THEN
+        $(  IF use.spooler THEN putstr("S", header, maxlen)
+            putstr(printer, header, maxlen)
+            big := putstr(heading, header, maxlen)
+        $) ELSE big := putstr(image.file, header, maxlen)
+        TEST big THEN
+        bungle("Header string (or filetitle) too long*N") ELSE
+        $(  LET saveout = output()
+            selectoutput(sysout)    // for LP: errors
+            TEST testflags(1) THEN
+            $(  bungle("BREAK*N")
+                selectoutput(saveout)
+            $) ELSE
+            $(  print:=findoutput(header)
+                TEST print=0 THEN
+                $(  LET r2 = result2
+                    bungle("%S stream *"%S*" - ", 
+                            (image.file=0 -> "Printer", "Image"), header)
+                    fault(r2)
+                $) ELSE
+                $(  selectoutput(print)
+                    printer.init()
+                $)
+            $)
+        $)
+        TEST print\=0 THEN try.to.find.printer := FALSE ELSE
+        $(  LET savein=input()
+            LET termin=findinput("**")
+            image.file := 0
+            selectinput(termin)
+            $(rpt
+                bungle("Another printer (or <CR>) ? *E")
+                options.ok := TRUE
+                try.to.find.printer := FALSE
+                IF 0 \= rdargs("To=Printer,Opt,Image/k",
+                    printer.vec, printersize/bytesperword) THEN
+                IF printer.vec!0\=0 | printer.vec!1\=0 | printer.vec!2\=0 THEN
+                $(  options.ok := TRUE
+                    TEST printer.vec!2\=0 THEN 
+                        image.file := printer.vec!2 ELSE options.ok := FALSE
+                    IF printer.vec!0\=0 THEN 
+                        options.ok := setup.printer(printer.vec!0)
+                    try.to.find.printer := TRUE
+                    IF printer.vec!1\=0 THEN
+                    IF NOT decode.opt(printer.vec!1, dummy.opts) THEN 
+                        options.ok := FALSE
+                $)
+            $)rpt REPEATUNTIL options.ok
+            endread()
+            selectinput(savein)
+        $)
+    $)
+    RESULTIS print\=0
+$)
+
+
+
+
+//  AND charstonum(s) = VALOF
+//    $( LET n,i,m = 0,1,s % 0
+//       result2:=0
+//       WHILE s % i = ' ' DO i := i + 1
+//       TEST ('0'<=s%i<='9') THEN
+//       WHILE ('0' <= s % i <= '9') & (i <= m) DO
+//         $( n := n * 10 + (s % i - '0')
+//            i := i + 1
+//         $)
+//       ELSE result2:=20
+//       RESULTIS n
+//    $)
+
+
+
+
+
+AND putstr(vect, s, words) = VALOF
+$(  LET size=vect%0
+    LET error=FALSE
+    LET n=words*bytesperword-1
+    TEST s%0+size>n THEN error:=TRUE ELSE
+    $(  FOR i=s%0+1 TO s%0+size DO
+        s%i:= vect%(i-s%0)
+        s%0:=s%0 + size
+    $)
+    RESULTIS error
+$)
+
+
+
+
+
+AND write.file(fileinfo, error.stream) = VALOF
+$(  LET file = fileinfo+f.str
+    LET in           = fileinfo!f.stream
+    LET offset       = fileinfo!f.offset
+    LET linenumbers  = fileinfo!f.lineno
+    LET quiet        = fileinfo!f.quiet
+    LET new.page     = fileinfo!f.newpage    
+    LET savein = input()
+    LET err = FALSE
+    LET terminate = FALSE
+    IF offset<0 THEN offset := (pw-80-(linenumbers -> 6, 0))/2
+    IF in=0 THEN
+    $(  in := my.findinput(file)
+        fileinfo!f.stream := in
+    $)
+//  TEST in=0 THEN err:=TRUE ELSE
+    TEST testflags(1) THEN
+    $(  LET saveout = output()
+        selectoutput(error.stream)
+        bungle("BREAK*N")
+        terminate:=TRUE
+        selectoutput(saveout)
+    $) ELSE
+    TEST ~get.print(file) THEN err:=TRUE ELSE
+    $(  LET ch=?
+        LET lineno=1
+        LET repeated = FALSE     // TRUE when last line ends '*C'
+        IF multi.files THEN
+        UNLESS quiet THEN
+            bungle("Printing file *"%S*"*N", file)  // not a bungle really!
+        UNLESS first.write THEN print.banner(file)
+        IF new.page THEN wrch('*P')
+        selectinput(in)
+        ch:=rdch()
+        WHILE ch~=endstreamch  & ~terminate DO
+        TEST testflags(1) THEN
+        $(  terminate:=TRUE
+            print.break.message()
+        $) ELSE
+        $(  LET chno = 0       // number of characters on this line
+            IF testflags(12) THEN
+                bungle("On line %N of file *"%S*" opt=%S%S%So%N*N",
+                        lineno, file,
+                        (linenumbers->"n",""), (new.page->"p",""),
+                        (quiet->"q",""), offset)
+            FOR i=1 TO offset DO wrch('*S')
+            IF linenumbers THEN
+            TEST repeated THEN
+            writes("      ") ELSE
+            writef("%I4  ",lineno)
+            WHILE ch~='*P' & ch~='*N' & ch~='*C' & ch~=endstreamch DO
+            $(  IF ch='*T' THEN
+                $(  LET n = 7 - chno REM 8
+                    FOR i=1 TO n DO wrch('*S')
+                    ch := '*S'
+                    chno := chno + n
+                $)
+                wrch(ch)
+                chno := chno + 1
+                ch:=rdch()
+            $)
+            repeated := (ch='*C')
+            UNLESS ch=endstreamch THEN
+            $(  wrch(ch)
+                ch:=rdch()
+            $)
+            UNLESS repeated THEN lineno:=lineno+1
+        $)
+        IF terminate THEN
+        $(  selectoutput(error.stream)
+            bungle("BREAK*n")
+            selectoutput(print)
+        $)
+    $)
+    IF in\=0 THEN
+    $(  selectinput(in)
+        endread()
+        fileinfo!f.stream := 0
+    $)
+    selectinput(savein)
+    RESULTIS ~err & ~terminate
+$)
+
+
+
+
+AND make.file.list(file.str, options, vect, n) = VALOF
+$(  LET get.names(file.str, options, vect, n) = VALOF
+    $(  // keep requesting names and adding them until there are no more
+        MANIFEST $( max.file.name.size = 80/bytesperword+3 $)
+        LET error = FALSE
+        LET file.end = ?
+        LET file.name = VEC max.file.name.size
+        LET prompt = "File %N> *E"
+        LET key.string = "File,Opt,Q/s"
+        LET interactive = (compstring(file.str, "**")=0)
+        LET break.made = ?
+        IF interactive THEN bungle("Please list files to be printed*N")
+        $(rpt
+            LET newoffset = 0
+            $(rpt1
+                IF interactive THEN bungle(prompt, vect!0+1)
+                file.end := eof()
+                break.made := testflags(1)
+                UNLESS file.end | break.made THEN
+                $(  error := (rdargs(key.string, file.name,
+                                      max.file.name.size)=0)
+                    file.end := NOT error & file.name!2\=0
+                $)
+            $)rpt1 REPEATUNTIL error & NOT interactive | file.end | break.made |
+                               file.name!1\=0 | file.name!0\=0
+            TEST error THEN
+            bungle("Bad syntax in file %S for the key string *"%S*"*N",
+                file.str, key.string) ELSE
+            TEST break.made THEN bungle("BREAK*N") ELSE
+            IF \file.end THEN
+            $(  LET new.opts = VEC optsize
+                FOR i=0 TO optsize-1 DO new.opts!i:=options!i
+                TEST NOT decode.opt(file.name!1, new.opts) THEN
+                $(  error := TRUE
+                    bungle("Bad options for file '%S'*N", file.name!0)
+                $) ELSE
+                error := ~add.file(file.name!0, new.opts, vect, n)
+            $)
+        $)rpt REPEATUNTIL error & NOT interactive | file.end | break.made
+        IF interactive THEN bungle("End of file list*N")
+        RESULTIS \(error & NOT interactive) & \break.made
+    $)
+
+    AND add.file(file.str, options, vect, n) = VALOF
+    TEST file.str\=0 & file.str%0\=0 & file.str%1\=',' THEN
+    $(  LET new.file=getvec(f.str+file.str%0/bytesperword)
+        LET error = TRUE
+        TEST new.file=0 THEN
+        bungle("Can't get space for '%S'*N",file.str) ELSE
+        TEST vect!0=n THEN
+        bungle("Too many (%N) files given*N", n) ELSE
+        $(  LET file.stream = my.findinput(file.str)
+            UNLESS file.stream=0 THEN
+            $(  vect!0 := vect!0+1
+                FOR i=0 TO file.str%0 DO (new.file+f.str)%i := file.str%i
+                new.file!f.offset := options!opt.offset
+                new.file!f.lineno := options!opt.linenos
+                new.file!f.quiet  := options!opt.quiet
+                new.file!f.newpage:= options!opt.newpage
+                new.file!f.stream := file.stream
+                vect!(vect!0):=new.file
+                error := FALSE
+            $)
+        $)
+        RESULTIS ~error
+    $) ELSE
+    $(  LET error = TRUE
+        LET in=?
+        LET file.name = "**"
+        IF file.str\=0 & file.str%0\=0 THEN
+        $(  FOR i=2 TO file.str%0 DO file.str%(i-1) := file.str%i
+            file.str%0 := file.str%0-1
+            file.name := file.str
+        $)
+        in := my.findinput(file.name)
+        UNLESS in=0 THEN
+        $(  LET savein=input()
+            selectinput(in)
+            error := ~get.names(file.name, options, vect, n)
+            endread()
+            selectinput(savein)
+        $)
+        RESULTIS ~error
+    $)
+
+    vect!0 := 0
+    RESULTIS add.file(file.str, options, vect, n)
+$)
+
+
+
+AND delete.file.list(vect) BE
+$(  LET savein = input()
+    FOR i=1 TO vect!0 DO
+    UNLESS vect!i=0 THEN
+    $(  UNLESS (vect!i)!f.stream=0 THEN
+        $(  selectinput((vect!i)!f.stream)
+            endread()
+        $)
+        freevec(vect!i)
+    $)
+    selectinput(savein)
+$)
+
+
+
+AND print.banner(file) BE
+$(  first.write := FALSE
+    writes("*P*N")
+    FOR i=1 TO pw DO wrch(extra.header.ch)
+    wrch('*N')
+    FOR i=1 TO 3 DO
+    $(  FOR i=1 TO 15 DO wrch(extra.header.ch)
+        TEST i=2 THEN
+        $(  LET heading = file
+            LET gap=((pw-32+1)-heading%0)/2
+            FOR i=1 TO gap DO wrch('*S')
+            writes(heading)
+            FOR i=16+gap+heading%0 TO pw-16 DO wrch('*S')
+        $) ELSE
+        FOR i=16 TO pw-16 DO wrch('*S')
+        FOR i=pw-15 TO pw DO wrch(extra.header.ch)
+        wrch('*N')
+    $)
+    FOR i=1 TO pw DO wrch(extra.header.ch)
+    writes("*N*N*N*N*N")
+$)
+
+
+
+
+AND print.break.message() BE
+$(  writes("*n*n*n")
+    FOR i=1 TO pw DO wrch('**')
+    writes("*n**")
+    FOR i=2 TO (pw-23)/2 DO wrch('*S')
+    writes("****** BREAK AT SOURCE ******")
+    FOR i=(pw-23)/2+23+1 TO pw-1 DO wrch('*S')
+    writes("***n")
+    FOR i=1 TO pw DO wrch('**')
+$)
+
+
+
+
+AND print.file.list(file, vect) = VALOF
+$(  LET success = TRUE
+    IF vect!0>1 THEN
+    TEST get.print(file) THEN
+    $(  first.write := FALSE      //  we generate some output
+        writes("Files Listed:                                    Options:*N*
+               *=============                                    ========*N*N")
+        FOR i=1 TO vect!0 DO
+        $(  writef("     %I2   %S ", i, vect!i+f.str)
+            FOR j=1 TO 30-(vect!i+f.str)%0 DO wrch('*S')
+            writef("%S offset ", (vect!i!f.lineno->"numbered","        ") )
+            TEST vect!i!f.offset<0 THEN writes("(centred)*N") ELSE
+            writef("%N*N", vect!i!f.offset)
+        $)
+    $) ELSE success := FALSE
+    RESULTIS success
+$)
+
+
+
+AND eof() = VALOF
+$(  LET ch=rdch()
+    UNLESS ch=endstreamch DO unrdch()
+    RESULTIS ch=endstreamch
+$)
+
+
+
+//  AND exists(file) = VALOF
+//  $(  LET in = my.findinput(file)
+//      IF in~=0 THEN
+//      $(  LET savein = input()
+//          selectinput(in)
+//          endread()
+//          selectinput(savein)
+//      $)
+//      RESULTIS in~=0
+//  $)
+
+
+
+AND my.findinput(file) = VALOF
+$(  LET in=findinput(file)
+    IF in=0 THEN
+    $(  LET r2=result2
+        bungle("Can't open '%S' because ",file)
+        result2:=r2
+        fault(result2)
+    $)
+    RESULTIS in
+$)
+
+
+
+AND bungle(bungle.string, arg1, arg2, arg3, arg4, arg5, arg6, arg7) BE
+$(  LET saveout = output()
+    selectoutput(error.stream)
+    writes("*CRingprint: ")
+    writef(bungle.string, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
+    selectoutput(saveout)
+$)
+                                    
+

@@ -1,0 +1,250 @@
+SECTION "PREPROC"
+GET     "LIBHDR"
+
+MANIFEST $( node.left   = 0
+            node.right  = 1
+            node.val    = 2
+            node.tag    = 3
+         $)
+GLOBAL   $( eoi.level   : ug + 1
+            eoi.label   : ug + 2
+            in.header   : ug + 3
+            from.file   : ug + 4
+            termout     : ug + 5
+            root        : ug + 6
+            blib.wrch   : ug + 7
+            with.str    : ug + 8
+            with.ptr    : ug + 9
+            blib.rdch   : ug + 10
+            in.with     : ug + 11
+            blib.unrdch : ug + 12
+            with.unrdch : ug + 13
+         $)
+
+LET error ( mess, rc ) BE
+$(
+   endread () ; endwrite () ; selectoutput ( termout )
+   writes ( mess )
+   freetree ( root ! node.left ) ; freetree ( root ! node.right )
+   stop ( rc )
+$)
+
+AND start () BE
+$(
+   LET argv = VEC 60
+   LET in   =  ?
+   LET out  =  ?
+
+   blib.wrch := wrch
+   blib.rdch := rdch ; blib.unrdch := unrdch
+   with.ptr  := 1
+   termout   := output ()
+   root      := TABLE 0, 0, 0, 0   // so it won't match
+
+   IF rdargs ( "from/a,to/a,header/k,ver/s,with/k", argv, 60 ) = 0 THEN
+   $(
+      writes ( "Bad arguments*N" ) ; stop ( 20 )
+   $)
+
+   with.str := argv ! 4
+
+    in :=  findinput ( argv ! 2 = 0 -> argv ! 0, argv ! 2 )
+   out := findoutput ( argv ! 1 )
+
+   IF ( in = 0 ) | ( out = 0 ) THEN
+   $(
+      writes    ( "Unable to open input/output*N" )
+      endstream ( in  )
+      endstream ( out )
+      stop      ( 20  )
+   $)
+
+   wrch      := local.wrch
+
+   selectinput ( in ) ; selectoutput ( out )
+
+   IF with.str \= 0 THEN $( rdch := with.rdch ; unrdch := with.unrdch $)
+
+   in.header := argv ! 2 \= 0
+   from.file := argv ! 0
+
+   // now process the BCPL program
+   // assumes that there are no <$, $> or $$ sequences in strings and
+   // that the source form.file is correctly terminated
+
+   $( // define three useful routines
+
+      LET nextch () = VALOF
+      $(
+         LET ch = rdch ()
+         IF testflags (1) THEN error ( "****BREAK*N", 0 )
+         IF ch = endstreamch THEN
+         $(
+            LET new.in = ?
+            UNLESS in.header DO longjump ( eoi.level, eoi.label )
+            endread () ; new.in := findinput ( from.file )
+            IF new.in = 0 THEN error ( "Unable to open main from.file*N", 20 )
+            selectinput ( new.in )
+            ch := rdch ()
+            IF ch = endstreamch THEN longjump ( eoi.level, eoi.label )
+            in.header := FALSE
+         $)
+         RESULTIS ch
+      $)
+      AND readtag ( tv ) BE
+      $(
+         LET n, c = 0, capitalch ( nextch () )
+         WHILE [ 'A' <= c <='Z' ] | [ '0' <= c <= '9' ] | [ c = '*'' ]
+            DO $( LET pr = c = '*''
+                  n := n + 1 ; tv % n := c ; c := capitalch ( nextch () )
+                  IF n > 20 THEN error ( "Tag too long*N", 20 )
+                  IF pr THEN BREAK
+               $)
+         tv % 0 := n ; unrdch ( c )
+      $)
+      AND taggedin ( tv ) = tv % ( tv % 0 ) = '*'' -> VALOF
+          $(
+             LET res = ?                 ; tv % 0 := tv % 0 - 1
+             res := tagscan ( tv, root ) ; tv % 0 := tv % 0 + 1
+             RESULTIS NOT res $) , tagscan ( tv, root )
+      AND tagscan ( tv, node ) = node = 0 -> FALSE, VALOF
+      $(
+         LET c = compstring ( tv, node + node.tag )
+         RESULTIS c = 0 -> node ! node.val,
+                  tagscan ( tv, node ! [ c < 0 -> node.left, node.right ] )
+      $)
+      AND skiptag ( tv ) BE
+      $(
+         LET ch = nextch () ; UNTIL ch = '$' DO ch := nextch ()
+         ch := nextch () ; UNLESS ch = '>' DO $( unrdch () ; LOOP $)
+         $( LET ntv = VEC 10
+            readtag ( ntv )
+            IF compstring ( tv, ntv ) = 0 THEN RETURN
+         $)
+      $) REPEAT
+      AND readlog () = VALOF
+      $(
+         LET lgv = VEC 10
+         LET ch  = nextch () ; UNTIL ch  = ':' DO ch := nextch ()
+                               UNTIL ch  = '=' DO ch := nextch ()
+             ch := nextch () ; UNTIL ch \= ' ' DO ch := nextch ()
+         TEST ch = '$'
+         THEN $( nextch () ; readtag ( lgv )
+                 RESULTIS taggedin ( lgv, root )
+              $)
+         ELSE $( unrdch () ; readtag ( lgv )
+                 RESULTIS compstring ( lgv, "TRUE" ) = 0
+              $)
+      $)
+
+      eoi.level := level ()
+
+      $( LET ch = nextch ()
+         LET tv = VEC 10
+         SWITCHON ch INTO
+         $( DEFAULT  : wrch ( ch ) ; LOOP
+            CASE '|' : ch := nextch ()
+                       TEST ch = '|'
+                       THEN $( writes ( "||" )
+                               UNTIL ch = '*N' DO $( ch := nextch ()
+                                                     wrch ( ch )     $)
+                            $)
+                       ELSE $( wrch ( '|' ) ; wrch ( ch ) $)
+                       LOOP
+            CASE '/' : ch := nextch ()
+                       TEST ch = '/'
+                       THEN $( writes ( "//" )
+                               UNTIL ch = '*N' DO $( ch := nextch ()
+                                                     wrch ( ch )     $)
+                            $)
+                       ELSE TEST ch = '**'
+                            THEN $( writes ( "/**" ) ; ch := nextch ()
+                                    $( UNTIL ch = '**' DO $( wrch ( ch )
+                                                             ch := nextch ()
+                                                          $)
+                                       ch := nextch ()
+                                       IF ch = '/' THEN BREAK
+                                       wrch ( '**' )
+                                    $) REPEAT
+                                    writes ( "**/" )
+                                 $)
+                            ELSE $( wrch ( '/' ) ; wrch ( ch ) $)
+                       LOOP
+            CASE '$' : ENDCASE
+         $)
+         ch := nextch ()
+         SWITCHON ch INTO
+         $( DEFAULT  : wrch ( '$' ) ; unrdch () ; ENDCASE
+            CASE '<' : readtag ( tv )
+                       UNLESS taggedin ( tv, root ) DO skiptag ( tv )
+                       ENDCASE
+            CASE '>' : readtag ( tv )
+                       ENDCASE
+            CASE '$' : readtag ( tv )
+                       settagval ( tv, readlog (), root )
+                       ENDCASE
+         $)
+      $) REPEAT
+
+      /**/ eoi.label : endread () ; endwrite ()
+
+      wrch := blib.wrch
+      rdch := blib.rdch
+
+      selectoutput ( termout )
+
+      IF argv ! 3 \= 0 THEN
+      $(
+         LET print ( node ) BE IF node \= 0 THEN
+         $(
+            print  ( node ! node.left  )
+            writef ( "%S %S*N", node + node.tag,
+                                node ! node.val -> "set", "unset" )
+            print  ( node ! node.right )
+         $)
+         print ( root ! node.left ) ; print ( root ! node.right )
+      $)
+
+      freetree ( root ! node.left  )
+      freetree ( root ! node.right )
+   $)
+$)
+
+AND settagval ( tag, value, node ) BE
+$(
+   LET  comp = compstring ( tag, node + node.tag )
+   LET  slot = node + [ comp < 0 -> node.left, node.right ]
+
+   TEST comp = 0
+   THEN node ! node.val := value
+   ELSE TEST ! slot = 0
+        THEN $( LET newnode = getvec ( node.tag + ( tag % 0 ) / 2 + 1 )
+                newnode ! node.left, newnode ! node.right := 0, 0
+                newnode ! node.val                        := value
+                FOR c = 0 TO tag % 0 DO [ newnode + node.tag ] % c := tag % c
+                ! slot := newnode
+             $)
+        ELSE settagval ( tag, value, ! slot )
+$)
+
+AND freetree ( node ) BE IF node \= 0 THEN
+                         $(
+                            freetree ( node ! node.left  )
+                            freetree ( node ! node.right )
+                            freevec  ( node )
+                         $)
+
+AND local.wrch ( ch ) BE UNLESS in.header DO blib.wrch ( ch )
+
+AND with.unrdch ( c ) BE with.ptr := with.ptr - 1
+
+AND with.rdch () = VALOF
+$(
+   LET resch =  [ with.ptr = ( with.str % 0 + 1 ) ] -> '*N', with.str % with.ptr
+   with.ptr := with.ptr + 1
+   IF with.ptr >= ( with.str % 0 + 2 ) THEN $( rdch   := blib.rdch
+                                               unrdch := blib.unrdch $)
+   RESULTIS resch
+$)
+
+

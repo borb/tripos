@@ -1,0 +1,188 @@
+// Source file "split" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+SECTION "SPLIT"
+GET "libhdr"
+GET "wrshdr"
+
+LET swapbufs() BE $(
+  LET t = ?
+  FOR i = 0 TO nmark - 1 DO
+    IF marker.y!i >= 0 & i ~= 15 &
+                         i ~= 16 THEN marker.alternate!i := ~marker.alternate!i
+// marker 15 is special. It represents the folded block.
+// marker 16 is too, it's the output pointer for a process in a process window
+// Each window may have a marker 15, it is saved here in the save window.
+  text.update.info := text.update.info | 15
+// Do not change ANY of the following mess!
+// The positions of various of these are assumed in the rest of this section.
+// In addition, textspace and textmax have positions assumed in 'sysdep' (re setting up)
+// and in 'obey2' (re exiting).
+// Also 'screen' accesses the alternate displaycol.
+//      'screen' accesses the alternate marker 15.
+  t := textspace;       textspace := otherbuf!0;        otherbuf!0 := t
+  t := textmax;         textmax := otherbuf!1;          otherbuf!1 := t
+  t := textend;         textend := otherbuf!2;          otherbuf!2 := t
+  t := textcur;         textcur := otherbuf!3;          otherbuf!3 := t
+  t := textsp;          textsp := otherbuf!4;           otherbuf!4 := t
+  t := textstart;       textstart := otherbuf!5;        otherbuf!5 := t
+  t := displaycol;      displaycol := otherbuf!6;       otherbuf!6 := t
+  t := fileline;        fileline := otherbuf!7;         otherbuf!7 := t
+  t := filecol;         filecol := otherbuf!8;          otherbuf!8 := t
+  t := text.top.scr.line; text.top.scr.line := otherbuf!9; otherbuf!9 := t
+  t := text.bot.scr.line; text.bot.scr.line := otherbuf!10; otherbuf!10 := t
+  t := t.insertmode;    t.insertmode := otherbuf!11;    otherbuf!11 := t
+  t := t.document;      t.document := otherbuf!12;      otherbuf!12 := t
+  t := source.filename; source.filename := otherbuf!13; otherbuf!13 := t
+  t := browse;          browse := otherbuf!14;          otherbuf!14 := t
+  t := updated;         updated := otherbuf!15;         otherbuf!15 := t
+  t := scb.src;         scb.src := otherbuf!16;         otherbuf!16 := t
+  t := scb.dst;         scb.dst := otherbuf!17;         otherbuf!17 := t
+  t := scb.trans;       scb.trans := otherbuf!18;       otherbuf!18 := t
+  t := scb.src.ptr;     scb.src.ptr := otherbuf!19;     otherbuf!19 := t
+  t := scb.dst.ptr;     scb.dst.ptr := otherbuf!20;     otherbuf!20 := t
+  t := scb.trans.ptr;   scb.trans.ptr := otherbuf!21;   otherbuf!21 := t
+  t := text.top.vis.line; text.top.vis.line := otherbuf!22; otherbuf!22 := t
+
+// additions to V2.0, May 1983
+  t := srcname.not.dstname; srcname.not.dstname := otherbuf!23; otherbuf!23 := t
+  t := lines.rolled.past; lines.rolled.past := otherbuf!24; otherbuf!24 := t
+  t := t.wordwrap;      t.wordwrap := otherbuf!25;      otherbuf!25 := t
+  t := t.justify;       t.justify  := otherbuf!26;      otherbuf!26 := t
+  t := t.varitabs;      t.varitabs := otherbuf!27;      otherbuf!27 := t
+  t := t.hyphhelp;      t.hyphhelp := otherbuf!28;      otherbuf!28 := t
+  t := t.softhyph;      t.softhyph := otherbuf!29;      otherbuf!29 := t
+  t := t.printdisp;     t.printdisp:= otherbuf!30;      otherbuf!30 := t
+  t := t.pagebreak;     t.pagebreak:= otherbuf!31;      otherbuf!31 := t
+  t := t.bracket;       t.bracket  := otherbuf!32;      otherbuf!32 := t
+  t := folded.block;    folded.block := otherbuf!33;    otherbuf!33 := t
+  t := folded.len;      folded.len := otherbuf!34;      otherbuf!34 := t
+  t := marker.x!15;     marker.x!15:= otherbuf!35;      otherbuf!35 := t
+  t := marker.y!15;     marker.y!15:= otherbuf!36;      otherbuf!36 := t
+// additions August 1983, for process buffers
+  t := twid;            twid:= otherbuf!37;             otherbuf!37 := t
+  t := marker.x!16;     marker.x!16 := otherbuf!38;     otherbuf!38 := t
+  t := marker.y!16;     marker.y!16 := otherbuf!39;     otherbuf!39 := t $)
+
+LET split.is.allowed() = VALOF $(
+  TEST splitallowed THEN RESULTIS yes ELSE $(
+    error("Split screen not allowed."); RESULTIS no $) $)
+
+LET edit.obey.split() BE IF split.is.allowed() THEN $(
+  // He has asked to split the screen.
+  // If it is already split, the currently active window is increased by
+  // one line. Otherwise, we prompt for a filename and open up a new file.
+  TEST ~t.split THEN $(
+    LET v = VEC 40
+    LET trysplit = (scroll.bot.line - scroll.top.line) / 2 + scroll.top.line
+    LET inbuf = getvec(80/bytesperword)
+    LET inbuf2= getvec(80/bytesperword)
+    LET browsewanted = no
+    LET answ = ?
+    IF otherbuf!0 = 0 THEN $( // need to getvec a new text buffer
+      LET spare = getvec(3000)
+      otherbuf!1 := textmax
+      otherbuf!0 := getvec((4 + textmax)/bytesperword)
+      IF spare ~= 0 THEN freevec(spare)
+      IF otherbuf!0 = 0 THEN $(
+        error("Not enough workspace - cannot split screen")
+        freevec(inbuf); freevec(inbuf2); RETURN $) $)
+    message("Splitting screen:*n")
+    cmd.init(v) // prepare to splurge screen
+    cmd.simple(3, "Using this command you can edit or inspect two files at once*n")
+    cmd.simple(3, "Please give the new file a name, even if you do not intend to save it*n")
+    answ := request.filename(inbuf, "Name of new file? ")
+    IF answ = (ctl&'U') | qbuf.file%0 = ch.line THEN $(
+      cmd.finish(); freevec(inbuf); freevec(inbuf2)
+      freevec(otherbuf!0); otherbuf!0 := 0
+      message("  Splitscreen request cancelled*n")
+      sys.keywait(200); RETURN $) // message flashed briefly on status line
+    IF answ ~= escape THEN $( // ask if he wants to set browse
+      LET dud = VEC 2         // dud vec for text of answ
+      dud%0 := ch.line
+      cmd.simple(3, "If you specify browse you will not be able to change the file*n")
+      browsewanted := cmd.query(inbuf2, 78, dud, "Browse (Y/N):", 0) $)
+    cmd.finish()
+    freevec(inbuf2)
+    swapbufs()
+    $( LET i = 0 // form string out of name
+       $( LET c = qbuf.file%i
+          IF c = ch.line THEN BREAK; i := i + 1
+          inbuf%i := c $) REPEAT // we know it's not too long
+       inbuf%0 := i $)
+    message("  Opening *"%S*" ...*n", inbuf)
+    srcname.not.dstname := no
+    initialise.toggles()  // initialise standard window-dependent variables
+    answ := text.init(inbuf, textspace, textmax)
+    IF ~answ THEN $(
+      freevec(inbuf); swapbufs()
+      freevec(otherbuf!0); otherbuf!0 := 0
+      message( "  Splitscreen request cancelled*n")
+      sys.keywait(250); RETURN $)
+    // OK the split really will go ahead
+    // 'inbuf' will only get freevec'd when the window closes
+    t.split := yes
+    IF twid = 0 THEN browse := browsewanted
+    scr.y.of.split := trysplit
+    text.top.scr.line := trysplit + 1 // appear in lower half
+    text.bot.scr.line := ymax $)      // guess
+
+  ELSE $( // screen already split
+
+    scr.y.of.split := scr.y.of.split +
+        (text.top.scr.line < scr.y.of.split -> 1, -1) $) $)
+
+LET edit.obey.swap() BE
+  TEST ~t.split THEN
+    edit.obey.split()
+  ELSE $( text.update(); swapbufs() $)
+
+LET initialise.toggles() BE $(
+  // this is called at the beginning of the edit and at the creation of
+  // any new window. It initialises all the standard guff to a standard form.
+  displaycol      := 0
+  fileline        := 0
+  filecol         := 0
+  t.insertmode    := yes
+  t.document      := no
+  updated         := no
+  text.top.vis.line := 0
+  lines.rolled.past := 0
+  t.wordwrap      := no
+  t.justify       := no
+  t.varitabs      := no
+  t.hyphhelp      := no
+  t.softhyph      := no
+  t.printdisp     := no
+  t.pagebreak     := no
+  t.bracket       := yes
+  folded.block    := 0
+  folded.len      := 0
+  marker.y!15     := -1
+  twid            := 0
+// marker 16 is after the last character output by the process to the buffer
+  marker.y!16     := 0 $)
+
+LET help.split() BE $(
+  LET v = getvec(100)
+  LET c = cmd.simple
+  cmd.init(v)
+  c(0, "The split screen facility allows you to edit two files at once*n")
+  c(0, "    ^^  (control-^) splits the screen*n")
+  c(0, "You will be prompted for the name of another file to edit,*n")
+  c(0, "and it will appear in half of the screen.*n")
+  c(0, "    ^^  (control-^) now swaps the cursor from one half to the other*n")
+  c(0, "    ^K^ (control-K, ^) increases the size of the current window*n")
+  c(0, "            by one line*n")
+  c(0, "Effectively you are provided to with two separate editors*n")
+  c(0, "To cancel a window, use ^KQ, ^KD or ^KX in the normal way*n")
+  c(0, "none of these will affect the other window*n")
+  c(0, "to move data from one window to the other, use a block move (see ^JB)*n")
+  c(0, "most features of the editor are duplicated in the two windows,*n")
+  c(0, "but there is only one set of markers to allow this*n")
+  c(0, "------------------------------------------------------------(press any key)--------*n")
+  message("Splitscreen:*n"); c := sys.rdch()
+  cmd.finish(); freevec(v) $)
+
+

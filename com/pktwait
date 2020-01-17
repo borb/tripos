@@ -1,0 +1,68 @@
+AND pktwait( id, pkt )  =  VALOF
+$(
+//  Wait for the packet "pkt", which should be arriving from task "id".
+//  Any other packets which arrive in the meantime are queued onto "pktlist",
+//  and dequeued when requested.
+
+    LET p  =  lookinpktqueue( pkt )
+
+    UNLESS  p = NIL  DO  RESULTIS  p
+
+    //  If it was not in the packet queue, then we must wait until the
+    //  packet arrives.
+
+    $(  //  Loop to wait for packets
+
+        p  :=  taskwait()
+
+        IF  p = pkt  THEN  RESULTIS  p
+
+        //  Oh, boring!  This was STILL not the one wanted, so queue it,
+        //  and wait some more.
+
+        addtopktqueue( p )
+    $)
+    REPEAT  //  Until the correct packet arrives.
+$)
+
+
+
+AND lookinpktqueue( pkt )  =  VALOF
+$(
+    LET ptr  =  @pktlist
+
+    UNTIL  !ptr = NIL  DO
+    $(
+        IF  !ptr = pkt  THEN
+        $(
+            //  This is our packet.  Dequeue it, and send it back again.
+
+            LET packet  =  !ptr
+
+            !ptr     :=  !packet
+            !packet  :=  notinuse
+
+            RESULTIS  packet
+        $)
+
+        //  Otherwise, we carry on down the chain, looking as we go
+
+        ptr  :=  !ptr
+    $)
+
+    RESULTIS  NIL
+$)
+
+
+
+AND addtopktqueue( pkt )  BE
+$(
+    !pkt     :=  pktlist
+    pktlist  :=  pkt
+$)
+
+
+
+AND nextpkt()  =  pktlist = NIL  ->  taskwait(),  lookinpktqueue( pktlist )
+
+

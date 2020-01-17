@@ -1,0 +1,349 @@
+/****************************************************************************\
+*                           Systems Research Group                           *
+******************************************************************************
+
+
+               ########  ##    ##    ####     ######   ########
+               ########  ###  ###   ######   ########  ########
+                  ##     ########  ##    ##  ##        ##
+                  ##     ## ## ##  ########  ##  ####  ######
+                  ##     ##    ##  ##    ##  ##    ##  ##
+                  ##     ##    ##  ##    ##  ##    ##  ##
+               ########  ##    ##  ##    ##  ########  ########
+               ########  ##    ##  ##    ##   ######   ########
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   08/01/87            *
+\****************************************************************************/
+
+
+
+SECTION "IMAGE"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+
+
+
+GLOBAL
+$(
+    buffp           :  ug + 0
+    buffe           :  ug + 1
+    file.buff       :  ug + 2
+    inputfile       :  ug + 3
+    outputfile      :  ug + 4
+    sysout          :  ug + 5
+    veclist         :  ug + 6
+$)
+
+
+
+MANIFEST
+$(
+    a.from          =  0
+    a.to            =  1
+
+    word.buffsize   =  1000
+$)
+
+
+
+LET start()  BE
+$(
+    LET args    =  "FROM/A,TO/K"
+    LET argv    =  VEC 50
+
+    LET f.file  =  0
+    LET t.file  =  0
+
+    sysout      :=  output()
+
+    veclist     :=  0
+    inputfile   :=  0
+    outputfile  :=  0
+    buffp       :=  0
+    buffe       :=  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+            error( "Bad arguments for string *"%S*"", args )
+
+    f.file      :=  argv!a.from
+    t.file      :=  argv!a.to
+
+    inputfile   :=  findinput( f.file )
+    outputfile  :=  t.file = 0  ->  sysout,  findoutput( t.file )
+
+    IF  inputfile = 0  |  outputfile = 0  THEN
+    $(
+        //  Failed to open the I/O streams, so we should do something about
+        //  this.
+
+        IF  inputfile = 0  THEN
+            writef( "Failed to open FROM file: %S*N",
+                     f.file )
+
+        IF  outputfile = 0  THEN
+            writef( "Failed to open TO file: %S*N",
+                     t.file = 0  ->  "(sysout)", t.file )
+
+        error( "Failed to open I/O streams" )
+    $)
+
+    file.buff  :=  gvec( word.buffsize )
+
+    selectinput( inputfile )
+    selectoutput( outputfile )
+
+    loadhunks()
+
+    writeend()
+
+    UNLESS  t.file = 0  DO  endwrite()
+
+    endread()
+
+    inputfile   :=  0
+    outputfile  :=  0
+
+    selectoutput( sysout )
+
+    //  And tidy up
+
+    fvectors( veclist )
+$)
+
+
+
+AND writeend()  BE
+    writef( "S8%X2%X6%X2*N", 4, 0, NOT( 4 + 0 ) )
+
+
+
+AND writehunk( buffer, address, size )  BE
+$(
+//  Write the boot file, with the hunks which are in the list pointed to by
+//  "hunk".
+
+    LET offset  =  0
+
+    UNLESS  outputfile = sysout  DO
+    $(
+        selectoutput( sysout )
+
+        writef( "%X6  -  %X6    (%N bytes)*E", address, address + size, size )
+
+        selectoutput( outputfile )
+    $)
+
+    UNTIL  size = 0  DO
+    $(
+        LET bytes   =  size > 32  ->  32,  size
+        LET words   =  bytes/bytesperword
+        LET length  =  bytes + 4
+
+        LET cs      =  length  +  ((address)        &  #XFF)  +
+                                  ((address >> 8)   &  #XFF)  +
+                                  ((address >> 16)  &  #XFF)
+
+        writef( "S2%X2%X6", length, address )
+
+        FOR  i = 0  TO  bytes-1  DO
+        $(
+            LET byte  =  buffer % (offset + i)
+
+            cs  :=  cs + byte
+
+            writehex( byte, 2 )
+        $)
+
+        writef( "%X2*N", NOT cs )
+
+        address  :=  address + bytes
+        offset   :=  offset  + bytes
+
+        size     :=  size    -  bytes
+    $)
+
+    UNLESS  outputfile = sysout  DO
+    $(
+        selectoutput( sysout )
+
+        newline()
+
+        selectoutput( outputfile )
+    $)
+$)
+
+
+
+AND loadhunks()  BE
+$(
+    LET o     =  output()
+    LET type  =  readword()
+
+    WHILE  type = t.abshunk  DO
+    $(
+        loadhunk()
+
+        type  :=  readword()
+    $)
+
+    UNLESS  type = t.end  DO  error( "Illegal type %N in object module", type )
+$)
+
+
+
+AND loadhunk()  BE
+$(
+//  Scan an absolute hunk, and add its value to the load list
+
+    LET address =  readword()
+    LET words   =  readword()
+
+    LET buffer  =  gvec( words )
+
+    FOR  i = 0  TO  words-1  DO  buffer!i  :=  readword()
+
+    writehunk( buffer, address*bytesperword, words*bytesperword )
+
+    fvec( buffer )
+$)
+
+
+
+AND readword()  =  VALOF
+$(
+    LET result  =  0
+
+    IF  buffp = buffe  THEN
+    $(
+        buffe  :=  (ABS readwords( file.buff, word.buffsize ))
+        buffp  :=  0
+    $)
+
+    IF  buffe = 0  THEN  error( "Premature END-OF-FILE" )
+
+    result  :=  file.buff!buffp
+    buffp   :=  buffp + 1
+
+    RESULTIS  result
+$)
+
+
+
+AND gvec( vecsize )  =  VALOF
+$(
+//  Add a new vector to the list of those "got" already.
+
+    LET node   =  getvec( 2 )
+    LET space  =  getvec( vecsize )
+
+    TEST  node = 0  |  space = 0  THEN
+    $(
+        //  Cannot get either the main space, or the node space.
+        //  Free whichever one was successful, and flag an error.
+
+        UNLESS  node   = 0  DO  freevec( node )
+        UNLESS  space  = 0  DO  freevec( space )
+
+        error( "Cannot get vector of size %U5", vecsize )
+    $)
+    ELSE
+    $(
+        //  We have got the vector successfully, so add it to the
+        //  chain of allocated vectors.
+
+        node!0  :=  veclist
+        node!1  :=  space
+        veclist :=  node
+
+        RESULTIS  space
+    $)
+$)
+
+
+
+AND fvec( vector )  BE
+$(
+//  Free the vector pointed to by "vector".  Look in the allocated space chain
+//  to find this vector, and when found, de-allocate the space.
+
+    LET node  =  veclist
+    LET ptr   =  @veclist
+
+    UNTIL  node = 0  DO
+    $(
+        IF  node!1 = vector  THEN
+        $(
+            //  We have found the vector to deallocate.  Remove this node from
+            //  the list, and deallocate the space involved.
+
+            !ptr   :=  node!0
+
+             freevec( vector )
+             freevec( node )
+
+             RETURN
+        $)
+
+        ptr   :=  node
+        node  :=  node!0
+    $)
+
+    error( "Cannot free vector %N", vector )
+$)
+
+
+
+AND fvectors( list )  BE
+$(
+//  Free all the vectors pointed to by the list "list".
+
+    UNTIL list = 0  DO
+    $(
+        LET nlist  =  list!0
+        LET space  =  list!1
+
+        freevec( space )
+        freevec( list  )
+
+        list  :=  nlist
+    $)
+$)
+
+
+
+AND error( string, argument )  BE
+$(
+//  Print out an error message, and then tidy up.
+
+    selectoutput( sysout )
+
+    writes( "*N****** Error:  " )
+    writef( string, argument )
+    newline()
+
+    UNLESS  inputfile = 0  DO
+    $(
+        selectinput( inputfile )
+
+        endread()
+    $)
+
+    UNLESS  outputfile = 0  |  outputfile = sysout  DO
+    $(
+        selectoutput( outputfile )
+
+        endwrite()
+    $)
+
+    fvectors( veclist )
+
+    stop( 20 )
+$)
+
+

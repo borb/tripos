@@ -1,0 +1,57 @@
+/*****************************************************************************\
+*                        Olivetti Research Laboratory                         *
+*******************************************************************************
+
+
+                     ##         ######   ##    ##           
+                     ##        ########  ##    ##           
+                     ##        ##        ##    ##           
+                     ##        #######   ##    ##     ##    
+                     ##              ##  ## ## ##     ##    
+                     ##              ##  ########           
+                     ########  ########  ###  ###     ##    
+                     ########   ######   ##    ##     ##    
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   13/04/87             *
+\*****************************************************************************/
+
+
+
+SECTION "LSW:"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+
+
+
+LET start( parm, act, scb, string )  =  VALOF
+$(
+//  Called when the user mentions the device without mounting it explicitly.
+
+    LET task  =  0
+
+    //  We call "mount" to mount the device for us, since there is no point
+    //  in duplicating the work here.
+
+    UNLESS  callseg( "sys:c.mount", "lsw:" )  DO  RESULTIS FALSE
+
+    //  Having mounted the device, get a handle on the task ID itself, and
+    //  then pass the open request on to it.
+
+    task  :=  devicetask( string )
+
+    IF  task = 0  THEN  RESULTIS  FALSE
+
+    //  The device has now definitely been mounted, so we should pass on the
+    //  open request to it.
+
+    scb!scb.type  :=  task
+
+    RESULTIS  sendpkt( notinuse, task, act, 0, 0, scb, 0, string )
+$)
+
+

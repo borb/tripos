@@ -1,0 +1,211 @@
+// Source file "pbuf" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+SECTION "PBUF"
+GET "libhdr"
+GET "wrshdr"
+
+// This section contains the main operations necessary to support a cli in
+// a window. IDW has stated that he will write the TRIPOS end of things,
+// using the following interface:
+//     init.ok := inittwids()              // in case he needs it
+//     twid := createtwid()
+//     deletetwid(twid)
+//     totwid(twid, buffer, length)
+//     length := fromtwid(twid, buffer, maxlen)
+//     escapetwid(twid, buffer, length)
+// Thus we hope not to produce a result that relys on tripos, although
+// note that it is very much line rather than character based.
+// creation and deletion are very simple and are dealt with
+// simply by calling the routines above.
+// the routines below are needed to correctly handle the interweaving of
+// process and human input to the buffer.
+// the process in polled for output in 'main', ie only at top level.
+// lines are sent to the process when CR is hit in that window.
+
+// it is intended that a later move to many windows should be possible
+// it is hoped that interactions in a window will be as flexible as possible,
+// although it is anticipated that the speed will be undesirably slow
+
+/* ----------------------------------------------------------------
+// dummies for testing purposes.
+let inittwids() be return
+let createtwid(i) = i
+// chopped out becuase it makes 'ws *' entry crash
+//valof $(
+//  error("TWID %n created", i); resultis i $)
+
+let deletetwid(i) be error("TWID %n deleted", i)
+
+let totwid(twid, buffer, length) be $(
+  error("TWID %n sent buffer %n length %n", twid, buffer, length)
+  error("%X2, %X2 .. %X2, %X2", buffer%0, buffer%1, buffer%(length-2),
+    buffer%(length - 1)) $)
+
+let escapetwid(twid, buffer, length) be $(
+  error("TWID %n ESCAPE: buffer %n length %n", twid, buffer, length)
+  error("%X2, %X2 .. %X2, %X2", buffer%0, buffer%1, buffer%(length-2),
+    buffer%(length - 1)) $)
+
+let fromtwid(twid, buffer, maxlen) = valof $(
+  let c = textspace%(textcur + filecol)
+  let v = vec 2
+  let t = datstamp(v)
+  let ticks = t!2
+//  test c ~= '**' then resultis 0 else $(
+//    let ptr = 0
+//    $( c := textspace%(textcur + ptr)
+//       if c = ch.line | c >= ch.lineend then break
+//       ptr := ptr + 1
+//       if ptr > maxlen then break
+//       buffer%ptr := c $) repeat
+  if ticks REM 200 ~= 0 then resultis 0
+  formf(buffer, 0, 200, "there are %n ticks in the current minute*n", ticks)
+  resultis formptr $)
+//    resultis ptr $) $)
+
+--------------------------------------------------------------------*/
+
+LET send.line.to.process(send.routine) BE $(
+// send.routine will be one of 'totwid' or 'escapetwid'
+// the user has pressed CR or ^K* in a window with twid ~= 0
+//      copy the current line to a buffer
+//      set the ^KV marker to here
+//      if front of buffer exactly matches front of opline, remove from buffer
+//              thus prompts will be stripped
+//      move to end of text
+//      if on a different line from ^KV marker, insert the buffer into the text
+//      add a CR to the end of the buffer
+//      totwid(twid, buffer)
+//      insert a carriage return into the text
+  LET buflen = ?
+  IF ~processbufallowed THEN RETURN
+  IF twid = 0 THEN $(
+    error("No process in this window, cannot send to it"); RETURN $)
+  marker.x!13 := filecol
+  marker.y!13 := fileline
+  marker.alternate!13 := no
+  cur.endofline()
+  IF filecol > 200 THEN filecol := 200
+  buflen := filecol
+  FOR i = 0 TO buflen - 1 DO process.inbuf%i := textspace%(textcur + i)
+  marker.alternate!16 := no
+  cur.marker(16)
+  IF filecol <= buflen THEN $(
+    LET equal = yes
+    LET ptr = 0
+    WHILE equal & ptr < filecol DO $(
+      equal := textspace%(textcur + ptr) = process.inbuf%ptr
+      ptr := ptr + 1 $)
+    IF equal & ptr > 0 THEN $( // we suspect a prompt, it will be stripped off
+      FOR i = ptr TO buflen - 1 DO process.inbuf%(i - ptr) := process.inbuf%i
+      buflen := buflen - ptr $) $)
+  cur.moveto(999999,999,0) // move to file end, no message
+  IF fileline ~= marker.y!13 THEN // insert the buffer into the text
+    FOR i = 0 TO buflen - 1 DO $(
+      cur.inschar(process.inbuf%i); cur.right() $)
+  process.inbuf%buflen := ctl&'M'; // is this the right char to send?
+  send.routine(twid, process.inbuf, buflen)
+  meta.string("^N^D", '^') // gets h'ware scroll hint etc right
+                           // ^M would send us back to here again!
+$)
+
+LET send.block.to.process() BE $(
+// the user has pressed ^KP (block to Process)
+// if twid = 0 and (~split or othertwid = 0) then complain and exit
+// if block not set complain and exit
+// get the content of the block, as in 'block' section
+// copy the block to the bottom of the buffer.
+// ie like ^QC ^KC, but retaining the getcec'd copy of the block content
+// munge through the block, chopping into lines at ^Js.
+// send each line using totwid(twid, buffer)
+// Can I count on infinite buffering from Wislon's program?
+// I am not sure about this.
+RETURN
+$)
+
+LET check.processes.for.output() = VALOF $(
+// returns yes if some action of some sort occurs, else no
+// should be fairly fast in the fail case
+// if twid ~= 0 call fromtwid
+//   if answer not 0, receive.process.output()
+// check.other.processes:
+// if t.split and othertwid ~= 0 then call fromtwid(othertwid)
+// if answer not 0, swapbufs, receive.process.output, swapbufs
+  LET res = no
+  IF ~processbufallowed THEN RESULTIS no
+  IF twid ~= 0 THEN $(
+    LET len = fromtwid(twid, process.inbuf, 200)
+    IF len ~= 0 THEN $(
+      res := yes
+      receive.process.output(process.inbuf, len, 200) $) $)
+  IF t.split & otherbuf!37 ~= 0 THEN $( // other twid
+    LET len = fromtwid(otherbuf!37, process.inbuf, 200)
+    IF len ~= 0 THEN $(
+      res := yes
+      swapbufs()
+      receive.process.output(process.inbuf, len, 200)
+      text.update()
+      swapbufs() $) $)
+  RESULTIS res
+$)
+
+AND receive.process.output(buffer, len, maxlen) BE $(
+// called internally by check.processes.for.output, if there is some in this window.
+// if not at end of file, set the block-internal-marker - else clear it
+// go to the end of the file.
+// if not at the end of a line, go to the opmarker (or beginning of this line,
+//                                                  if closer)
+// insert the output from the process
+// call fromtwid again, and insert more output
+// repeat until fromtwid yields 0, or up to tbsl - ttsl times
+// if it is set, go to the block-internal-marker - else go to end of file
+// (the end of file stuff seems unnecessary, but
+//  without it the very simplest case doesn't work)
+  LET maxlines = (text.bot.scr.line - text.top.scr.line) // cheat
+  marker.x!14 := filecol
+  marker.y!14 := fileline
+  marker.alternate!14 := no
+  // if cursor at end of file, it should remain so
+  IF textspace%(textcur + filecol) = ch.eof THEN marker.y!14 := -1
+  cur.moveto(999999,0,0) // move to beginning of last line in file, no message
+  marker.alternate!16 := no
+  IF marker.y!16 = fileline & marker.x!16 > filecol THEN cur.marker(16)
+  WHILE len > 0 DO $(
+    FOR i = 0 TO len - 1 DO $( // might need twiddling re scroll, ctl chars
+      LET c = buffer%i
+      TEST c = ch.line | c >= ch.lineend THEN
+        ins.ch.line(c) ELSE cur.inschar(c)
+      cur.right() $)
+    IF maxlines = 0 THEN BREAK
+    maxlines := maxlines - 1
+    len := fromtwid(twid, buffer, maxlen) $)
+  marker.y!16 := fileline
+  marker.x!16 := filecol
+  TEST marker.y!14 >= 0 THEN cur.marker(14) ELSE cur.moveto(999999,999,0)
+$)
+
+LET help.processbuf() BE $(
+  LET v = getvec(100)
+  LET c = cmd.simple
+  cmd.init(v)
+  c(0, "This feature allows you to converse with a program,*n")
+  c(0, "as well as just editing text.*n")
+  c(0, "Split the screen (^^, see ^J^ (control-J, up-arrow))*n")
+  c(0, "and answer *'NAME OF NEW FILE?*'with an asterisk (*'***') instead of a filename*n")
+  c(0, "This will start a window with an interactive terminal session in it*n")
+  c(0, "         RETURN in this window sends the current line to the program*n")
+  c(0, "         ^K**    in this window send the current line to the program*n")
+  c(0, "              as a break, exception or other special event*n")
+  c(0, "In either case any prompt from the process is stripped from the line first*n")
+  c(0, "In this way a normal terminal session may proceed*n")
+  c(0, "All other editing facilities work normally*n")
+  c(0, "Your entire conversation with the process is recorded in the output file*n")
+  c(0, "^KS, ^KD, ^KX and ^KQ will all kill the process*n")
+  c(0, "------------------------------------------------------------(press any key)--------*n")
+  message("PROCESS BUFFERS:*n"); c := sys.rdch()
+  cmd.finish(); freevec(v) $)
+
+
+

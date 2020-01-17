@@ -1,0 +1,711 @@
+/****************************************************************************\
+*                          Systems Research Group                            *
+******************************************************************************
+
+
+##    ##    ####    ##    ##  ########  #######    ######    ######   ########
+###  ###   ######   ##   ##   ########  ########  ########  ########  ########
+########  ##    ##  ##  ##    ##        ##    ##  ##    ##  ##    ##     ##
+## ## ##  ########  ####      ######    #######   ##    ##  ##    ##     ##
+##    ##  ##    ##  ## ##     ##        ##    ##  ##    ##  ##    ##     ##
+##    ##  ##    ##  ##  ##    ##        ##    ##  ##    ##  ##    ##     ##
+##    ##  ##    ##  ##   ##   ########  ########  ########  ########     ##
+##    ##  ##    ##  ##    ##  ########  #######    ######    ######      ##
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   29/05/87            *
+\****************************************************************************/
+
+
+
+SECTION "MAKEBOOT"
+
+
+
+GET "LIBHDR"
+
+$<TRIPOS   GET "IOHDR"    $>TRIPOS
+$<TRIPOS   GET "CLIHDR"   $>TRIPOS
+
+
+
+GLOBAL
+$(
+    buffp           :  ug + 0
+    buffe           :  ug + 1
+    file.buff       :  ug + 2
+    hunkcount       :  ug + 3
+    hunklist        :  ug + 4
+    inputfile       :  ug + 5
+    outputfile      :  ug + 6
+    sysout          :  ug + 7
+    veclist         :  ug + 8
+$)
+
+
+
+MANIFEST
+$(
+    h.link          =  0
+    h.address       =  1
+    h.end           =  2
+    h.buffer        =  3
+
+    nodesize        =  3
+
+    a.from          =  0
+    a.to            =  1
+    a.device        =  2
+    a.new           =  3
+    a.old           =  4
+
+    word.buffsize   =  1000
+    wordsperblock   =  128
+
+$<PANOS
+    t.abshunk       =  1003
+    t.end           =  1002
+
+    act.write       =  1002
+$>PANOS
+$)
+
+
+
+LET start()  BE
+$(
+    LET args      =  "FROM/A,TO/K,DEVICE/K,NEW/S,OLD/S"
+    LET argv      =  VEC 50
+
+    LET f.file    =  0
+    LET t.file    =  0
+    LET d.string  =  0
+    LET d.number  =  0
+    LET new       =  0
+    LET file      =  0
+
+    sysout      :=  output()
+
+    veclist     :=  0
+    hunklist    :=  0
+    inputfile   :=  0
+    outputfile  :=  0
+    buffp       :=  0
+    buffe       :=  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+        error( "Bad arguments for string *"%S*"", args )
+
+    f.file    :=  argv!a.from
+    t.file    :=  argv!a.to
+    d.string  :=  argv!a.device
+
+    new       :=  argv!a.new  |  NOT argv!a.old
+
+    UNLESS  (t.file = 0)  NEQV  (d.string = 0)  DO
+        error( "Must quote one of TO or DEVICE" )
+
+    file       :=  t.file \= 0
+    inputfile  :=  findinput( f.file )
+
+    TEST  file
+        THEN  outputfile  :=  findoutput( t.file )
+        ELSE  d.number    :=  convertnumber( d.string )
+
+    IF  inputfile = 0                 |
+        (file  &  outputfile = 0)     |
+        (NOT file  &  d.number = 0)   THEN
+
+    $(  //  Some sort of error setting the parameters up.  Either the
+        //  file opens have failed, or the device number was invalid.
+
+        IF  inputfile = 0  THEN
+            writef( "Failed to open FROM file: %S*N", f.file )
+
+        IF  file  &  outputfile = 0  THEN
+            writef( "Failed to open TO file: %S*N", t.file )
+
+        IF  NOT file  &  d.number = 0  THEN
+            writef( "Bad device number: %S*N", d.string )
+
+        error( "Oh dear!" )
+    $)
+
+    writes( "MAKEBOOT Version 5.23*N" )
+
+    //  Scan the hunks to decide on buffer size
+
+    file.buff  :=  gvec( word.buffsize )
+
+    selectinput( inputfile )
+
+    scanhunks()
+    endread()
+
+    inputfile  :=  0
+
+    //  And merge them into fewer hunks
+
+    mergehunks( hunklist )
+    printlist( hunklist )
+
+    //  Now read the data from the file
+
+    inputfile  :=  findinput( f.file )
+
+    IF  inputfile = 0  THEN
+        error( "Cannot rewind FROM file *"%S*"*N", argv!0 )
+
+    selectinput( inputfile )
+
+    loadhunks()
+    endread()
+
+    inputfile  :=  0
+
+    //  Now write out the boot file.
+
+    writebootfile( d.number, hunklist, new )
+
+    IF  file  THEN
+    $(
+        selectoutput( outputfile )
+        endwrite()
+
+        selectoutput( sysout )
+    $)
+
+    //  And tidy up
+
+    fvectors( veclist )
+$)
+
+
+
+AND convertnumber( string )  =  VALOF
+$(
+//  Return the binary representation of the number given.
+
+    LET value   =  0
+    LET length  =  string % 0
+
+    UNLESS  length > 1          DO  RESULTIS  0
+    UNLESS  string % 1  =  '-'  DO  RESULTIS  0
+
+    FOR  i = 2  TO  length  DO
+    $(
+        LET ch  =  string % i
+
+        UNLESS  '0' <= ch <= '9'  DO  RESULTIS  0
+
+        value  :=  value * 10  +  ch  -  '0'
+    $)
+
+    RESULTIS  -value
+$)
+
+
+
+AND writebootfile( device, hunk, new )  BE
+$(
+//  Write the boot file, with the hunks which are in the list pointed to by
+//  "hunk".  The device parameter is either a device number or zero,
+//  implying that the boot image should be written to a file.
+
+    LET blockbuff  =  gvec( wordsperblock )
+    LET blocknum   =  1
+    LET blockoff   =  new  ->  16,  0
+
+    UNTIL  hunk = 0  DO
+    $(
+        LET address  =  hunk!h.address
+        LET end      =  hunk!h.end
+        LET buffer   =  hunk!h.buffer
+        LET bytes    =  end - address
+        LET words    =  bytes/bytesperword
+
+        writef( "*NHunk at :%X6  size %N bytes ", address, bytes )
+
+$<TRIPOS
+        wrch( '*E' )
+$>TRIPOS
+
+        TEST  device = 0  THEN
+        $(
+            selectoutput( outputfile )
+
+            writeword( t.abshunk )
+            writeword( address/bytesperword )
+            writeword( words )
+            writewords( buffer, words )
+
+            selectoutput( sysout )
+        $)
+        ELSE
+        $(
+            blockbuff!(blockoff + 0)  :=  address
+            blockbuff!(blockoff + 1)  :=  new  ->  bytes,  words
+
+            blockoff                  :=  blockoff + 2
+
+            UNTIL  words = 0  DO
+            $(
+                LET size  =  words > wordsperblock  ->  wordsperblock, words
+
+                UNLESS  sendpkt( notinuse, device, act.write, 0, 0,
+                                 buffer, wordsperblock, 0, 0, 0, blocknum ) = 0  DO
+                    writef( "*NBlock %N failed: %X8*N", blocknum, result2 )
+
+                IF  testflags( #B0001 )  THEN
+                $(
+                    writes( "*N****** BREAK*N" )
+
+                    GOTO  endofblocks
+                $)
+
+                buffer    :=  buffer + size
+                words     :=  words  - size
+
+                blocknum  :=  blocknum + 1
+            $)
+        $)
+
+        newline()
+
+        hunk  :=  hunk!h.link
+    $)
+
+endofblocks:
+
+    TEST  device = 0  THEN
+    $(
+        selectoutput( outputfile )
+
+        writeword( t.end )
+
+        selectoutput( sysout )
+    $)
+    ELSE
+    $(
+        blockbuff!(blockoff + 0)  :=  0
+        blockbuff!(blockoff + 1)  :=  0
+
+        UNLESS  sendpkt( notinuse, device, act.write, 0, 0,
+                         blockbuff, wordsperblock, 0, 0, 0, 0 ) = 0  DO
+
+            writef( "*NRoot block failed:  %X8*N", result2 )
+    $)
+
+    fvec( blockbuff )
+
+    writes( "*NEnd of Hunks.*N" )
+$)
+
+
+
+AND loadhunks()  BE
+$(
+    LET type  =  readword()
+    LET hunk  =  hunklist
+
+    //  First, create the buffers for the merged hunks.
+
+    UNTIL  hunk = 0  DO
+    $(
+        LET address  =  hunk!h.address
+        LET end      =  hunk!h.end
+        LET size     =  end - address
+        LET buffer   =  gvec( size / bytesperword )
+
+        hunk!h.buffer  :=  buffer
+        hunk           :=  hunk!h.link
+    $)
+
+    writes( "*NSecond pass ... " )
+
+$<TRIPOS
+    wrch( '*E' )
+$>TRIPOS
+
+    WHILE  type = t.abshunk  |  type = t.end  DO
+    $(
+        UNLESS  type = t.end  DO  loadhunk()
+
+        type  :=  readword()
+    $)
+
+    newline()
+
+    UNLESS  type = endstreamch  DO  error( "Illegal type %N in object module", type )
+$)
+
+
+
+AND loadhunk()  BE
+$(
+//  Scan an absolute hunk, and add its value to the load list
+
+    LET  address =  readword()  <<  2
+    LET  words   =  readword()
+    LET  ptr     =  findbuffer( address )
+
+    //  First of all, decide which buffer it has to go into
+
+    FOR  i = 0  TO  words-1  DO  ptr!i  :=  readword()
+$)
+
+
+
+AND scanhunks()  BE
+$(
+    LET  type = readword()
+
+    hunkcount  :=  0
+
+    writes( "*NHunks to be loaded:" )
+
+    WHILE  type = t.abshunk  |  type = t.end  DO
+    $(
+        UNLESS  type = t.end  DO  scanhunk()
+
+        type  :=  readword()
+    $)
+
+    UNLESS  type = endstreamch  DO  error( "Illegal type %N in object module", type )
+
+    writef( "*N*NTotal number of unmerged hunks:  %N*N", hunkcount )
+$)
+
+
+
+AND scanhunk()  BE
+$(
+//  Scan an absolute hunk, and add its value to the load list
+
+    LET  address =  readword()  <<  2
+    LET  size    =  readword()  <<  2
+    LET  nwords  =  size / bytesperword
+
+    FOR  i = 0  TO  nwords-1  DO  readword()
+
+    IF  hunkcount REM 8  =  0  THEN  newline()
+
+    writef( ":%X6  ", address )
+
+$<TRIPOS
+    wrch( '*E' )
+$>TRIPOS
+
+    putinlist( @hunklist, address, address + size )
+
+    hunkcount  :=  hunkcount + 1
+$)
+
+
+
+AND findbuffer( address )  =  VALOF
+$(
+    LET hunk  =  hunklist
+
+    UNTIL  hunk = 0  DO
+    $(
+        LET addr  =  hunk!h.address
+        LET end   =  hunk!h.end
+
+        IF  addr <= address <= end  THEN
+
+            //  Found it folks!
+
+            RESULTIS  hunk!h.buffer  +  (address - addr) / bytesperword
+
+        hunk  :=  hunk!h.link
+    $)
+
+    abort( 9999 )
+
+    RESULTIS  0
+$)
+
+
+
+AND putinlist( hunkptr, address, end )  BE
+$(
+    LET  hunk  =  hunkptr = 0  ->  0, hunkptr!h.link
+
+    UNTIL  hunk = 0  DO
+    $(
+        //  We are chasing down the list, waiting for a comparison
+        //  which is greater.
+
+        IF  address < hunk!h.address  THEN  BREAK
+
+        hunkptr  :=  hunk
+        hunk     :=  hunk!h.link
+    $)
+
+    //  On reaching here, we have found the correct place in the list for the
+    //  address, so add it in.
+
+    hunkptr!h.link  :=  newnode( hunk, address, end )
+$)
+
+
+
+AND mergehunks( hunk )  BE
+$(
+//  Having built up the list of hunks, see if we can merge one hunk into
+//  the next.
+
+    LET nhunks  =  0
+
+    UNTIL  hunk = 0  DO
+    $(
+        //  Base hunk pointed to by "hunk".  See if we can merge any
+        //  following hunks.
+
+        LET hunk1  =  hunk!h.link
+        LET addr   =  hunk!h.address
+        LET end    =  hunk!h.end
+        LET size   =  end - addr
+
+        UNTIL  hunk1 = 0  DO
+        $(
+            //  Look at the next hunks, to see if they can be merged.
+
+            LET oldhunk1  =  hunk1
+            LET addr1     =  hunk1!h.address
+            LET end1      =  hunk1!h.end
+            LET size1     =  end1 - addr1
+
+            UNLESS  (addr1 - 256)  <  end  DO  BREAK
+
+            IF  end < end1  THEN  end  :=  end1
+
+            hunk1  :=  hunk1!h.link
+
+            fvec( oldhunk1 )
+        $)
+
+        //  We drop through here when we can do no more merging.
+
+        nhunks         :=  nhunks + 1
+        hunk!h.link    :=  hunk1
+        hunk!h.end     :=  end
+        hunk           :=  hunk1
+    $)
+
+    writef( "Total number of merged hunks:    %N*N", nhunks )
+$)
+
+
+
+AND printlist( node )  BE
+$(
+    writes( "*N    Map of hunks to be loaded*N*N*
+              *          Start    End*N*N" )
+
+    UNTIL  node = 0  DO
+    $(
+        writef( "        :%X6  :%X6*N", node!h.address, node!h.end )
+
+        node  :=  node!h.link
+    $)
+$)
+
+
+
+AND newnode( link, address, end )  =  VALOF
+$(
+    LET node  =  gvec( nodesize )
+
+    node!h.link     :=  link
+    node!h.address  :=  address
+    node!h.end      :=  end
+
+    RESULTIS  node
+$)
+
+
+
+AND readword()  =  VALOF
+$(
+    LET result  =  0
+
+    IF  buffp = buffe  THEN
+    $(
+        buffe  :=  (ABS readwords( file.buff, word.buffsize ))
+        buffp  :=  0
+    $)
+
+    IF  buffe = 0  THEN  RESULTIS  endstreamch
+
+    result  :=  file.buff!buffp
+    buffp   :=  buffp + 1
+
+    RESULTIS  result
+$)
+
+
+
+AND gvec( vecsize )  =  VALOF
+$(
+//  Add a new vector to the list of those "got" already.
+
+    LET node   =  getvec( 2 )
+    LET space  =  getvec( vecsize )
+
+    TEST  node = 0  |  space = 0  THEN
+    $(
+        //  Cannot get either the main space, or the node space.
+        //  Free whichever one was successful, and flag an error.
+
+        UNLESS  node   = 0  DO  freevec( node )
+        UNLESS  space  = 0  DO  freevec( space )
+
+        error( "Cannot get vector of size %U5", vecsize )
+    $)
+    ELSE
+    $(
+        //  We have got the vector successfully, so add it to the
+        //  chain of allocated vectors.
+
+        node!0  :=  veclist
+        node!1  :=  space
+        veclist :=  node
+
+        RESULTIS  space
+    $)
+$)
+
+
+
+AND fvec( vector )  BE
+$(
+//  Free the vector pointed to by "vector".  Look in the allocated space chain
+//  to find this vector, and when found, de-allocate the space.
+
+    LET node  =  veclist
+    LET ptr   =  @veclist
+
+    UNTIL  node = 0  DO
+    $(
+        IF  node!1 = vector  THEN
+        $(
+            //  We have found the vector to deallocate.  Remove this node from
+            //  the list, and deallocate the space involved.
+
+            !ptr   :=  node!0
+
+             freevec( vector )
+             freevec( node )
+
+             RETURN
+        $)
+
+        ptr   :=  node
+        node  :=  node!0
+    $)
+
+    error( "Cannot free vector %N", vector )
+$)
+
+
+
+AND fvectors( list )  BE
+$(
+//  Free all the vectors pointed to by the list "list".
+
+    UNTIL list = 0  DO
+    $(
+        LET nlist  =  list!0
+        LET space  =  list!1
+
+        freevec( space )
+        freevec( list  )
+
+        list  :=  nlist
+    $)
+$)
+
+
+
+AND error( string, argument )  BE
+$(
+//  Print out an error message, and then tidy up.
+
+    selectoutput( sysout )
+
+    writes( "*N****** Error:  " )
+    writef( string, argument )
+    newline()
+
+    UNLESS  inputfile = 0  DO
+    $(
+        selectinput( inputfile )
+
+        endread()
+    $)
+
+    UNLESS  outputfile = 0  DO
+    $(
+        selectoutput( outputfile )
+
+        endwrite()
+    $)
+
+    fvectors( veclist )
+
+    stop( return.severe )
+$)
+
+
+
+AND writeword( word )  BE  writewords( @word, 1 )
+
+
+
+$<PANOS
+AND readwords( buffer, length )  =  VALOF
+$(
+    LET required  =  length*bytesperword
+    LET actual    =  readbytes( buffer, 0, required )
+    LET words     =  (actual + bytesperword - 1)/bytesperword
+
+    swapwords( buffer, length )
+
+    RESULTIS  actual = required  ->  words,  -words
+$)
+
+
+
+AND writewords( buffer, length )  BE
+$(
+    swapwords( buffer, length )
+
+    writebytes( buffer, 0, length*bytesperword )
+
+    swapwords( buffer, length )
+$)
+
+
+
+AND swapwords( buffer, words )  BE
+    FOR  i = 0  TO  words-1  DO
+        swapword( buffer+i )
+
+
+
+AND swapword( lv.word )  BE
+$(
+    LET word  =  !lv.word
+
+    FOR  i = bytesperword-1  TO  0  BY  -1  DO
+    $(
+        lv.word % i  :=  word & #XFF
+        word         :=  word >> 8
+    $)
+$)
+$>PANOS
+
+

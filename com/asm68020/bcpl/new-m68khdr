@@ -1,0 +1,864 @@
+//****************************************************************************
+//*                                                                          *
+//*                                                                          *
+//*   ##    ##   ######    ######   ##    ##  ##    ##  ######    #######    *
+//*   ###  ###  ########  ########  ##   ##   ##    ##  #######   ########   *
+//*   ########  ##        ##    ##  ##  ##    ##    ##  ##    ##  ##    ##   *
+//*   ## ## ##  #######    ######   ####      ########  ##    ##  ########   *
+//*   ##    ##  ##    ##  ##    ##  ## ##     ##    ##  ##    ##  #######    *
+//*   ##    ##  ##    ##  ##    ##  ##  ##    ##    ##  ##    ##  ##  ##     *
+//*   ##    ##   ######   ########  ##   ##   ##    ##  #######   ##   ##    *
+//*   ##    ##    ####     ######   ##    ##  ##    ##  ######    ##    ##   *
+//*                                                                          *
+//*                                                                          *
+//****************************************************************************
+
+
+
+$$EBCDIC              :=  $$IBM370
+$$RECORDIO            :=  $$IBM370
+$$IBM370.CAP1         :=  $$IBM370  |  $$CAP1
+
+$$TRIPOS.MINOS        :=  $$TRIPOS  |  $$MINOS
+$$TRIPOS.MINOS.PANOS  :=  $$TRIPOS  |  $$MINOS  |  $$PANOS
+$$MINOS.PANOS         :=  $$MINOS   |  $$PANOS
+
+
+
+$<IBM370
+MANIFEST
+$(
+    ug                             =  fg
+$)
+$>IBM370
+
+
+
+GLOBAL
+$(
+    abortassembly                   :  ug + 0
+    aborted                         :  ug + 1
+    absloc                          :  ug + 2
+    absmax                          :  ug + 3
+    absmin                          :  ug + 4
+    absolute                        :  ug + 5
+    absrp16                         :  ug + 6
+    absrp32                         :  ug + 7
+    absrvec16                       :  ug + 8
+    absrvec32                       :  ug + 9
+    absvec                          :  ug + 10
+    addexternalref                  :  ug + 11
+    addressmask                     :  ug + 12
+    align                           :  ug + 13
+    ascii.value                     :  ug + 14
+    asmlabel                        :  ug + 15
+    block1                          :  ug + 16
+    block2                          :  ug + 17
+    block3                          :  ug + 18
+    block4                          :  ug + 19
+    bytesize                        :  ug + 20
+    bytesized                       :  ug + 21
+    bytesonline                     :  ug + 22
+    ch                              :  ug + 23
+    changemode                      :  ug + 24
+    charpos                         :  ug + 25
+    charsperline                    :  ug + 26
+    checkexpression                 :  ug + 27
+    checkfor                        :  ug + 28
+    checkinstrsize                  :  ug + 29
+    checklabel                      :  ug + 30
+    checktagsize                    :  ug + 31
+    clearbits                       :  ug + 32
+    clearbuffer                     :  ug + 33
+    codebuff                        :  ug + 34
+    codestream                      :  ug + 35
+    codevec                         :  ug + 36
+    codeword                        :  ug + 37
+    codewords                       :  ug + 38
+    commentline                     :  ug + 39
+    complain                        :  ug + 40
+    currentfile                     :  ug + 41
+    dataptr                         :  ug + 42
+    datavector                      :  ug + 43
+    datestring                      :  ug + 44
+    declare                         :  ug + 45
+    declsyswords                    :  ug + 46
+    defineblock                     :  ug + 47
+    defineconstants                 :  ug + 48
+    definestorage                   :  ug + 49
+    definesymbols                   :  ug + 50
+    dest.ea                         :  ug + 51
+    directive                       :  ug + 52
+    dodir                           :  ug + 53
+    doget                           :  ug + 54
+    doline                          :  ug + 55
+    dummylocation                   :  ug + 56
+    dummymaxloc                     :  ug + 57
+    dummyminloc                     :  ug + 58
+    dummysection                    :  ug + 59
+    dumpsymbols                     :  ug + 60
+    eafield                         :  ug + 61
+    eatype                          :  ug + 62
+    effective.address               :  ug + 63
+    ended                           :  ug + 64
+    entrysymbols                    :  ug + 65
+    error                           :  ug + 66
+    error.found                     :  ug + 67
+    errors                          :  ug + 68
+    errorvec                        :  ug + 69
+    evalexp                         :  ug + 70
+    exp                             :  ug + 71
+    expression                      :  ug + 72
+    exptype                         :  ug + 73
+    expvec                          :  ug + 74
+    expvecp                         :  ug + 75
+    externalref                     :  ug + 76
+    externalsymb                    :  ug + 77
+    extrnsymbols                    :  ug + 78
+    failed                          :  ug + 79
+    fatalerrorlabel                 :  ug + 80
+    fatalerrorlevel                 :  ug + 81
+    filelist                        :  ug + 82
+    filenumber                      :  ug + 83
+    findsymbol                      :  ug + 84
+    forwardref                      :  ug + 85
+    forwardreftype                  :  ug + 86
+    genea                           :  ug + 87
+    generate                        :  ug + 88
+    genmove                         :  ug + 89
+    genmovea                        :  ug + 90
+    genmovec                        :  ug + 91
+    genmovem                        :  ug + 92
+    genmovep                        :  ug + 93
+    genmoveq                        :  ug + 94
+    genmoves                        :  ug + 95
+    getchunk                        :  ug + 96
+    getfrombuffer                   :  ug + 97
+    getlevel                        :  ug + 98
+    getstore                        :  ug + 99
+    headingtype                     :  ug + 100
+    heap2                           :  ug + 101
+    heap3                           :  ug + 102
+    includefiles                    :  ug + 103
+    initstore                       :  ug + 104
+    inmacro                         :  ug + 105
+    inputbuff                       :  ug + 106
+    instr.mask                      :  ug + 107
+    instr.masktype                  :  ug + 108
+    instr.size                      :  ug + 109
+    instr19                         :  ug + 110
+    instr20                         :  ug + 111
+    instr21                         :  ug + 112
+    instr22                         :  ug + 113
+    instr23                         :  ug + 114
+    instr24                         :  ug + 115
+    instr25                         :  ug + 116
+    instr26                         :  ug + 117
+    instr27                         :  ug + 118
+    instr28                         :  ug + 119
+    instr29                         :  ug + 120
+    instr30                         :  ug + 121
+    instr31                         :  ug + 122
+    instr32                         :  ug + 123
+    instr33                         :  ug + 124
+    instr34                         :  ug + 125
+    instr35                         :  ug + 126
+    instr36                         :  ug + 127
+    instr37                         :  ug + 128
+    instr38                         :  ug + 129
+    intelhexmodule                  :  ug + 130
+    labelset                        :  ug + 131
+    labelvec                        :  ug + 132
+    length                          :  ug + 133
+    linenumber                      :  ug + 134
+    linepos                         :  ug + 135
+    linesperpage                    :  ug + 136
+    listed                          :  ug + 137
+    listing                         :  ug + 138
+    listline                        :  ug + 139
+    liststream                      :  ug + 140
+    llenfixed                       :  ug + 141
+    location                        :  ug + 142
+    locmode                         :  ug + 143
+    lookup                          :  ug + 144
+    macrobase                       :  ug + 145
+    macrobuffers                    :  ug + 146
+    macrochar                       :  ug + 147
+    macrodepth                      :  ug + 148
+    macroend                        :  ug + 149
+    macroname                       :  ug + 150
+    makefile                        :  ug + 151
+    maxloc                          :  ug + 152
+    message                         :  ug + 153
+    minloc                          :  ug + 154
+    motorolamodule                  :  ug + 155
+    name.prologfile                 :  ug + 156
+    nargs                           :  ug + 157
+    nextsymb                        :  ug + 158
+    nitems                          :  ug + 159
+    noobj                           :  ug + 160
+    number                          :  ug + 161
+    objectmodule                    :  ug + 162
+    onpage                          :  ug + 163
+    op.ea                           :  ug + 164
+    op1.ea                          :  ug + 165
+    op1.eatype                      :  ug + 166
+    op1.exp                         :  ug + 167
+    op1.exptype                     :  ug + 168
+    op1.externalref                 :  ug + 169
+    op1.externalsymb                :  ug + 170
+    op1.outer                       :  ug + 171
+    op1.outertype                   :  ug + 172
+    op1.registers                   :  ug + 173
+    outbuff                         :  ug + 174
+    outer                           :  ug + 175
+    outertype                       :  ug + 176
+    pagenumber                      :  ug + 177
+    paging                          :  ug + 178
+    parmlisting                     :  ug + 179
+    pass1                           :  ug + 180
+    pass1errors                     :  ug + 181
+    pass2                           :  ug + 182
+    plenfixed                       :  ug + 183
+    printbuffer                     :  ug + 184
+    printequates                    :  ug + 185
+    printxreftable                  :  ug + 186
+    putinbuffer                     :  ug + 187
+    putinxreftable                  :  ug + 188
+    rch                             :  ug + 189
+    readbitfield                    :  ug + 190
+    readlabel                       :  ug + 191
+    readopcode                      :  ug + 192
+    readregisters                   :  ug + 193
+    readsymb                        :  ug + 194
+    readtag                         :  ug + 195
+    recoverlabel                    :  ug + 196
+    recoverlevel                    :  ug + 197
+    registers                       :  ug + 198
+    regnum                          :  ug + 199
+    release                         :  ug + 200
+    relloc                          :  ug + 201
+    relmax                          :  ug + 202
+    relmin                          :  ug + 203
+    relocatable                     :  ug + 204
+    relocate                        :  ug + 205
+    relocvec16                      :  ug + 206
+    relocvec32                      :  ug + 207
+    relp16                          :  ug + 208
+    relp32                          :  ug + 209
+    relrp16                         :  ug + 210
+    relrp32                         :  ug + 211
+    relrvec16                       :  ug + 212
+    relrvec32                       :  ug + 213
+    relvec                          :  ug + 214
+    resetflags                      :  ug + 215
+    reverse                         :  ug + 216
+    setlabel                        :  ug + 217
+    setloc                          :  ug + 218
+    settitle                        :  ug + 219
+    sizefield                       :  ug + 220
+    skiplayout                      :  ug + 221
+    skiplevel                       :  ug + 222
+    skipping                        :  ug + 223
+    skiprest                        :  ug + 224
+    source.ea                       :  ug + 225
+    sourcestream                    :  ug + 226
+    spacelines                      :  ug + 227
+    specialinstruction              :  ug + 228
+    stackvalue                      :  ug + 229
+    storage.chunksize               :  ug + 230
+    storage.high                    :  ug + 231
+    storage.low                     :  ug + 232
+    storage.root                    :  ug + 233
+    storage.totalwords              :  ug + 234
+    storage.wordsused               :  ug + 235
+    swapoperands                    :  ug + 236
+    symb                            :  ug + 237
+    symbolchar                      :  ug + 238
+    symbtype                        :  ug + 239
+    sysout                          :  ug + 240
+    systemwords                     :  ug + 241
+    tagsize.given                   :  ug + 242
+    tagtable1                       :  ug + 243
+    tagtable2                       :  ug + 244
+    tagv                            :  ug + 245
+    timestring                      :  ug + 246
+    titlevec                        :  ug + 247
+    totalwords                      :  ug + 248
+    triposmodule                    :  ug + 249
+    ts.default                      :  ug + 250
+    undefined                       :  ug + 251
+    uninitstore                     :  ug + 252
+    uppercase                       :  ug + 253
+    value                           :  ug + 254
+    version                         :  ug + 255
+    verstream                       :  ug + 256
+    warning                         :  ug + 257
+    wordsized                       :  ug + 258
+    wrchsave                        :  ug + 259
+    writechar                       :  ug + 260
+    writehexvalue                   :  ug + 261
+    writenumber                     :  ug + 262
+    writestring                     :  ug + 263
+    xref                            :  ug + 264
+$)
+
+
+
+MANIFEST
+$(
+    //  Basic constants
+    //  ===============
+
+    storesize                       =  512
+    tagtablesize                    =  512
+    expsize                         =  128
+    titlecharsmax                   =  60
+    codesize                        =  200
+    errorsize                       =  500
+    maxllen                         =  255
+    minllen                         =  60
+    maxplen                         =  255
+    minplen                         =  20
+    maxmacrodepth                   =  20
+    maxgetlevel                     =  20
+    macroargs                       =  36
+    maxfile                         =  500
+
+    tabspace                        =  8
+    tabmask                         =  NOT (tabspace - 1)
+
+
+    //  Instruction encoding in the Symbol Table
+    //  ========================================
+    //
+    //  The "type" field in the symbol table is held in a packed form,
+    //  and contains the following information:
+    //
+    //    +---------+---------+------------+--------+
+    //    |         |         |            |        |
+    //    |  nargs  |  sizes  |  masktype  |  type  |
+    //    |         |         |            |        |
+    //    +---------+---------+------------+--------+
+    //         2         3           4          5
+    //
+    //  The total number of bits should not exceed the size of the machine
+    //  word for which the assembler is being compiled.  The following
+    //  manifests should be updated to reflect the layout of the field.
+    //
+    //  For all other data types, only the "type" value is set.
+
+    mask.type                       =  #B0000000000011111
+    mask.masktype                   =  #B0000000111100000
+    mask.sizes                      =  #B0000111000000000
+    mask.nargs                      =  #B0011000000000000
+
+    shift.type                      =  0
+    shift.masktype                  =  shift.type      +  5
+    shift.sizes                     =  shift.masktype  +  4
+    shift.nargs                     =  shift.sizes     +  3
+
+
+    //  Symbol types  (for symbol table  -  current limit of 5 bits)
+    //  ============================================================
+
+    s.abs16                         =  0
+    s.abs32                         =  1
+    s.dir                           =  2
+    s.rel                           =  3
+    s.rel32                         =  4
+    s.instr                         =  5
+    s.new                           =  6
+    s.Dr                            =  7
+    s.Ar                            =  8
+    s.SR                            =  9
+    s.CCR                           =  10
+    s.PC                            =  11
+    s.SFC                           =  12
+    s.DFC                           =  13
+    s.CACR                          =  14
+    s.CAAR                          =  15
+    s.VBR                           =  16
+    s.MSP                           =  17
+    s.ISP                           =  18
+    s.USP                           =  19
+    s.macro                         =  20
+    s.ext                           =  21
+    s.reg                           =  22
+    s.FPgreg                        =  23
+    s.FPcreg                        =  24
+    s.ZPC                           =  25
+    s.FPr                           =  26
+    s.FPIAR                         =  27
+    s.FPSR                          =  28
+    s.FPCR                          =  29
+    s.dotW                          =  30
+    s.dotL                          =  31
+
+
+    //  Other symbol types (do not appear in symbol table)
+    //  ==================================================
+
+    s.star                          =  32
+    s.none                          =  33
+    s.bra                           =  34
+    s.number                        =  35
+    s.operator                      =  36
+    s.slash                         =  37
+    s.hyphen                        =  38
+    s.plus                          =  39
+    s.minus                         =  40
+    s.over                          =  41
+    s.times                         =  s.star
+    s.logand                        =  42
+    s.logor                         =  43
+    s.lshift                        =  44
+    s.rshift                        =  45
+    s.Ar.indirect                   =  46
+    s.Ar.postincr                   =  47
+    s.Ar.predecr                    =  48
+    s.ket                           =  49
+    s.literal                       =  50
+    s.colon                         =  51
+    s.monminus                      =  52
+    s.abs                           =  53
+    s.comma                         =  54
+    s.opapply                       =  55
+    s.cbra                          =  56
+    s.cket                          =  57
+    s.sbra                          =  58
+    s.sket                          =  59
+    s.not                           =  60
+
+
+    //  Instruction types
+    //  =================
+
+    i.zop                           =  #B00      // No operands for this instruction
+    i.1op                           =  #B01      // One operand for this instruction
+    i.2op                           =  #B10      // Two operands for this instruction
+    i.3op                           =  #B11      // Three operands for this instruction
+
+
+    //  Possible instruction sizes
+    //  ==========================
+
+    size.b                          =  #B001
+    size.w                          =  #B010
+    size.l                          =  #B100
+
+    size.bw                         =  size.b + size.w
+    size.wl                         =  size.w + size.l
+    size.bwl                        =  size.b + size.w + size.l
+
+
+    //  Instruction combinations with the Number of operands, and
+    //  the sizes of instructions allowed
+
+    ins.zop                         =  (i.zop    << shift.nargs)  +  s.instr
+    ins.1op                         =  (i.1op    << shift.nargs)  +  s.instr
+    ins.2op                         =  (i.2op    << shift.nargs)  +  s.instr
+    ins.3op                         =  (i.3op    << shift.nargs)  +  s.instr
+
+    ins.1op.b                       =  (size.b   << shift.sizes)  +  ins.1op
+    ins.1op.w                       =  (size.w   << shift.sizes)  +  ins.1op
+    ins.1op.l                       =  (size.l   << shift.sizes)  +  ins.1op
+    ins.1op.bw                      =  (size.bw  << shift.sizes)  +  ins.1op
+    ins.1op.wl                      =  (size.wl  << shift.sizes)  +  ins.1op
+    ins.1op.bwl                     =  (size.bwl << shift.sizes)  +  ins.1op
+
+    ins.2op.b                       =  (size.b   << shift.sizes)  +  ins.2op
+    ins.2op.w                       =  (size.w   << shift.sizes)  +  ins.2op
+    ins.2op.l                       =  (size.l   << shift.sizes)  +  ins.2op
+    ins.2op.bw                      =  (size.bw  << shift.sizes)  +  ins.2op
+    ins.2op.wl                      =  (size.wl  << shift.sizes)  +  ins.2op
+    ins.2op.bwl                     =  (size.bwl << shift.sizes)  +  ins.2op
+
+    ins.3op.b                       =  (size.b   << shift.sizes)  +  ins.3op
+    ins.3op.w                       =  (size.w   << shift.sizes)  +  ins.3op
+    ins.3op.l                       =  (size.l   << shift.sizes)  +  ins.3op
+    ins.3op.bw                      =  (size.bw  << shift.sizes)  +  ins.3op
+    ins.3op.wl                      =  (size.wl  << shift.sizes)  +  ins.3op
+    ins.3op.bwl                     =  (size.bwl << shift.sizes)  +  ins.3op
+
+
+    //  Directives
+    //  ==========
+
+    d.equ                           =  0
+    d.equr                          =  1
+    d.set                           =  2
+    d.org                           =  3
+    d.rorg                          =  4
+    d.dc                            =  5
+    d.ds                            =  6
+    d.page                          =  7
+    d.list                          =  8
+    d.nolist                        =  9
+    d.nol                           =  9
+    d.spc                           =  10
+    d.nopage                        =  11
+    d.llen                          =  12
+    d.plen                          =  13
+    d.ttl                           =  14
+    d.noobj                         =  15
+    d.ifeq                          =  16
+    d.ifne                          =  17
+    d.endc                          =  18
+    d.macro                         =  19
+    d.endm                          =  20
+    d.mexit                         =  21
+    d.end                           =  22
+    d.fail                          =  23
+    d.get                           =  24
+    d.cnop                          =  25
+    d.extrn                         =  26
+    d.entry                         =  27
+    d.reg                           =  28
+    d.dcb                           =  29
+    d.iflt                          =  30
+    d.ifle                          =  31
+    d.ifgt                          =  32
+    d.ifge                          =  33
+    d.dorg                          =  34
+    d.ifdef                         =  35
+    d.ifndef                        =  36
+
+
+    //  Heading types
+    //  =============
+
+    h.code                          =  1
+    h.errors                        =  2
+    h.xref                          =  3
+    h.files                         =  4
+
+
+    //  Macro buffers
+    //  =============
+    
+    mbuff.link                      =  -1
+    mbuff.hdr                       =  1
+    mbuff.size                      =  256/bytesperword + mbuff.hdr
+
+    
+    //  Other assorted constants
+    //  ========================
+
+    tagchars                        =  30
+    tagsize                         =  tagchars / bytesperword + 1
+
+    bytesper68000word               =  4
+    wordsper68000word               =  bytesper68000word/bytesperword
+
+
+    //  Symbol table entry offsets
+    //  ==========================
+
+    st.link                         =  0
+    st.type                         =  1
+    st.flags                        =  2
+    st.template                     =  3
+    st.value.high                   =  4
+    st.value.low                    =  5
+    st.definition                   =  6
+    st.file                         =  7
+    st.references                   =  8
+    st.name                         =  9
+
+    st.size                         =  9
+
+    //  To maintain compatibility with the previous version
+
+    st.value                        =  st.value.low
+
+
+    //  Symbol table flag bits
+    //  ======================
+
+    stb.muldef                      =  #B00001
+    stb.setnow                      =  #B00010
+    stb.setever                     =  #B00100
+    stb.equ                         =  #B01000
+    stb.set                         =  #B10000
+
+
+    //  Special cross-reference values
+    //  ==============================
+
+    cr.undefined                    =  -1
+    cr.multiple                     =  -2
+    cr.setsymbol                    =  -3
+
+
+    //  Address Mode Type Bits
+    //  ======================
+
+    am.Dr                           =  #B0000000000000001
+    am.Ar                           =  #B0000000000000010
+    am.Ar.ind                       =  #B0000000000000100
+    am.Ar.pi                        =  #B0000000000001000
+    am.Ar.pd                        =  #B0000000000010000
+    am.Ar.disp                      =  #B0000000000100000
+    am.Ar.index                     =  #B0000000001000000
+    am.abs16                        =  #B0000000010000000
+    am.abs32                        =  #B0000000100000000
+    am.PC.disp                      =  #B0000001000000000
+    am.PC.index                     =  #B0000010000000000
+    am.imm3                         =  #B0000100000000000
+    am.imm16                        =  #B0001000000000000
+    am.imm32                        =  #B0010000000000000
+    am.special                      =  #B0100000000000000
+    am.FPr                          =  #B1000000000000000
+
+    am.imm                          =  am.imm3           +
+                                       am.imm16          +
+                                       am.imm32
+
+    am.all                          =  am.Dr             +
+                                       am.Ar             +
+                                       am.Ar.ind         +
+                                       am.Ar.pi          +
+                                       am.Ar.pd          +
+                                       am.Ar.disp        +
+                                       am.Ar.index       +
+                                       am.abs16          +
+                                       am.abs32          +
+                                       am.PC.disp        +
+                                       am.PC.index       +
+                                       am.imm
+
+    am.data                         =  am.Dr             +
+                                       am.Ar.ind         +
+                                       am.Ar.pi          +
+                                       am.Ar.pd          +
+                                       am.Ar.disp        +
+                                       am.Ar.index       +
+                                       am.abs16          +
+                                       am.abs32          +
+                                       am.PC.disp        +
+                                       am.PC.index       +
+                                       am.imm
+
+    am.mem                          =  am.Ar.ind         +
+                                       am.Ar.pi          +
+                                       am.Ar.pd          +
+                                       am.Ar.disp        +
+                                       am.Ar.index       +
+                                       am.abs16          +
+                                       am.abs32          +
+                                       am.PC.disp        +
+                                       am.PC.index       +
+                                       am.imm
+
+    am.alt                          =  am.Dr             +
+                                       am.Ar             +
+                                       am.Ar.ind         +
+                                       am.Ar.pi          +
+                                       am.Ar.pd          +
+                                       am.Ar.disp        +
+                                       am.Ar.index       +
+                                       am.abs16          +
+                                       am.abs32
+
+    am.mem.alt                      =  am.mem            &
+                                       am.alt
+
+    am.data.alt                     =  am.data           &
+                                       am.alt
+
+    am.contr                        =  am.Ar.ind         +
+                                       am.Ar.disp        +
+                                       am.Ar.index       +
+                                       am.abs16          +
+                                       am.abs32          +
+                                       am.PC.disp        +
+                                       am.PC.index
+
+    am.contr.alt                    =  am.contr          &
+                                       am.alt
+
+
+    //  Effective address types
+    //  =======================
+
+    ea.Dr                            =  1
+    ea.Ar                            =  2
+    ea.FPr                           =  3
+    ea.Ar.ind                        =  4
+    ea.Ar.pi                         =  5
+    ea.Ar.pd                         =  6
+    ea.special                       =  7
+    ea.R.disp                        =  8
+    ea.R.index                       =  9
+    ea.exp                           =  10
+    ea.literal                       =  11
+    ea.68020.R.disp                  =  12
+    ea.68020.R.index                 =  13
+    ea.68020.postindex               =  14
+    ea.68020.preindex                =  15
+    ea.68020.word                    =  16
+    ea.68020.long                    =  17
+
+
+    //  Tag size specifiers
+    //  ===================
+
+    ts.byte                          =  1
+    ts.word                          =  2
+    ts.long                          =  3
+    ts.short                         =  4
+    ts.double                        =  5
+    ts.extended                      =  6
+    ts.packed                        =  7
+
+    ts.single                        =  ts.short
+
+    ts.none                          =  0
+
+
+    //  Masks for the MC68000 family of processors
+    //  ==========================================
+
+    mask.68000                       =  #XFFFF000000
+    mask.68010                       =  #XFFF0000000
+    mask.68020                       =  #X0000000000
+
+
+    //  Floating point coprocessor information
+    //  ======================================
+
+    fp.mask                          =  #XF000
+    fp.id                            =  1
+
+
+    //  Object module types available
+    //  =============================
+
+    o.none                           =  0
+    o.tripos                         =  1
+    o.motorola                       =  2
+    o.intelhex                       =  3
+
+
+    //  Tripos object module identifiers
+    //  ================================
+
+    t.hunk                           =  1000
+    t.reloc                          =  1001
+    t.end                            =  1002
+    t.abshunk                        =  1003
+    t.absrel                         =  1004
+    t.ext1                           =  1007
+
+    ext.defrel                       =  1
+    ext.defabs                       =  2
+    ext.ref                          =  129
+
+
+    //  Selectors in assorted data structures.
+    //  ======================================
+
+    e.link                           =  0
+    e.symbol                         =  1
+    e.countr                         =  2
+    e.refsr                          =  3
+    e.counta                         =  4
+    e.refsa                          =  5
+
+    e.size                           =  6
+
+    eb.line                          =  0
+    eb.code                          =  1
+    eb.file                          =  2
+    eb.size                          =  3
+
+    cb.dtype                         =  0
+    cb.dsize                         =  1
+    cb.dvalue                        =  2
+    cb.dext                          =  3
+    cb.dsymb                         =  4
+    cb.size                          =  5
+
+    m.buff                           =  0
+    m.length                         =  1
+    m.link                           =  2
+
+    p.ptr0                           =  0
+    p.ptr1                           =  1
+    p.ptr2                           =  2
+    p.ptr3                           =  3
+
+    p.rtype                          =  p.ptr0
+    p.rnumber                        =  p.ptr1
+    p.rsize                          =  p.ptr2
+    p.rscale                         =  p.ptr3
+
+    p.base                           =  p.ptr0
+    p.index                          =  p.ptr1
+
+    r.link                           =  0
+    r.line                           =  1
+    r.address                        =  1
+    r.file                           =  2
+
+
+    //  Offsets in the TRIPOS/MINOS/PANOS argument vectors
+    //  ==================================================
+
+    a.from                           =  0
+    a.to                             =  1
+    a.ver                            =  2
+    a.list                           =  3
+    a.prolog                         =  4
+    a.hdr                            =  5
+    a.define                         =  6
+    a.equ                            =  7
+    a.symbols                        =  8
+    a.opt                            =  9
+
+    a.size                           =  100
+$)
+
+
+
+MANIFEST
+$(
+    //  Return codes
+    //  ============
+
+$<IBM370
+    rc.catastrophic                  =  32
+    rc.aborted                       =  16
+    rc.errors                        =  8
+$>IBM370
+
+$<CAP1
+    rc.catastrophic                  =  3
+    rc.aborted                       =  2
+    rc.errors                        =  1
+$>CAP1
+
+$<TRIPOS
+    rc.catastrophic                  =  20
+    rc.aborted                       =  20
+    rc.errors                        =  10
+$>TRIPOS
+
+$<MINOS.PANOS
+    rc.catastrophic                  =  return.severe
+    rc.aborted                       =  return.severe
+    rc.errors                        =  return.hard
+$>MINOS.PANOS
+
+
+    //  Values which are not defined in the standard headers
+    //  ====================================================
+
+$<CAP1
+    maxint                           =  #X7FFFFFFF
+    minint                           =  #X80000000
+$>CAP1
+$)
+
+

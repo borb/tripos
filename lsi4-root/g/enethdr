@@ -1,0 +1,132 @@
+// Header for use with the Ethernet Handler Task
+
+MANIFEST
+$( // well-known constants
+
+   socket.route       = 1          // well known sockets on Ethernet
+   socket.echo        = 2
+   socket.route.error = 3
+   level0.type.idp    = 6          // types used for the level 1 protocols
+   level0.type.ip     = 8
+   level0.type.a.res  = 1544       // ARPA RFC 826 address resolution
+   level1.type.route  = 1          // sim. level 2 - Xerox protocols
+   level1.type.echo   = 2
+   level1.type.error  = 3
+   level1.type.pep    = 4          // XNS packet exchange
+   level1.type.spp    = 5          // XNS sequenced packet
+   level1.type.icmp   = 1          // ARPA internet control message
+   level1.type.udp    = 17         // ARPA user datagram - equivalent to PEP
+   level1.type.tcp    = 6          // ARPA transmission control - equiv SPP
+
+   tcp.type.normal    = 1          // pseudo-types for TCP opens
+   tcp.type.system    = 2          // system opens use Unix "system" ports
+
+   // packet types (same as for ring handler!)
+
+   act.receive.packet = 983   // act.rx.bb
+   act.transmit.packet= 982   // act.tx
+   act.reserve.socket = 997   // act.reserveport
+   act.find.socket    = 998   // act.findfreeport
+   act.release.socket = 996   // act.releaseport
+
+   act.enet.lookup    = 981   // new one - convert service name to srvdsc
+   act.enet.open      = 980   // set up a "channel" (if possible/appropriate)
+   act.enet.close     = 979   // clear it down
+   act.set.tracing    = 978   // set/clear tracing flag bits
+   act.enet.rvlkup    = 977   // map machine + port to service name
+   act.enet.mc.lookup = 976   // take a machine name to an address
+   act.enet.mc.rvlkup = 975   // map machine address to name
+
+   // error codes
+
+   rc.bad.protocol    = 6200         // wrong protocol-code found
+   rc.socket.not.res  = 6201         // specified socket was not reserved
+   rc.bad.request     = 6202         // wrong type, inconsistent parameters etc
+   rc.handler.stopped = 6203         // packets cleared out when stopping
+   rc.socket.allocated= 6204         // attempt to reserve already reserved skt
+   rc.rx.timeout      = 6205         // timeout on rx request expired
+   rc.not.implemented = 6206         // facility not (yet?) implemented
+   rc.congestion      = 6207         // run out of internal resources
+   rc.name.not.found  = 6208         // failed to find service name
+   rc.addr.map.failed = 6209         // mapping address failed
+   rc.tcp.reset       = 6210         // TCP channel aborted on RESET
+   rc.tcp.closed      = 6211         // TCP channel is closing down
+   rc.enet.down       = 6212         // out of contact with Ethernet bridge
+   rc.skt.cancelled   = 6213         // manual cancellation
+
+   // information codes returned in reception packets (with FALSE result)
+
+   rc.rx.fin          = -1           // TCP soft close received
+   rc.rx.urg.start    = -2           // TCP channel entered URGENT mode
+   rc.rx.urg.end      = -3           // left URGENT mode
+
+   // fields of a Service Descriptor block
+
+   srvdsc.protocol    = 0        // protocol code
+   srvdsc.prefix.len  = 1        // prefix size for transmission (bytes)
+   srvdsc.suffix.len  = 2
+   srvdsc.address     = 3        // pointer to address block
+                                 // then protocol-dependent fields ...
+
+                                 // protocol specific values of service descs
+   e.srvdsc.upb       = srvdsc.address + 1    // descriptor block upperbounds
+   idp.srvdsc.upb     = e.srvdsc.upb + 1
+   spp.srvdsc.upb     = e.srvdsc.upb + 2
+   ip.srvdsc.upb      = e.srvdsc.upb + 2
+   udp.srvdsc.upb     = ip.srvdsc.upb
+   tcp.srvdsc.upb     = e.srvdsc.upb + 3
+
+   max.srvdsc.upb     = e.srvdsc.upb + 3   // *** keep this value correct!
+
+   e.addr.size        = 6        // sizes of address blocks (in bytes)
+   idp.addr.size      = 12
+   ip.addr.size       = 4
+
+   max.addr.size      = 12       // *** keep this correct too
+
+   e.hdr.offset       = 2        // byte offsets in bridge data blocks
+   e.data.offset      = e.hdr.offset + 14
+   idp.hdr.offset     = e.data.offset
+   idp.data.offset    = idp.hdr.offset + 30
+   spp.hdr.offset     = idp.data.offset
+   spp.data.offset    = spp.hdr.offset + 12
+   ip.hdr.offset      = e.data.offset
+   ip.data.offset     = ip.hdr.offset + 20     // assuming no options
+   udp.hdr.offset     = ip.data.offset
+   udp.data.offset    = udp.hdr.offset + 8
+   tcp.hdr.offset     = ip.data.offset
+   tcp.data.offset    = tcp.hdr.offset + 20    // assuming no options
+
+   // most of the protocol specific field offsets are private to the
+   // ethernet handler, but these need to be used for forging service
+   // descriptors in order to send and receive UDP data directly
+
+   srvdsc.ip.port     = e.srvdsc.upb + 2 // IP destination port
+   srvdsc.reply.port  = e.srvdsc.upb + 1 // same as IDP reply socket
+
+   prot.e             = 1        // values in protocol code field - raw Enet
+   prot.idp           = 2        // Xerox Internet Datagram
+   prot.spp           = 3        // Sequenced Packet
+   prot.ip            = 4        // "raw" ARPA Internet
+   prot.udp           = 5        // ARPA user datagrams
+   prot.tcp           = 6        // ARPA Transmission Control
+
+   // tracing flag bits
+
+   trace.spare        = #B0000000000000001  // not used at present
+   trace.misc         = #B0000000000000010  // things I couldn't categorise!
+   trace.rx           = #B0000000000000100  // Ethernet reception
+   trace.tx           = #B0000000000001000  // Ethernet transmission
+   trace.rx.data      = #B0000000000010000  // data received
+   trace.tx.data      = #B0000000000100000  // data transmitted
+   trace.ip           = #B0000000001000000  // IP level data
+   trace.idp          = #B0000000010000000  // ditto IDP
+   trace.tcp          = #B0000000100000000  // TCP data, events etc.
+   trace.spp          = #B0000001000000000  // ditto SPP
+   trace.icmp         = #B0000010000000000  // error packet handling
+   trace.a.res        = #B0000100000000000  // address resolution
+   trace.timeout      = #B0001000000000000  // timeout events
+   trace.a.err.abort  = #B0010000000000000  // abort on ip addr mapping error
+$)
+
+

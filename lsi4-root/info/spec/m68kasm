@@ -1,0 +1,1182 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                           M68KASM                           M68KASM
+
+
+
+
+      A Macro Assembler for the MC68000 Microprocessor      A Macro Assembler for the MC68000 Microprocessor
+
+
+
+
+
+
+
+
+
+
+               Specification (5th October 82)               Specification (5th October 82)
+
+                        Version 8.146                        Version 8.146
+
+
+
+
+
+
+
+
+
+
+I. D. Wilson
+Computer Laboratory
+Corn Exchange Street
+Cambridge  CB2 3QG
+
+Telephone: (0223) 352435  Ext. 265
+
+
+
+
+
+
+
+
+
+
+IntroductionIntroduction
+
+   The Motorola MC68000 is a 16 bit microprocessor, designed
+to supercede the MC6800 and MC6809 processors. It is a byte-
+addressed machine with a 24 bit ADDRESS bus, giving it an
+address space of 16 megabytes. It has at any one time 16 32-
+bit registers, 8 of which are specialised for arithmetic type
+operations (DATA registers, named D0 to D7), and the other 8
+of which are specialised for addressing operations (ADDRESS
+registers, named A0 to A7). A7 has a synonym SP, and is used
+as the Stack Pointer.
+
+
+   It has two operating states (User and System), the second
+of which is privileged, and has its own, separate stack
+pointer. This means that there are in fact 9 ADDRESS
+registers, only 8 of which are visible at any one time. In
+addition to the general purpose registers, there is a 24-bit
+Program Counter (PC), and a 16-bit Status Register (SR)
+incorporating the 8-bit Condition Code register (CCR).
+
+
+   Like the MC6809, the MC68000 has a large collection of
+addressing modes, and addresses are specified by using one of
+the 12 Effective Address types, the assembler code syntax of
+which is described later. The MC68000 is capable of performing
+8, 16 and 32 bit arithmetic, and most instructions have a size
+qualifier, specifying the size of the operation to be
+performed.
+
+
+   For a full specification of the Processor, and a detailed
+list of the instructions available, see the Motorola MC68000
+16-bit Microprocessor User's Manual MC68000UM(AD).
+
+
+   This document is a specification of the Cambridge Macro
+Assembler for the MC68000, which is designed to be compatible
+with the MOTOROLA version.
+
+
+   The assembler currently runs on three different machines in
+Cambridge:
+
+          a)  IBM 3081 under PHOENIX/MVT
+          b)  CAP      under CHAOS
+          c)  MC68000  under TRIPOS
+
+
+   An up to date report on the known bugs in the current
+version of the assembler are listed at the end of this
+document. Anybody suspecting bugs other than those listed are
+asked to contact the author as soon as possible.
+
+
+
+
+                            - 1 -The Macro AssemblerThe Macro Assembler
+
+   The MC68000 Macro Assembler (M68KASM) takes as input a
+source form of the MC68000 assembly language as defined in the
+MOTOROLA publications MC68000UM(AD) and MC68KXASM(D3), and
+produces as output:
+
+          a)  An assembly listing of the source
+          b)  An object module, in one of three formats
+
+   The input to the assembler can be put into five main
+categories. These are:
+
+          a)  Instruction Opcodes
+          b)  Assembler Directives
+          c)  Symbolic names and labels
+          d)  Operators
+          e)  Special symbols
+
+   The assembler is a two pass assembler, reading the source
+text twice, firstly to construct a symbol table and MACRO
+definitions, and secondly, to produce a source listing and
+object module. If a HEADER file is present, then the assembler
+will process this file as though it were concatenated onto the
+beginning of the source file.
+
+
+Running the Assembler under PHOENIX/MVTRunning the Assembler under PHOENIX/MVT
+
+   The command to run the assembler is:
+
+     C IDW2.PHX:M68KASM  PROGRAM=<file>         PRINTC=<file>   
+                                CODE=<file>             SYSPRINT=<file> 
+                                HDR=<file>              PARMC=<opt>     
+
+
+   where PROGRAM is the source file to be assembled, PRINTC is
+the listing output, CODE is the object module output, and
+SYSPRINT is the general diagnostic output. The default parm is
+"LTX", i.e. produce a listing and cross reference (to &PRINTC
+online, or *A offline, if PRINTC is not given), and a TRIPOS
+object module (to &CODE if CODE is not given).
+
+
+Running the Assembler under CHAOSRunning the Assembler under CHAOS
+
+   The command to run the assembler is:
+
+     .*.IDW.M68KASM             PROGRAM=        <file>          LISTING=        <file>
+                                CODE=   <file>          HDR=<file>      
+
+   where PROGRAM is the source file to be assembled, LISTING
+is the listing output, and CODE is the object module output.
+The options to the assembler are prompted for at the console,
+and if <RETURN> is typed, the default of "LTX" is taken.
+
+
+
+
+                            - 2 -Running the Assembler under TRIPOSRunning the Assembler under TRIPOS
+
+   The command to run the assembler is:
+
+     ASM  "PROG=FROM/A,CODE=TO/K,VER/K,LIST/K,HDR/K,OPT/K"
+
+   where PROG/FROM is the source file to be assembled, CODE/TO
+is the object module output, VER is the general diagnostic
+output, and LIST is the listing output. The default option
+string is generated depending on the arguments given. If
+CODE/TO is specified, then the "T" option is taken, and
+similarly, if LISTING is specified, the "L" option is taken.
+The options specified with the OPT keyword are concatenated
+with the default options to produce the complete options
+string.
+
+
+Options to the AssemblerOptions to the Assembler
+
+   The options to the assembler currently available are:
+
+          T   -   Produce a TRIPOS object module
+          H   -   Produce an INTEL HEX object module
+          M   -   Produce a MOTOROLA object module
+          L   -   Produce an assembler source listing
+          X   -   Produce an alphabetic cross-reference
+          Wn  -   Set workspace size to "n"
+          S   -   Dump the symbol table (for use with DEBUG68)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            - 3 -Program EncodingProgram Encoding
+
+   A program acceptable to M68KASM takes the form of a series
+of input lines that are:
+
+          a)  Comment or Blank lines
+          b)  Executable Instructions
+          c)  Assembler Directives
+
+
+CommentsComments
+
+   Comments are introduced into the program in one of two
+ways. If the first character on the line is an asterisk ("*"),
+then the whole line is treated as comment. Also, text after an
+instruction or assembler directive is treated as comment,
+provided it is preceded by at least one blank character. Blank
+lines are also treated as comments by the assembler.
+
+Examples of Comments:
+
+   *  This entire line is a comment
+
+   FRED  MOVEQ.L  #10,D0  This comment follows an instruction
+
+         PAGE             Move to the top of a new page
+
+
+Executable InstructionsExecutable Instructions
+
+   The specification of the executable instructions is given
+in the MC68000 User's Manual, and so there is little point in
+covering it here. The Instructions source statements have the
+general overall format:
+
+                LABEL     OPCODE        OPERAND(s)              COMMENT 
+
+each field being separated from the next by at least one blank
+character.
+
+
+Label FieldLabel Field
+
+   A label is a user symbol which either a) Starts in the
+first column, terminated by at least one blank character or a
+newline, or b) Starts in any column, and is terminated with a
+colon (":"). If a label is present, then it must be the first
+non-blank item on the line. The label is assigned the value
+and type of the program counter, i.e. the memory address of
+the first byte of the instruction or data being referenced.
+Labels are allowed on all instructions, and some directives.
+See the specification of individual directives for whether a
+label field is allowed.
+
+N.B. Labels must not be Instruction names, Directives or
+Register names, and must not be multiply defined.
+
+
+
+                            - 4 -Opcode FieldOpcode Field
+
+   The Opcode field follows the Label field, and is separated
+from it by at least one blank character. Entries in this field
+are of two types. Firstly, the MC68000 operation codes, as
+defined in the MC68000 User Manual, and secondly, Assembler
+Directives. For instructions and directives which can operate
+on more than one data size, there is an optional size-
+specifier subfield, which is separated from the opcode by the
+period (".") character. Possible size specifiers are:
+
+          B  -  Byte sized data (8 bits)
+          W  -  Word sized data (16 bits)
+          L  -  Long Word sized data (32 bits)
+          S  -  Short Branch specifier
+
+   The size specifier must match with the instruction or
+directive type being used.
+
+
+Operand FieldOperand Field
+
+   If present, this field contains the one or more operands to
+the instruction or directive, and must be separated from it by
+at least one blank character. Where two or more operands occur
+in this field, they must be separated by the comma character
+(","). The operand field is terminated by the blank or newline
+characters, so blank characters are not allowed in this field.
+
+
+Comment FieldComment Field
+
+   If present, anything after the terminating blank character
+of the operand field is ignored, and hence can be treated as
+comment.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            - 5 -ExpressionsExpressions
+
+   An expression is a combination of symbols, constants,
+algebraic operators and parentheses, and can be used to
+specify the operand field to instructions or directives.
+Relative symbols may be included in expressions, but they can
+only be operated on by a subset of the operators.
+
+OperatorsOperators
+
+   The operators available, in decreasing order of precedence
+are:
+
+          a)  Monadic Minus ("-")
+          b)  Lshift, Rshift ("<<" and ">>")
+          c)  And, Or ("&" and "!")
+          d)  Multiply, Divide ("*" and "/")
+          e)  Add, Subtract ("+" and "-")
+
+   The precedence of the operators can be over-ridden by
+enclosing sub-expressions in parentheses. Operators of equal
+precedence are evaluated from left to right.
+
+Operand Types for OperatorsOperand Types for Operators
+
+   In the following table, Absolute symbols are represented by
+"A", and relative symbols by "R". The possible
+operator/operand combinatios are shown, with the type of the
+resulting value. "x" indicates an error. The Monadic minus
+operator is only valid with an absolute operand.
+
+                               OPERANDS
+                  |          |          |          |
+      Operator    |  A op A  |  R op R  |  A op R  |  R op A
+   ---------------+----------+----------+----------+----------
+                  |          |          |          |
+         +        |     A    |     x    |     R    |     R
+         -        |     A    |     A    |     x    |     R
+         *        |     A    |     x    |     x    |     x
+         /        |     A    |     x    |     x    |     x
+         &        |     A    |     x    |     x    |     x
+         !        |     A    |     x    |     x    |     x
+         >>       |     A    |     x    |     x    |     x
+         <<       |     A    |     x    |     x    |     x
+
+SymbolsSymbols
+
+   A symbol is a string of characters, the first of which must
+be alphabetic ("A"-"Z" or "@"), and the rest of which can be
+alphabetic (as before), numeric ("0"-"9") or the underline
+character ("_"). In all symbols, the lower case characters
+("a"-"z") are treated as synonymous with their upper case
+equivalents. Symbols can be up to 30 characters in length, all
+of which are significant. The assembler will take symbols
+longer than this, and truncate them to 30 characters, giving a
+warning that it has done so. The Instruction names, Directive
+names, Register names, and special symbols CCR, SR, SP and USP
+cannot be used as user symbols.
+
+                            - 6 -   A symbol can have one of three types:
+
+     Absolute     ________
+
+     a) The symbol was SET or EQUated to an Absolute value
+     b) An ORG statement preceded the definition of the symbol
+
+     Relative     ________
+
+     a) The symbol was SET or EQUated to a Relative value
+     b) A RORG statement preceded the definition of the symbol
+     c) Neither ORG nor RORG was used (Default is RORG 0)
+
+     Register     ________
+
+     a) The symbol was set to a register name using EQUR
+
+   There is a special symbol "*", which has the value and type
+of the current program counter, i.e. the address of the
+current instruction or directive being dealt with.
+
+
+NumbersNumbers
+
+   A number may be used as a term of an expression, or as a
+single value. Numbers ALWAYS have absolute values, and can
+take one of the following formats:
+
+     Decimal  (a string of decimal digits)     _______
+
+     Example:  1234
+
+     Hexadecimal  ("$" followd by a string of hex digits)     ___________
+
+     Example:  $89AB
+
+     ASCII Literal  (Up to 4 ASCII characters within quotes)     _____________
+
+     Examples:  'ABCD'  '*'  'I''ll'
+
+   Strings of less than 4 characters are justified to the
+right, with NUL being used as the packing character. To obtain
+a quote character in the string, two quotes must be used.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            - 7 -Addressing ModesAddressing Modes
+
+   The effective address modes define the operands to
+instructions and directives, and there is a detailed
+description of them in the MC68000 User's Manual. Addresses
+refer to individual bytes, but instructions, Word and Long
+Word references access more than one byte, and the address for
+these must be word aligned.
+
+   In the following table, "Dn" represents one of the data
+registers, "An" represents one of the address registers, "a"
+represents an absolute expression, "r" represents a relative
+expression, and "Xn" represents An or Dn, with an optional
+".W" or ".L" size specifier. The syntax for each of the modes
+is as follows:
+
+
+
+
+Address Mode  Description and Examples____________  ________________________
+
+
+    Dn        Data Register Direct
+              e.g.     MOVE   D0,D1
+
+
+    An        Address Register Direct
+              e.g.     MOVEA  A0,A1
+
+
+   (An)       Address Register Indirect
+              e.g.     MOVE   D0,(A1)
+
+
+   (An)+      Address Register Indirect Post Increment
+              e.g.     MOVE   (A7)+,D0
+
+
+  -(An)       Address Register Indirect Pre Decrement
+              e.g.     MOVE   D0,-(A7)
+
+
+  a(An)       Address Register Indirect with Displacement
+              e.g.     MOVE   20(A0),D1
+
+
+a(An,Xn)      Address Register Indirect with Index
+              e.g.     MOVE   0(A0,D0),D1
+                       MOVE  12(A1,A0.L),D2
+                       MOVE 120(A0,D3.W),D4
+
+
+
+
+
+
+
+
+
+                            - 8 -Address Mode  Description and Examples____________  ________________________
+
+
+    a         Short absolute (16 bits)
+              e.g.     MOVE  $1000,D0
+
+
+    a         Long  absolute (32 bits)
+              e.g.     MOVE  $10000,D0
+
+
+    r         Program Counter Relative with Displacement
+              e.g.     MOVE  FRED,D0       (FRED is relative)
+
+
+  r(Xn)       Program Counter Relative with Index
+              e.g.     MOVE  FRED(D0.L),D1 (FRED is relative)
+
+
+   #a         Immediate data
+              e.g.     MOVE  #1234,D0
+
+
+   USP   )
+   CCR   )    Special addressing modes
+   SR    )
+              e.g.     MOVE  A0,USP
+                       MOVE  D0,CCR
+                       MOVE  D1,SR
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            - 9 -DirectivesDirectives
+
+   The assembler directives are here listed by function, and
+then described individually.
+
+Assembly Control________________
+
+      ORG               Absolute Origin
+      RORG              Relocatable Origin
+      CNOP              Program Alignment
+      END               Program End
+
+Symbol Definition_________________
+
+      EQU               Assign Permanent Value
+      EQUR              Assign Permanent Register Value
+      SET               Assign Temporary Value
+      EXTRN             Define External Symbol name
+      ENTRY             Define Internal Symbol name
+
+Data Definition_______________
+
+      DC                Define Constants
+      DS                Define Storage
+
+Listing Control_______________
+
+      PAGE              Page-throw to listing
+      LIST              Enable listing
+      NOLIST (NOL)      Disable listing
+      SPC               Skip blank lines
+      NOPAGE            Disable paging
+      LLEN              Set line length
+      PLEN              Set page length
+      TTL               Set program title
+
+Conditional Assembly____________________
+
+      IFEQ              Assemble if equal
+      IFNE              Assemble if not equal
+      ENDC              End of Conditional Assembly
+
+Macro Directives________________
+
+      MACRO             Define a Macro Name
+      ENDM              End of Macro Definition
+      MEXIT             Exit the Macro Expansion
+
+General Directives__________________
+
+      NOOBJ             Disable Object Code output
+      FAIL              Generate an Assembly error
+      GET               Insert file in the source
+
+
+
+
+
+
+                            - 10 -Assembly Control DirectivesAssembly Control Directives
+
+
+ORG       Set Absolute Origin
+
+          Format:       label      ORG     absexp
+                        label      ORG.L   absexp
+
+        The ORG directive changes the program counter to the
+     value specified by the absolute expression in the operand
+     field. Subsequent statements are assigned absolute memory
+     locations, starting with the new program counter value.
+     The optional symbol "label" will be assigned the value of
+     the program counter AFTER the ORG directive has been
+     obeyed.
+
+        If the ORG form of the directive is used, the
+     assembler will assume that all forward referenced
+     addresses are addressable using the Short Absolute
+     addressing mode. Using the ORG.L form forces the
+     assembler to assume a Long Absolute address for all
+     forward references. Backward references will be treated
+     the same with both forms of the directive.
+
+
+RORG      Set Relative Origin
+
+          Format:       label      RORG    absexp
+
+        The RORG directive changes the program counter to be
+     of relocatable type, and to have the value given by
+     "absexp". Subsequent statements will be assigned
+     relocatable memory locations, starting with the value
+     assigned to the program counter. Addressing in
+     relocatable sections is done using the "program counter
+     relative with displacement" addressing mode. If neither
+     an ORG nor a RORG directive is specified, relative mode
+     is assumed, and the program counter will start as if a
+     "RORG 0" were present. The label value assignment is the
+     same as for ORG.
+
+
+CNOP      Set Program Alignment
+
+          Format:       label      CNOP    number,number
+
+        The CNOP directive changes the program counter,
+     aligning it as specified in the arguments. The SECOND
+     argument gives a base value, and the FIRST argument gives
+     an offset from that base. The program counter is aligned
+     such that (PC-"offset") is a multiple of "base". Thus,
+     "CNOP 0,4" aligns the program counter to a 0 byte offset
+     from a 4 byte boundary (i.e. full word alignment), and
+     "CNOP 128,256" aligns the program counter to a 128 byte
+     offset from a 256 byte boundary.
+
+
+
+
+                            - 11 -END       End of program
+
+          Format:       label      END
+
+        The END directive tells the assembler that the source
+     is finished, and subsequent source statements are
+     ignored. The END directive encountered during the first
+     pass of the assembler, causes it to begin the second
+     pass. If the label field is present, then the value of
+     the current program counter is assigned to the label,
+     before the END directive is executed.
+
+
+
+
+Symbol Definition DirectivesSymbol Definition Directives
+
+
+EQU       Equate symbol value
+
+          Format:  label     EQU     exp
+
+        The EQU directive assigns the value of the expression
+     in the operand field to the symbol in the label field.
+     The value assigned is permanent, so the label may not be
+     defined anywhere else in the program. The expression must
+     not contain forward references.
+
+
+EQUR      Equate register value
+
+          Format:  label     EQUR    register
+
+        This directive allows the user to equate one of the
+     processor registers with a user symbol. Only the Address
+     and Data registers are valid, so special symbols like SR,
+     CCR and USP are illegal here. The register assigned is
+     permanent, so the label cannot be defined anywhere else
+     in the program. The register must not be a forward
+     reference to another EQUR statement.
+
+
+SET       Set symbol value
+
+          Format:  label     SET     exp
+
+        The SET directive assigns the value of the expression
+     in the operand field to the symbol in the label field.
+     SET is identical to EQU, apart from the fact that the
+     assignment is temporary, and can be changed later on in
+     the program. The expression cannot contain forward
+     references, and no forward references are allowed to
+     symbols which are defined using SET.
+
+
+
+
+
+
+                            - 12 -EXTRN     Define external symbols
+
+          Format:            EXTRN   list
+
+        The EXTRN directive declares a list of symbols which
+     are external to the current module. The symbols must not
+     be longer that 7 characters, and must not be defined
+     within the module. External symbols are assumed to be of
+     Long Absolute type, and are valid in instructions or
+     directives which use this addressing mode. External
+     symbols are only valid with the TRIPOS Object Module
+     format.
+
+
+ENTRY     Define internal symbols
+
+          Format:            ENTRY   list
+
+        The ENTRY directive declares a list of symbols which
+     are internal to the current module, but which are to be
+     made available to other modules as external symbols. The
+     symbols must not be longer that 7 characters, and must be
+     defined within the module. Internal symbols must be of
+     Long Absolute, Short Absolute, or Relocatable type.
+     Internal symbols are only valid with the TRIPOS Object
+     Module format.
+
+
+
+
+Data Definition DirectivesData Definition Directives
+
+
+DC        Define Constant
+
+          Format:       label      DC.B   list
+                        label      DC.W   list
+                        label      DC.L   list
+
+        The DC directive defines a constant value in memory.
+     It may have any number of operands, separated by commas
+     (","). The values in the list must be capable of being
+     held in the data location, whose size is given by the
+     size specifier on the directive. If no size specifier is
+     given, a default of ".W" is assumed. If the size is ".B",
+     then there is one other data type which can be used: that
+     of the ASCII string. This is a series of ASCII
+     characters, contained within quotation marks. As with
+     ASCII literals, if a quotation mark is required in the
+     string, then two must be entered. If the size is ".W" or
+     ".L", then the assembler aligns the data onto a word
+     boundary.
+
+
+
+
+
+
+
+                            - 13 -DS        Define Storage
+
+          Format:       label      DS.B   absexp
+                        label      DS.W   absexp
+                        label      DS.L   absexp
+
+        The DS directive is used to reserve memory locations,
+     but does not initialise them in any way. The amount of
+     space allocated depends on the data size (given by the
+     size specifier on the directive), and the value of the
+     expression in the operand field. This is interpreted as
+     the number of data items of that size to allocate. As
+     with DC, if the size specifier is ".W" or ".L", the space
+     is aligned onto a word boundary; thus "DS.W 0" will have
+     the effect of aligning to a word boundary only. If no
+     size specifier is given, a default of ".W" is assumed.
+
+
+
+
+Listing ControlListing Control
+
+
+PAGE      Page Throw
+
+          Format:            PAGE
+
+        Unless paging has been inhibited, advance the assembly
+     listing to the top of the next page. The PAGE directive
+     does not appear on the output listing.
+
+
+LIST      Enable Listing
+
+          Format:            LIST
+
+        The LIST directive enables the production of the
+     assembly listing file. Listing continues until either an
+     END or a NOLIST directive is encountered. This directive
+     overrides the listing parameter given from the operating
+     system. The LIST directive does not appear on the output
+     listing.
+
+
+NOLIST    (or NOL)  Disable Listing
+
+          Format:            NOLIST
+
+        The NOLIST directive (for which NOL is a synonym),
+     disables production of the assembly listing file. Listing
+     ceases until either an END or a LIST directive is
+     encountered. This directive overrides the listing
+     parameter given from the operating system. The NOLIST
+     directive does not appear on the program listing.
+
+
+SPC       Space Blank Lines
+
+
+                            - 14 -          Format:            SPC     number
+
+        The SPC directive outputs the number of blank lines
+     given by the operand field, to the assembly listing. The
+     SPC directive does not appear on the program listing.
+
+
+NOPAGE    Disable Paging
+
+          Format:            NOPAGE
+
+        The NOPAGE directive disables paging to the assembly
+     listing.
+
+
+LLEN      Set Line Length
+
+          Format:            LLEN    number
+
+        The LLEN directive sets the line length of the
+     assembly listing file, to the value given in the operand
+     field. The value must lie between 60 and 132, and can
+     only be set once in the program. The default is 132.
+
+
+PLEN      Set Page Length
+
+          Format:           PLEN    number
+
+        The PLEN directive sets the page length of the
+     assembly listing file, to the value given in the operand
+     field. The value must lie between 24 and 100, and can
+     only be set once in the program. The default is 60.
+
+
+TTL       Set Program Title
+
+         Format:            TTL     title string
+
+        The TTL directive sets the title of the program to the
+     string given in the operand field. This string is used as
+     the page heading in the assembly listing. The string
+     starts at the first non-blank character after the TTL,
+     and continues until the end of line. It must not be
+     longer than 60 characters in length. The TTL directive
+     does not appear on the program listing.
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            - 15 -Conditional Assembly DirectivesConditional Assembly Directives
+
+
+IFEQ      Assemble if Equal
+IFNE      Assemble if Not Equal
+
+          Format:            IFEQ    absexp
+                             IFNE    absexp
+
+        The IFEQ and IFNE directives are used to enable or
+     disable assembly, depending on the value of the
+     expression in the operand field. The value is assumed to
+     be EQUAL if it is zero, and NOT EQUAL otherwise. Thus the
+     assembly is disabled if the operand is non zero for IFEQ,
+     or zero for IFNE. The conditional assembly switch remains
+     active until a matching ENDC statement is found.
+     Conditional assembly switches can be nested arbitrarily,
+     and each level of nesting must be terminated by a
+     matching ENDC.
+
+
+ENDC      End conditional assembly
+
+          Format:            ENDC
+
+        The ENDC directive is used to terminate conditional
+     assembly, set up using the IFEQ and IFNE directives. ENDC
+     matches the most recently encountered IFEQ or IFNE.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            - 16 -Macro DirectivesMacro Directives
+
+
+MACRO     Define macro body
+
+          Format:  label     MACRO
+
+        The MACRO directive defines the name of a macro, and
+     starts the definition of a macro body. The symbol in the
+     label field is the macro name. The macro body can contain
+     any text which would be normally be valid, (apart from
+     other macro definitions), plus escape sequences, to allow
+     the passing of macro parameters.
+
+        Macro parameters are positional, and have the names
+     "  1" to " 9". There is also the parameter "       0" which is
+     set to the value of the size specifier (if present) given
+     on the macro call. Parameters are passed textually, and
+     are separated by commas. If a macro parameter contains
+     blanks, then is must be enclosed within angle brackets
+     "<" and ">", or square brackets "  " and " ". This
+     mechanism allows both angle and square brackets to be
+     passed as macro parameters, but not at the same time.
+
+        A special escape sequence "     @" causes an assembler
+     generated sequence "@nnn", where "nnn" is a three digit
+     decimal number, unique for each macro call. This allows
+     labels to be defined within macros which are called more
+     than once, without the problem of multiple symbol
+     definition.
+
+        Note that it is illegal to generate macro definitions,
+     END statements etc. within a macro expansion, and macros
+     must always be defined before they are used. Macro calls
+     can be nested to a depth of 3.
+
+
+ENDM      End macro body
+
+          Format:            ENDM
+
+        The ENDM directive terminates the definition of a
+     macro body, and resumes normal assembly. ENDM is only
+     valid in a macro body.
+
+
+MEXIT     Terminate macro expansion
+
+         Format:             MEXIT
+
+        The MEXIT directive causes termination of the current
+     macro expansion. MEXIT is only valid in a macro body.
+
+
+
+
+
+
+
+                            - 17 -General DirectivesGeneral Directives
+
+
+NOOBJ     Disable Object Code Generation
+
+          Format:            NOOBJ
+
+        The NOOBJ directive disables the production of the
+     object code file at the end of assembly. This directive
+     overrides the value of the Object Module parameter given
+     from the operating system.
+
+
+FAIL      Generate a user error
+
+          Format:            FAIL
+
+        The FAIL directive causes the assembler to flag an
+     error for this input line.
+
+
+GET       Insert an external file
+
+          Format:            GET     "<file descriptor>"
+
+        The GET directive allows the inclusion of external
+     files into the program source. The file which is inserted
+     is given by the string descriptor in the operand field.
+     The nature of this descriptor will vary depending on the
+     machine on which the assembler is running. Under
+     PHOENIX/MVT, it is a DDname, which must be set up
+     externally, whereas on CAP or TRIPOS, it is an operating
+     system file name. GET directives can be nested to a depth
+     of three, and single quotes can be used instead of double
+     quotes.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            - 18 -Differences from the MOTOROLA SpecificationDifferences from the MOTOROLA Specification
+
+
+
+   This document is based on the MOTOROLA Macro Assembler
+Manual M68KXASM(D3), but clarifies its ambiguities, and
+provides specifications for the extensions in the Cambridge
+Assembler.
+
+   The differences are as follows:
+
+          a)  ORG, RORG and END statements can be labelled
+          b)  EQUR is provided for equating registers
+          c)  GET is provided for inserting header files
+          d)  G is done by default, and hence not relevant
+          e)  FAIL does not take an argument
+          f)  No automatic instruction translation is done
+          g)  ASCII literals are always justified to the right
+          h)  User generated line numbers are not supported
+          i)  CNOP is provided for program alignment
+          j)  ENTRY and EXTRN are provided, for module linkage
+          k)  Macro brackets can be "<>" or "           "
+
+
+
+
+
+
+
+
+Known BugsKnown Bugs
+
+
+
+   This bug list is effective from the 5th October 1982, and
+release 8.146 of the Assembler. All previous versions are
+invalidated. The bugs known to the author are:
+
+          No bugs known at present
+
+
+
+   Please report any other bugs to Ian Wilson, Room 205 in the
+Computer Laboratory, Telephone extension 265 as soon as
+possible.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            - 19 -
+
+

@@ -1,0 +1,297 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+      #######    ######    ######   ########  ##        ########  #######  
+      ########  ########  ########  ########  ##        ########  ######## 
+      ##    ##  ##    ##  ##    ##     ##     ##           ##     ##    ## 
+      ########  ##    ##  ##    ##     ##     ##           ##     #######  
+      #######   ##    ##  ##    ##     ##     ##           ##     ##    ## 
+      ##  ##    ##    ##  ##    ##     ##     ##           ##     ##    ## 
+      ##   ##   ########  ########     ##     ########  ########  ######## 
+      ##    ##   ######    ######      ##     ########  ########  #######  
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   03/09/85             *
+\*****************************************************************************/
+
+
+
+
+
+//  Replacement for the standard BLIB "devicetask" procedure.  This module
+//  implements the conversion of TRIPOS userids into locks on user's root
+//  directories, for example:
+//
+//      idw:a.b.c
+//
+//  looks up "idw" in the MAP service, and creates an assignment to it,
+//  giving it a lock on "sys:idw".  If the name refers to the logged on user,
+//  then the assignment is set up as a copy of "HOME:", in order to get the
+//  access correct.
+
+
+
+
+SECTION "ROOTLIB"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "RINGHDR"
+GET "FILEHDR"
+GET "BCPL.SSPLIB"
+GET "BCPL.RINGMAP"
+GET "BCPL.MAPPUID"
+
+
+
+LET devicetask( name )  =  VALOF
+$(
+//  First, attempt to split the name, so that we can see if an assignment is
+//  actually being used.
+
+    LET workvec    =  VEC 30/bytesperword
+    LET directory  =  currentdir
+    LET task       =  task.filehandler
+
+    //  Attempt to split the name, so that we can determine what is before the
+    //  colon (if there is one).
+
+    LET ptr        =  splitname( workvec, ':', name, 1 )
+
+    //  Look to see if there actually was a colon in the name, and if
+    //  not, return a reference to the current filing system.
+    
+    TEST  ptr = 0  |  ptr = 2  THEN
+    $(
+        //  This is something of the form "xxxx" or ":xxxx".  In any case,
+        //  the relevant filing system is the one represented by "currentdir".
+        
+        UNLESS  directory = 0  DO
+        $(
+            //  We have a current directory lock, so we can find out the task
+            //  which is handling the current filing system.
+            
+            task  :=  directory!lock.task
+            
+            //  However, if the filename stared with a ":", then we must look
+            //  from the root of the filing system.
+            
+            IF  ptr = 2  THEN  directory  :=  0
+        $)
+    $)
+    ELSE
+    $(
+        //  Not quite so simple.  We must look in the assignments list to see
+        //  whether the item exists, and if it does, return the values 
+        //  immediately.  Otherwise, this is more difficult, and requires 
+        //  or a ring transaction.  
+        
+        LET assignlist  =  rootnode!rtn.info + info.assignments
+        
+        //  Look for the assignment first of all.  If the assignment does not
+        //  exist, then the primary result (task) is zero.
+
+        task       :=  findassignment( workvec, !assignlist )
+        directory  :=  result2
+        
+        //  If we return from that having failed to find the assignment, then
+        //  we should call the map service to find out if this name corresponds
+        //  to a user's root directory.
+                
+        IF  task = 0  THEN
+        $(
+            //  Lookup failed.  We should therefore call the MAP service to
+            //  see whether this is a name known to it.
+            
+            LET rootname  =  lookuproot( workvec )
+            
+            //  If rootname is not set, then we cannot find a mapping for
+            //  the name.
+            
+            UNLESS  rootname = 0  DO
+            $(
+                //  We have the name of the user's root directory in our
+                //  hands, and so we should attempt to get a lock on it.
+                
+                LET lock  =  locateobj( rootname )
+                
+                //  If we have managed to get a lock, then we should add this
+                //  item to the assignments list.
+                
+                UNLESS  lock = 0  DO
+                $(
+                    //  We have obtained a lock on the object, and so we should
+                    //  be ready to add this entry into the assignments list.
+                    //  We should claim the assignments lock, and then make
+                    //  sure that someone hasn't put the assignment in behind
+                    //  our back.
+                    
+                    LET opri   =  claimlock()
+                        
+                    LET otask  =  findassignment( workvec, !assignlist )
+                    LET olock  =  result2
+                    
+                    TEST  otask = 0  THEN
+                    $(
+                        //  No-one else has inserted this item, and so we
+                        //  should.
+                    
+                        LET length  =  workvec % 0
+                        LET entry   =  getvec( ass.name + length/bytesperword )
+                        
+                        directory  :=  lock
+                        task       :=  lock!lock.task
+                
+                        UNLESS  entry = 0  DO
+                        $(
+                            //  We have allocated the new assignment entry, and so
+                            //  should fill in all the details.
+                        
+                            entry!ass.link  :=  !assignlist
+                            entry!ass.type  :=  dt.disc
+                            entry!ass.dir   :=  directory
+                            entry!ass.task  :=  task
+
+                            FOR  i = 0  TO  length  DO  
+                                (entry + ass.name) % i  :=  workvec % i
+                                
+                            !assignlist     :=  entry
+                        $)
+                    $)
+                    ELSE
+                    $(
+                        //  Someone has sneaked in behind our back.  We should
+                        //  free the lock we have just obtained, and use the
+                        //  one which they put there.
+                        
+                        freeobj( lock )
+                        
+                        directory  :=  olock
+                        task       :=  otask
+                    $)
+                    
+                    freelock( opri )
+                $)
+
+                freevec( rootname )
+            $)
+        $)
+    $)
+
+    result2  :=  directory
+
+    RESULTIS  task
+$)
+
+
+
+AND findassignment( name, list )  =  VALOF
+$(
+//  Look in the list "list" to see if there is a reference to "name".  If
+//  so, then return the corresponding lock and task.
+
+    UNTIL  list = 0  DO
+    $(
+        //  Compare the name in our hand with the name in the assignment.
+        //  If equal, then we have found the item in the list, and we can
+        //  stop looking.
+            
+        IF  compstring( name, list + ass.name ) = 0  THEN
+        $(
+            //  This assignment exists.  Return with "result2" set to the
+            //  lock, and the result set to the task number.
+
+            result2  :=  list!ass.dir
+
+            RESULTIS  list!ass.task
+        $)
+            
+        //  Otherwise, move on to the next item in the chain, and compare
+        //  that instead.
+            
+        list  :=  list!ass.link
+    $)
+
+    result2  :=  error.device.not.mounted
+
+    RESULTIS  0
+$)
+
+
+
+AND lookuproot( name )  =  VALOF
+$(
+//  Call the MAP service, to see if there is a TRIPOS directory corresponding
+//  to the "name" given.
+
+    LET size    =  max.ssp.size * 2
+    LET result  =  getvec( size/bytesperword )
+
+    TEST  result = 0  THEN  RESULTIS  0
+    ELSE
+    $(    
+        //  Managed to get some store, so call the map service to see if we
+        //  can get the mapping.
+        
+        IF  mappuid( "PNAME", result, size )  THEN
+        $(
+            //  We have the name of this person now, so compare it with the
+            //  name given, to see if it matches.
+            
+            IF  compstring( result, name ) = 0  THEN
+            $(
+                //  This is the same, so the result is simply the user's home
+                //  directory, or HOME:.
+                
+                LET home  =  "HOME:"
+                
+                FOR  i = 0  TO  home % 0  DO  result % i  :=  home % i
+                
+                RESULTIS  result
+            $)
+        $)
+    
+        //  If the userid is not that of the logged on user, then we must
+        //  look further.
+
+        TEST  ringmap( name, "PNAME", "TRIPOSDIR", result, size )  THEN  RESULTIS  result
+        ELSE
+        $(
+            //  Mapping not found, so free the result memory block, and return
+            //  the error value.
+        
+            freevec( result )
+          
+            RESULTIS  0
+        $)
+    $)
+$)
+
+
+
+AND claimlock()  =  VALOF
+$(
+//  Attempt to change to the lock priority, and wait until we can do so.
+
+    LET opri  =  tcb!tcb.pri
+    
+    UNTIL  changepri( taskid, maxint )  DO  delay( tickspersecond/10 )
+    
+    RESULTIS  opri
+$)
+
+
+
+AND freelock( opri )  BE
+
+//  Set the priority back to what it was.
+
+    changepri( taskid, opri )
+
+

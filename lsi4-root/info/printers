@@ -1,0 +1,47 @@
+******************************************************************************
+*       PRINT/LIST      Printer Definition File  (Lab Tripos)                *
+******************************************************************************
+
+
+*  IDW  18th November 1986
+
+
+*  Each line must match:
+*      NAME/A   PRINTER/A   OPTIONS/A
+*
+*
+*  Options within printer names are:
+*
+*      ??    -    ?
+*      ?T    -    Title (or file name)
+*      ?N    -    Newline character
+
+
+*  VDU and DEFAULT must always be present.
+
+vdu       *           "w80,l22,pw"
+
+default   lp:?t       "w132,l60,prolog=sys:info.prolog-lp"
+
+
+*  Synonyms for old lab names
+
+titan     tp:?t    "w132,l60,prolog=sys:info.prolog-lp"
+mond      mp:?t    "w136,l60,prolog=sys:info.prolog-lp"
+canon     cp:?t    "w98,l98,prolog=sys:info.prolog-lp"
+ccanon    cp:?t    "w196,l196,prolog=sys:info.prolog-canon"
+
+
+*  Special use of Laser Writer.
+*    ("prolog-ps1" sets prefeed on; "prolog-ps2" doesn't)
+
+balfour   oms:?t   "w91,l73,postscript,prolog=sys:info.prolog-ps1"
+cbalfour  oms:?t   "w180,l134,postscript,prolog=sys:info.prolog-ps2"
+lbalfour  oms:?t   "w132,l50,postscript,prolog=sys:info.prolog-ps1"
+lcbalfour oms:?t   "w264,l93,postscript,prolog=sys:info.prolog-ps2"
+
+*  Special option for printing of assembler listings on Laser Writer
+
+asm       oms:?t   "w300,l130,pf2,postscript,prolog=sys:info.prolog-ps2"
+
+

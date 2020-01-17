@@ -1,0 +1,945 @@
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*************************************************************************
+*  (C) Copyright 1979  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*                 8 x 3 0 0    A S S E M B L E R                        *
+*                                                                       *
+*************************************************************************
+**  C  Gray  Girling      COMPUTER LAB,  CAMBRIDGE           20.06.79  **
+*************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*/
+
+
+
+
+
+
+
+SECTION "8x300"
+
+
+
+//*<TRIPOS
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+
+
+
+
+
+
+
+
+//
+//                     Error  messages
+//
+
+
+MANIFEST $(
+   e.regbus   =  e.e + 0
+   e.regba    =  e.e + 1
+   e.regbusba =  e.e + 2
+   e.valuerange = e.e + 3
+   e.pcrange  = e.e + 4
+   e.nestproc = e.e + 5
+   e.badend   = e.e + 6
+   e.badret   = e.e + 7
+   e.badproc  = e.e + 8
+   e.badlen   = e.e + 9
+   e.noread   = e.e + 10
+   e.nowrite  = e.e + 11
+   e.badport  = e.e + 12
+   e.fwdrefinorg=e.e+ 13
+$)
+
+
+LET errormess(rc) = VALOF
+SWITCHON rc INTO
+$(  CASE e.regbus:     RESULTIS "register or bus expected"
+    CASE e.regba:      RESULTIS "register or bus address expected"
+    CASE e.regbusba:   RESULTIS "register, bus, or bus address expected"
+    CASE e.valuerange: RESULTIS "address (%X4) out of range"
+    CASE e.pcrange:    RESULTIS "can't fit %N words into a %N word block"
+    CASE e.nestproc:   RESULTIS "nested procedures not allowed"
+    CASE e.badend:     RESULTIS "END not of current procedure"
+    CASE e.badret:     RESULTIS "nothing to return from"
+    CASE e.badproc:    RESULTIS "procedure name expected"
+    CASE e.badlen:     RESULTIS "port length incompatibility"
+    CASE e.noread:     RESULTIS "%S is read-only"
+    CASE e.nowrite:    RESULTIS "%S is write-only"
+    CASE e.badport:    RESULTIS "bad port description"
+    CASE e.fwdrefinorg:RESULTIS "forward references not allowed in ORG"
+    DEFAULT:           RESULTIS "unknown return code given"
+$)
+
+
+
+
+
+//
+//                    Register  Discriptions
+//
+
+
+
+
+MANIFEST $(
+   r.bad      =  0            // bad register
+   b.reg      =  bit15        // to denote a register mnemonic
+   b.rbus     =  bit14        // to denote a right bank bus mnemonic
+   b.lbus     =  bit13        // to denote a left bank bus mnemonic
+   b.bus      =  b.rbus|b.lbus// to denote a bus mnemonic
+   b.read     =  bit12        // to denote a readable register
+   b.write    =  bit11        // to denote a writeable register
+   aux        =  b.reg | b.read | b.write | 0
+   r1         =  b.reg | b.read | b.write | 1
+   r2         =  b.reg | b.read | b.write | 2
+   r3         =  b.reg | b.read | b.write | 3
+   r4         =  b.reg | b.read | b.write | 4
+   r5         =  b.reg | b.read | b.write | 5
+   r6         =  b.reg | b.read | b.write | 6
+   r11        =  b.reg | b.read | b.write | 9
+   ovf        =  b.reg | b.read | 8
+   ivl        =  b.reg | b.write | #X7
+   ivr        =  b.reg | b.write | #XF
+   liv0       =  b.lbus | b.read | b.write | (2<<3) + 0
+   liv1       =  b.lbus | b.read | b.write | (2<<3) + 1
+   liv2       =  b.lbus | b.read | b.write | (2<<3) + 2
+   liv3       =  b.lbus | b.read | b.write | (2<<3) + 3
+   liv4       =  b.lbus | b.read | b.write | (2<<3) + 4
+   liv5       =  b.lbus | b.read | b.write | (2<<3) + 5
+   liv6       =  b.lbus | b.read | b.write | (2<<3) + 6
+   liv7       =  b.lbus | b.read | b.write | (2<<3) + 7
+   riv0       =  b.rbus | b.read | b.write | (3<<3) + 0
+   riv1       =  b.rbus | b.read | b.write | (3<<3) + 1
+   riv2       =  b.rbus | b.read | b.write | (3<<3) + 2
+   riv3       =  b.rbus | b.read | b.write | (3<<3) + 3
+   riv4       =  b.rbus | b.read | b.write | (3<<3) + 4
+   riv5       =  b.rbus | b.read | b.write | (3<<3) + 5
+   riv6       =  b.rbus | b.read | b.write | (3<<3) + 6
+   riv7       =  b.rbus | b.read | b.write | (3<<3) + 7
+$)
+
+
+
+
+LET initsyms() BE
+$(
+    reg.put("R1",r1)
+    reg.put("R2",r2)
+    reg.put("R3",r3)
+    reg.put("R4",r4)
+    reg.put("R5",r5)
+    reg.put("R6",r6)
+    reg.put("R11",r11)
+    reg.put("OVF",ovf)
+    reg.put("AUX",aux)
+    reg.put("LIV" ,liv0)
+    reg.put("LIV0",liv0)
+    reg.put("LIV1",liv1)
+    reg.put("LIV2",liv2)
+    reg.put("LIV3",liv3)
+    reg.put("LIV4",liv4)
+    reg.put("LIV5",liv5)
+    reg.put("LIV6",liv6)
+    reg.put("LIV7",liv7)
+    reg.put("RIV" ,riv0)
+    reg.put("RIV0",riv0)
+    reg.put("RIV1",riv1)
+    reg.put("RIV2",riv2)
+    reg.put("RIV3",riv3)
+    reg.put("RIV4",riv4)
+    reg.put("RIV5",riv5)
+    reg.put("RIV6",riv6)
+    reg.put("RIV7",riv7)
+    reg.put("IVL",ivl)
+    reg.put("IVR",ivr)
+$)
+
+
+
+
+//
+//                    Symbol   Types
+//
+
+
+
+MANIFEST $(
+   type.proc  = type.+1
+   type.iv    = type.+2
+   b.rl       = bit14           // set in RIV ports
+$)
+
+
+
+GLOBAL $(
+   v.byte : ag + 0        //  field for byte address of lv or rv
+   v.bit  : ag + 1        //  field for lsb number of lv or rv
+   v.len  : ag + 2        //  field for the length of a lv or rv
+$)
+
+
+
+LET valtype(type, val) = VALOF
+SWITCHON type INTO
+$(  CASE type.proc:
+         warn(e.badtype)
+         RESULTIS val
+    CASE type.iv:
+         RESULTIS getf(val, v.byte)
+    DEFAULT:
+         warn(e.badtype)
+         RESULTIS -1
+$)
+
+
+
+AND printtype(type, val) BE
+SWITCHON type INTO
+$(   CASE type.proc:
+          writef("proc   %X4",val)
+          ENDCASE
+     CASE type.iv:
+          writef("%Cv  %I3,%I1,%I1", ((val&b.rl)=0->'l','r'),
+                                     getf(val,v.byte),
+                                     getf(val,v.bit),
+                                     getf(val,v.len) )
+          ENDCASE
+     DEFAULT:
+          writes(" ????????? ")
+$)
+
+
+
+
+AND savetype(ty, str, val) BE
+$(  FOR i=1 TO 15 DO wrch(i>str%0 -> '*S', str%i)
+    wrch('*S')
+    SWITCHON ty INTO
+    $(  CASE type.const: DEFAULT:
+             writef("EQU     %N*N", val)
+             ENDCASE
+        CASE type.lab: CASE type.proc:
+             writef("SET     #X%X4*N", val)
+             ENDCASE
+        CASE type.iv:
+             writef("%CIV     %I3,%I1,%I1*N", ((val&b.rl)=0 -> 'R', 'L'),
+                                getf(val, v.byte),
+                                getf(val, v.bit),
+                                getf(val, v.len)                        )
+             ENDCASE
+    $)
+$)
+
+
+
+
+
+
+
+
+
+
+//
+//                    Code   for   Opcode   Formats
+//
+
+
+
+GLOBAL $(
+  f.s   :  ag + 4   //   A field in which the source usualy goes
+  f.l   :  ag + 5   //   The central field called 'L' in the documentation
+  f.d   :  ag + 6   //   Ususaly contains the destination
+  f.i   :  ag + 7   //   Contains an eight bit number
+  f.a   :  ag + 8   //   The field for JMP (13 bits)
+
+  /*    These fields are layed out as folows:
+
+         -------------------------------------
+         | OP |    S      | L  |      D      |
+         -------------------------------------
+
+         -------------------------------------
+         | OP |    S      |        I         |
+         -------------------------------------
+
+         -------------------------------------
+         | OP |             A                |
+         -------------------------------------
+
+   */
+
+
+   procname   : ag + 9    // name of current procedure
+   returntable: ag + 10   // table of procedure return addresses
+   rettabaddr : ag + 11   // address of return table
+   length     : ag + 12   // length of bit field in a transfer
+                          // value is set in 'getsymb'
+   outputrettable:ag+13   //  generates jump table at end of run
+   callproc   : ag + 14   //  for CALL <procedure> mnemonic
+   retproc    : ag + 15   //  for RETURN <procedure> mnemonic
+   procproc   : ag + 16   //  for PROC <procname> mnemonic
+   endproc    : ag + 17   //  for END <procname> and END mnemonics
+   rivproc    : ag + 18   //  for RIV directive
+   livproc    : ag + 19   //  for LIV directive
+   orgproc    : ag + 20   //  for ORG <addr> and ORG <space>,<page size>
+   selproc    : ag + 21   //  for SEL <ivaddr> directive
+   need       : ag + 22   //  need(space,pagesize) for ORG
+   fmt1       : ag + 23   //  MOVE, AND, ADD, XOR
+   fmt2.1     : ag + 24   //  XEC
+   fmt2.2     : ag + 25   //  NZT
+   fmt3       : ag + 26   //  XMIT
+   fmt4       : ag + 27   //  JMP
+$)
+
+
+
+
+MANIFEST $(
+   rettabsize = 256
+   noport = bit14
+$)
+
+
+LET outputrettable() BE
+$(  IF restartpage & pass=second THEN wrch('*P')
+    need(returntable!0+1, 256)
+    rettabaddr:=pc
+    IF returntable!0\=0  THEN
+    $(  IF list>0 & pass=second  THEN writes("Jump Table:*n")
+        putword(4<<13)              /* XEC */
+        putwordf(pc, f.i)           /*  *  */
+        putwordf(trim(r11,f.s),f.s) /* (r11) */
+        FOR i=1 TO returntable!0 DO
+        $(  putword(7<<13)          /* JMP */
+            putwordf(returntable!i,f.a)     /* CALL i */
+        $)
+        endline()
+    $)
+$)
+
+
+
+AND callproc(lab) BE
+$(  LET i=?
+    get.and.declare(lab)
+    UNLESS is.type(type.proc) THEN error(e.badproc)
+    i:=gettype(type.proc, item.info)
+    UNLESS returntable!0=rettabsize THEN
+        returntable!0 := returntable!0 + 1
+    putword(6<<13)                      /* XMIT */
+    putwordf(returntable!0, f.i)
+    putwordf(trim(r11,f.s), f.s)        /* (r11) */
+    putword(7<<13)                      /* JMP   */
+    putwordf(i, f.a)                    /* to procedure */
+    returntable!(returntable!0):=pc+2   /* (return pointer) */
+    getitem()
+$)
+
+
+
+AND retproc(lab) BE
+$(  get.and.declare(lab)
+    putword(7<<13)                      /* JMP */
+//  IF procname=0 THEN error(e.badret)
+    putwordf(rettabaddr, f.a)           /* through return table */
+    getitem()
+$)
+
+
+AND procproc(lab) BE
+$(  get.and.declare(lab)
+    UNLESS item.type=i.iden THEN error(e.noname)
+    putlab(item.info, pc, type.proc)
+    TEST procname=0 THEN procname:=getstr(item.info)
+    ELSE error(e.nestproc)
+    getitem()
+$)
+
+
+
+AND endproc(lab) BE
+$(  get.and.declare(lab)
+    TEST procname=0 & item.type~=i.iden THEN finishpass:=TRUE ELSE
+    $(  UNLESS is.type(type.proc) THEN error(e.badproc)
+        UNLESS 0=compstring(item.info, procname) THEN error(e.badend)
+        procname:=0
+        getitem()
+    $)
+$)
+
+
+
+AND defv(lab,right) BE
+$(  LET n=0
+    LET b=0
+    LET bi=7
+    LET l=1
+    get.and.declare(lab)
+    b:=expression()
+    IF scan(i.comma) THEN
+    $(  bi:=expression()
+        IF scan(i.comma) THEN l:=trim(expression(), v.len)
+    $)
+    UNLESS l<=bi+1 THEN warn(e.badport)
+    n:=putf(b, v.byte, n)
+    n:=putf(bi, v.bit, n)
+    n:=putf(l, v.len,  n)
+    putlab(lab, n | (right -> b.rl, 0), type.iv)
+$)
+
+
+
+AND rivproc(lab) BE defv(lab, TRUE)
+
+
+AND livproc(lab) BE defv(lab, FALSE)
+
+
+AND orgproc(lab) BE
+$(  LET i=?
+    get.and.declare(lab)
+    i:=expression()
+    TEST scan(i.comma) THEN
+    $(  LET forward=dontknow
+        LET page=expression()
+        TEST forward | dontknow THEN error(e.fwdrefinorg) ELSE need (i, page)
+    $) ELSE pc:=i
+$)
+
+
+
+AND need(words, pagesize) BE
+$(  LET nextp=(pc/pagesize + 1)*pagesize
+    TEST words>pagesize THEN error(e.pcrange, words, pagesize) ELSE
+    IF pc+words>nextp THEN
+    $(  putword(7<<13)              /* JMP */
+        putwordf(nextp, f.a)        /* to next page boundary */
+        endline()
+        pc:=nextp
+    $)
+$)
+
+
+
+AND selproc(lab) BE
+$(  LET i=?
+    get.and.declare(lab)
+    putword(6<<13)              // XMIT
+    TEST is.type(type.iv) THEN
+    $(  LET port=gettype(type.iv, item.info)
+        putlab("IV", port, type.iv)
+        putwordf((((port&b.rl)\=0)->15,7), f.s)
+        putwordf(getf(port, v.byte), f.i)
+    $) ELSE error(e.badtype)
+    getitem()
+$)
+
+
+
+
+
+
+
+.
+
+
+
+
+SECTION "8x300a"
+
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+
+
+//
+//                  Header for second section:
+//
+
+
+
+MANIFEST $(
+   e.regbus   =  e.e + 0
+   e.regba    =  e.e + 1
+   e.regbusba =  e.e + 2
+   e.valuerange = e.e + 3
+   e.pcrange  = e.e + 4
+   e.nestproc = e.e + 5
+   e.badend   = e.e + 6
+   e.badret   = e.e + 7
+   e.badproc  = e.e + 8
+   e.badlen   = e.e + 9
+   e.noread   = e.e + 10
+   e.nowrite  = e.e + 11
+   e.badport  = e.e + 12
+   e.fwdrefinorg=e.e+ 13
+   r.bad      =  0            // bad register
+   b.reg      =  bit15        // to denote a register mnemonic
+   b.rbus     =  bit14        // to denote a right bank bus mnemonic
+   b.lbus     =  bit13        // to denote a left bank bus mnemonic
+   b.bus      =  b.rbus|b.lbus// to denote a bus mnemonic
+   b.read     =  bit12        // to denote a readable register
+   b.write    =  bit11        // to denote a writeable register
+   aux        =  b.reg | b.read | b.write | 0
+   r1         =  b.reg | b.read | b.write | 1
+   r2         =  b.reg | b.read | b.write | 2
+   r3         =  b.reg | b.read | b.write | 3
+   r4         =  b.reg | b.read | b.write | 4
+   r5         =  b.reg | b.read | b.write | 5
+   r6         =  b.reg | b.read | b.write | 6
+   r11        =  b.reg | b.read | b.write | 9
+   ovf        =  b.reg | b.read | 8
+   ivl        =  b.reg | b.write | #X7
+   ivr        =  b.reg | b.write | #XF
+   liv0       =  b.lbus | b.read | b.write | (2<<3) + 0
+   liv1       =  b.lbus | b.read | b.write | (2<<3) + 1
+   liv2       =  b.lbus | b.read | b.write | (2<<3) + 2
+   liv3       =  b.lbus | b.read | b.write | (2<<3) + 3
+   liv4       =  b.lbus | b.read | b.write | (2<<3) + 4
+   liv5       =  b.lbus | b.read | b.write | (2<<3) + 5
+   liv6       =  b.lbus | b.read | b.write | (2<<3) + 6
+   liv7       =  b.lbus | b.read | b.write | (2<<3) + 7
+   riv0       =  b.rbus | b.read | b.write | (3<<3) + 0
+   riv1       =  b.rbus | b.read | b.write | (3<<3) + 1
+   riv2       =  b.rbus | b.read | b.write | (3<<3) + 2
+   riv3       =  b.rbus | b.read | b.write | (3<<3) + 3
+   riv4       =  b.rbus | b.read | b.write | (3<<3) + 4
+   riv5       =  b.rbus | b.read | b.write | (3<<3) + 5
+   riv6       =  b.rbus | b.read | b.write | (3<<3) + 6
+   riv7       =  b.rbus | b.read | b.write | (3<<3) + 7
+   type.proc  = type.+1
+   type.iv    = type.+2
+   b.rl       = bit14           // set in RIV ports
+   rettabsize = 256             // size of return jump table
+   noport     = bit14           // value of a 'null' port
+$)
+
+
+
+
+
+
+GLOBAL $(
+   v.byte : ag + 0        //  field for byte address of lv or rv
+   v.bit  : ag + 1        //  field for lsb number of lv or rv
+   v.len  : ag + 2        //  field for the length of a lv or rv
+   f.s   :  ag + 4        //  A field in which the source usualy goes
+   f.l   :  ag + 5        //  The central field called 'L' in the documentation
+   f.d   :  ag + 6        //  Ususaly contains the destination
+   f.i   :  ag + 7        //  Contains an eight bit number
+   f.a   :  ag + 8        //  The field for JMP (13 bits)
+   procname   : ag + 9    //  name of current procedure
+   returntable: ag + 10   //  table of procedure return addresses
+   rettabaddr : ag + 11   //  address of return table
+   length     : ag + 12   //  length of bit field in a transfer
+   outputrettable:ag+13   //  generates jump table at end of run
+   callproc   : ag + 14   //  for CALL <procedure> mnemonic
+   retproc    : ag + 15   //  for RETURN <procedure> mnemonic
+   procproc   : ag + 16   //  for PROC <procname> mnemonic
+   endproc    : ag + 17   //  for END <procname> and END mnemonics
+   rivproc    : ag + 18   //  for RIV directive
+   livproc    : ag + 19   //  for LIV directive
+   orgproc    : ag + 20   //  for ORG <addr> and ORG <space>,<page size>
+   selproc    : ag + 21   //  for SEL <ivaddr> directive
+   need       : ag + 22   //  need(space,pagesize) for ORG
+   fmt1       : ag + 23   //  MOVE, AND, ADD, XOR
+   fmt2.1     : ag + 24   //  XEC
+   fmt2.2     : ag + 25   //  NZT
+   fmt3       : ag + 26   //  XMIT
+   fmt4       : ag + 27   //  JMP
+$)
+
+
+
+//
+//                      Code  Mnemonic  Implimentation
+//
+
+
+
+MANIFEST $(
+  read = TRUE           //  for symbol used for reading from
+  write= FALSE          //  for symbol used for writing to
+$)
+
+
+LET getsym(types, field, mode, err, a1, a2, a3)  =  VALOF
+$(  LET ans=r.bad
+    TEST item.type\=i.iden THEN error(err,a1,a2,a3) ELSE
+    $(  LET r=getreg(item.info)
+        TEST r\=r.bad THEN
+        $(  TEST (r&types)=0 THEN error(err,a1,a2,a3) ELSE
+            IF (r&mode)=0 THEN
+               TEST mode=b.read THEN error(e.noread, item.info)
+               ELSE error(e.nowrite, item.info)
+            putwordf( trim(r,field), field )
+            ans:=r
+        $) ELSE
+        IF is.type(type.iv, item.info) THEN
+        TEST (types&b.bus)=0 THEN error(err, a1, a2, a3) ELSE
+        $(  LET rec=gettype(type.iv, item.info)
+            LET r=(rec&b.rl)\=0
+            length:=getf(rec, v.len)
+            putwordf(((r->3,2)<<3)+getf(rec,v.bit), field)
+            ans:=(r->b.rbus, b.lbus)
+        $)
+        getitem()
+    $)
+    IF ans=r.bad THEN error(err, a1, a2, a3)
+    RESULTIS ans
+$)
+
+
+AND fmt1(lab) BE
+$(  LET s=?
+    LET d=?
+    LET nobus = FALSE
+    LET firstlen = ?
+    LET overlen = -1
+    get.and.declare(lab)
+    length:=-1
+    s:=getsym(b.reg|b.bus, f.s, b.read, e.regbus)
+    firstlen:=length
+//  IF (s&b.bus)\=0 THEN secondbank:=(s=b.rbus->b.lbus,b.rbus)
+    IF (s&b.reg)\=0 & scan(i.lbkt) THEN
+    $(  nobus:=TRUE
+        putwordf(expression(), f.l)
+        UNLESS scan(i.rbkt) THEN error(e.expected, ')')
+    $)
+    UNLESS scan(i.comma) THEN error(e.expected, ',')
+    IF item.type=i.number THEN
+    TEST nobus THEN error(e.regba) ELSE
+    $(  putwordf(trim(item.info, f.l), f.l)
+        overlen:=trim(item.info, f.l)
+        getitem()
+        UNLESS scan(i.comma) THEN error(e.expected, ',')
+    $)
+    getsym(b.reg|(nobus->0,b.bus), f.d, b.write, (nobus->e.regba, e.regbusba) )
+    IF overlen=-1 & length\=-1 THEN
+    $(  putwordf(length, f.l)
+        UNLESS firstlen=length | firstlen=-1 THEN error(e.badlen)
+    $)
+$)
+
+
+AND fmt2.1(lab) BE
+$(  LET s=?
+    LET i=?
+    LET tl=2
+    length:=0
+    get.and.declare(lab)
+    i:=expression()
+    UNLESS scan(i.lbkt) THEN error(e.expected,'(')
+    s:=getsym(b.reg|b.bus, f.s, b.read, e.regbus)
+    TEST (s&b.reg)\=0 THEN putwordf(pcrel(i, #XFF), f.i) ELSE
+    $(  putwordf(i, f.d)
+        TEST scan(i.comma) THEN
+        putwordf(trim(expression(),f.l), f.l)
+        ELSE putwordf(length, f.l)
+    $)
+    UNLESS scan(i.rbkt) THEN error(e.expected,')')
+    IF scan(i.comma) THEN tl:=expression()
+    need(tl, (s&b.reg)\=0-> (1<<8), (1<<5))
+$)
+
+
+AND fmt2.2(lab) BE
+$(  LET i=?
+    LET s=?
+    length:=0
+    get.and.declare(lab)
+    s:=getsym(b.reg|b.bus, f.s, b.read, e.regbus)
+    UNLESS scan(i.comma) THEN error(e.expected, ',')
+    TEST (s&b.reg)\=0 THEN putwordf(pcrel(expression(), #XFF),f.i) ELSE
+    $(  i:=expression()
+        TEST scan(i.comma) THEN
+        $(  putwordf(pcrel(expression(), #X1F), f.d)
+            putwordf(trim(i, f.l), f.l)
+        $) ELSE
+        $(  putwordf(pcrel(i, #X1F), f.d)
+            putwordf(length, f.l)
+        $)
+    $)
+$)
+
+
+AND fmt3(lab) BE
+$(  LET i=?
+    LET d=?
+    length:=0
+    get.and.declare(lab)
+    i:=expression()
+    UNLESS scan(i.comma) THEN error(e.expected,',')
+    d:=getsym(b.bus|b.reg, f.s, b.write, e.regbus)
+    TEST (d&b.bus)\=0 THEN
+    $(  putwordf(i, f.d)
+        TEST scan(i.comma) THEN
+        putwordf(expression(), f.l)
+        ELSE putwordf(length, f.l)
+    $) ELSE putwordf(i, f.i)
+$)
+
+
+AND fmt4(lab) BE
+$(  LET a=?
+    get.and.declare(lab)
+    putwordf(expression(), f.a)
+$)
+
+AND pcrel(address, mask) = VALOF
+$(  IF (address&~mask)\=(pc&~mask) THEN warn(e.valuerange,address)
+    RESULTIS address&mask
+$)
+
+
+
+
+
+/*<LSI4INIT  12.07.81  Version 3.052
+LET initcodes() BE
+$(  // table:
+    LET tab = TABLE
+    /*0000*/   #XE1, #XDD, 0, #X0A, #X88, #XE1, 0, #XE4, #XE6,
+    /*0009*/   0, 'B', #X11, #XE4, #X07, #XF1, #XDF, 0, #X18,
+    /*0012*/   #X34, #XF1, #X0E, #XF3, #XE0, 0, #X7A, #X1F, #XF3,
+    /*001B*/   #X15, #XF8, #X0100+'H', 0, #X8F, #X26, #XF8, #X1C,
+    /*0023*/   #XFE, #X0100+'I', 0, #X2D, #X5E, #XFE, #X23, #X0100,
+    /*002B*/   #XDE, 0, #X3B, 'I', #X0100, #X2A, #X011E, #XE1,
+    /*0033*/   0, #X6C, #XFFFF, #X011E, #X31, #X0103, #XE2, 0,
+    /*003B*/   #X96, #XFFFF, #X0103, #X38, #XE7, #XE3, 0, #XBD,
+    /*0043*/   #XFFFF, #XE7, #X3F, #X0107, #XE4, 0, 'P', #XA5,
+    /*004B*/   #X0107, 'F', #X010A, #XE5, 0, #X81, 'W', #X010A,
+    /*0053*/   'M', #X0110, #X0100+'J', 0, #XFFFF, #XCD, #X0110,
+    /*005A*/   'T', #X0117, #XE7, 0, #X65, #XFFFF, #X0117, #X5B,
+    /*0062*/   #X0119, #XEF, 0, #XFFFF, #XDD, #X0119, #X62, #X0120,
+    /*006A*/   #X0100+'G', 0, #XFFFF, #X73, #X0120, #X69, #X0122,
+    /*0071*/   #XEE, 0, #XFFFF, #XFFFF, #X0122, #X70, #XF5, #XED,
+    /*0079*/   0, #XFFFF, #XFFFF, #XF5, #X77, #X010D, #X0100+'F',
+    /*0080*/   0, #XFFFF, #XFFFF, #X010D, #X7E, #X0125, #X0100+'D',
+    /*0087*/   0, #XFFFF, #XAD, #X0125, #X85, #XFA, #X0100+'E',
+    /*008E*/   0, #X9D, #XFFFF, #XFA, #X8C, #X0105, #X0100+'E',
+    /*0095*/   0, #XFFFF, #XFFFF, #X0105, #X93, #XFC, #X0100+'K',
+    /*009C*/   0, #XFFFF, #XFFFF, #XFC, #X9A, #X0114, #X0100+'M',
+    /*00A3*/   #X01, 0, #XFFFF, #XFFFF, #X0114, #XA1, #X0128,
+    /*00AA*/   #X0100+'M', #X01, #X2000, #XB5, #XFFFF, #X0128,
+    /*00B0*/   #XA9, #X012A, #X0100+'M', #X01, #X4000, #XFFFF,
+    /*00B6*/   #XFFFF, #X012A, #XB1, #XEA, #X0100+'M', #X01, #X6000,
+    /*00BD*/   #XFFFF, #XC5, #XEA, #XB9, #XEC, #X0100+'N', #X01,
+    /*00C4*/   #X8000, #XD5, #XFFFF, #XEC, #XC1, #X0112, #X0100+'O',
+    /*00CB*/   #X01, #XA000, #XFFFF, #XFFFF, #X0112, #XC9, #XEE,
+    /*00D2*/   #X0100+'P', #X01, #XC000, #XFFFF, #XFFFF, #XEE,
+    /*00D8*/   #XD1, #X011C, #X0100+'Q', #X01, #XE000, #XFFFF,
+    /*00DE*/   #XFFFF, #X011C, #XD9, #X0400+'D', 'A'*#X100+'T',
+    /*00E3*/   'A'*#X100, #X0400+'T', 'E'*#X100+'X', 'T'*#X100,
+    /*00E7*/   #X0400+'W', 'R'*#X100+'E', 'F'*#X100, #X0300+'X',
+    /*00EB*/   'O'*#X100+'R', #X0300+'X', 'E'*#X100+'C', #X0400+'X',
+    /*00EF*/   'M'*#X100+'I', 'T'*#X100, #X0300+'E', 'Q'*#X100+'U',
+    /*00F3*/   #X0300+'S', 'E'*#X100+'T', #X0400+'S', 'P'*#X100+'A',
+    /*00F7*/   'C'*#X100, #X0300+'R', 'I'*#X100+'V', #X0300+'R',
+    /*00FB*/   'T'*#X100+'N', #X0300+'S', 'E'*#X100+'L', #X0300+'L',
+    /*00FF*/   'I'*#X100+'V', #X0400+'P', 'R'*#X100+'O', 'G'*#X100,
+    /*0103*/   #X0300+'R', 'E'*#X100+'F', #X0300+'R', 'E'*#X100+'T',
+    /*0107*/   #X0500+'N', 'E'*#X100+'E', 'D'*#X100+'S', #X0400+'P',
+    /*010B*/   'R'*#X100+'A', 'G'*#X100, #X0400+'P', 'R'*#X100+'O',
+    /*010F*/   'C'*#X100, #X0300+'O', 'R'*#X100+'G', #X0300+'N',
+    /*0113*/   'Z'*#X100+'T', #X0400+'M', 'O'*#X100+'V', 'E'*#X100,
+    /*0117*/   #X0300+'G', 'E'*#X100+'T', #X0400+'L', 'I'*#X100+'S',
+    /*011B*/   'T'*#X100, #X0300+'J', 'M'*#X100+'P', #X0300+'D',
+    /*011F*/   'E'*#X100+'F', #X0300+'E', 'N'*#X100+'D', #X0400+'E',
+    /*0123*/   'J'*#X100+'C', 'T'*#X100, #X0400+'C', 'A'*#X100+'L',
+    /*0127*/   'L'*#X100, #X0300+'A', 'D'*#X100+'D', #X0300+'A',
+    /*012B*/   'N'*#X100+'D'
+    LET tab.start = 3
+    LET locate(lv.tree, at) BE
+    TEST !lv.tree<0 THEN !lv.tree:=null ELSE
+    $(  MANIFEST
+        $(  c.size = 0; c.str  = 0; c.fn   = 1; c.opstr= 2
+            t.left = 0; t.right= 1; t.str  = 2; t.val  = 3
+            t.size = 4
+        $)
+        LET tree = !lv.tree+at
+        LET val = tree!t.val+at
+        val!c.fn := (@start-1)!(val!c.fn)
+        val!c.str := val!c.str+at
+        !lv.tree := !lv.tree+at
+        tree!t.str := val!c.str
+        tree!t.val := val
+        locate(tree+t.left, at)
+        locate(tree+t.right, at)
+    $)
+    locate(@tab.start, tab)
+    codes := tab.start
+$)
+/*LSI4INIT>*/
+
+
+
+//*<STANDINIT
+LET initcodes() BE
+$(  code.put("DATA",dataproc,0)
+    code.put("TEXT",textproc,0)
+    code.put("EQU",equproc,0)
+    code.put("SET",setproc,0)
+    code.put("RIV",rivproc,0)
+    code.put("LIV",livproc,0)
+    code.put("PROG",titlproc,0)
+    code.put("DEF",defproc,0)
+    code.put("REF",refproc,0)
+    code.put("WREF",wrefproc,0)
+    code.put("NEEDS",needsproc,0)
+    code.put("PRAG",pragproc,0)
+    code.put("ORG",orgproc,0)
+    code.put("GET",getproc,0)
+    code.put("LIST",listproc,0)
+    code.put("END",endproc,0)
+    code.put("EJCT",ejectproc,0)
+    code.put("SPAC",spaceproc,0)
+    code.put("PROC",procproc,0)
+    code.put("CALL",callproc,0)
+    code.put("RTN",retproc,0)
+    code.put("RET",retproc,0)
+    code.put("SEL",selproc,0)
+    code.put("MOVE",fmt1,1,0<<13)
+    code.put("ADD",fmt1,1,1<<13)
+    code.put("AND",fmt1,1,2<<13)
+    code.put("XOR",fmt1,1,3<<13)
+    code.put("XEC",fmt2.1,1,4<<13)
+    code.put("NZT",fmt2.2,1,5<<13)
+    code.put("XMIT",fmt3,1,6<<13)
+    code.put("JMP",fmt4,1,7<<13)
+$)
+/*STANDINIT>*/
+
+
+
+
+//
+//                        Initialisation
+//
+
+
+
+LET startasm(version) = (version/1000)\=3 -> "Version 3.047 24-April-81", VALOF
+$(  name:="8x300"
+    binbufwidth:=1
+    bytesperasmword:=2
+    wordsperaddress:=1
+    comntcheck:=TRUE
+    procname:=0
+    returntable:=getvec(rettabsize)
+    FOR i=0 TO rettabsize DO returntable!i := 0
+    v.byte := newf(0,8)
+    v.bit  := newf(8,3)
+    v.len  := newf(11,3)
+    f.s := newf(8,5)
+    f.l := newf(5,3)
+    f.d := newf(0,5)
+    f.i := newf(0,8)
+    f.a := newf(0,13)
+    RESULTIS 0
+$)
+
+
+
+AND startparse() BE
+$(  returntable!0:=0
+    UNLESS procname=0 THEN procname:=0
+$)
+
+
+AND endparse() BE UNLESS fatal THEN outputrettable()
+
+
+AND endasm() BE
+$(  freevec(returntable)
+    returntable:=0
+$)
+
+

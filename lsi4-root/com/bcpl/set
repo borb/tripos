@@ -1,0 +1,97 @@
+// (C) Copyright 1981 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+// Modified 23 July 1981 by BJK: can be CALLSEGed to set user's default
+//                               directory. (Use arg of -1)
+
+// Modified 21 November 1981 by CGG: uses "HOME:" as default directory
+// Modified 21 June     1983 by MFR: checks for cross device/pack moves
+
+SECTION "SET"
+GET     "LIBHDR"
+GET     "CLIHDR"
+GET     "MANHDR"
+GET     "RINGHDR"
+GET     "BCPL.SSPLIB"
+GET     "BCPL.FIND-FILESERVER"
+GET     "FILEHDR"
+
+LET start(start.arg) BE
+  $( LET argv               = VEC 50
+     LET running.as.command = start.arg=0 // Otherwise, assume CALLSEGed
+     LET newdir             = currentdir
+     LET olddir             = currentdir
+     LET comdir             = cli.commanddir
+     LET rc                 = 0
+     LET oldtask            = currentdir = 0 -> task.filehandler,
+                                                currentdir ! lock.task
+     LET newtask            = -1
+     LET oldpack            = -1
+     LET newpack            = -1
+     LET oldtype            = -1
+     LET newtype            = -1
+     LET dinfovec           = VEC discinfo.upB
+
+     TEST running.as.command
+          THEN IF rdargs("DIR,COMDIR/K", argv, 50)=0 THEN
+               $( writes("Bad args*N"); stop(20) $)
+          ELSE $( argv!0 := 0; argv!1 := 0 $)
+
+
+     IF argv!0=0 & argv!1=0 THEN $( argv!0     := "HOME:"
+                                    currentdir := 0
+                                 $)
+
+     UNLESS argv!0=0 DO
+     $( LET dir = locatedir(argv!0)
+        TEST dir=0 THEN $( writef("Can't find %S*N", argv!0)
+                           rc := 20
+                        $) ELSE
+        $( newdir  := dir
+           newtask := newdir = 0 -> task.filehandler, newdir ! lock.task
+           IF sendpkt(-1,oldtask,action.discinfo,?,?,dinfovec) THEN
+                                        oldtype := dinfovec!discinfo.type
+           IF sendpkt(-1,newtask,action.discinfo,?,?,dinfovec) THEN
+                                        newtype := dinfovec!discinfo.type
+
+           IF ([oldtype=disctype.FM] | [oldtype=disctype.FS]) & [olddir\=0] THEN
+           $( LET nsvec   = VEC 3
+              LET oldpuid = VEC 3
+              FOR i = 0 TO 3 DO put2bytes(oldpuid,i,olddir![lock.file.puid+i])
+              IF find.fileserver(oldpuid,nsvec) THEN oldpack := result2
+           $)
+           IF ([newtype=disctype.FM] | [newtype=disctype.FS]) & [newdir\=0] THEN
+           $( LET nsvec   = VEC 3
+              LET newpuid = VEC 3
+              FOR i = 0 TO 3 DO put2bytes(newpuid,i,newdir![lock.file.puid+i])
+              IF find.fileserver(newpuid,nsvec) THEN newpack := result2
+           $)
+        $)
+     $)
+
+     UNLESS argv!1=0 DO
+     $( LET dir = locatedir(argv!1)
+        TEST dir=0 THEN $( writef("Can't find %S*N", argv!1)
+                           rc := 20
+                        $)
+                   ELSE comdir := dir
+     $)
+
+     UNLESS olddir=newdir DO freeobj(olddir)
+     UNLESS cli.commanddir=comdir DO freeobj(cli.commanddir)
+     currentdir := newdir
+     cli.commanddir := comdir
+     TEST oldtask=newtask
+     THEN UNLESS [oldpack=newpack] | [newpack=-1] DO
+                 writef("****** Current directory now on pack %N*N", newpack)
+     ELSE UNLESS newtask=-1 DO
+          $( writef("****** Current directory now handled by task %N", newtask)
+             UNLESS newpack=-1 DO writef(" on pack %N", newpack)
+             newline()
+          $)
+
+     IF running.as.command THEN stop(rc)
+  $)
+
+

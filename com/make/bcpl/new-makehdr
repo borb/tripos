@@ -1,0 +1,204 @@
+/*****************************************************************************\
+*                        Olivetti Research Laboratory                         *
+*******************************************************************************
+
+
+      ##    ##    ####    ##    ##  ########  ##    ##  ######    #######  
+      ###  ###   ######   ##   ##   ########  ##    ##  #######   ######## 
+      ########  ##    ##  ##  ##    ##        ##    ##  ##    ##  ##    ## 
+      ## ## ##  ########  ####      ######    ########  ##    ##  ######## 
+      ##    ##  ##    ##  ## ##     ##        ##    ##  ##    ##  #######  
+      ##    ##  ##    ##  ##  ##    ##        ##    ##  ##    ##  ##  ##   
+      ##    ##  ##    ##  ##   ##   ########  ##    ##  #######   ##   ##  
+      ##    ##  ##    ##  ##    ##  ########  ##    ##  ######    ##    ## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   15/05/87             *
+\*****************************************************************************/
+
+
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+
+
+
+GLOBAL
+$(
+    addmacro                        :  ug + 0
+    addnode                         :  ug + 1
+    ch                              :  ug + 2
+    ch.all                          :  ug + 3
+    ch.assign                       :  ug + 4
+    ch.command                      :  ug + 5
+    ch.comment                      :  ug + 6
+    ch.dbra                         :  ug + 7
+    ch.depend                       :  ug + 8
+    ch.destination                  :  ug + 9
+    ch.dket                         :  ug + 10
+    ch.escape                       :  ug + 11
+    ch.fbra                         :  ug + 12
+    ch.fket                         :  ug + 13
+    ch.macro                        :  ug + 14
+    ch.mbra                         :  ug + 15
+    ch.mket                         :  ug + 16
+    ch.source                       :  ug + 17
+    ch.special                      :  ug + 18
+    ch.stem                         :  ug + 19
+    commandlist                     :  ug + 20
+    currentnode                     :  ug + 21
+    debugging                       :  ug + 22
+    defaultmakefile                 :  ug + 23
+    defaultnode                     :  ug + 24
+    defaultrulefile                 :  ug + 25
+    definecommands                  :  ug + 26
+    definetagtable                  :  ug + 27
+    error                           :  ug + 28
+    errorlabel                      :  ug + 29
+    errorlevel                      :  ug + 30
+    faillevel                       :  ug + 31
+    filename                        :  ug + 32
+    freescbs                        :  ug + 33
+    freetagitems                    :  ug + 34
+    getchunk                        :  ug + 35
+    getstore                        :  ug + 36
+    gettagitem                      :  ug + 37
+    handleassign                    :  ug + 38
+    isassignment                    :  ug + 39
+    linenumber                      :  ug + 40
+    lookuptag                       :  ug + 41
+    makeitem                        :  ug + 42
+    message                         :  ug + 43
+    nodelist                        :  ug + 44
+    nomake                          :  ug + 45
+    norules                         :  ug + 46
+    panic                           :  ug + 47
+    parsefile                       :  ug + 48
+    printing                        :  ug + 49
+    rope.addbyte                    :  ug + 50
+    rope.addrope                    :  ug + 51
+    rope.addstring                  :  ug + 52
+    rope.getbyte                    :  ug + 53
+    rope.getrope                    :  ug + 54
+    rope.length                     :  ug + 55
+    rope.putbyte                    :  ug + 56
+    rope.write                      :  ug + 57
+    storage.chunksize               :  ug + 58
+    storage.high                    :  ug + 59
+    storage.low                     :  ug + 60
+    storage.root                    :  ug + 61
+    storehwm                        :  ug + 62
+    sysin                           :  ug + 63
+    sysout                          :  ug + 64
+    tagtable                        :  ug + 65
+    warning                         :  ug + 66
+$)
+
+
+
+MANIFEST
+$(
+    tagtablesize                    =  128
+
+    a.firstarg                      =  0
+    a.lastarg                       =  19
+    a.makefile                      =  20
+    a.nomake                        =  21
+    a.debug                         =  22
+    a.ignore                        =  23
+    a.norules                       =  24
+    a.print                         =  25
+
+    c.unknown                       =  0
+    c.include                       =  1
+    c.import                        =  2
+    c.prefixes                      =  3
+    c.suffixes                      =  4
+    c.ignore                        =  5
+
+    cl.link                         =  0
+    cl.name                         =  1
+    cl.type                         =  2
+    cl.size                         =  2
+
+    he.link                         =  0
+    he.name                         =  1
+    he.size                         =  2
+
+    tl.link                         =  0
+    tl.tag                          =  1
+    tl.size                         =  1
+
+    node.link                       =  0
+    node.tag                        =  1
+    node.lock                       =  2
+    node.imports                    =  3
+    node.macros                     =  4
+    node.rules                      =  5
+    node.prefixes                   =  6
+    node.suffixes                   =  7
+    node.faillevel                  =  8
+    node.files                      =  9
+    node.dates                      =  10
+    node.size                       =  10
+
+    rule.link                       =  0
+    rule.tags                       =  1
+    rule.depends                    =  2
+    rule.commands                   =  3
+    rule.queue                      =  4
+    rule.size                       =  4
+
+    command.link                    =  0
+    command.line                    =  1
+    command.size                    =  1
+
+    import.link                     =  0
+    import.node                     =  1
+    import.size                     =  2
+
+    macro.link                      =  0
+    macro.tag                       =  1
+    macro.value                     =  2
+    macro.size                      =  2
+
+    date.link                       =  0
+    date.tag                        =  1
+    date.days                       =  2
+    date.mins                       =  3
+    date.ticks                      =  4
+    date.size                       =  4
+    
+    buff.bytes                      =  10000
+    buff.words                      =  buff.bytes/bytesperword + 1
+
+    string.bytes                    =  255
+    string.words                    =  string.bytes/bytesperword + 1
+
+    r.link                          =  -2
+    r.length                        =  -1
+    r.hdrsize                       =  2
+
+    r.buffsize.byte                 =  256
+    r.buffsize.word                 =  r.buffsize.byte/bytesperword + 1
+
+    r.buffer                        =  0
+    r.size                          =  r.hdrsize + r.buffsize.word
+
+    nullrope                        =  -1
+    size.exinfo                     =  dirent.size + file.header.size - 1
+    exinfo.name                     =  dirent.name
+
+    shpkt.scb                       =  pkt.arg1
+    shpkt.prompt                    =  pkt.arg2
+    shpkt.faillevel                 =  pkt.arg3
+    shpkt.size                      =  pkt.arg3
+
+    NIL                             =  -1
+$)
+
+

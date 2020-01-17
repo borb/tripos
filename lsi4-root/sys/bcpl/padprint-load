@@ -1,0 +1,98 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+ #######     ####    ######    #######   #######   ########  ##    ##  ######## 
+ ########   ######   #######   ########  ########  ########  ###   ##  ######## 
+ ##    ##  ##    ##  ##    ##  ##    ##  ##    ##     ##     ####  ##     ##    
+ #######   ########  ##    ##  #######   ########     ##     ## ## ##     ##    
+ ##        ##    ##  ##    ##  ##        #######      ##     ##  ####     ##    
+ ##        ##    ##  ##    ##  ##        ##  ##       ##     ##  ####     ##    
+ ##        ##    ##  #######   ##        ##   ##   ########  ##   ###     ##    
+ ##        ##    ##  ######    ##        ##    ##  ########  ##    ##     ##    
+
+                    ##         ######     ####    ######   
+                    ##        ########   ######   #######  
+                    ##        ##    ##  ##    ##  ##    ## 
+                    ##        ##    ##  ########  ##    ## 
+                    ##        ##    ##  ##    ##  ##    ## 
+                    ##        ##    ##  ##    ##  ##    ## 
+                    ########  ########  ##    ##  #######  
+                    ########   ######   ##    ##  ######   
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   25/07/84             *
+\*****************************************************************************/
+
+
+SECTION "PADPRINT: LOAD"
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+
+
+LET start( dummy, action, scb, string )  =  VALOF
+$(
+//  Loader for the PADPRINT: pseudo device.  We check  that the action 
+//  is "act.findoutput" before we go any further.
+
+    LET handlerfile  =  "sys:l.padprint-handler"
+    LET seglist      =  VEC 3
+    LET routename    =  VEC 256/bytesperword
+    LET length       =  string % 0
+    LET pos          =  0
+    LET exall        =  FALSE
+
+    UNLESS  action = act.findoutput  DO
+    $(
+        result2  :=  error.actionnotknown
+        
+        RESULTIS  FALSE
+    $)
+
+    //  Split off the device part of the name to get the route name.  
+
+    pos     :=  splitname( routename, ':', string, 1 )
+    length  :=  length - pos + 1
+
+    //  Make a copy of the route name, minus the device name.  This
+    //  will be passed on to the handler.
+
+    FOR  i = 0  TO  length-1  DO  routename % (i+1)  :=  capitalch( string % (i+pos) )
+    
+    routename % 0  :=  length
+
+    //  Now call our PADPRINT: task with this information, so that it can do the
+    //  work.  Load the code, and start it running.
+    
+    seglist!0  :=  3
+    seglist!1  :=  tcb!tcb.seglist!1
+    seglist!2  :=  tcb!tcb.seglist!2
+    seglist!3  :=  loadseg( handlerfile )
+
+    IF  seglist!3 = 0  THEN  RESULTIS  FALSE
+
+    //  Otherwise, we can attempt to create a task to handle the examination.
+    //  Start at our own priority, and work steadily downwards until we hit
+    //  rock bottom.
+
+    FOR  priority = tcb!tcb.pri - 1  TO  1  BY  -1  DO
+    $(
+        LET task  =  createtask( seglist, 500, priority )
+        
+        UNLESS  task = 0  DO
+            RESULTIS  sendpkt( notinuse, task, action.startup, 0, 0, 
+                               scb, routename )
+    $)
+
+    //  If we drop through here, then the attempt to create the task failed.
+    //  Ho, humm.  Try again sometime!
+    
+    RESULTIS  FALSE
+$)
+
+

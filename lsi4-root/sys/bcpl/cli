@@ -1,0 +1,143 @@
+// (C) Copyright 1979 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "CLI"
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "IOHDR"
+
+MANIFEST
+$(
+namemax    = 25
+promptmax  = 15
+filemax    = 10
+$)
+
+LET START(parm.pkt) BE
+  $( LET prompt  = VEC promptmax
+     LET commandname = VEC namemax
+     LET commandfile = VEC filemax
+     LET globbase = @globsize
+     LET error = FALSE
+
+     cli.prompt := prompt
+     cli.commandname := commandname
+     cli.commandfile := commandfile
+
+     cli.init(parm.pkt)(result2)
+
+     $( LET ch = ?
+
+     $( LET item = ?
+
+        cli.interactive :=  NOT cli.background &
+               cli.currentinput=cli.standardinput
+
+        selectinput(cli.currentinput)
+        ch := unrdch() -> rdch(), 0
+
+        TEST cli.interactive THEN
+           UNLESS ch=';' THEN
+           $( LET mins = rootnode!rtn.mins
+              selectoutput(cli.standardoutput)
+              writef(cli.prompt,taskid,mins/60,mins REM 60)
+              wrch('*E')
+              selectoutput(cli.currentoutput)
+           $)
+        ELSE
+        $( IF testflags(2) THEN
+           $( error := TRUE
+              writes("****BREAK - CLI*N")
+           $)
+           IF error BREAK
+        $)
+
+        error := FALSE
+
+        item := rditem(cli.commandname, namemax)
+        ch := 0
+
+        UNLESS item=0 THEN
+        $( error := TRUE
+           TEST item=1 THEN
+           $( LET coptr = 0
+              cli.module := loadseg(cli.commandname)
+
+              IF cli.module=0 THEN
+              $( LET dir = currentdir
+                 currentdir := cli.commanddir
+                 cli.module := loadseg(cli.commandname)
+                 currentdir := dir
+              $)
+
+              UNLESS cli.module=0 | globin(cli.module)=0 DO
+                 coptr := createco(start, cli.defaultstack)
+
+              TEST coptr=0 THEN
+              $( cli.result2 := result2
+                 writef("Can't load %S*N", cli.commandname)
+              $)
+              ELSE
+              $( testflags(1)
+                 callco(coptr,0)
+                 cli.result2 := returncode=0 -> 0, result2
+
+                 start := cli.undefglobval
+                 FOR i = ug TO globsize DO
+                    globbase!i := cli.undefglobval
+                 globin(tcb!tcb.seglist!1)
+                 globin(tcb!tcb.seglist!2)
+                 cli.returncode := returncode
+                 returncode := 0
+                 IF cli.returncode<cli.faillevel THEN
+                    error := FALSE
+                 deleteco(coptr)
+                 selectinput(cli.currentinput)
+                 selectoutput(cli.currentoutput)
+                 ch := unrdch() -> 0, '*N'
+                 IF error & NOT cli.interactive THEN
+                    writef("%S failed returncode %N*N",
+                        cli.commandname, cli.returncode)
+              $)
+
+              unloadseg(cli.module)
+              cli.module := 0
+           $)
+
+           ELSE
+              writes("Error in command name*N")
+        $)
+
+        UNTIL ch='*N' | ch='*E' | ch=';' |
+              ch=endstreamch DO ch := rdch()
+
+     $) REPEATUNTIL ch=endstreamch
+
+        TEST cli.currentinput=cli.standardinput THEN
+        $( IF cli.background BREAK
+           cli.standardinput!scb.end := -1
+           cli.standardinput!scb.arg1 := 1
+        $)
+        ELSE
+        $( endread()
+           deleteobj(cli.commandfile)
+           cli.currentinput := cli.standardinput
+           cli.faillevel := cli.initialfaillevel
+        $)
+
+     $) REPEAT
+
+     endread()
+     endwrite()
+     UNLESS cli.currentoutput=cli.standardoutput THEN
+     $( selectoutput(cli.standardoutput)
+        endwrite()
+     $)
+     freeobj(currentdir)
+     freeobj(cli.commanddir)
+     deletetask(taskid)
+  $)
+
+

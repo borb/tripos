@@ -1,0 +1,221 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+                      #######   ######    #######
+                      ########  #######   ########
+                      ##    ##  ##    ##  ##    ##
+                      #######   ##    ##  #######
+                      ##        ##    ##  ##
+                      ##        ##    ##  ##
+                      ##        #######   ##
+                      ##        ######    ##
+
+            ########  ##    ##    ####     ######   ########
+            ########  ###  ###   ######   ########  ########
+               ##     ########  ##    ##  ##        ##
+               ##     ## ## ##  ########  ##  ####  ######
+               ##     ##    ##  ##    ##  ##    ##  ##
+               ##     ##    ##  ##    ##  ##    ##  ##
+            ########  ##    ##  ##    ##  ########  ########
+            ########  ##    ##  ##    ##   ######   ########
+
+************************************************************************
+**    Author:   Brian Knight                            May 1979      **
+***********************************************************************/
+
+
+// Program to create core image of PDP11 tripos on an
+// RX50 disc
+
+SECTION "sysimage"
+
+GET "LIBHDR"
+GET "IOHDR"
+
+MANIFEST
+    $(
+    top.address    = 28*1024 - 1
+    top.chunk.size = 20*1024
+    top.chunk.base = top.address - top.chunk.size + 1
+    block.size          = 256
+    bottom.chunk.blocks = 4
+    bottom.chunk.size = bottom.chunk.blocks * block.size
+    bottom.chunk.top = bottom.chunk.size - 1
+    disc.dev       = -2
+    buffer.size    = 500
+    $)
+
+
+GLOBAL
+    $(
+    current.block   : ug
+    block           : ug +  1
+    low.hwm         : ug +  2
+    high.lwm        : ug +  3
+    len             : ug +  4
+    offset          : ug +  5
+    instream        : ug +  6
+    buffer          : ug +  7
+    base.block      : ug +  8
+    second          : ug +  9
+    unit            : ug + 10
+    $)
+
+
+LET start() BE
+    $(
+    LET argv = VEC 50
+    writef("PDP11 sysimage - store limit %N*N", top.address)
+    instream      := 0
+    buffer        := getvec(buffer.size-1)
+    block         := getvec(block.size-1)
+    current.block := -1
+    high.lwm      := maxint
+    low.hwm       := -1
+    base.block    := 1
+
+    IF rdargs("from/a,to/a/k", argv, 50) = 0
+    THEN error("Bad arguments*N")
+
+    unit := compstring(argv!1, "0") = 0 -> 0,
+            compstring(argv!1, "1") = 0 -> 1,
+            compstring(argv!1, "2") = 0 -> 2,
+            -1
+
+    IF unit < 0 THEN error ("bad unit number*N")
+
+    instream := findinput(argv!0)
+    IF instream=0
+    THEN error("Failed to open %S for input*N", argv!0)
+    selectinput(instream)
+
+    IF (block=0) | (buffer=0)
+    THEN error("Insufficient free store*N")
+
+
+    WHILE getabshunk()
+    DO $(
+       // len, offset set by getabshunk()
+       IF TESTFLAGS(1) THEN ERROR("****** BREAK*N")
+
+       UNTIL len = 0
+       DO $(
+          LET chunk.size = ?
+          TEST len > buffer.size
+          THEN chunk.size, len := buffer.size, len-buffer.size
+          ELSE chunk.size, len := len, 0
+
+          UNLESS readwords(buffer, chunk.size) = chunk.size
+          THEN
+            $( writef("Premature end-of-file*N")
+               stop(20)
+            $)
+
+          FOR j=0 TO chunk.size-1
+          DO $(
+             output.word(offset, buffer!j)
+             offset := offset + 1
+             $)
+          $)
+       $)
+
+    // Flush last block
+    write.block()
+    writes("Bootstrap written*N")
+    writef("Bottom hwm = %n, top lwm = %n*n", low.hwm,high.lwm)
+    tidy.stop(0)
+    $)
+
+
+AND getabshunk() = VALOF
+    $(
+    LET v = VEC 2
+    LET rc = readwords(v, 3)
+
+    IF (rc\=3) | (v!0 \= t.abshunk)
+    $( IF rc=-1 & v!0=t.end RESULTIS FALSE
+       error("Format error in SYSLINKed file*N")
+    $)
+
+    offset := v!1
+    len := v!2
+    RESULTIS TRUE
+    $)
+
+
+AND output.word(address, word) BE
+    $(
+    // Outputs the word which is to go at the given
+    // absolute address in the core image.
+    LET blocknum = ?
+
+    TEST (address >= 0) & (address <= bottom.chunk.top)
+    THEN
+      $( blocknum := address/block.size + base.block
+         IF address > low.hwm THEN low.hwm := address
+      $)
+    ELSE TEST (address >= top.chunk.base) &
+              (address <= top.address)
+         THEN
+           $( blocknum := (address-top.chunk.base)/block.size +
+                           base.block + bottom.chunk.blocks
+              IF high.lwm > address THEN high.lwm := address
+           $)
+         ELSE error("Invalid address %U5*N", address)
+
+
+
+
+    UNLESS blocknum = current.block
+    THEN
+      $( // Wrong block loaded!
+      write.block()
+      current.block := blocknum
+      read.block()
+      $)
+
+    // Correct block loaded - update word
+    block ! (address REM block.size) := word
+    $)
+
+
+AND tidy.stop(n) BE
+    $(
+    UNLESS instream=0 THEN endread()
+    freevec(buffer)
+    freevec(block)
+    stop(n)
+    $)
+
+
+AND error(f,a,b,c,d,e) BE
+    $(
+    writef(f,a,b,c,d,e)
+    tidy.stop(20)
+    $)
+
+
+
+AND write.block() BE discaction(act.write)
+
+AND read.block() BE discaction(act.read)
+
+AND discaction(action) BE
+    $( // Transfers to/from current block
+
+    IF current.block < 0 THEN RETURN // Dummy value
+
+    FOR z=1 TO 10
+    DO IF sendpkt(notinuse, disc.dev, action,
+                  0, 0, block, block.size,
+                  unit, 0, 0, current.block) = 0
+       THEN RETURN
+
+    error("%S transfer failed: block %N code #%O6*N",
+          (action = act.write -> "Write", "Read"),
+          current.block, result2)
+    $)
+
+

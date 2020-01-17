@@ -1,0 +1,148 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+      #######   #######   ########  ##         ######     ####    ######   
+      ########  ########  ########  ##        ########   ######   #######  
+      ##    ##  ##    ##  ##        ##        ##    ##  ##    ##  ##    ## 
+      #######   ########  ######    ##        ##    ##  ########  ##    ## 
+      ##        #######   ##        ##        ##    ##  ##    ##  ##    ## 
+      ##        ##  ##    ##        ##        ##    ##  ##    ##  ##    ## 
+      ##        ##   ##   ########  ########  ########  ##    ##  #######  
+      ##        ##    ##  ########  ########   ######   ##    ##  ######   
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   31/07/84             *
+\*****************************************************************************/
+
+
+
+SECTION "PRELOAD"
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "bcpl.preloadhdr"
+
+
+LET start()  BE
+$(
+//  Program to cause programs to be preloaded.  This requires the "preload:"
+//  device to be mounted.
+
+    LET args   =  "NAME,AS,UNLOAD/S,LIST/S,NOTREENTRANT/S,MONITOR/S,NOMONITOR/S"
+    LET argv   =  VEC 50
+
+    LET ptask  =  devicetask( "preload:" )
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** PRELOAD:  Bad arguments for *"%S*"*N", args )
+        
+        stop( 20 )
+    $)
+
+    IF  ptask = 0  THEN
+    $(
+        writes( "****** PRELOAD:  Device *"preload:*" not mounted*N" )
+
+        stop( 20 )
+    $)
+
+    TEST  argv!2  &  argv!0 \= 0  THEN
+    $(
+        //  This is the UNLOAD option.  Send a request off, saying
+        //  that we want to unload the file.
+
+        LET name  =  argv!0
+
+        LET rc    =  sendpkt( notinuse, ptask, act.unload, 0, 0, name )
+        LET r2    =  result2
+
+        UNLESS  rc  DO
+        $(
+            writef( "****** PRELOAD:  Unload *"%S*" failed  -  ", name )
+            fault( r2 )
+        $)
+    $)
+    ELSE
+    
+    IF  NOT argv!2  &  argv!0 \= 0  THEN
+    $(
+        //  This is the LOAD option.  Send of a request saying which file
+        //  we want to be loaded.
+        
+        LET name       =  argv!0
+        LET asname     =  argv!1
+        LET reentrant  =  NOT argv!4
+        LET rc         =  0
+        LET r2         =  0
+
+        IF  asname = 0  THEN  asname  :=  name
+
+        rc  :=  sendpkt( notinuse, ptask, act.load, 0, 0, currentdir, name, asname, reentrant )
+        r2  :=  result2
+
+        UNLESS  rc  DO
+        $(
+            writef( "****** PRELOAD:  Load *"%S*" failed  -  ", name )
+            fault( r2 )
+        $)
+    $)
+    
+    IF  argv!3  THEN
+    $(
+        //  LIST option.  We should get a copy of the load list, and then
+        //  print it out.
+
+        LET count  =  sendpkt( notinuse, ptask, act.list )
+        LET list   =  result2
+        LET total  =  0
+        
+        TEST  count = 0  THEN  writes( "No segments loaded*N" )
+        ELSE
+        $(
+            //  Scan down the list of items, printing them out, and freeing
+            //  them as we go.
+            
+            writes( "NAME                               " )
+            writes( "  ADDRESS" )
+            writes( "     SIZE*N" )
+            
+            FOR  i = 1  TO  count  DO
+            $(
+                LET len      =  list
+                LET link     =  len!le.link
+                LET name     =  len!le.name
+                LET address  =  len!le.address
+                LET length   =  len!le.length
+            
+                writef( "%TZ %U8 %U8*N", name, address, length )
+                
+                freevec( name )
+                freevec( len )
+                
+                total  :=  total + length
+                list   :=  link
+            $)
+            
+            writef( "*N%N segment%S loaded, occupying %N words*N",
+                     count, count = 1 -> "", "s", total )
+        $)
+    $)
+
+    IF  argv!5  |  argv!6  THEN
+    $(
+        //  This is the MONITOR or NOMONITOR function.  Send a packet to the
+        //  preload handler telling it to monitor or not.
+        
+        LET monitoring  =  argv!5
+        
+        sendpkt( notinuse, ptask, act.monitor, 0, 0, monitoring )
+    $)
+$)
+
+

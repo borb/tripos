@@ -1,0 +1,638 @@
+/*****************************************************************************
+**                (C) Copyright 1985  TRIPOS Research Group                 **
+**               University of Cambridge Computer Laboratory                **
+******************************************************************************
+
+                 ######   #######     ####     ######   ######## 
+                ########  ########   ######   ########  ######## 
+                ##        ##    ##  ##    ##  ##        ##       
+                ##  ####  #######   ########  ##  ####  ######   
+                ##    ##  ##        ##    ##  ##    ##  ##       
+                ##    ##  ##        ##    ##  ##    ##  ##       
+                ########  ##        ##    ##  ########  ######## 
+                 ######   ##        ##    ##   ######   ######## 
+
+******************************************************************************
+**      Author:   Nick Ody                                 June 1985        **
+*****************************************************************************/
+
+//   This program acts as a filter for GCODE, to allow particular pages
+//to be printed out.  It simply scans the FROM file skipping and counting
+//FORMFEED characters.  In pages which are being skipped a check is made
+//for "significant" control sequences.  If these are encountered they are
+//copied to the output.
+
+//   Modifications
+//
+// 04-Jul-85 NJO  Bug fixes:  end-of-stream caused loop when reading page
+//                spec.  Spurious error message at end-of-file if last page
+//                is included in output.  Check introduced for duplicate
+//                pages in page spec.
+// 26-Nov-85 NJO  Altered to accept "version 3" GCODE:  buffer added for
+//                reading and decoding directives, parsing altered.
+
+SECTION "gpage"
+
+GET "libhdr"
+
+MANIFEST
+$( control.delim     = '\'        // introduces control directives
+
+   max.control.len   = 20         // length of control sequence buffer
+
+   NIL               = 0
+
+   page.link         = 0          // page descriptor fields
+   page.number       = 1
+$)
+
+GLOBAL
+$( sysprint          : ug           // for messages
+   page.list         : ug + 1       // list of page descriptors
+   curr.page         : ug + 2
+   level.exit        : ug + 3
+   label.exit        : ug + 4
+   trace             : ug + 5       // print diagnostic info if set
+   last.page         : ug + 6       // set iff last page of output document
+   control.buf       : ug + 7       // buffers control sequences
+$)
+
+LET start() BE
+
+$( LET from.stream = 0
+   LET to.stream   = 0
+   LET sysin       = input()
+   LET rc          = 16
+   LET prompt      = TRUE           // TRUE if interactive prompting required
+   LET cbuf.vec    = VEC max.control.len/bytesperword    // for CONTROL.BUF
+
+   sysprint       := output()
+   page.list      := NIL            // anchor of page descriptor list
+   curr.page      := 0              // number of page being processed
+   level.exit     := level()
+   label.exit     := exit
+   control.buf    := cbuf.vec
+
+   $( LET argstr = "FROM/A,TO/A,PAGES/K,TRACE/S"
+      LET argv   = VEC 80/bytesperword
+
+      IF rdargs(argstr, argv, 80/bytesperword) = 0 THEN
+         error("Args unsuitable for string %S", argstr)
+
+      from.stream := findinput(argv!0)
+
+      IF from.stream = 0 THEN
+         error("Can't open FROM stream %S", argv!0)
+
+      to.stream := findoutput(argv!1)
+
+      IF to.stream = 0 THEN
+         error("Can't open TO stream %S", argv!1)
+
+      trace := argv!3
+
+      IF argv!2 ~= 0 THEN
+      $( UNLESS decode.page.spec(argv!2) DO
+            error("Bad page spec *"%S*"", argv!2)
+
+         prompt := FALSE
+      $)
+   $)
+
+   selectinput(from.stream)
+   selectoutput(to.stream)
+
+   $( LET char = rdch()      // read the first character to find GCODE version
+
+      wrch(char)             // copy it over anyway
+
+      TEST char = '*B' THEN  // it's above version 2 - next char is version
+      $( LET gcode.version = ?
+
+         char          := rdch()
+         gcode.version := char - '0'
+
+         IF gcode.version ~= 3 THEN
+            error("can't support GCODE version %N", gcode.version)
+
+         wrch(char)
+      $)
+      ELSE
+         error("FROM file is not new GCODE (use OGPAGE for old GCODE)")
+   $)
+
+   selectinput(sysin)
+   selectoutput(sysprint)
+
+   IF prompt THEN
+   $( writes("Specify pages required - terminate by *"/***", H for help*N*N")
+
+      WHILE TRUE DO
+      $( LET argv = VEC 40/bytesperword
+
+         writes("Page(s): *E")
+
+         IF rdargs("PAGES", argv, 40/bytesperword) = 0 THEN
+         $( IF rdch() = endstreamch THEN   // check for end-of-stream
+               BREAK                       // treat as valid terminator
+
+            unrdch()
+
+            LOOP
+         $)
+
+         IF argv!0 = 0 THEN
+            LOOP
+
+         IF ((argv!0)%1 = 'H') | ((argv!0)%1 = 'h') THEN
+         $( writes("Give a list of numbers separated by commas.*N*
+              *A range may be given as a pair of numbers separated by *'-*'*N")
+            LOOP
+         $)
+
+         IF (compstring(argv!0, "/**") = 0) THEN
+            BREAK
+
+         IF (compstring(argv!0, "q") = 0) THEN
+            error("Abandoned")
+
+         IF testflags(1) THEN
+            error("BREAK")
+
+         UNLESS decode.page.spec(argv!0) DO
+         $( writes("Bad page spec*N")
+            LOOP
+         $)
+      $)
+   $)
+
+   IF trace THEN
+      print.page.list()
+
+   last.page := (page.list = NIL)
+
+   IF last.page THEN
+      writes("Warning:  no page(s) specified!*N")
+
+   selectinput(from.stream)
+   selectoutput(to.stream)
+
+   read.page(TRUE)
+
+   $( LET page.desc = page.list
+
+      UNTIL last.page DO
+      $( LET next = page.link!page.desc
+         LET num  = page.number!page.desc
+
+         UNTIL curr.page = num DO
+            read.page(FALSE)
+
+         last.page := (next = NIL)
+
+         read.page(TRUE)
+
+         page.desc := next
+      $)
+   $)
+
+   rc := 0
+
+exit:
+
+   IF from.stream ~= 0 THEN
+   $( selectinput(from.stream)
+      endread()
+   $)
+
+   IF to.stream ~= 0 THEN
+   $( selectoutput(to.stream)
+      endwrite()
+   $)
+
+   UNTIL page.list = NIL DO
+   $( LET next = page.link!page.list
+
+      freevec(page.list)
+
+      page.list := next
+   $)
+
+   stop(rc)
+$)
+
+AND error(msg, arg1, arg2, arg3) BE
+
+$( selectoutput(sysprint)
+
+   writes("GPage: ")
+   writef(msg, arg1, arg2, arg3)
+   newline()
+
+   longjump(level.exit, label.exit)
+$)
+
+AND read.page(copy.to.output) BE
+
+//   Read up to a FORMFEED from the input stream.  If the parameter is
+//TRUE then copy it all to the output.  Otherwise copy only data delimited
+//by CTRL-S characters.
+
+$( LET char          = rdch()
+   LET in.delim.sect = FALSE
+   LET delim.type    = ?
+
+   IF testflags(8) | trace THEN
+   $( LET out = output()
+
+      selectoutput(sysprint)
+
+      writef("GPage: %S page %N*N", copy.to.output -> "copying", "skipping",
+                                                                    curr.page)
+      selectoutput(out)
+   $)
+
+   WHILE TRUE DO
+   $( LET end.of.page  = FALSE
+
+      IF testflags(1) THEN
+         error("BREAK on page %N", curr.page)
+
+      IF char = control.delim THEN
+      $( LET control.type = read.control.code()
+
+         SWITCHON control.type INTO
+         $( DEFAULT:
+            IF copy.to.output | in.delim.sect THEN
+               write.control.code()
+            GOTO next.char
+
+            CASE 'F':             // end of page code
+            end.of.page := TRUE
+            ENDCASE
+
+            CASE '=':             // font definition - write out and copy args
+            write.control.code()
+            FOR i = 1 TO 2 DO     // copy to second "
+            $( char := rdch()
+               UNTIL char = '*"' DO
+               $( IF char = endstreamch THEN
+                     error("end of file in bind font directive")
+                  wrch(char)
+                  char := rdch()
+               $)
+               wrch(char)
+            $)
+            GOTO next.char
+
+            CASE 'D':              // section delimiters
+            CASE 'A':
+            write.control.code()
+            TEST in.delim.sect THEN
+            $( IF control.type ~= delim.type THEN
+                  error("%C found in a %C delimited section on page %N", 
+                                          control.type, delim.type, curr.page)
+               in.delim.sect := FALSE
+            $)
+            ELSE
+            $( in.delim.sect := TRUE
+               delim.type    := control.type
+            $)
+            GOTO next.char
+         $)
+      $)
+
+      IF end.of.page | (char = endstreamch) THEN
+      $( IF in.delim.sect THEN
+            error("end-of-page in delimited section on page %N", curr.page)
+
+         IF last.page THEN             // end of document - don't write newpage
+            BREAK
+
+         IF char = endstreamch THEN    // error except on last page
+            error("Unexpected end of file in page %N", curr.page)
+
+         // at this point we have an end-of-page and it's not the last page
+
+         IF copy.to.output | in.delim.sect THEN
+            write.control.code()       // write it out if we should
+
+         BREAK                         // and then exit
+      $)
+
+      IF copy.to.output | in.delim.sect THEN   // normal char - write out
+         wrch(char)
+
+next.char:
+
+      char := rdch()
+   $)
+
+   curr.page := curr.page + 1
+$)
+
+AND read.control.code() = VALOF
+
+//   This procedure should be called after a CONTROL.DELIM character has
+//been read from the input stream.  It reads the rest of the sequence up
+//to and including the control code type letter into the buffer CONTROL.BUF.
+//The delimiter is inserted at the beginning, and the whole is made into a
+//BCPL string.  The type letter is returned as result.
+
+$( LET len  = 0           // count the CONTROL.DELIM initially
+   LET char = control.rdch(@len, control.delim)
+
+first.char:
+
+   SWITCHON char INTO     // check the first character
+   $( DEFAULT:
+      error("Unexpected char *'%C*' in fixed length control code", char)
+
+      CASE '\':           // fixed length codes
+      CASE 'P':
+      CASE 'F':
+      CASE 'D':
+      CASE 'N':
+      CASE 'B':
+      CASE 'H':
+      CASE 'A':
+      GOTO end.of.code
+
+      CASE '0':           // number introduces variable length code
+      CASE '1':
+      CASE '2':
+      CASE '3':
+      CASE '4':
+      CASE '5':
+      CASE '6':
+      CASE '7':
+      CASE '8':
+      CASE '9':
+      CASE '.':
+      ENDCASE
+
+      CASE '*N':          // newline - put in string but ignore
+      char := control.rdch(@len, char)
+      GOTO first.char
+
+      CASE endstreamch:
+      error("end of file found in control sequence")
+   $)
+
+   // at this point we have read a number from the stream, so we must
+   // loop reading further numbers until a terminator is found
+
+   WHILE TRUE DO
+   $( char := control.rdch(@len, char) // put last char in buf and read another
+
+      SWITCHON char INTO     // check it
+      $( DEFAULT:
+         error("Unexpected char *'%C*' in variable length control code", char)
+   
+         CASE '=':           // terminator codes
+         CASE '!':
+         CASE '#':
+         CASE '>':
+         CASE '<':
+         CASE '$':
+         CASE '%':
+         CASE '_':
+         CASE '\':
+         CASE '/':
+         CASE ')':
+         CASE '(':
+         GOTO end.of.code
+   
+         CASE '0':           // number or newline - copy over
+         CASE '1':
+         CASE '2':
+         CASE '3':
+         CASE '4':
+         CASE '5':
+         CASE '6':
+         CASE '7':
+         CASE '8':
+         CASE '9':
+         CASE '.':
+         CASE '*N':
+         LOOP
+   
+         CASE endstreamch:
+         error("end of file found in control sequence")
+      $)
+   $)
+
+end.of.code:
+
+   len := len + 1     // fill in terminator and length
+
+   IF len > max.control.len THEN
+      error("Control code overflowed internal buffer on page %N", curr.page)
+
+   control.buf%len := char
+   control.buf%0   := len
+
+   RESULTIS char
+$)
+
+AND control.rdch(lv.ptr, last.char) = VALOF
+
+//   Place the previous character into CONTROL.BUF and read the next.
+
+$( LET len  = !lv.ptr
+   LET char = ?
+
+   len := len + 1
+
+   IF len > max.control.len THEN
+      error("Control code overflowed internal buffer on page %N", curr.page)
+
+   control.buf%len := last.char
+   char            := rdch()
+   !lv.ptr         := len
+
+   RESULTIS char
+$)
+
+AND write.control.code() BE
+
+//   Write out the last code read in by READ.CONTROL.CODE
+
+   writes(control.buf)
+
+AND decode.page.spec(string) = VALOF
+
+//   Read the given string and decode it into a series of page descriptors.
+//It should consist of a list of numbers separated by commas.  Items are
+//numbers or pairs of form <number>-<number> indicating a range.
+//
+//   The parser is a finite state machine with states:
+//
+//      0 - Looking for the first number
+//      1 - Reading the first number
+//      2 - Looking for the second number
+//      3 - Reading the second number
+
+$( LET num1    = ?
+   LET num2    = ?
+   LET state   = 0
+   LET len     = string%0
+
+   FOR pos = 1 TO len + 1 DO
+   $( LET char = pos > len -> -1, string%pos   // put a flag on the end!
+
+      IF trace THEN
+         writef("Pos %N, char *'%C*' state %N*N", pos, char, state)
+
+      SWITCHON char INTO
+      $( DEFAULT:
+         writef("Bad character *'%C*' (#X%X2) in page spec*N", char, char)
+         RESULTIS FALSE
+
+         CASE '0':
+         CASE '1':
+         CASE '2':
+         CASE '3':
+         CASE '4':
+         CASE '5':
+         CASE '6':
+         CASE '7':
+         CASE '8':
+         CASE '9':
+         SWITCHON state INTO
+         $( CASE 0:
+            num1  := char - '0'
+            state := 1
+            ENDCASE
+
+            CASE 1:
+            num1 := num1*10 + char - '0'
+            ENDCASE
+
+            CASE 2:
+            num2  := char - '0'
+            state := 3
+            ENDCASE
+
+            CASE 3:
+            num2 := num2*10 + char - '0'
+            ENDCASE
+         $)
+         ENDCASE
+
+         CASE '-':
+         SWITCHON state INTO
+         $( CASE 0:
+            writes("Number missing before *'-*'*N")
+            RESULTIS FALSE
+
+            CASE 1:
+            state := 2
+            ENDCASE
+
+            CASE 2:
+            writes("Only two numbers allowed in range spec*N")
+            RESULTIS FALSE
+         $)
+         ENDCASE
+
+         CASE -1:         // end of string
+         SWITCHON state INTO
+         $( CASE 0:
+            CASE 2:
+            writes("Number missing at end-of-line*N")
+            RESULTIS FALSE
+
+            CASE 1:
+            insert.page.desc(num1)
+            RESULTIS TRUE
+
+            CASE 3:
+            IF num1 > num2 THEN
+            $( writes("Negative range!*N")
+               RESULTIS FALSE
+            $)
+            insert.page.range(num1, num2)
+            RESULTIS TRUE
+         $)
+         ENDCASE
+
+         CASE ',':
+         SWITCHON state INTO
+         $( CASE 0:
+            CASE 2:
+            writes("Number missing before *',*'*N")
+            RESULTIS FALSE
+
+            CASE 1:
+            insert.page.desc(num1)
+            state := 0
+            ENDCASE
+
+            CASE 3:
+            IF num1 > num2 THEN
+            $( writes("Negative range!*N")
+               RESULTIS FALSE
+            $)
+            insert.page.range(num1, num2)
+            state := 0
+            ENDCASE
+         $)
+         ENDCASE
+
+         CASE '*S':       // ignore spaces
+         ENDCASE
+      $)
+   $)
+$)
+
+AND insert.page.desc(number) BE
+
+$( LET desc = page.list
+   LET prev = @page.list - page.link
+   LET new  = getvec(page.number)
+
+   IF new = 0 THEN
+      error("Failed to get store for page descriptor")
+
+   UNTIL (desc = NIL) | (page.number!desc > number) DO
+   $( IF page.number!desc = number THEN    // duplicate!
+      $( writef("Warning: page %N specified again - ignored*N", number)
+         freevec(new)
+         RETURN
+      $)
+
+      prev := desc
+      desc := page.link!prev
+   $)
+
+   page.link!new   := desc
+   page.link!prev  := new
+   page.number!new := number
+$)
+
+AND insert.page.range(min, max) BE
+
+$( FOR i = min TO max DO
+      insert.page.desc(i)
+$)
+
+AND print.page.list() BE
+
+$( LET desc = page.list
+
+   writes("Pages to be printed:")
+
+   IF desc = NIL THEN
+      writes(" None")
+
+   UNTIL desc = NIL DO
+   $( writef(" %N", page.number!desc)
+
+      desc := page.link!desc
+   $)
+
+   newline()
+$)
+
+

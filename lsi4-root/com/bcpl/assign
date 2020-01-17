@@ -1,0 +1,268 @@
+/***********************************************************************
+**             (C) Copyright 1980  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+         ####     ######    ######   ########   ######   ##    ##
+        ######   ########  ########  ########  ########  ###   ##
+       ##    ##  ##        ##           ##     ##        ####  ##
+       ########  #######   #######      ##     ##  ####  ## ## ##
+       ##    ##        ##        ##     ##     ##    ##  ##  ####
+       ##    ##        ##        ##     ##     ##    ##  ##  ####
+       ##    ##  ########  ########  ########  ########  ##   ###
+       ##    ##   ######    ######   ########   ######   ##    ##
+
+************************************************************************
+**    Author:   Brian Knight                           July 1983      **
+***********************************************************************/
+
+
+
+// This program sets up and deletes assignments of logical names to
+// tasks and filing system directories.
+
+// Modifications:
+//  5 Jul 83 by BJK: Original ARA version completely rewritten to use ASSIGNLIB.
+//                   No longer an error to reassign an existing name: the old
+//                   one is now deleted implicitly (unless NODELETE specified).
+//                   This command can now be used to make assignments to tasks
+//                   as well as to directories.
+//
+// 12 Apr 84 by BJK: Prints "task" or "device" as appropriate.
+// 
+// 28 Mar 85 by IDW: Allows assignment to concatenated directories using
+//                   the DIR: device.
+
+
+SECTION "ASSIGN"
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+GET "STRING-TO-NUMBER"
+GET "BCPL.ASSIGNLIB"
+
+GLOBAL
+    $(
+    rc  : ug
+    $)
+
+LET start() BE
+    $(
+    LET rdargs.string   = "NAME,DIR,TASK/K,LIST/S,NODELETE/S"
+    LET argv            = VEC 50
+    LET name            = VEC 30/bytesperword
+    LET assname         = ?
+    LET dirname         = ?
+    LET taskstring      = ?
+    LET listwanted      = ?
+    LET nodelete        = ?
+    LET action          = #B000
+    rc                  := 0
+
+    IF rdargs(rdargs.string, argv, 50)=0
+    THEN $( error("Bad args for key string *"%S*"", rdargs.string); stop(rc) $)
+
+    assname     := argv!0
+    dirname     := argv!1
+    taskstring  := argv!2
+    listwanted  := argv!3 \= 0
+    nodelete    := argv!4 \= 0
+
+    // If an assignment name is given then check that it ends with a colon,
+    // and copy the first part of the string into NAME.
+
+    IF assname\=0
+    THEN
+      $(
+      LET ptr   = splitname(name, ':', assname, 1)
+      UNLESS (ptr-1)=assname%0 THEN error("Invalid device name %S", assname)
+      $)
+
+    // NAME, DIR, and TASK may be specified in a variety of combinations:
+    //
+    // NAME  DIR TASK  Valid?
+    //   0    0    0    Yes    Do nothing
+    //   0    0    1    No     No name
+    //   0    1    0    No     No name
+    //   0    1    1    No     No name; both DIR & TASK specified
+    //   1    0    0    Yes    Delete existing assignment
+    //   1    0    1    Yes    Set up task assignment
+    //   1    1    0    Yes    Set up directory assignment
+    //   1    1    1    No     Both DIR & TASK specified
+    //
+    // ACTION is used to assemble a number so we can decide what to do.
+
+    IF rc=0
+    THEN
+      $( // Don't proceed if there was an error above
+      IF assname\=0     THEN action := action + #B100
+      IF dirname\=0     THEN action := action + #B010
+      IF taskstring\=0  THEN action := action + #B001
+      $)
+
+    SWITCHON action
+    INTO
+      $(
+      CASE #B000: ENDCASE       // Nothing to do
+
+      CASE #B001:
+      CASE #B010:
+      CASE #B011: error("No NAME specified")
+                  ENDCASE
+
+      CASE #B100: delete(assname, name, nodelete)
+                  ENDCASE
+
+      CASE #B101: setup.task.assignment(assname, name, taskstring, nodelete)
+                  ENDCASE
+
+      CASE #B110: setup.dir.assignment(assname, name, dirname, nodelete)
+                  ENDCASE
+
+      CASE #B111: error("Both DIR and TASK specified")
+                  ENDCASE
+      $)
+
+    // List all the assignments if requested
+
+    IF listwanted
+    THEN
+      $(
+      LET ass   = rootnode!rtn.info!info.assignments
+
+      UNTIL ass=0
+      DO $(
+         writef("%T6 %I2  %t6 %S:*N",
+                 ass!ass.task<0 -> "Device", "Task",
+                 ass!ass.task,
+                 [ass!ass.dir\=0 -> "dir",
+                   (ass!ass.type=dt.disc -> "disc", "device")],
+                 ass+ass.name)
+
+         ass := ass!ass.link
+         $)
+      $)
+
+    stop(rc)
+    $)
+
+
+AND error(f,a) BE
+    $(
+    writes("ASSIGN: ")
+    writef(f,a)
+    newline()
+    rc  := 20
+    $)
+
+
+AND setup.task.assignment(assname, name, taskstring, nodelete) BE
+    $(
+    LET task    = ?
+
+    TEST string.to.number(taskstring)
+    THEN task   := result2
+    ELSE $( error("Bad task number *"%S*"", taskstring); RETURN $)
+
+    IF NOT delete(assname, name, nodelete) THEN RETURN // Already exists & NODELETE
+
+    make.task.assignment(name, task)
+    $)
+
+
+AND setup.dir.assignment(assname, name, dirname, nodelete) BE
+    $(
+    LET lock  =  locatedirectory(dirname)
+
+    IF lock=0 THEN $( error("Can't find %S*N", dirname); RETURN $)
+
+    IF NOT delete(assname, name, nodelete) THEN $( freeobj(lock); RETURN $) // Already exists & NODELETE
+
+    make.assignment(name, lock!lock.task, lock)
+    $)
+
+
+AND delete(assname, name, nodelete) = VALOF
+    $(
+    // ASSNAME is the assignment name with the colon on the end; NAME is
+    // the same string without the colon.
+    // If NODELETE is FALSE deletes assignment NAME and returns TRUE.
+    // If NODELETE is TRUE, does nothing, and returns TRUE iff no assignment
+    // for NAME exists.
+
+    TEST devicetask(assname)=0
+    THEN RESULTIS TRUE // No existing assignment for this name
+    ELSE TEST nodelete
+         THEN
+           $( // Exists but must not be deleted
+           error("*"%S*" is already assigned and NODELETE was specified", assname)
+           RESULTIS FALSE
+           $)
+         ELSE $( delete.assignment(name); RESULTIS TRUE $)
+    $)
+
+
+
+AND locatedirectory( name )  =  VALOF
+$(
+//  Look at the directory name given, to see whether it is a concatenation
+//  of directories.  If so, then we call the DIR: device to handle it
+//  properly.
+
+    LET count  =  countchars( name, '+' )
+
+    TEST  count = 0  THEN  RESULTIS  locatedir( name )
+    ELSE
+    $(
+        //  Concatenated directories, and so we had better create a 
+        //  DIR: handler for this set.
+        
+        LET handlerfile  =  "sys:l.dir-handler"
+        LET seglist      =  VEC 3
+        
+        seglist!0  :=  3
+        seglist!1  :=  tcb!tcb.seglist!1
+        seglist!2  :=  tcb!tcb.seglist!2
+        seglist!3  :=  loadseg( handlerfile )
+
+        IF  seglist!3 = 0  THEN  RESULTIS  0
+
+        //  Otherwise, we can attempt to create a task to handle the directories.
+        //  Start at our own priority, and work steadily downwards until we hit
+        //  rock bottom.
+
+        FOR  priority = tcb!tcb.pri - 1  TO  1  BY  -1  DO
+        $(
+            LET task  =  createtask( seglist, 500, priority )
+        
+            UNLESS  task = 0  DO
+                RESULTIS  sendpkt( notinuse, task, action.startup, 0, 0, 
+                                   name, count + 1, copydir( currentdir ) )
+        $)
+
+        //  If we drop through here, then the attempt to create the task failed.
+        //  Ho, humm.  Try again sometime!
+    
+        RESULTIS  0
+    $)
+$)
+
+
+
+AND countchars( string, char )  =  VALOF
+$(
+//  Count the number of occasions the character "char" occurs in the string
+//  "string".
+
+    LET count  =  0
+
+    FOR  i = 1  TO  string % 0  DO
+        IF  string % i  =  char  THEN
+            count  :=  count + 1
+
+    RESULTIS  count
+$)
+
+

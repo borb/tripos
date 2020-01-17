@@ -1,0 +1,1133 @@
+//****************************************************************************
+//*                                                                          *
+//*        M68KASM  -  Assembler for the MC68000 family  -  Section 2        *
+//*                                                                          *
+//*                     Line Decoding and Macro Expansion                    *
+//*                                                                          *
+//****************************************************************************
+//*     I. D. Wilson    -    Last Modified    -    IDW    -    10/04/87      *
+//****************************************************************************
+
+
+
+SECTION "M2"
+
+
+
+GET "LIBHDR"
+GET "M68KHDR"
+
+
+
+LET doline()  BE
+$(
+//  Parse, and generate code for an entire input line.
+
+$<TRIPOS.MINOS
+    IF  testflags( #B0001 )  THEN
+        error( 149 )
+
+    IF  testflags( #B1000 )  THEN
+    $(
+        selectoutput( sysout )
+
+        writef( "******  Pass %N  File *"%S*"  Line %N  Errors %N*N",
+                 (pass1 -> 1, 2), filelist!currentfile, linenumber, errors )
+
+        selectoutput( liststream )
+    $)
+$>TRIPOS.MINOS
+
+    labelset      :=  FALSE
+    undefined     :=  FALSE
+    recoverlevel  :=  level()
+
+    rch()
+
+    SWITCHON  ch  INTO
+    $(
+        CASE '**'     : // Comment line
+        CASE '!'      : // New style comment line
+        CASE '*N'     : // Blank line
+
+                        skiprest()
+
+                        symb         :=  s.none
+                        commentline  :=  TRUE
+
+                        ENDCASE
+
+        CASE '.'      :
+        CASE '_'      :
+
+        CASE 'A'      : CASE 'B'      : CASE 'C'      : CASE 'D'      :
+        CASE 'E'      : CASE 'F'      : CASE 'G'      : CASE 'H'      :
+        CASE 'I'      : CASE 'J'      : CASE 'K'      : CASE 'L'      :
+        CASE 'M'      : CASE 'N'      : CASE 'O'      : CASE 'P'      :
+        CASE 'Q'      : CASE 'R'      : CASE 'S'      : CASE 'T'      :
+        CASE 'U'      : CASE 'V'      : CASE 'W'      : CASE 'X'      :
+        CASE 'Y'      : CASE 'Z'      :
+
+        CASE 'a'      : CASE 'b'      : CASE 'c'      : CASE 'd'      :
+        CASE 'e'      : CASE 'f'      : CASE 'g'      : CASE 'h'      :
+        CASE 'i'      : CASE 'j'      : CASE 'k'      : CASE 'l'      :
+        CASE 'm'      : CASE 'n'      : CASE 'o'      : CASE 'p'      :
+        CASE 'q'      : CASE 'r'      : CASE 's'      : CASE 't'      :
+        CASE 'u'      : CASE 'v'      : CASE 'w'      : CASE 'x'      :
+        CASE 'y'      : CASE 'z'      :
+
+                        readlabel()
+
+                        IF  ch = ':'  THEN  rch()
+
+                        UNLESS  tagsize.given = ts.none  DO  complain( 1 )
+
+                        FOR  i = 0  TO  tagsize-1  DO  labelvec!i  :=  tagv!i
+
+                        labelset  :=  TRUE
+                        skiplayout()
+
+                        undefined  :=  FALSE
+                        readopcode()
+
+                        ENDCASE
+
+
+        CASE '\'      : UNLESS  inmacro  DO  complain( 117 )
+
+                        UNTIL  ch = '*S'  |  ch = '*N'  DO  rch()
+
+        CASE '*S'     : skiplayout()
+
+                        IF  ch = '*N'  THEN
+                        $(
+                            symb         :=  s.none
+                            commentline  :=  TRUE
+
+                            ENDCASE
+                        $)
+
+                        IF  ch = '\'  THEN
+                        $(
+                            UNLESS  inmacro  DO  complain( 117 )
+
+                            UNTIL  ch = '*S'  |  ch = '*N'  DO
+                                   rch()
+
+                            symb  :=  s.none
+
+                            ENDCASE
+                        $)
+
+                        UNLESS  symbolchar( ch, FALSE )  DO
+
+                                //  Not a valid start to a symbol name, and
+                                //  so we should complain.
+
+                                complain( 2 )
+
+                        readlabel()
+
+                        TEST  ch = ':'  THEN
+                        $(
+                            //  This really is a label, since it has the
+                            //  terminating ":" character.
+
+                            rch()
+
+                            UNLESS  tagsize.given = ts.none  DO  complain( 1 )
+
+                            FOR  i = 0  TO  tagsize-1  DO  labelvec!i  :=  tagv!i
+
+                            labelset  :=  TRUE
+                            skiplayout()
+
+                            undefined  :=  FALSE
+                            readopcode()
+                        $)
+                        ELSE
+                        $(
+                            //  This isn't a label at all, and is in fact an
+                            //  opcode.  We should look this symbol up in the
+                            //  opcode table.
+
+                            undefined  :=  FALSE
+
+                            lookup( tagv, tagtable1 )
+                        $)
+
+                        ENDCASE
+
+
+        CASE endstreamch :
+                        symb  :=  s.none
+
+                        UNLESS  getlevel = 0  DO
+                        $(
+                            //  End of a GET file, so close it, and
+                            //  Return to the previous level.
+
+                            getlevel    :=  getlevel - 1
+                            linenumber  :=  linenumber - 1
+                            ended       :=  FALSE
+
+                            RETURN
+                        $)
+
+                        IF  pass2  THEN
+                        $(
+                            selectoutput( sysout )
+
+                            writes( "******  'END' statement missing*N*N" )
+
+                            selectoutput( liststream )
+                        $)
+
+                        ended  :=  TRUE
+
+                        ENDCASE
+
+
+        DEFAULT       : complain( 5 )
+    $)
+
+    IF  undefined  &  pass2  THEN
+
+        //  This is an undefined symbol in the opcode field.  This is serious
+        //  unless we are in a macro, in which case this could just be
+        //  something with a "\" in it.
+
+        UNLESS  inmacro  DO  complain( 96 )
+
+    //  Go on to decode the opcode/directive field.
+
+    TEST  skiplevel > 0  THEN
+    $(
+          //  We are in a conditional section, and so we must only
+          //  do something if we have met an ENDC or another IF..
+          //  directive.
+
+          LET dir  =  symbtype!st.value
+
+          IF  symb = s.dir  &  (dir = d.endc    |
+                                dir = d.ifdef   |
+                                dir = d.ifndef  |
+                                dir = d.ifeq    |
+                                dir = d.ifne    |
+                                dir = d.iflt    |
+                                dir = d.ifle    |
+                                dir = d.ifgt    |
+                                dir = d.ifge    )  THEN  dodir()
+
+          commentline  :=  TRUE
+    $)
+    ELSE
+
+    TEST  inmacro  THEN
+    $(
+        //  We are in a macro body, and unless this is an
+        //  ENDM directive, we must stack up the current
+        //  line in a buffer.  The exception to this is if
+        //  another MACRO directive is found, in which case
+        //  an error must be flagged.
+
+        TEST  symb = s.dir  &   (symbtype!st.value = d.macro  |
+                                 symbtype!st.value = d.endm )  THEN
+              dodir()
+
+        ELSE
+
+        IF  pass1  THEN
+        $(
+            LET newbuff  =  getstore( length/bytesperword )
+            LET newnode  =  heap3( 0, 0, 0 )
+
+            FOR  i = 0  TO  length-1  DO  newbuff % i  :=  inputbuff % i
+
+            macroend!m.buff    :=  newbuff
+            macroend!m.length  :=  length
+            macroend!m.link    :=  newnode
+
+            macroend           :=  newnode
+        $)
+
+        commentline  :=  TRUE
+    $)
+    ELSE
+
+    TEST  symb = s.instr  THEN  doinstr()      ELSE
+    TEST  symb = s.dir    THEN  dodir()        ELSE
+    TEST  symb = s.macro  THEN  domacro()      ELSE
+    TEST  symb = s.none   THEN
+
+          IF  labelset  THEN
+              setlabel( locmode, location, FALSE )
+
+    ELSE  complain( 3 )
+
+recoverlabel:                       // Recover here on error
+
+    skiprest()
+    listline()
+$)
+
+
+
+AND doinstr()  BE
+$(
+//  We have decoded some sort of instruction.  Decode further to determine if
+//  it is a special type of instruction, how many operands it takes, and what
+//  its mask type is.
+
+    LET t      =  symbtype!st.type
+    LET vh     =  symbtype!st.value.high
+    LET vl     =  symbtype!st.value.low
+    LET sizes  =  0
+
+    instr.mask      :=  symbtype!st.template
+    instr.masktype  :=  (t & mask.masktype)  >>  shift.masktype
+
+    source.ea       :=  vh
+    dest.ea         :=  vl
+
+    //  Instructions MUST be word aligned.
+
+    UNLESS  aligned( 2 )  DO
+    $(
+        warning( 102 )
+
+        align( 2 )
+    $)
+
+    IF  labelset  THEN  setlabel( locmode, location, FALSE )
+
+    nargs  :=  (t & mask.nargs)  >>  shift.nargs
+    sizes  :=  (t & mask.sizes)  >>  shift.sizes
+
+    //  If the size given is one of the common ones, then look to see if the
+    //  instruction mask precludes it.
+
+    IF  tagsize.given = ts.byte  |  tagsize.given = ts.word  |  tagsize.given = ts.long  THEN
+    $(
+        LET sizebit  =  1  <<  (tagsize.given - 1)
+
+        IF  (sizes & sizebit) = 0  THEN  complain( 6 )
+    $)
+
+    //  Othewise, set up the instruction size, and look to see whether this is
+    //  a general type of instruction.
+
+    instr.size  :=  tagsize.given
+
+    TEST  instr.masktype = 0  THEN  specialinstruction( dest.ea )
+    ELSE
+    $(
+        //  The size of the instruction has been verified as being correct.
+        //  Now read the operands (each is the form of an effective address)
+
+        IF  nargs = 0  THEN  readsymb()
+
+        checkinstrsize()
+
+        IF  nargs = 1  THEN
+        $(
+            nextsymb()
+            effective.address()
+
+            IF  (dest.ea & op.ea) = 0  THEN  complain( 7 )
+        $)
+
+        IF  nargs = 2  THEN
+        $(
+            nextsymb()
+
+            effective.address()
+            checkfor( s.comma, 10 )
+
+            IF  (source.ea & op.ea) = 0  THEN  complain( 8 )
+
+            //  the first operand is correct, so store it away, and read the
+            //  second.
+
+            swapoperands()
+
+            effective.address()
+
+            IF  (dest.ea & op.ea) = 0  THEN  complain( 9 )
+        $)
+
+        checkfor( s.none, 12 )
+
+        generate( instr.masktype )
+    $)
+$)
+
+
+
+AND aligned( boundary )  =  location REM boundary  =  0
+
+
+
+AND domacro()  BE
+$(
+//  This line is a macro, and must be decoded as such.  Set up the argument
+//  vector, and call "expandmacro" to actually do the expansion.
+
+    LET argvec      =  VEC macroargs
+    LET argcount    =  0
+
+    LET macrovalue  =  symbtype!st.value
+
+    //  Pick up the label, if there is one, and make a copy of it into
+    //  a macro buffer.
+
+    LET labelfield  =  getmacrobuffer()
+
+    TEST  labelset  THEN
+        FOR  i = 0  TO  labelvec % 0  DO
+            labelfield % i  :=  labelvec % i
+
+    ELSE  labelfield % 0  :=  0
+
+    //  Check for forward reference to a MACRO definition (which is illegal).
+
+    IF  (symbtype!st.flags & stb.setnow) = 0  THEN  complain( 151 )
+
+    FOR  i = 1  TO  macroargs  DO  argvec!i  :=  ""
+
+    instr.size  :=  tagsize.given
+
+    argvec!0    :=  instr.size  =  ts.byte      ->  "B",
+                    instr.size  =  ts.word      ->  "W",
+                    instr.size  =  ts.long      ->  "L",
+                    instr.size  =  ts.short     ->  "S",
+                    instr.size  =  ts.double    ->  "D",
+                    instr.size  =  ts.extended  ->  "X",
+                    instr.size  =  ts.packed    ->  "P",  ""
+
+    skiplayout()
+
+    FOR  i = 1  TO  macroargs  DO
+    $(
+        //  Read the arguments for the macro.
+
+        LET argbuffer  =  getmacrobuffer()
+        LET arglength  =  0
+
+        TEST  ch = '<'  |  ch = '['  THEN
+        $(
+            LET bracket  =  ch = '<'  ->  '>', ']'
+
+            rch()
+
+            UNTIL  ch = bracket  |  ch = '*N'  DO
+            $(
+                arglength              :=  arglength + 1
+                argbuffer % arglength  :=  ch
+
+                rch()
+            $)
+
+            TEST  ch = '*N'
+                THEN  complain( 114 )
+                ELSE  rch()
+        $)
+        ELSE
+
+        UNTIL  ch = ','  |  ch = '*S'  |  ch = '*N'  DO
+        $(
+            arglength              :=  arglength + 1
+            argbuffer % arglength  :=  ch
+
+            rch()
+        $)
+
+        argbuffer % 0    :=  arglength
+        argcount         :=  argcount + 1
+        argvec!argcount  :=  argbuffer
+
+        readsymb()
+
+        TEST  symb = s.none   THEN   BREAK
+        ELSE
+
+            UNLESS  symb = s.comma  DO
+                complain( 115 )
+    $)
+
+    IF  symb = s.comma  THEN  complain( 118 )
+
+    expandmacro( macrovalue, argvec, labelfield )
+
+    //  Release the macro buffers, so that they can live to fight
+    //  another day.
+
+    freemacrobuffer( labelfield )
+
+    FOR  i = 1  TO  argcount  DO  freemacrobuffer( argvec!i )
+$)
+
+
+
+AND getmacrobuffer()  =  VALOF
+$(
+//  Look to see if there is a spare macro buffer and if so, return it.
+//  Otherwise, allocate a new one.
+
+    LET buffer  =  0
+
+    TEST  macrobuffers = 0  THEN  buffer  :=  getstore( mbuff.size ) + mbuff.hdr
+    ELSE
+    $(
+        //  One already exists, so return it instead.
+
+        buffer        :=  macrobuffers
+        macrobuffers  :=  buffer!mbuff.link
+    $)
+
+    RESULTIS  buffer
+$)
+
+
+
+AND freemacrobuffer( buffer )  BE
+$(
+//  Add this buffer to the macro free chain.
+
+    buffer!mbuff.link  :=  macrobuffers
+    macrobuffers       :=  buffer
+$)
+
+
+
+AND expandmacro( macroptr, argvec, labelfield )  BE
+$(
+//  Expand the source macro, whose text is pointed to by "macroptr".
+//  The current depth of macro nesting is given by "depth".  The
+//  restriction is that depth must not be greater than 3.  This is
+//  a MOTOROLA restriction, and the macro depth for this implementation
+//  is given by "maxmacrodepth".
+
+    LET macroline  =  macroptr!m.buff
+    LET asml       =  0
+    LET depth      =  macrodepth
+    LET skip       =  skipping
+    LET skipl      =  skiplevel
+
+    //  Macro nesting too deep.  Possibly in a recursive
+    //  loop of macro expansion.
+
+    IF  macrodepth = maxmacrodepth  THEN  complain( 108 )
+
+    //  Before we expand the macro, we must list the line that
+    //  the macro name is on.
+
+    commentline  :=  TRUE
+
+    listline()
+
+    macrodepth  :=  macrodepth + 1
+
+    resetflags()
+
+    UNTIL  macroline = 0  |  macrodepth = depth  |  ended  |  aborted  DO
+    $(
+        LET sptr     =  0
+        LET mptr     =  0
+        LET wcode    =  0
+        LET mlength  =  macroptr!m.length
+
+        FOR  i = 0  TO  maxllen-1  DO  inputbuff % i  :=  '*S'
+
+        UNTIL  mptr = mlength  DO
+        $(
+            LET char  =  macroline % mptr
+
+            TEST  char = '\'  THEN
+            $(
+                mptr  :=  mptr + 1
+
+                IF  mptr = mlength  THEN
+                $(
+                    wcode  :=  109
+
+                    BREAK
+                $)
+
+                char  :=  macroline % mptr
+
+                TEST  char = '\'  THEN
+                $(
+                    //  Double '\', means insert this character into the
+                    //  expanded string.
+
+                    putinbuffer( inputbuff, sptr, char )
+
+                    sptr  :=  sptr + 1
+                    mptr  :=  mptr + 1
+                $)
+                ELSE
+
+                TEST  char = '@'  THEN
+                $(
+                    //  This is an assembler generated label.
+                    //  The first time that this is encountered in
+                    //  a macro expansion, a new label is obtained
+                    //  from the function "newasmlabel".  Thereafter
+                    //  this value is used in the entire macro
+                    //  expansion from now on.
+
+                    LET chbuff  =  VEC 10
+                    LET size    =  0
+                    LET label   =  0
+
+                    IF  asml = 0  THEN  asml  :=  newasmlabel()
+
+                    label  :=  asml
+                    size   :=  digits( asml )
+
+                    IF  size < 3  THEN  size  :=  3
+
+                    FOR  i = size  TO  1  BY  -1  DO
+                    $(
+                        chbuff!i  :=  (label REM 10) + '0'
+                        label     :=  label / 10
+                    $)
+
+                    putinbuffer( inputbuff, sptr, '.' )
+
+                    FOR  i = 1  TO  size  DO
+                         putinbuffer( inputbuff, sptr + i, chbuff!i )
+
+                    sptr  :=  sptr + size + 1
+                    mptr  :=  mptr + 1
+                $)
+                ELSE
+
+                //  This should be an argument number (in the range
+                //  '0' to '9' or 'A' to 'Z'), and can be treated as as index
+                //  into "argvec".
+
+                TEST  macrochar( char )  THEN
+                $(
+                    LET argnumber  =  argoffset( char )
+                    LET arg        =  argvec!argnumber
+
+                    FOR  j = 1  TO  arg % 0  DO
+                    $(
+                        putinbuffer( inputbuff, sptr, arg % j )
+
+                        sptr  :=  sptr + 1
+                    $)
+
+                    mptr  :=  mptr + 1
+                $)
+                ELSE
+
+                //  Extension to the Motorola specification.  We allow the
+                //  user to insert information from the environment into
+                //  his file.  These are:
+                //
+                //      \&   macro label
+                //      \$   current date
+                //      \#   current time
+
+                TEST  char = '&'  |  char = '$'  |  char = '#'  THEN
+                $(
+                    //  One of the local extensions.  Pick up the string
+                    //  and insert it into the output buffer.
+
+                    LET string  =  char = '&'  ->  labelfield,
+                                   char = '$'  ->  datestring,
+                                   char = '#'  ->  timestring,  complain( 0 )
+
+                    FOR  i = 1  TO  string % 0  DO
+                    $(
+                        putinbuffer( inputbuff, sptr, string % i )
+
+                        sptr  :=  sptr + 1
+                    $)
+
+                    mptr  :=  mptr + 1
+                $)
+
+                //  All others are definitely disallowed!
+
+                ELSE
+                $(
+                    wcode  :=  109
+
+                    BREAK
+                $)
+            $)
+            ELSE
+            $(
+                //  Not a macro argument, so make sure that we get the tabbing
+                //  correct.
+
+                TEST  macroline % mptr = '*S'  THEN
+                $(
+                    //  First, skip all spaces from the macro record
+                    //  to find the column of the next non-space char.
+
+                    WHILE  mptr < mlength  &  macroline % mptr = '*S'   DO
+                           mptr  :=  mptr + 1
+
+                    //  Now pad the output record with spaces up to this
+                    //  column.  We MUST pad at least one space.
+
+                    sptr  :=  sptr < mptr  ->  mptr,  sptr + 1
+                $)
+                ELSE
+                $(
+                    putinbuffer( inputbuff,  sptr, char )
+
+                    sptr  :=  sptr + 1
+                    mptr  :=  mptr + 1
+                $)
+            $)
+        $)
+
+        //  Having filled up the buffer, look to see if we have overfilled
+        //  it, and if so, complain.
+
+        UNLESS  sptr < maxllen  DO
+        $(
+            wcode  :=  189
+            sptr   :=  maxllen
+        $)
+
+        //  Now call "doline" with the newly constructed, macro expanded
+        //  line.  Then get the next line in the macro expansion (found at
+        //  macroptr!m.link), and carry on.
+
+        TEST  wcode \= 0  THEN
+        $(
+            //  There has been some problem in decoding the formal parameters
+            //  to the Macro, and so, we must print out the offending line
+            //  and not bother to expand anything from it.
+
+            FOR  i = 0  TO  mlength-1  DO  inputbuff % i  :=  macroline % i
+
+            length              :=  mlength
+            inputbuff % length  :=  '*N'
+            commentline         :=  TRUE
+
+            warning( wcode )
+
+            listline()
+        $)
+        ELSE
+        $(
+            length              :=  sptr
+            inputbuff % length  :=  '*N'
+            charpos             :=  0
+
+            doline()
+        $)
+
+        macroptr   :=  macroptr!m.link
+        macroline  :=  macroptr!m.buff
+
+        resetflags()
+    $)
+
+    IF  macrodepth = depth  DO
+    $(
+        //  If we have executed a "MEXIT" then we must reset the
+        //  "skipping" and "skiplevel" variables.
+
+        skipping    :=  skip
+        skiplevel   :=  skipl
+    $)
+
+    macrodepth  :=  depth
+    listed      :=  TRUE
+$)
+
+
+
+AND argoffset( char )  =  '0' <= char <= '9'  ->  char - '0',
+                       /* 'A' <= char <= 'Z' */   char - 'A' + 10
+
+
+
+AND digits( value )  =  value < 10  ->  1,  (digits( value/10 ) + 1)
+
+
+
+AND newasmlabel()  =  VALOF
+$(
+//  Returns a new assembler generated label.
+
+    asmlabel  :=  asmlabel + 1
+
+    RESULTIS  asmlabel
+$)
+
+
+
+AND printxreftable()  BE
+$(
+//  Print a cross reference table.  We should first scan the table to find
+//  the size of the heap which we should use for the sorting.  These items
+//  are then inserted into the heap and printed out.
+
+    LET xreftable  =  0
+    LET count      =  0
+
+    listing  :=  TRUE
+    paging   :=  TRUE
+
+    //  Do a preliminary scan of the table to find out how big the heap
+    //  must be for the sorting.
+
+    FOR  i = 0  TO  tagtablesize-1  DO
+    $(
+        LET t  =  tagtable2!i
+
+        UNTIL  t = 0  DO
+        $(
+            UNLESS  t!st.definition = 0  DO  count  :=  count + 1
+
+            t  :=  t!st.link
+        $)
+    $)
+
+    //  Having worked out the size of the table, allocate the store for the
+    //  heap, and set its size in the first element.
+
+    xreftable    :=  getchunk( count, TRUE )
+    xreftable!0  :=  0
+
+    //  Now, scan the table again, this time adding the entries into the
+    //  heap.
+
+    FOR  i = 0  TO  tagtablesize-1  DO
+    $(
+        LET t  =  tagtable2!i
+
+        UNTIL  t = 0  DO
+        $(
+            UNLESS  t!st.definition = 0  DO  addnode( xreftable, t )
+
+            t  :=  t!st.link
+        $)
+    $)
+
+    //  Now the items are in the heap, we should extract them in a sorted
+    //  order, printing them out as we go.
+
+    onpage  :=  0
+
+    settitle( "CROSS-REFERENCE" )
+
+    headingtype  :=  h.xref
+
+    UNTIL  xreftable!0 = 0  DO  printnode( getnode( xreftable ) )
+
+    //  If we have more than one file, then we should print out a file
+    //  index as well.  Otherwise return  now.
+
+    IF  filenumber = 1  THEN  RETURN
+
+    //  Print out a file list, since this may (or may not) help the user
+    //  to find out what his program is doing!
+
+    onpage  :=  0
+
+    settitle( "FILE-INDEX" )
+
+    headingtype  :=  h.files
+
+    printfiles()
+$)
+
+
+
+AND addnode( heap, node )  BE
+$(
+//  Add the node given to the heap.  The current size of the heap is stored
+//  in element zero.
+
+    LET next  =  heap!0 + 1
+
+    LET pos   =  next
+    LET name  =  node+st.name
+
+    UNTIL  pos = 1  DO
+    $(
+        LET pos2   =  pos/2
+        LET node2  =  heap!pos2
+        LET name2  =  node2+st.name
+
+        IF  comparestrings( name, name2 ) > 0  THEN  BREAK
+
+        heap!pos  :=  node2
+        pos       :=  pos2
+    $)
+
+    heap!pos  :=  node
+    heap!0    :=  next
+$)
+
+
+
+AND getnode( heap )  =  VALOF
+$(
+//  Get the next node from the heap, and rearrange the heap to make sure
+//  that it still meets its constraints.
+
+    LET node  =  heap!1
+    LET name  =  node+st.name
+
+    LET pos   =  heap!0
+    LET next  =  pos - 1
+
+    IF  pos > 1  THEN
+    $(
+        //  We must munge the heap so that the relationships between the
+        //  entries still holds.
+
+        LET node2  =  heap!pos
+        LET name2  =  node2+st.name
+        LET pos2   =  1
+
+        UNTIL  pos2 > next/2  DO
+        $(
+            LET x      =  pos2*2
+            LET y      =  x + 1
+
+            LET nodex  =  heap!x
+            LET namex  =  nodex+st.name
+            LET lessx  =  comparestrings( name2, namex ) < 0
+
+            LET nodey  =  0
+            LET namey  =  0
+            LET lessy  =  TRUE
+
+            UNLESS  y > pos  DO
+            $(
+                nodey  :=  heap!y
+                namey  :=  nodey+st.name
+                lessy  :=  comparestrings( name2, namey ) < 0
+            $)
+
+            //  Look to see which of the two possible positions we should
+            //  put our new node into.
+
+            IF  lessx & lessy  THEN  BREAK
+
+            //  Not the end of the scan yet, so we should decide which pair
+            //  of items to swap.
+
+            IF  lessx  THEN
+            $(
+                //  The node is less than the "x" item, so we should swap
+                //  with the "y" item.
+
+                heap!pos2  :=  nodey
+                pos2       :=  y
+
+                LOOP
+            $)
+
+            IF  lessy  THEN
+            $(
+                //  The node is less than the "y" item, so we should swap
+                //  with the "x" item.
+
+                heap!pos2  :=  nodex
+                pos2       :=  x
+
+                LOOP
+            $)
+
+            //  The node is greater than both "x" and "y", so we should
+            //  compare those two to decide which to swap.
+
+            TEST  comparestrings( namex, namey ) < 0  THEN
+            $(
+                heap!pos2  :=  nodex
+                pos2       :=  x
+            $)
+            ELSE
+            $(
+                heap!pos2  :=  nodey
+                pos2       :=  y
+            $)
+        $)
+
+        //  When we drop out of that loop, we have found the final resting
+        //  place for the node.
+
+        heap!pos2  :=  node2
+    $)
+
+    //  Update the length of the heap, and then return the node value.
+
+    heap!0  :=  next
+
+    RESULTIS  node
+$)
+
+
+
+AND comparestrings( s1, s2 )  =  VALOF
+$(
+//  Compare the strings pointed to by s1 and s2, and return
+//  <0  if  s1 < s2    and
+//  >0  if  s1 > s2
+
+    LET l1  =  s1 % 0
+    LET l2  =  s2 % 0
+
+    FOR  i = 1  TO  (l1 < l2  ->  l1, l2)  DO
+    $(
+        LET ch1   =  s1 % i
+        LET ch2   =  s2 % i
+        LET diff  =  ch1 - ch2
+
+        UNLESS  diff = 0  DO  RESULTIS  diff
+    $)
+
+    RESULTIS  l1 - l2
+$)
+
+
+
+AND printnode( node )  BE
+$(
+//  Print out the cross reference node "node".
+
+    LET type    =  node!st.type
+    LET value   =  node!st.value
+    LET line    =  node!st.definition
+    LET file    =  node!st.file
+    LET refs    =  node!st.references
+    LET name    =  node+st.name
+
+    LET online  =  0
+
+    clearbuffer()
+
+    linepos  :=  0
+    writestring( name )
+
+    linepos  :=  32
+
+    TEST  type = s.ext         THEN  writestring( "******EXTERNAL******" )       ELSE
+    TEST  line = cr.undefined  THEN  writestring( "******UNDEFINED******" )      ELSE
+    TEST  line = cr.multiple   THEN  writestring( "******MULTIPLE******" )       ELSE
+    TEST  line = cr.setsymbol  THEN  writestring( "**********SET************" )
+
+    ELSE
+    $(
+        //  A bog standard file name.  We can therefore print out the line
+        //  where the symbol was defined, along with its file reference.
+
+        writenumber( line, 5 )
+        writechar( fileref( file ) )
+    $)
+
+    linepos  :=  40
+
+    IF  line > 0  THEN
+
+        SWITCHON  type  INTO
+        $(
+            CASE s.rel     :  writehexvalue( value, 4  )
+                              writechar( '*'' )
+                              ENDCASE
+
+            CASE s.reg     :
+            CASE s.FPgreg  :
+            CASE s.FPcreg  :  writehexvalue( value, 4  )
+                              writechar( 'R' )
+                              ENDCASE
+
+            CASE s.abs16   :  writehexvalue( value, 4 )
+                              ENDCASE
+
+            CASE s.abs32   :  writehexvalue( value, 8 )
+                              ENDCASE
+
+            CASE s.Dr      :  writechar( 'D' )
+                              writehexvalue( value, 1 )
+                              ENDCASE
+
+            CASE s.Ar      :  writechar( 'A' )
+                              writehexvalue( value, 1 )
+                              ENDCASE
+
+            CASE s.FPr     :  writestring( "FP" )
+                              writehexvalue( value, 1 )
+                              ENDCASE
+
+            DEFAULT        :  writestring( "????" )
+                              ENDCASE
+        $)
+
+    //  Now print out the references to this particular symbol.
+
+    linepos  :=  52
+
+    UNTIL  refs = 0  DO
+    $(
+        IF  online = 10  THEN
+        $(
+            printbuffer()
+            clearbuffer()
+
+            linepos  :=  50
+            writestring( "- " )
+
+            online   :=  0
+        $)
+
+        writenumber( refs!r.line, 5 )
+
+        writechar( fileref( refs!r.file ) )
+        writechar( '*S' )
+
+        refs    :=  refs!r.link
+        online  :=  online  +  1
+    $)
+
+    printbuffer()
+$)
+
+
+
+AND printfiles()  BE
+$(
+//  Print out a file list.  For each file, print out its reference character
+//  and the name of the file.
+
+    FOR  i = 2  TO  filenumber  DO
+    $(
+        clearbuffer()
+
+        linepos  :=  10
+        writechar( fileref( i ) )
+
+        linepos  :=  20
+        writestring( filelist!i )
+
+        printbuffer()
+    $)
+$)
+
+
+
+AND fileref( file )  =  VALOF
+$(
+//  Given a file number, return the character which represents it.
+
+    LET chars  =  " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    LET charl  =  chars % 0
+
+    RESULTIS  file > charl  ->  '?',  chars % file
+$)
+
+

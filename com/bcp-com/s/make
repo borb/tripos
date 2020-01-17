@@ -1,0 +1,59 @@
+.K v,obj,opt,opts,tidy/s
+.def v h
+.def obj Bobj:
+.def opt -wa
+.def opts -db
+. -db for LSI4s
+
+IF EQ tidy <tidy$compile>; SKIP tidy
+BCP BCP.MST  <obj>MST            OPT <opt>SN
+BCP BCP.MST  <obj>NMST           OPT <opt>SNcc:NOVL:
+
+BCP BCP.OVL <obj>OVL-<v>         OPT <opt>SN
+BCP BCP.OVL  <obj>OVL-SPARE-<v>  OPT <opt>cc:SPARE:SN
+BCP BCP.NOVL <obj>NOVL-<v>       OPT <opt>cc:NOVL:SN
+BCP BCP.NOVL <obj>NOVL-spare-<v> OPT <opt>cc:SPARE:cc:NOVL:SN
+
+obj:link <obj> <obj>BCP OVL-<v>       TO <obj>bcp-<v>
+obj:link <obj> <obj>BCP OVL-spare-<v> TO <obj>bcp-<v>-spare
+
+obj:link <obj> NBCP NOVL-<v>          TO <obj>nbcp-<v>
+obj:link <obj> NBCP NOVL-spare-<v>    TO <obj>nbcp-<v>-spare
+
+bcp BCP.ERR  <obj>ERR  OPT <opt>:SN
+bcp BCP.FAT  <obj>FAT  OPT <opt>:SN
+BCP BCP.SML  <obj>SML  OPT <opt>:SN
+bcp BCP.FEP  <obj>FEP  OPT <opt>:SN
+BCP BCP.NSW  <obj>NSW  OPT <opt>:SN
+BCP BCP.SYE  <obj>SYE  OPT <opt>:SN
+BCP BCP.TRE  <obj>TRE  OPT <opt>:SN
+obj:link <obj> ERR to SYS:l.bcp-<v>-err
+
+BCP BCP.SYN  <obj>SYN  OPT <opt>:SN
+BCP BCP.SYN1 <obj>SYN1 OPT <opt>:SN
+BCP BCP.SYN2 <obj>SYN2 OPT <opt>:SN
+BCP BCP.SYN3 <obj>SYN3 OPT <opt>:SN
+BCP BCP.SYN4 <obj>SYN4 OPT <opt>:SN
+BCP BCP.SYN5 <obj>SYN5 OPT <opt>:SN
+BCP BCP.SYN6 <obj>SYN6 OPT <opt>:SN
+BCP BCP.SYN7 <obj>SYN7 OPT <opt>:SN
+bcp BCP.GET  <obj>GET  OPT <opt>:SN
+obj:link <obj> SYN to SYS:l.bcp-<v>-SYN smallreloc
+
+BCP BCP.TRN  <obj>TRN  OPT <opt><opts>:SN
+BCP BCP.TRN1 <obj>TRN1 OPT <opt><opts>:SN
+BCP BCP.TRN2 <obj>TRN2 OPT <opt><opts>:SN
+BCP BCP.TRN3 <obj>TRN3 OPT <opt><opts>:SN
+BCP BCP.TRN4 <obj>TRN4 OPT <opt><opts>:SN
+BCP BCP.TRN5 <obj>TRN5 OPT <opt><opts>:SN:WS19000
+BCP BCP.TRN6 <obj>TRN6 OPT <opt><opts>:SN
+BCP BCP.TRN7 <obj>TRN7 OPT <opt><opts>:SN
+obj:link <obj> TRN to SYS:l.bcp-<v>-TRN smallreloc
+
+QUIT
+
+LAB tidy
+
+scratch dir=<obj>
+
+

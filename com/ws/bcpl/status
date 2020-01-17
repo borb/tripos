@@ -1,0 +1,342 @@
+// Source file "status" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+SECTION "STATUS"
+GET "libhdr"
+GET "wrshdr"
+
+LET formf(v, init, max, s, a1, a2, a3, a4, a5, a6) BE $(
+  LET swrch = wrch
+  LET mywrch(c) BE $(
+    IF formptr = formmax THEN RETURN
+    formbuf%formptr := c
+    formptr := formptr + 1 $)
+  LET mywrited(n, d) BE $( // for status line only - disgusting I know..
+                           // allows left-justified numeric output
+    LET prev = formptr
+    work.formf(n, 0)
+    WHILE formptr < prev + d & formptr < formmax DO wrch(' ') $)
+  work.formf := writed
+  wrch := mywrch
+  writed := mywrited
+  formbuf := v
+  formptr := init
+  formmax := max
+  writef(s, a1, a2, a3, a4, a5, a6)
+  wrch := swrch; writed := work.formf $)
+
+LET error(string, a1, a2, a3, a4, a5, a6) BE $(
+  // prints the message and demands an escape.
+  // no '*n' at end of string !
+  LET v1 = VEC 100/bytesperword
+  LET v2 = VEC 2
+  LET v3 = VEC 2 // for saveing lines
+  rptstop := yes
+  scr.saveline(0, v2); scr.saveline(1, v3)
+  formf(v1, 0, 99, "** ** ** Error: ")
+  formf(v1, formptr, 98, string, a1, a2, a3, a4, a5, a6)
+  TEST formptr < (ymax - 30) & formptr < 60 THEN $(
+    formf(v1, formptr, 99, " ** ** ** Press ESCAPE Key *n")
+    scr.updateline(0, v1, 0, queryline) $)
+  ELSE $(
+    formf(v1, formptr, 99, "*n")
+    scr.updateline(0, v1, 0, cmdline)
+    scr.updateline(1, "** ** ** Press ESCAPE key *n", 1, queryline) $)
+  $( sys.killkbd(); scr.dolineupdates() $) REPEATWHILE sys.keywaiting()
+  $( LET c = sys.rdch()
+     IF c = narrow.flip.char THEN $(
+       new.narrow.offset(); scr.dolineupdates(); LOOP $)
+     IF c = escape THEN BREAK $) REPEAT
+  scr.updateline(0, v2!0, v2!1, v2!2)  // restore old line
+  scr.updateline(1, v3!0, v3!1, v3!2)
+  scr.dolineupdates()
+  // tell the lisp system (if it's running) to stop as soon as convenient
+  IF wspl.status = pl.running THEN wspl.status := pl.broken
+$)
+
+LET statusline(s, a1, a2, a3, a4, a5, a6) BE $(
+  formf(statusbuf, 0, xmax, s, a1, a2, a3, a4, a5, a6)
+  scr.updateline(0, statusbuf, 0, cmdline) $)
+
+LET message(s, a1, a2, a3, a4, a5, a6) BE $(
+  // Puts a message on the top line.
+  // Doesn't save original version as top line rewritten all the time
+  LET buffer  =  VEC 256/bytesperword
+  formf(buffer, 0, xmax, s, a1, a2, a3, a4, a5, a6)
+  scr.updateline(0, buffer, 0, cmdline)
+  scr.dolineupdates() $)
+
+LET checkint() = VALOF TEST interrupt THEN $(
+  scr.updateline(0, "** ** ** Interrupted  -  press ESCAPE key*n", 1, cmdline)
+  $( sys.killkbd(); scr.dolineupdates() $) REPEATWHILE sys.keywaiting()
+  interrupt := no REPEATUNTIL sys.rdch() = escape
+  message("*n")  // in case file/block op or something
+  RESULTIS yes $) ELSE RESULTIS no
+
+// Now the mechanism by which menus, command explanations
+// and questions are placed on the screen, remembering what was underneath.
+// See the menus section for how to call
+
+LET cmd.init(v) BE $(
+  v!0 := cmd.savevec; v!1 := cmd.saveptr; v!2 := cmd.curline
+  cmd.savevec := v; cmd.saveptr := 3; cmd.curline := 1 $)
+
+//let cmd.simple(lev, mes) be if helplevel >= lev then $(
+//  scr.saveline(cmd.curline, cmd.savevec + cmd.saveptr*adinc)
+//  scr.updateline(cmd.curline, mes, 1, cmdline)
+//  cmd.curline := cmd.curline + 1
+//  cmd.saveptr := cmd.saveptr + 3*adinc $)
+
+LET cmd.simple(lev, mes, a1, a2, a3, a4, a5) BE IF helplevel >= lev THEN $(
+  // This routine is dreadful, cos to form a complex line
+  // someone had better do the memory management.
+  // We do a getvec here, and remember the fact in a very devious way:
+  // by negating the 'byte.ad' part of the scr.saveline
+  // This is unpicked in cmd.finish
+  LET v = getvec(101/bytesperword)
+  formf(v, 0, 100, mes, a1, a2, a3, a4, a5) // might bite on 132col screen?
+  v%99 := ch.line // needs terminating cleanly, just in case
+  scr.saveline(cmd.curline, cmd.savevec + cmd.saveptr*adinc)
+  scr.updateline(cmd.curline, v, 0, cmdline)
+  cmd.curline := cmd.curline + 1
+  cmd.savevec!(cmd.saveptr + adinc) := ~cmd.savevec!(cmd.saveptr + adinc)
+  cmd.saveptr := cmd.saveptr + 3 * adinc $)
+
+LET cmd.finish() BE $(
+  WHILE cmd.saveptr > 3 DO cmdinternal.unwindline()
+  cmd.saveptr := cmd.savevec!1
+  cmd.curline := cmd.savevec!2
+  cmd.savevec := cmd.savevec!0 $)
+
+AND cmdinternal.unwindline() BE $(
+  // called above and in request.filename in the case of an ocall.
+  LET wad, bad, type = ?, ?, ?
+  cmd.saveptr := cmd.saveptr - 3*adinc
+   cmd.curline := cmd.curline - 1
+   wad := cmd.savevec!cmd.saveptr
+   bad := cmd.savevec!(cmd.saveptr + adinc)
+   type:= cmd.savevec!(cmd.saveptr + 2 * adinc)
+   IF bad < 0 THEN $( // must free getvec from cmd.complex
+     LET v = VEC 2
+     bad := ~bad
+     scr.saveline(cmd.curline, v)
+     freevec(v!0) $) // yech! that's the word pointer from the line
+   scr.updateline(cmd.curline, wad, bad, type) $)
+
+
+LET cmd.query(inbuf, lim, answbuf, mes, ty) = VALOF $(
+  // inbuf must be big enough to hold mes too, lim is its size
+  // ty = 0 -> Y/N, ty = 1 -> numeric only 2-> set help level, string
+  // ty = 4 -> an oscall may result - usually only a filename request...
+  // initially, answbuf%0 must = ch.line
+  // returns answer in %0..ch.line of answbuf
+  // resultis terminating char, or true/false if a Y/N question
+  LET c, c1 = ?, ?
+  LET v = VEC 3 // blank line below question
+  LET inptr = mes%0
+  LET savead = cmd.savevec + cmd.saveptr * adinc;
+
+  // restore the previous answer to this question
+  $( LET src, dst = 0, mes%0
+     $( c1 := answbuf%src
+        IF lim <= dst THEN
+          // error("Internal - query system")
+          // this could happen with very long file names.
+          // chop off the rest, tough on him.
+          c1 := ch.line
+        inbuf%dst := c1
+        src := src + 1; dst := dst + 1 $) REPEATUNTIL c1 = ch.line
+     WHILE dst < lim DO $(
+        inbuf%dst := c1; dst := dst + 1 $) $)
+  FOR i = 1 TO inptr DO inbuf%(i-1) := mes%i
+
+  // blank line below the question
+  cmd.curline := cmd.curline + 1  // noticed by text.update
+  scr.saveline(cmd.curline, v)
+  scr.updateline(cmd.curline, "*N", 1, cmdline)
+  cmd.curline := cmd.curline + 1
+
+  // inbuf is now set up as the prompt line.
+  scr.saveline(cmd.curline - 2, savead)
+  $( c1 := inbuf%inptr; inbuf%inptr := ch.line
+     scr.updateline(cmd.curline - 2, inbuf, 0, queryline)
+     scr.dolineupdates()
+     c := sys.rdch()
+     inbuf%inptr := c1
+     IF c = narrow.flip.char THEN $( new.narrow.offset(); LOOP $)
+     TEST ty = 0 THEN $( // Y/N question - very simple
+       c := c = 'Y' | c = 'y' | c = (ctl&'Y'); BREAK $)
+     ELSE SWITCHON c INTO $(
+       DEFAULT:      // inputting ctl chars (except ^N, for ease in ^QA)
+                     // NEEDS a ^P first
+                     IF c < 32 & c ~= (ctl&'N') THEN LOOP
+                     GOTO l
+       CASE ctl&'P': c := sys.rdch(); IF c = ch.line THEN LOOP
+                  l: TEST ty = 1 THEN IF c > '9' | c < '0' THEN LOOP ELSE
+                     IF ty = 2 THEN $( // set help level
+                       c := c >= '0' & c <= '3' -> c, -1; BREAK $)
+                     inbuf%inptr := c; IF inptr < lim THEN inptr := inptr + 1; LOOP
+
+       CASE #X7F:    IF inptr > mes%0 THEN inptr := inptr - 1; LOOP
+       CASE ctl&'Y': inptr := mes%0; LOOP
+       CASE ctl&'H': WHILE inptr < lim & inbuf%inptr ~= ch.line DO
+                       inptr := inptr + 1
+                     LOOP
+// slight problem here - scrolling the area under the question
+// causes chaos!
+       CASE ctl&']': IF ~t.editing THEN LOOP
+                     c := textspace%(textcur+filecol)
+                     IF c = ch.line | c >= ch.lineend THEN LOOP
+                     cur.right(); text.update(); GOTO l
+       // harmless chars still scroll text.
+       CASE ctl&'W': CASE ctl&'Z': CASE ctl&'C': CASE ctl&'R':
+       CASE ctl&'E': CASE ctl&'X': CASE ctl&'S': CASE ctl&'D':
+       CASE ctl&'A': CASE ctl&'F':
+                     IF t.editing THEN $( edit.obey.main(c); text.update() $)
+                     LOOP
+       CASE ch.line: LOOP // ctlJ I think
+       CASE ctl&'M': c := ch.line
+       CASE ctl&'U': CASE escape: inbuf%inptr := ch.line; BREAK $)
+  $) REPEAT
+  // now shift answer back to answbuf
+  $( LET src, dst = mes%0, 0
+     $( c1 := inbuf%src; answbuf%dst := c1
+        src := src + 1; dst := dst + 1 $) REPEATUNTIL c1 = ch.line
+     answbuf%dst := c1 $)
+  cmd.curline := cmd.curline - 1
+  scr.updateline(cmd.curline, v!0, v!1, v!2)  // the blank line
+  scr.updateline(cmd.curline - 1, inbuf, 0, cmdline)
+  cmd.saveptr := cmd.saveptr + 3*adinc
+  RESULTIS c $) // terminating char
+
+LET request.filename(inbuf, prompt) = VALOF $(
+  LET answ = ?
+  cmd.simple(2, "^U=cancel command    ^Y=delete entry   ^H=restore previous answer*n")
+  IF os.call.char >= 0 THEN
+    cmd.simple(2, "%c=command to operating system*n", os.call.char)
+//  if t.editing then cmd.simple(3, "^Z, ^C=scroll down   ^W, ^R=scroll up*n")
+//  cmd.simple(1, "*n")  // seems to look nicer without.
+ retry.after.os.call:
+  answ := cmd.query(inbuf, 75, qbuf.file, prompt, 3)
+  IF qbuf.file%0 = os.call.char & answ ~= (ctl&'U') THEN $(
+    LET v = getvec(80 / bytesperword)
+    LET i = 0
+    $( LET c = qbuf.file%i
+       IF c = ch.line THEN BREAK
+       i := i + 1; v%i := c $) REPEAT
+    v%0 := i
+    ws.os.call(v); freevec(v)
+    cmdinternal.unwindline() // reclaim question line so question doesn't
+                             // appear twice
+    GOTO retry.after.os.call $)
+  RESULTIS answ $)
+
+LET request.helplevel() BE $(
+  // this does the whole job
+  LET v = getvec(3 * 10)
+  LET v2= VEC 2  // dud answer buffer
+  LET inbuf, answ = getvec(80/bytesperword), ?
+  cmd.init(v);
+  message("HELP LEVELS:*n")
+  cmd.simple(1, "  3  all  menus and explanations displayed*n")
+  cmd.simple(1, "  2  main editing menu (1-control-char commands) suppressed*n")
+  cmd.simple(1, "  1  prefix menus (2-character commands) also suppressed*n")
+  cmd.simple(1, "  0  command explanations (including this) also suppressed*n")
+  cmd.simple(0, "Current Help Level is %N*N", helplevel)
+  v2%0 := ch.line
+  answ := cmd.query(inbuf, 70, v2, "Enter SPACE or new help level (0, 1, 2 or 3): ", 2)
+  IF '0' <= answ & answ <= '3' THEN helplevel := answ - '0'
+  cmd.finish(); freevec(v); freevec(inbuf) $)
+
+LET pop.up.menu(mes1, mes2, mes3, menu) = VALOF $(
+  // Used by any long command sequence, eg ^Q, ^O, ^P, ^K, ^J
+  // mes1 2 and 3 are string messages for line 1, menu is a routine that
+  // calls cmd.simple.
+  // This routine handles all the mess concerned with waiting for a key.
+  // It's value is the resulting character.
+  // At help mode 0 or 1 a '?' can be used to get the menu
+  // narrow.flip.char may be spliced in to allow a narrow screen to show
+  //  the whole menu.
+  LET c, reply = ?, ?
+  IF sys.keywait(60) THEN RESULTIS sys.rdch()
+  message(mes1)
+  reply := sys.keywait(360)
+  IF (~reply) & helplevel <= 1 THEN message(mes2)
+  TEST (~reply) & helplevel >= 2 THEN c := show.menu(mes3, menu)
+  ELSE $(
+    l: c := sys.rdch()
+    IF c = narrow.flip.char THEN $( new.narrow.offset()
+      scr.dolineupdates(); GOTO l $)
+    IF c = '?' | c = '/' THEN c := show.menu(mes3, menu) $)
+  scr.updateline(0, "*n", 1, cmdline)
+  RESULTIS c $)
+
+AND show.menu(mes3, menu) = VALOF $(
+  LET c = ?
+  LET v = getvec(3 * 20) // up to 19 lines allowed, arbitrary
+  cmd.init(v); menu()
+  l: message(mes3)
+  c := sys.rdch()
+  IF c = narrow.flip.char THEN $( new.narrow.offset(); GOTO l $)
+  cmd.finish(); freevec(v)
+  scr.dolineupdates()  // sledgehammer solution to screen garbage feature
+  RESULTIS c $)
+
+LET cmd.query.numeric(menu, prompt) = VALOF $(
+  // prints menu and gets a numeric reply.
+  // = terminating key, numeric answer in result2
+  LET v = getvec(20 * 3)
+  LET answ = 0
+  LET inbuf = getvec(80/bytesperword)
+  cmd.init(v)
+  menu()
+  answ := cmd.query(inbuf, 78, qbuf.line, prompt, 1)
+  cmd.finish(); freevec(inbuf); freevec(v)
+  result2 := 0
+  $( LET i = 0
+     $( LET c = qbuf.line%i
+        i := i + 1; IF c = ch.line THEN BREAK
+        result2 := result2 * 10 + c - '0' $) REPEAT $)
+  RESULTIS answ $)
+
+LET build.tabline() BE $(
+  // create the rulerbuf for display
+  IF right.margin > 240 THEN right.margin := 240
+  IF right.margin < 1 THEN right.margin := 1
+  IF left.margin >= right.margin THEN left.margin := right.margin - 1
+  IF left.margin <0 THEN left.margin := 0
+  text.update.info := text.update.info | 8
+  FOR i = 0 TO left.margin DO rulerbuf%i := ' '
+  FOR i = left.margin TO right.margin DO rulerbuf%i := '-'
+  FOR i = left.margin TO right.margin DO
+    IF tabbuf%i = '!' | tabbuf%i = '#' THEN rulerbuf%i := tabbuf%i
+  IF ~t.marrel THEN $(
+    rulerbuf%left.margin := 'L'
+    rulerbuf%right.margin := 'R' $)
+  IF t.tabindent THEN rulerbuf%0 := '>'
+  rulerbuf%(right.margin + 1) := ch.line $)
+
+LET log.writef(form, a1, a2, a3, a4, a5, a6) BE TEST form ~= 0 THEN $(
+  // write to log.
+  // the data strucure hanging off log.dat is a linked list of getvec(1)s.
+  // !0 of each points to the next,
+  // !1 of each points to a getvec'd string
+  // No-one else accesses this structure except this routine
+  // If we run out of memory, we crash.
+  LET v = getvec(255)
+  LET v2, v3 = ?, ?
+  formf(v, 1, 250, form, a1, a2, a3, a4); v%0 := formptr - 1
+  v2 := getvec(2 + v%0 / bytesperword)
+  formf(v2, 1, v%0 + 1, "%s", v); v2%0 := formptr - 1
+  v3 := getvec(1)
+  v3!0 := log.dat; v3!1 := v2; log.dat := v3; freevec(v) $)
+ ELSE $( // output the whole lot to the current output stream
+  LET rptr, p = 0, ?
+  $( IF log.dat = 0 THEN BREAK // first we reverse the list
+     p := log.dat; log.dat := p!0; p!0 := rptr; rptr := p $) REPEAT
+  IF rptr ~= 0 THEN writes("*nEditor log:*n") // non-empty
+  $( IF rptr = 0 THEN BREAK
+     writes(rptr!1); freevec(rptr!1); p := rptr!0; freevec(rptr); rptr := p $) REPEAT $)
+
+

@@ -1,0 +1,285 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+                  ######   ########  ##    ##  ######
+                 ########  ########  ###   ##  #######
+                 ##        ##        ####  ##  ##    ##
+                 #######   ######    ## ## ##  ##    ##
+                       ##  ##        ##  ####  ##    ##
+                       ##  ##        ##  ####  ##    ##
+                 ########  ########  ##   ###  #######
+                  ######   ########  ##    ##  ######
+
+************************************************************************
+**    Authors: Adrian Aylward & Brian Knight      September 1979      **
+**             (and Gray Girling                  February  1981)     **
+***********************************************************************/
+
+
+
+SECTION "SEND"
+
+GET "libhdr"
+GET "ringhdr"
+GET "BCPL.synfind"
+GET "BCPL.append"
+GET "MANHDR"
+
+LET start(user, from.file, terminator, about) BE
+ $( LET workfile = "T:Send"
+    LET savefile = "T:Send-message"
+    LET newstream = 0
+    LET savein = input()
+    LET instream = 0
+    LET outstream = output()
+    LET argv = VEC 50
+    LET datvec = VEC 14
+    LET term = "/**"
+    LET tlen = 2
+    LET workfile.created = FALSE
+    LET rc = 0
+    LET ch = ?
+    LET rdargs.string = "USER=USERS=INITIALS/A,FROM,TERM/K,ABOUT/K"
+
+    TEST user=0 THEN
+    IF rdargs(rdargs.string, argv, 50)=0 THEN
+    $(  writes("SEND: Command line does not fit the RDARGS string:*N")
+        writef("*"%S*"*N", rdargs.string)
+        rc := 20
+        stop(rc)
+    $)
+    ELSE
+    $(  argv!0 := user
+        argv!1 := from.file
+        argv!2 := terminator
+        argv!3 := about
+    $)
+
+    TEST argv!2=0 THEN
+       UNLESS argv!1=0 DO tlen := -1
+    ELSE
+    $( term := argv!2
+       tlen := term%0
+    $)
+
+    UNLESS argv!1=0 DO
+    $( instream := findinput(argv!1)
+       IF instream=0 DO
+       $(  writef("SEND: Can't open %S for input*N", argv!1)
+           rc := 20
+           GOTO exit
+       $)
+       selectinput(instream)
+    $)
+
+    newstream := findoutput(workfile)
+    IF newstream=0 DO
+    $(  writef("SEND: Can't open work file %S for output*N", workfile)
+        rc := 20
+        GOTO exit
+    $)
+
+    workfile.created := TRUE
+    mydatstring(datvec)
+    selectoutput(newstream)
+
+    $( LET t, ch = 1, ?
+       LET save = VEC 50
+       ch := rdch()
+       WHILE t<=tlen & compch(ch,term%t)=0 & ch\='*N' & ch\=0 DO
+       $( save%t := ch
+          t := t+1
+          ch := rdch()
+       $)
+       // *** temporarily - allow null (0) as a line terminator ***
+       // ***               aleviating the FM-TRIPOS append bug ***
+       IF t=tlen+1 & (ch='*N' | ch=0) BREAK
+       UNLESS t<=1 THEN writes("   ")
+       FOR j = 1 TO t-1 DO wrch(save%j)
+       IF ch=endstreamch THEN GOTO close
+       IF t<=1 THEN writes("   ")
+       wrch(ch)
+       $( IF testflags(1) GOTO broken
+          IF ch='*N' | ch=0 BREAK
+          ch := rdch()
+          IF ch=endstreamch THEN GOTO close
+          wrch(ch)
+       $) REPEAT
+    $) REPEAT
+
+close:
+    endwrite()
+    newstream := 0
+    selectoutput(outstream)
+    rc := deal.with.names(argv!0, send, workfile, datvec, argv!3)
+    GOTO exit
+
+broken:
+    selectoutput(outstream)
+    writes("****** BREAK: in SEND*N")
+    rc := 10
+
+exit:
+    synfind(0)     // clear translation buffers
+    UNLESS newstream=0 DO
+    $( selectoutput(newstream)
+       endwrite() $)
+    UNLESS instream=0 DO
+    $( selectinput(instream)
+       endread() $)
+    selectinput(savein)
+    selectoutput(outstream)
+    IF workfile.created THEN
+    TEST rc=0 THEN deleteobj(workfile) ELSE
+    writef("Message file retained in %S*N",
+            (0=renamefile(workfile, savefile) -> workfile, savefile))
+    TEST user=0 THEN stop(rc)  // i.e. not if callseged
+    ELSE IF rc=0 THEN result2:=0
+ $)
+
+
+
+
+AND puid.find(string, puid) =
+    (string%0=16 & gethex(string, puid, (8/bytesperword)) -> puid,
+        synfind(string, from.name.domain, 0))
+
+
+
+AND gethex(string, vect, vect.size) = VALOF
+$(  // This procedure writes the value represented in the string
+    // 'string' as a hexadecimal number into the vector 'vect' which
+    // is 'vect.size' words long.
+    // Returns TRUE unless either the hexadecimal value is too great
+    // to fit into 'vect' or there are non-hexadecimal characters in
+    // 'string'
+    LET vect.byte.size = vect.size*bytesperword*2
+    LET rc = (0 < string%0 <= vect.byte.size)
+    IF rc THEN
+    $(  LET chars = (string%0 > vect.byte.size -> vect.byte.size, string%0)
+        FOR word=0 TO vect.size-1 DO vect!word:=0
+        FOR j=1 TO chars DO
+        $(  LET sh= 4*((chars-j) REM (2*bytesperword))
+            LET o = vect.size-1-(chars-j)/(2*bytesperword)
+            string%j := capitalch(string%j)
+            vect!o := vect!o |
+            (('0'<=string%j<='9' -> string%j-'0', string%j-'A'+10) << sh)
+            rc := rc & ('A'<=capitalch(string%j)<='F' | '0'<=string%j<='9')
+        $)
+    $)
+    RESULTIS rc
+$)
+
+
+
+AND mydatstring(datvec) BE
+$(  LET time = datvec+5
+    LET day  = datvec+10
+    LET date = datvec+0
+    TEST datstring(datvec)=0 | date%0 = '<' THEN
+    $(  FOR i=0 TO 5 DO time%i := "??:??"%i
+        FOR i=0 TO 3 DO day%i  := "???"%i
+        FOR i=0 TO 9 DO date%i := "??-???-??"%i
+    $) ELSE
+    $(  time%0 := 5   //  (shorten time to just hour and mins)
+        day%0  := 3   //  (shorten day to three letter code)
+    $)
+$)
+
+
+
+AND deal.with.names(list, name.proc, arg1, arg2, arg3) = VALOF
+$(  LET i=0
+    LET listlen=list%0
+    LET rc = 0
+    WHILE i<=listlen & rc<=5 DO
+    $(  LET begining=i
+        LET name = VEC 30
+        i:=i+1
+        WHILE i-begining<30*bytesperword & i<=listlen &
+              list%i\='+' & list%i\=',' & list%i\='*S' DO
+        $(  name%(i-begining):=list%i
+            i:=i+1
+        $)
+        name%0:=i-begining-1
+        $(  LET rc1 = name.proc(name, arg1, arg2, arg3)
+            IF rc1 > rc THEN rc := rc1
+        $)
+    $)
+    RESULTIS rc
+$)
+
+
+
+AND send(user, extra.file, dat, about) = VALOF
+$(  // appends 'extra.file' to the end of 'base.file'
+    LET messagefile = "SYS:USERS.Message-0123456789ABCDEF"
+    MANIFEST $(  mf.start = 19  $)
+    LET receiver.puid = VEC 3
+    LET rc = 20
+    receiver.puid := puid.find(user, receiver.puid)
+    TEST receiver.puid=0 THEN
+    $(  writef("User %S unknown*N", user)
+        rc := 5
+    $) ELSE
+    $(  LET instream = findinput(extra.file)
+        FOR i=0 TO (8/bytesperword)-1 DO
+        FOR j=0 TO 2*bytesperword-1 DO
+        $(  LET hex = (receiver.puid!i >> ((2*bytesperword-1-j)*4)) & #XF
+            messagefile%(mf.start+(bytesperword*2)*i+j) :=
+            (hex<#XA -> '0'+hex, 'A'+hex-#XA)
+        $)
+        TEST instream=0 THEN
+        writef("SEND: Can't open %S for input*N", extra.file) ELSE
+        $(  LET savein = input()
+            LET appendout = append(messagefile)
+            selectinput(instream)
+            TEST appendout = 0 THEN
+            writef("SEND: Can't open %S for append*N", messagefile) ELSE
+            $(  LET saveout = output()
+                LET ch = rdch()
+                selectoutput(appendout)
+                write.header(dat, about)
+                WHILE ch~=endstreamch & ~testflags(1) DO
+                $(  wrch(ch)
+                    ch := rdch()
+                $)
+                rc := 0
+                endwrite()
+                selectoutput(saveout)
+                TEST ch=endstreamch THEN rc:=0 ELSE
+                $(  writef("****** BREAK: in SEND to %S*N", user)
+                    rc := 10
+                $)
+            $)
+            endread()
+            selectinput(savein)
+        $)
+    $)
+    RESULTIS rc
+$)
+
+
+
+AND write.header(datvec, about) BE
+$(  LET uidsetlist = rootnode ! rtn.info ! rtninfo.ring ! ri.uidset
+    LET sender.name = "NOBODY"
+    writef("++ %S %S %S ", datvec+5, datvec+10, datvec)
+    UNLESS uidsetlist=0 THEN
+    sender.name := synfind((uidsetlist+1)+3*(8/bytesperword),
+                           to.name.domain, "UNKNOWN USER")
+    writes(sender.name)
+    IF about~=0 THEN
+    $(  wrch(':')
+        FOR i=0 TO 4 - (sender.name%0 - (sender.name%0/4)*4) DO wrch('*S')
+        writes(about)
+    $)
+    newline()
+$)
+
+
+
+
+

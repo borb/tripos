@@ -1,0 +1,32 @@
+SEND USER=USERS=INITIALS,(from=stream|/k),CC/K,BCC/K,ABOUT=SUBJECT/K,NONE/S
+[,file/k]                                           Send mail to a list of users
+
+
+        The user argument is a list of recipients, separated by spaces or commas
+Each recipient may be the initials of a user known by the MAP service, or a
+distribution list. MAP is tried first, but if that fails, then the sender's own
+distribution list and the system disitribution list are scanned.
+
+    If no user list is given, then the sender is prompted for the various
+possible headers, and then types the body of the message.
+
+    CC and BCC are Carbon Copies and Blind Carbon Copies.
+
+    If no subject field is given, the user will be prompted until a string is
+given. If this consists of spaces, it will be discarded.
+
+    NONE tells the program not to read from the terminal even if no file is
+given.
+
+[    The TRIPOS COMMAND version allows a file title to be specified, in which
+  case that file is sent.  [ The testing vesrions allow pasing the file by puid
+    or passing a stream, i.e. a stream is read into a file, and the file sent by
+    puid ]
+  Note that as immutable files are not yet implemented, the file should be
+  deleted
+  or not modified.
+]
+    Note that users may not see the mail immediately as the MAILSERVER caches
+the master tables.
+
+

@@ -1,0 +1,847 @@
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*************************************************************************
+*  (C) Copyright 1981  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*                             H  E  L  P                                *
+*                                                                       *
+*************************************************************************
+**  C  Gray  Girling      COMPUTER LAB,  CAMBRIDGE           21.06.81  **
+*************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*/
+
+
+
+SECTION "Help"
+
+GET "libhdr"
+GET "clihdr"
+GET "TERMHDR"
+
+
+STATIC    // not GLOBAL - so HELP can be CALLSEG'd
+$(  standard.help  = TRUE    // STATIC incase CALLSEGED
+    private.output = FALSE   // set when T commands cannot be allowed
+    terminal.out   = 0       // stream to the terminal
+    tracing        = FALSE   // TRUE when tracing info needed
+    broken         = FALSE   // TRUE when a BREAK B has been pressed
+    page.len       = 21      // length of HELP page
+    page.width     = 80      // Width of page
+    main.help.dir  = 0       // String: giving name of the help directory
+$)
+
+
+
+// although HELP mustn't use any globals it is important that it should
+// reference a high on, otherwise things that it CALLSEGs won't have the
+// globals they need to run.
+
+GLOBAL $( max.global: 350 $)
+
+
+
+
+MANIFEST
+$(  argsize  = 19+100/bytesperword   // store for help arguments
+    max.args = 15                    // maximum number of HELP items for request
+    max.blank.lines = 5              // longest sequence of '*N's printed
+$)
+
+
+
+
+LET start(vect, helpdir, tofile, opt) BE
+$(  LET arg = VEC argsize
+    //  arg ! 0             holds a bit map of keys that have been
+    //                      successfully matched in help files so far.
+    //  arg + 1             holds vector of 'n' keys
+    //  arg!(max.args+1)    holds name of an alternative HELP directory
+    //  arg!(max.args+2)    holds name of optional output stream
+    LET saveout = output()
+    $(  // set up size of the terminal screen - this code is not TRIPOS portable
+        LET type =ROOTNODE ! RTN.TASKTAB ! CONSOLETASK ! TCB.GBASE ! TERM.GLOBAL
+        UNLESS type=0
+        $(  IF 40<=type!term.width<=150 THEN page.width := type!term.width
+            IF 10<=type!term.depth<=80  THEN page.len   := type!term.depth-3
+        $)
+    $)
+    max.global := max.global  // to ensure we reference the highest global!
+    terminal.out := findoutput("**")
+    selectoutput(terminal.out)
+    IF VALOF
+    $(  LET ans = FALSE
+        TEST vect=0 THEN   // not CALLSEGed
+            TEST 0=rdargs(",,,,,,,,,,,,,,,#HELPDIR/K,#TO/K,#TRACE/S",
+                          arg+1, argsize-1)
+            THEN writes("Arguments invalid for HELP*N") ELSE ans:=TRUE
+        ELSE
+        $(  // HELP has been CALLSEGed
+            // VECT contains vector of up to VECT!0 help keywords from
+            // VECT!1 to VECT!(VECT!0)
+            // HELPDIR is a string naming an alternate HELP directory
+            // TOFILE is a string naming an alternative output file
+            // OPT is a bit array of options:
+            //     1 & (OPT>>0)   -  TRACE: route to files is to be listed
+            //     1 & (OPT>>1)   -  STAND: logging is to be allowed
+            arg!0 := 0          // initially all keys are unmatched
+            FOR i=1 TO max.args DO arg!i := (i>vect!0 ->0, vect!i)
+            arg!(max.args+1) := helpdir
+            arg!(max.args+2) := tofile
+            arg!(max.args+3) := ( ((opt & #X01)=0) -> 0, 42)
+            private.output := TRUE
+            standard.help := ((opt & #X02) ~= 0)
+            ans := TRUE
+        $)
+        RESULTIS ans
+    $) THEN
+    $(  LET default.help.dir = "SYS:HELP"
+        LET to.file = (arg+1)!(max.args+1)
+        LET list = (to.file=0 -> 0, findoutput(to.file))
+        LET no.of.items = 0
+        // reset the TRIPOS break flags (B and D):
+        testflags(5)
+        main.help.dir := ((arg+1)!max.args=0 ->
+                           default.help.dir, (arg+1)!max.args)
+        tracing := ((arg+1)!(max.args+2) \= 0)
+        standard.help := standard.help & ((arg+1)!max.args=0)
+        IF to.file~=0 THEN private.output := TRUE
+        WHILE no.of.items<=max.args & (arg+1)!no.of.items~=0 DO
+        no.of.items:=no.of.items+1
+        IF no.of.items=0 THEN
+        $(  arg!1 := "HELP"
+            no.of.items := 1
+        $)
+        wrch('*C')    // make sure output starts at front of the line!
+        TEST list=0 & to.file~=0 THEN
+        toterm("HELP: can't open listing file *"%S*"*N",to.file) ELSE
+        $(  LET saveout = output()
+            IF list~=0 THEN selectoutput(list)
+            UNLESS execute.help.directory(main.help.dir, no.of.items, arg) THEN
+            log(no.of.items,arg)
+            IF list~=0 THEN
+            $(  endwrite()
+                selectoutput(saveout)
+            $)
+        $)
+    $)
+    endwrite()
+    selectoutput(saveout)
+$)
+
+
+
+
+
+
+
+AND execute.help.directory(dir, n, arg) = VALOF
+$(  LET old.dir = currentdir
+    LET found = FALSE
+    currentdir := locatedir(dir)
+    TEST currentdir=0 THEN
+    toterm("HELP: can't find HELP directory *"%S*"*N",dir) ELSE
+    $(  LET file=0
+        LET the.match = 1<<0    // bit map indicating which key word matched
+        LET findinproc = VEC 1     // vector of procedures
+        LET procno = 0             // pointer into FINDPROC
+        LET try.initial.file.name(f.name) = VALOF
+        $(  LET file = findinput(f.name)
+            IF file=0 THEN
+            $(  LET last.ch = f.name%(f.name%0)
+                IF capitalch(last.ch) = 'S' THEN
+                $(  f.name%0 := f.name%0-1
+                    file := findinput(f.name)
+                    IF file=0 THEN f.name%0 := f.name%0+1
+                $)
+            $)
+            RESULTIS file
+        $)
+        LET try.default.file.name(f.name) = VALOF
+        // Default already tested if file name is only 1 character long
+        TEST f.name%0<=1 THEN RESULTIS 0 ELSE
+        $(  LET len = f.name%0      // try file names which are just initials
+            LET file = ?
+            f.name%0 := 1
+            file := findinput(f.name)
+            IF file=0 THEN f.name%0 := len
+            RESULTIS file
+        $)
+        findinproc!0 := try.initial.file.name
+        findinproc!1 := try.default.file.name
+        IF tracing THEN toterm("HELP: using directory %S*N",dir)
+//      toterm("EXECUTE HELP: keywords are:*N")
+//      FOR i=1 TO n DO
+//           toterm("EXECUTE HELP: No. %I2 *"%S*" %S*N", i,
+//                  (arg!i=0->"<absent>", arg!i),
+//                  (((arg!0>>(i-1))&1)=0 ->"","matched") )
+        WHILE ~found & procno<=1 & NOT broken DO
+        $(  LET i=1
+            WHILE ~found & i<=n DO
+            $(  LET thisarg = arg!i
+                LET old.match = arg!0
+                UNLESS thisarg%0 > 30 | ((old.match & the.match)~=0) THEN
+                $(  LET f.name = VEC 16
+                    FOR i=1 TO thisarg%0 DO f.name%i := file.ch(thisarg%i)
+                    f.name%0 := thisarg%0
+//                  toterm("EXECUTE HELP: trying file name *"%S*"*N", f.name)
+                    file := (findinproc!procno)(f.name)
+                    arg!0 := arg!0 | the.match
+                    IF file~=0 THEN
+                    $(  IF tracing THEN
+                        toterm("HELP: using help file *"%S*"*N", f.name)
+                        found := do.help(file, '**', endstreamch, FALSE, n, arg)
+                        IF tracing & ~found THEN
+                        toterm("HELP: no help from help file *"%S*"*N", f.name)
+                    $)
+                    UNLESS found THEN arg!0 := old.match
+                $)
+                the.match := the.match<<1
+                i:=i+1
+            $)
+            procno := procno + 1
+        $)
+        UNLESS currentdir=old.dir DO freeobj(currentdir)
+    $)
+    currentdir := old.dir
+    RESULTIS found | broken
+$)
+
+
+
+AND file.ch(ch) =
+    // only certain characters are allowed in file names
+    // change those that are not into the '-' character
+    // it is particularly important in the case of strings
+    // which could be opened as some other kind of stream
+    // name: e.g.  "mp:" or "help.rat"
+    ( 'A' <= capitalch(ch) <= 'Z' -> ch,
+    ( '0' <= ch <= '9' -> ch, '-'))
+
+
+
+
+AND do.help(help, helpch, termch, all, n, args) = VALOF
+$(  LET savein = input()
+    LET this.file = (0=help)
+    LET found = FALSE
+    LET help.key.found = FALSE    // TRUE if help key (*?) found in the file
+    LET no.good = FALSE           // TRUE if last match was for nothing (#N)
+    LET rdargs.string =
+        "#KEYWORD,#FILE,#H/s,#T/s,#I/s,#C/s,#N/s,#TCH/k,#HCH/k,#FULL/s,../s"
+    MANIFEST
+    $(  l.key   = 0                 // string to be matched (or + or *)
+        l.file  = 1                 // file to be executed if match
+        l.h     = 2                 // execute as a help file
+        l.t     = 3                 // execute by T ing file
+        l.i     = 4                 // execute as an interactive help file
+        l.c     = 5                 // execute file with CALLSEG
+        l.n     = 6                 // succeed match but fail file
+        l.tch   = 7                 // terminating 'end of file' character
+        l.hch   = 8                 // alternative help character
+        l.full  = 9                 // in help file do not stop at 1st match
+        l.cont  = 10                // ignore this match
+        linesize= 11+60/bytesperword   // RDARGS space for HELP line
+    $)
+    LET line = getvec(linesize)
+    TEST line=0 THEN toterm("HELP: No memory!*N") ELSE
+    $(  UNLESS this.file THEN selectinput(help)
+        WHILE (all | ~found) & \broken & VALOF
+        $(  // find the next line begining with HELPCH and parse it
+            // return TRUE if such a line has been found before
+            // the end of the file has been reached or the user pressed
+            // BREAK
+            LET ch=rdch()
+            LET ans=TRUE
+            WHILE ch~=helpch & ch~=termch & ch~=endstreamch DO
+            $(  WHILE ch~='*N' & ch~='*E' & ch~=endstreamch & ch~='*P' DO
+                ch:=rdch()
+                IF test.break() THEN ans:=FALSE  // we havn't made it!
+                UNLESS ch=endstreamch THEN ch:=rdch()
+            $)
+            TEST ans THEN ans := (ch~=termch & ch~=endstreamch) ELSE
+            found := TRUE  // don't complain if we've been broken
+            IF ans THEN
+            IF 0=rdargs(rdargs.string, line, linesize) THEN
+            $(  ans := FALSE
+                toterm("HELP: Line does not conform to RDARGS string *N*
+                       **"%S*"*N", rdargs.string)
+                TEST line!l.key=0 THEN toterm("(Empty line?)*N") ELSE
+                toterm("(Line starts *"%S*")*N",line!l.key)
+            $)
+            RESULTIS ans & (all | ~found)
+        $) DO
+        UNLESS line!l.key=0 THEN
+        $(  LET i=0
+            LET match = FALSE
+            LET caught = FALSE
+            LET n.termch =
+                (line!l.tch=0 -> ((line!l.file=0)->helpch, endstreamch),
+                 (line!l.tch%0=0 -> endstreamch, line!l.tch%1))
+            LET n.helpch = (line!l.hch=0 -> '**',
+                            line!l.hch%0=0 -> endstreamch, line!l.hch%1)
+            LET n.all = (line!l.full~=0)
+            LET h.help = (line!l.h~=0)        // help file help
+            LET t.help = (line!l.t~=0)        // T file help
+            LET i.help = (line!l.i~=0)        // interactive help
+            LET c.help = (line!l.c~=0)        // CALLSEG help
+            LET no.help = (line!l.n~=0)       // no help
+            LET ignore.help = (line!l.cont~=0)// continue help
+            help.key.found := TRUE
+            no.good := FALSE
+            WHILE i<=n-1 & ~caught DO
+            $(  LET matched.set = args!0    // set of keys matched so far
+                match := match.str(line!l.key, found, i, n, args)
+                IF match THEN
+                $(  // execute command denoted by RDARGS parameters:
+                    caught := TRUE
+//                  toterm("DO HELP: #H=%C #T=%C #I=%C #C=%C #N=%C ..=%C  *"%S*"*N",
+//                         (h.help -> 'T','F'),
+//                         (t.help -> 'T','F'),
+//                         (i.help -> 'T','F'),
+//                         (c.help -> 'T','F'),
+//                         (no.help -> 'T','F'),
+//                         (ignore.help -> 'T','F'),
+//                         line!l.key)
+                    IF line!l.file=0 | i.help THEN skipterm(helpch)
+                    // skip over other 'labels'
+                    match := ~ignore.help
+                    no.good := no.help
+                    // this help file will fail if this is the last match
+                    // and no.help is set
+                    TEST h.help THEN
+                    UNLESS
+                    find.help(line!l.file, n.helpch, n.termch, n.all, n,args) THEN
+                    $(  args!0 := matched.set     // restore old set
+                        match := FALSE
+                    $) ELSE
+                    TEST t.help THEN t.command(line!l.file, n.termch) ELSE
+                    TEST i.help THEN
+                    $(  LET saveout=output()
+                        selectoutput(terminal.out)
+                        type(0, (line!l.file=0 -> n.helpch, helpch))
+                        selectoutput(saveout)
+                        IF line!l.file=0 & helpch~=n.helpch THEN skipterm(helpch)
+                        interactive.help(line!l.file, n.helpch, n.termch,
+                                         n.all, n, args)
+                    $) ELSE
+                    TEST c.help THEN
+                    UNLESS call.command(line!l.file, n.all, n,args) THEN
+                    $(  args!0 := matched.set       // restore old set
+                        match := FALSE
+                    $) ELSE
+                    UNLESS no.help THEN
+                    type(line!l.file, n.termch)
+                $)
+                found := found | match
+                i:=i+1
+            $)
+        $)
+//      toterm("FOUND = %C*N", (found->'T','F'))
+        IF NOT help.key.found & NOT broken THEN
+        toterm("HELP: no help key (*"%C*") found in HELP file*N", helpch)
+        UNLESS this.file THEN
+        $(  UNLESS cli.currentinput=input() THEN endread()
+            selectinput(savein)
+        $)
+        freevec(line)
+    $)
+    RESULTIS found & ~no.good
+$)
+
+
+
+
+AND match.str(key, found, i, n, request.vec) = VALOF
+$(  LET request = (request.vec+1)!i
+    LET set = request.vec!0           // bit map of matched items
+    LET ans = ?
+    LET request.matched = TRUE
+    LET key.len = key%0
+    // strip trailing blanks off key for comparason
+    WHILE key%(key%0) = '*S' DO key%0 := key%0-1  // assumes '*S'~=0
+    ans := (0=compstring(key, request))
+    IF ~ans THEN
+    $(  LET lastch = request%(request%0)
+        IF lastch='s' | lastch='S' THEN
+        $(  request%0 := request%0 - 1
+            ans := (0=compstring(key, request))
+            request%0 := request%0 + 1
+        $)
+        UNLESS ans THEN request.matched := FALSE
+        // put trailing blanks back before checking for + or *
+        key%0 := key.len
+        IF ~ans THEN
+        TEST 0=compstring(key,"+") THEN
+        $(  // "+" matches if all keys have already been matched
+            ans := TRUE
+            FOR i=0 TO n-1 DO
+            $(  ans:=ans & ((set & (1<<i))~=0)
+//              writef("%S - %Smatched*N",request.vec!(i+1),
+//                      (((set & (1<<i))~=0) -> "", "not ") )
+            $)
+        $) ELSE
+        IF ~found THEN
+        ans:=(0=compstring(key,"**"))  // * matches everything
+    $)
+    IF request.matched THEN request.vec!0 := set | (1<<i)
+//  toterm("MATCH:  '%S' %S= '%S'*N",key,(ans->"","~"),request)
+    IF tracing & ans THEN
+    toterm("HELP: *"%S*" key matched with *"%S*"*N", request, key)
+    RESULTIS ans
+$)
+
+
+
+
+AND skipterm(termch) BE
+$(  LET ch=rdch()
+    WHILE ch~=endstreamch & ch=termch DO
+    $(  ch:=rdch() REPEATUNTIL ch='*N' | ch=endstreamch
+        ch:=rdch()
+    $)
+    unrdch()
+$)
+
+
+
+
+
+AND findhelpinput(file) = VALOF
+TEST file%0=0 THEN RESULTIS 0 ELSE
+$(  // To reduce the number of files needed short HELP files are provided
+    // in the default HELP files A, B, C .. &c In order that HELP files
+    // may refer to a file without knowing whether it is in one of these
+    // default files or not both are tried:
+    LET ans = findinput(file)
+    IF ans=0 & file%0>1 THEN
+    $(  LET len = file%0
+        LET i=len
+        WHILE i>=1 & file%i\='.' & file%i\=':' DO i:=i-1
+        file%0 := ((file%i='.' | file%i=':') & i\=len -> i+1, 1)
+        // get file name with just FILEs initial letter
+        ans := findinput(file)
+        // do not restore string - leave for subsequent printing out
+    $)
+    RESULTIS ans
+$)
+
+
+
+
+
+
+
+AND find.help(help.file, helpch, termch, all, n, args) = VALOF
+TEST help.file~=0 & help.file%0>0 & help.file%1='@' THEN
+$(  FOR i=2 TO help.file%0 DO help.file%(i-1) := help.file%i
+    help.file%0 := help.file%0-1
+    // i.e. remove initial '@' character
+    IF help.file%0=0 THEN help.file := main.help.dir
+    RESULTIS execute.help.directory(help.file, n, args)
+$) ELSE
+$(  LET this.file = (help.file = 0)
+    LET help = (this.file -> 0, findhelpinput(help.file))
+    LET ans = FALSE
+    IF tracing THEN
+    toterm("HELP: using *"%S*"*N",
+           (this.file->"<same file>",help.file))
+//  toterm("   FULL = %C   TCH = %C   HCH = %C*N",
+//         (all -> 'T','F'), termch, helpch)
+    TEST ~this.file & help=0 THEN
+    toterm("HELP: Can't open HELP file *"%S*"*N",help.file) ELSE
+    $(  ans:= do.help(help, helpch, termch, all, n, args)
+        IF tracing & ~ans THEN
+        toterm("HELP: no help from *"%S*"*N",
+               (help.file=0 -> "<same file>", help.file))
+    $)
+    RESULTIS ans
+$)
+
+
+
+
+AND t.command(file.name, termch) BE
+TEST private.output THEN
+$(  toterm("HELP cannot do T command for help on this topic in this mode*N")
+    writes("****** HELP: execute the following in command mode*N")
+    type(file.name, termch)
+$) ELSE
+$(  // can't enforce the TERMCH
+    LET t.file = (0=file.name -> input(),findhelpinput(file.name))
+    TEST t.file=0 THEN
+    toterm("HELP: can't open T file *"%S*"*N", file.name) ELSE
+    $(  IF tracing THEN
+        toterm("HELP: T ing *"%S*"*N", (file.name=0 ->"<same file>", file.name))
+        UNLESS cli.currentinput=cli.standardinput THEN
+        $(  selectinput(cli.currentinput)
+            endread()
+        $)
+        cli.currentinput := t.file
+        testflags(2)   // Clear BREAK C before T ing the file
+    $)
+$)
+
+
+
+AND interactive.help(file, helpch, termch, all, n, args) BE
+UNLESS broken THEN
+$(  LET savein=input()
+    LET rdargs.bad = ?
+    standard.help := FALSE
+    selectinput(findinput("**"))
+    toterm("? *E")
+    rdargs.bad := (0=rdargs(",,,,,,,,,,,,,,,",args+1,argsize-1))
+    args!0 := 0    // clear set of matched items to zero
+    endread()
+    selectinput(savein)
+    TEST rdargs.bad THEN
+    writes("HELP: too many qualifiers*N") ELSE
+    IF args!1~=0 THEN
+    $(  LET no.of.items = 0
+        WHILE no.of.items<=max.args & (args+1)!no.of.items~=0 DO
+        no.of.items:=no.of.items+1
+        outch(0)    // clean page for output
+        find.help(file, helpch, termch, all, no.of.items, args)
+    $)
+$)
+
+
+
+
+
+AND call.command(file, all, n, args) = VALOF
+TEST file=0 THEN
+$(  toterm("HELP: no file to callseg with #C*N")
+    RESULTIS FALSE
+$) ELSE
+$(  LET rc = TRUE
+    IF tracing THEN toterm("HELP: callseging file *"%S*"*N", file)
+//  toterm("CALL: matched set = #X%X4*N", args!0)
+    result2 := 0
+    rc := callseg(file, args, n, all)
+//  $(  LET r2=result2
+//      toterm("CALL: after callseg result2 = %N, matched set = #X%X4*N",
+//             r2, args!0)
+//      result2 := r2
+//  $)
+    UNLESS result2=TRUE | result2=FALSE THEN
+    $(  // if an error has occured during CALLSEG result2 will not
+        // be one of the expected results (i.e. TRUE or FALSE) but
+        // will be a system error return code!
+        toterm("HELP: failed to load #C file *"%S*" - ", file)
+        fault(result2)
+        rc := FALSE
+    $)
+    RESULTIS rc
+$)
+
+
+
+
+AND type(file.name, termch) BE
+$(  LET this.file = (0=file.name)
+    LET message.file = (this.file -> 0,findhelpinput(file.name))
+    TEST ~this.file & message.file=0 THEN
+    toterm("HELP: Can't open TYPE file *"%S*"*N", file.name) ELSE
+    $(  LET savein = input()
+        LET ch = ?
+        IF tracing THEN
+        toterm("HELP: typing file *"%S*"*N",
+               (this.file -> "<same file>", file.name))
+        UNLESS this.file THEN selectinput(message.file)
+        ch := rdch()
+//      toterm("TYPE: termch = '%C'*N", termch)
+        WHILE ch~=endstreamch & ch~=termch & ~test.break() DO
+        $(  WHILE ch~='*N' & ch~=endstreamch DO ch := outch(ch)
+            UNLESS ch=endstreamch THEN ch:=outch(ch)
+//          TEST ch~=endstreamch & ch~='*N' THEN
+//          toterm("First CH is '%C'*N", ch) ELSE
+//          toterm("First CH is '%C'*N",
+//                 (ch='*N' -> "**N", "endstreamch"))
+        $)
+//      toterm("TYPE finished ch='%S'*N",
+//             (ch=termch -> "termch", ch=endstreamch -> "endstreamch",
+//              ch='*N' -> "**N", "other"))
+        IF ch=termch THEN unrdch()
+        UNLESS this.file THEN
+        $(  endread()
+            selectinput(savein)
+        $)
+    $)
+$)
+
+
+
+AND outch(ch) = VALOF
+$(  // This routine outputs a character and reads another in
+    // Page waits to the terminal taking taking account of the following:
+    //     a) lines too long for screen width
+    //     b) the length of the screen in lines
+    //     c) the characters '*N', '*C', '*P' and '*T'
+    // Modified Sept 1981 by Piete Brooks to generalise a) & b) and do c) '*T'
+    STATIC
+    $(  lineno          = 0
+        blank.lines     = 0
+        line.pos        = 0
+    $)
+
+    LET wrc(ch) = VALOF
+    $(  LET res = 0
+        IF line.pos >= page.width THEN res := outch('*N')
+        wrch(ch)
+        line.pos := line.pos+1
+        blank.lines := 0
+        RESULTIS res
+    $)
+
+    TEST ch=0
+    THEN lineno, blank.lines, line.pos := 0, 0, 0
+    ELSE TEST output()=terminal.out
+    $(  SWITCHON ch INTO
+        $(  DEFAULT:
+                ch := wrc(ch)
+                UNLESS ch=0 RESULTIS ch
+                ENDCASE
+            CASE '*T':
+                ch := wrc(' ') REPEATUNTIL line.pos REM 8 = 0
+                UNLESS ch=0 RESULTIS ch
+                ENDCASE
+            CASE '*N':
+                line.pos := 0
+                UNLESS blank.lines > max.blank.lines THEN
+                TEST lineno > page.len THEN
+                $(  LET savein = input()
+                    selectinput(findinput("**"))
+                    wrch('*E')
+                    ch := rdch() REPEATUNTIL ch='*N' | ch=endstreamch
+                    endread()
+                    selectinput(savein)
+                    lineno := 0
+                $) ELSE
+                $(  wrch(ch)
+                    lineno := lineno + 1
+                    blank.lines := blank.lines + 1
+                $)
+        $)
+        ch := rdch()
+        IF ch='*C' | ch='*P' THEN ch:='*N'
+    $) ELSE
+    $(  wrch(ch)
+        ch:=rdch()      // output stream is to a file
+    $)
+    RESULTIS ch
+$)
+
+
+
+
+AND test.break() = VALOF
+$(  LET brk = FALSE
+    TEST testflags(1) THEN
+    $(  toterm("****** BREAK: in HELP*N")
+        brk := TRUE
+        broken := TRUE
+    $) ELSE
+    IF testflags(4) THEN
+    $(  toterm("****** BREAK D: in HELP*N")
+        brk := TRUE
+    $)
+    RESULTIS brk
+$)
+
+
+
+
+AND toterm(format, a1, a2, a3, a4, a5, a6, a7) BE
+$(  LET saveout=output()
+    selectoutput(terminal.out)
+    writef(format, a1, a2, a3, a4, a5, a6, a7)
+    selectoutput(saveout)
+$)
+
+
+
+
+/*<LOG
+AND log(n, arg) BE
+UNLESS n=0 THEN
+$(  LET help.log = "BJK"
+//  "FF020A22DD4D94CA"  // BJK
+    LET saveout = output()
+    selectoutput(terminal.out)
+    writes("HELP has no information on this topic*N")
+//  writef("LOG: standard help = %C*N",
+//        (standard.help -> 'T','F'))
+    TEST standard.help & user.wants.to.log() THEN
+    $(  LET string = getvec(#XFF)
+        LET concat(string, s) = VALOF
+        $(  LET ans = (s%0+string%0 <= #XFF)
+            IF ans THEN
+            $(  FOR i=1 TO s%0 DO string%(string%0+i):=s%i
+                string%0 := string%0 + s%0
+            $)
+            RESULTIS ans
+        $)
+        LET argno = 1
+        LET send.vec = VEC 8
+        IF string\=0 THEN
+        $(  string%0 := 0
+            concat(string, "No HELP on *"")
+            WHILE argno<=n & concat(string, (arg!argno=0 -> "", arg!argno)) DO
+            $(  UNLESS argno=n THEN concat(string, " ")
+                argno:=argno+1
+            $)
+            concat(string, "*"")
+            send.vec!0 := help.log    // who to
+            send.vec!1 := 0           // from file
+            send.vec!2 := "HELP"      // "about" string
+            send.vec!3 := string      // immediate message
+            send.vec!4 := 0           // carbon copies
+            send.vec!5 := 0           // blind carbon copies
+            send.vec!6 := 0           // to whom to reply
+            send.vec!7 := 4           // "bits" (for access status)
+            send.vec!8 := -1          // ?????
+            callseg("SYS:L.RSEND", 2, send.vec)
+            IF result2\=0 THEN
+            writes("Your request has been recorded*N")
+        $)
+    $) ELSE
+        writes("(Use HELP TROUBLE to report any trouble with HELP)*N")
+    selectoutput(saveout)
+$)
+
+
+
+/*/   // if not that log procedure then this one:
+
+
+
+AND log(n, arg) BE
+UNLESS n=0 THEN
+$(  //LET help.temp = "T:HELP-text"
+    LET help.log = "SYS:HELP.pending"
+    LET saveout = output()
+    selectoutput(terminal.out)
+    toterm("HELP has no information on this topic*N")
+//  toterm("LOG: standard help = %C*N", (standard.help -> 'T','F'))
+    IF standard.help & user.wants.to.log() THEN
+    $(  //LET in = findinput(help.log)
+        //LET out = findoutput(help.temp)
+        LET out = findappend(help.log)
+        LET log.used = FALSE
+        TEST out=0 THEN
+//        toterm("HELP: Can't open work file *"%S*" for append*N", help.temp) ELSE
+        toterm("HELP: Can't open work file *"%S*" for append*N", help.log) ELSE
+        $(  LET saveoutput=output()
+            selectoutput(out)
+//            TEST in=0 THEN
+//            writes("*****NHELP is pending on:*N*N") ELSE
+//            $(  LET ch = ?
+//                LET savein = input()
+//                selectinput(in)
+//                ch := rdch()
+//                WHILE ch\=endstreamch DO
+//                $(  wrch(ch)
+//                    ch:=rdch()
+//                $)
+//                endread()
+//                selectinput(savein)
+//            $)
+            write.stamp()
+            writes("HELP ")
+            FOR i=1 TO n DO writef("%S ", (arg!i=0 -> "", arg!i))
+            newline()
+            endwrite()
+            selectoutput(saveout)
+            log.used := TRUE
+//            TEST renameobj(help.temp, help.log)=0 THEN
+//            toterm("HELP: Can't rename *"%S*" as *"%S*"*N",
+//                    help.temp, help.log)
+//            ELSE log.used := TRUE
+        $)
+        TEST NOT log.used THEN
+        toterm("(Use HELP TROUBLE to report any trouble with HELP)*N") ELSE
+        $(  toterm("Your request has been recorded*N")
+            toterm("(Use HELP PENDING to monitor the progress *
+                   *of your request)*N")
+        $)
+    $)
+    selectoutput(saveout)
+$)
+
+
+
+AND write.stamp() BE
+//$(  LET v = VEC 14
+//    datstring(v)
+//    writef("%S %S ", v, v+5)
+$(  LET infoin = findinput("INFO:%U on %M (%L) %D - ")
+    IF infoin \= 0 THEN
+    $(  LET ch = ?
+        LET savein = input()
+        selectinput(infoin)
+        ch := rdch()
+        WHILE ch\=endstreamch DO
+        $(  wrch(ch)
+            ch := rdch()
+        $)
+        endread()
+        selectinput(savein)
+    $)
+$)
+/*LOG>*/
+
+
+
+AND user.wants.to.log() = VALOF
+$(  LET savein = input()
+    LET ch = ?
+    selectinput(findinput("**"))
+    writes("If you do not want this request logged type an 'n' here: *E")
+    ch:=rdch() REPEATUNTIL ch~='*S'
+    endread()
+    selectinput(savein)
+    RESULTIS ~(ch='n' | ch='N')
+$)
+
+

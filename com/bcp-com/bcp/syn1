@@ -1,0 +1,417 @@
+SECTION "SYN1"
+
+GET "SYNHDR"
+$<TRIPOS MANIFEST $( scb.pos=4 $) $>TRIPOS
+
+LET nextsymb() BE
+$(1 nlpending := FALSE
+
+$(2
+    LAST.SYMB.PNT := CHCOUNT
+    $<TRIPOS IF TESTFLAGS(1) THEN Synreport(-1) $>TRIPOS
+    SWITCHON ch INTO
+
+$(s CASE '*N': nlpending := TRUE
+    CASE '*T':
+    CASE '*S': rch() REPEATWHILE ch='*S'
+               LOOP
+
+    CASE '0':CASE '1':CASE '2':CASE '3':CASE '4':
+    CASE '5':CASE '6':CASE '7':CASE '8':CASE '9':
+         symb := s.number
+         readnumb(10)
+         RETURN
+
+    CASE 'a':CASE 'b':CASE 'c':CASE 'd':CASE 'e':
+    CASE 'f':CASE 'g':CASE 'h':CASE 'i':CASE 'j':
+    CASE 'k':CASE 'l':CASE 'm':CASE 'n':CASE 'o':
+    CASE 'p':CASE 'q':CASE 'r':CASE 's':CASE 't':
+    CASE 'u':CASE 'v':CASE 'w':CASE 'x':CASE 'y':
+    CASE 'z':
+    CASE 'A':CASE 'B':CASE 'C':CASE 'D':CASE 'E':
+    CASE 'F':CASE 'G':CASE 'H':CASE 'I':CASE 'J':
+    CASE 'K':CASE 'L':CASE 'M':CASE 'N':CASE 'O':
+    CASE 'P':CASE 'Q':CASE 'R':CASE 'S':CASE 'T':
+    CASE 'U':CASE 'V':CASE 'W':CASE 'X':CASE 'Y':
+    CASE 'Z':
+      $( LET c = ch
+         rch()
+         rdtag(c)
+         symb := lookupword()
+         IF symb=s.get DO $( performget(); LOOP  $)
+    $<OPB
+         IF symb=s.logor | symb=s.logand GOTO checkassx
+    $>OPB
+         RETURN
+      $)
+
+        //----------------------------------------------------------------------
+        //      Treat '$' very specially on TRIPOS, in case PRSOURCE>0,
+        //      i.e. we're generating PRE-PROCESSOR output !!
+        //----------------------------------------------------------------------
+       CASE '{':
+       CASE '}':
+       CASE '$': $(1
+                 LET SCH=?      // READ NO REFLECT REGARDLESS OF SETTING !!!!!!!
+                 UNLESS CH = '}' | ch = '{'
+                 $(     LET print=printing; printING:=FALSE;
+                        RCH();
+                        printING:=print
+                 $)
+                 SCH:=CH
+
+                 SWITCHON SCH INTO
+                 $( CASE '(': CASE ')':
+                    CASE '{': CASE '}':
+                         UNLESS CH = '}' | ch = '{'
+//                      UNLESS PRSOURCE <= 0 | SKIPPING DO PRCH(SCH)  // REFLECT
+                        IF printing THEN PRCH(SCH)  // REFLECT
+                        RCH()
+                        SYMB := (SCH='(' | SCH = '{') -> S.LSECT,S.RSECT
+                        RDTAG('$')
+                        LOOKUPWORD()
+                        RETURN
+
+                    CASE 'E':                                           //PB====
+//                      UNLESS PRSOURCE <= 0 | SKIPPING DO PRCH(SCH)   //REFLECT
+                        IF Printing THEN PRCH(SCH)   //REFLECT
+                        RCH()
+                        RDTAG(SCH)                                      //PB====
+                        TEST (STFLAGS & stf.err) ~= 0 &                 //PB====
+                             $<PDPRSX EQUALSTRING(WORDV, "ERR") & $>PDPRSX//PB====
+                             $<TRIPOS COMPSTRING(WORDV, "ERR")=0 & $>TRIPOS//PB====
+                             CH = '$'                                   //PB====
+                        THEN $( SYMB := s.err; RCH() $)                 //PB====
+                        ELSE synreport(91)                              //PB====
+                        RETURN                                          //PB====
+
+                    CASE 'G':                                           //PB====
+//                      UNLESS PRSOURCE <= 0 | SKIPPING DO PRCH(SCH)   //REFLECT
+                        IF Printing THEN PRCH(SCH)   //REFLECT
+                        RCH()
+                        RDTAG(SCH)                                      //PB====
+                        TEST (STFLAGS & stf.glob) ~= 0 &                //PB====
+                             $<PDPRSX EQUALSTRING(WORDV, "G") & $>PDPRSX//PB====
+                             $<TRIPOS COMPSTRING(WORDV, "G")=0 & $>TRIPOS//PB====
+                             CH = '$'                                   //PB====
+                        THEN $( SYMB := s.Globnumber; RCH() $)          //PB====
+                        ELSE synreport(91)                              //PB====
+                        RETURN                                          //PB====
+
+                    CASE '$':
+                        //------------------------------------------------------
+                        //      Now, here's one of interest.
+                        //      We've got '$$'
+                        //------------------------------------------------------
+$<TRIPOS
+//                      IF PRSOURCE>0 & ~SKIPPING
+                        IF printing
+                        $( CHCOUNT := CHCOUNT-1 // So that
+                           WRITE.LAST.SYMB(-99)
+                        $)
+$>TRIPOS                IF PRSOURCE>0 THEN PRINTING := FALSE
+//                      IF PRSOURCE>0 THEN Skipping := TRUE
+                        RCH()
+                        SYMB := S.DOLLARNAME
+                        RDTAG('**')
+                        LOOKUPWORD()
+                        DECVAL := H1!WORDNODE = -S.NAME
+                        LAST.SYMB.PNT   := CHCOUNT
+                        RETURN
+
+                    CASE '<':
+                        //------------------------------------------------------
+                        //      Now, here's one of interest.
+                        //      We've got '$<'
+                        //------------------------------------------------------
+$<TRIPOS
+//                      IF PRSOURCE>0 & ~SKIPPING
+                        IF PRINTING
+                        $( CHCOUNT := CHCOUNT-1 // So that
+                           WRITE.LAST.SYMB(-99)
+                        $)
+$>TRIPOS
+                        CONDSKIP()      // Last char not reflected if PRSOURCE>0
+                                        // RESETS PRINTING !!!!!!!!!!
+                        IF PRSOURCE>0 THEN PRCH(ch)
+                        LOOP
+
+                    CASE '>':
+                        //------------------------------------------------------
+                        //      Now, here's one of interest.
+                        //      We've got '$>'
+                        //------------------------------------------------------
+$<TRIPOS                IF PRINTING
+//                      IF PRSOURCE>0 & ~SKIPPING
+                        $( CHCOUNT := CHCOUNT-1 // So that
+                           WRITE.LAST.SYMB(-99)
+                        $)
+$>TRIPOS
+                        $( LET print = printING
+                           printING := FALSE            //1234
+                           RCH()
+                           TEST INTAG=0 THEN synreport(69)
+                           ELSE $( RDTAG('**'); IF CH='*'' DO RCH() $)
+                           printING     := print        //1234
+                        $)
+                        //======================================================
+                        //=============== Check it's correct !! ================
+                        //======================================================
+                        INTAG := INTAG-1;
+                        IF PRSOURCE>0 THEN PRCH(ch)
+                        LOOP
+
+                    DEFAULT:
+                        RCH()
+                        synreport(91); RETURN
+
+                $)
+                $)1
+
+
+    CASE '[':
+    CASE '(': symb := s.lparen; BREAK
+    CASE ']':
+    CASE ')': symb := s.rparen; BREAK
+
+    CASE '#':
+       $( LET radix = 8
+          rch()
+          UNLESS '0'<=ch<='7' DO
+          $( SWITCHON capitalch(ch) INTO
+             $( DEFAULT: synreport(33)
+                CASE 'B': radix := 2; ENDCASE
+                CASE 'O': radix := 8; ENDCASE
+                CASE 'X': radix := 16
+             $)
+             rch()
+          $)
+          readnumb(radix)
+          symb := s.number
+          RETURN
+       $)
+
+
+    CASE '?': symb := s.query;     BREAK
+    CASE '+': symb := s.plus;      $<OPB GOTO CHECKASS $>OPB
+                                   $<OPB' BREAK $>OPB'
+    CASE ',': symb := s.comma;     BREAK
+    CASE ';': symb := s.semicolon; BREAK
+    CASE '@': symb := s.lv;        BREAK
+    CASE '&': symb := s.logand;    $<OPB GOTO CHECKASS $>OPB
+                                   $<OPB' BREAK $>OPB'
+    CASE '=': symb := s.eq;        BREAK
+    CASE '!': symb := s.vecap;     BREAK
+
+    CASE '%': rch()
+            TEST ch='%'
+            $( symb := ((STFLAGS & stf.halfwordop) ~= 0) -> s.halfwordap,//PB===
+                                                            s.vecap
+                 BREAK
+            $)
+            ELSE symb := s.byteap
+            RETURN
+
+    CASE '**':symb := s.mult;   $<OPB GOTO CHECKASS $>OPB $<OPB' BREAK $>OPB'
+
+    CASE '|':
+         multichar("|**", 0, -1, s.logor)
+    $<OPB
+         IF symb=s.logor GOTO checkassx
+    $>OPB
+         IF symb>0 RETURN
+         readcomment('|', symb<0)
+         LOOP
+
+    CASE '/':
+         multichar("\/**", s.logand, 0, -1, s.div)      /* For pre proc */
+    $<OPB
+         IF symb=s.logand | symb=s.div GOTO checkassx
+    $>OPB
+         IF symb>0 RETURN
+         readcomment('/', symb<0)
+         LOOP
+
+    CASE '~': multichar("=", s.ne, s.not)
+              RETURN
+
+    CASE '\': multichar("/=", s.logor, s.ne, s.not)
+    $<OPB
+              IF symb=s.logor GOTO checkassx
+    $>OPB
+              RETURN
+
+    CASE '<': multichar("=<>", s.le, s.lshift, s.cont, s.ls)
+              RETURN
+
+    CASE '>': multichar("=>", s.ge, s.rshift, s.gr)
+              RETURN
+
+    CASE '-': multichar(">", s.cond, s.minus)
+    $<OPB
+              IF symb=s.minus GOTO checkassx
+    $>OPB
+              RETURN
+
+    CASE ':': multichar( $<SLCT "=:" $>SLCT $<SLCT' "=" $>SLCT' ,
+                                s.ass, $<SLCT s.slctap, $>SLCT s.colon)
+              RETURN
+
+
+    CASE '"':
+           $( LET i = 0
+              rch()
+
+              UNLESS ch='"'
+              $( LET k=rdstrch()
+                 IF k<0 BREAK
+                 IF i=255 DO synreport(34)
+                 i := i + 1
+                 wordv%i := k
+              $) REPEATUNTIL ch='"'
+
+              wordv%0 := i
+              symb := s.string
+              BREAK
+           $)
+
+    CASE '*'':rch()
+              decval := rdstrch()
+              symb := s.number
+              UNLESS ch='*'' DO synreport(34)
+              BREAK
+
+
+    DEFAULT:    UNLESS ch=ENDSTREAMCH DO
+                $( let sch=ch; ch := '*S'; synreport(94, sch) $)
+    CASE '.':   IF getp=0 DO $( symb := s.end;    BREAK $)      // '..'?//PB====
+              $( LET was, next = ch, ?                                  //PB====
+                 UNLESS ch=ENDSTREAMCH DO RCH()                         //PB====
+                 next := ch                                             //PB====
+                 ENDREAD()                                              //PB====
+                 getp           := getp - get.inc                       //PB====
+//$<DEBUG DEB("<Source '%S'->'%S'>", source.name, getv!(getp+get.name)) $>DEBUG
+                 Source.name    := getv!(getp+get.name)                 //PB====
+                 sourcestream   := getv!(getp+get.stream)               //PB====
+                 selectinput(sourcestream)                              //PB====
+                 linecount      := getv!(getp+get.line)                 //PB====
+                 ch             := getv!(getp+get.ch)                   //PB====
+                 IF getp= 0 & was='.' & (next='.' | next=ENDSTREAMCH)   //PB====
+                 $( Symb := s.end; BREAK $)                             //PB====
+                 PRINTING := (PRSOURCE<0 |
+                              (PRSOURCE > 0 & NOT SKIPPING)
+                             ) &
+                             ( SHOWALL | GETP=0 )
+                 // Insert a (s.info, linecount, Source.name) ******************
+              $)                                                        //PB====
+              LOOP
+    $<OPB
+    checkass:   rch()
+    checkassx:  IF ch=':' $( rch(); UNLESS ch='=' DO synreport(57); ch := '_' $)
+                UNLESS ch = '_' RETURN
+                symb := symb+becomesbit
+                BREAK
+    $>OPB
+
+$)s
+
+$)2 REPEAT
+
+    rch()
+$)1
+
+AND WRITE.LAST.SYMB(SYMB) BE UNLESS SYMB=s.semicolon
+$<TRIPOS
+TEST SYMB=-99
+$(      LET O.pos = COS!4
+        LET len = CHCOUNT-LAST.SYMB.PNT
+        LET OK = TRUE
+        FOR I=0 TO len DO
+        UNLESS (COS!3)%(O.pos-I-1) = CHBUF!((CHCOUNT-I) REM 64) DO OK := FALSE
+        TEST OK
+        THEN FOR I=0 TO CHCOUNT-LAST.SYMB.PNT DO COS!4 := COS!4-1
+        ELSE
+        $(      WRITEF("[[****** Delete Failed - Please delete previous %N*
+                        * chars]]", len+1)
+                REPORTCOUNT := 1
+        $)
+        LAST.SYMB.PNT := CHCOUNT
+$)
+ELSE
+$>TRIPOS
+   FOR I = LAST.SYMB.PNT TO CHCOUNT DO WRCH(CHBUF!(I REM 64))
+
+AND readcomment(type, bracketed) BE TEST bracketed
+$(B
+    $( IF ch='**' $( rch(); IF ch=type BREAK; LOOP $)
+       IF ch=endstreamch DO synreport(63)
+       rch()
+    $) REPEAT
+    rch()
+$)B
+ELSE UNTIL ch='*N' | ch='*P' | ch=endstreamch DO rch()
+
+AND CONDSKIP() BE
+$(      LET TAG         = ?
+        LET skip        = skipping
+        LET expect      = -S.NAME
+
+        INTAG           := INTAG+1
+        SKIPPING        := TRUE         //1234
+        RCH()
+        RDTAG('**')
+        //      IF $<(tag)' THEN invert expected value
+        IF CH='*'' DO $( RCH() ; expect := -expect $)
+
+        LOOKUPWORD()
+        TAG:=WORDNODE
+
+        //      Is it the expected value ?
+        IF H1!WORDNODE= expect
+        $(      SKIPPING := skip        //    IF PRSOURCE>0 THEN PRCH(ch)
+PRINTING :=(PRSOURCE<0|(PRSOURCE>0 & NOT SKIPPING)) & (SHOWALL | GETP=0)
+                RETURN
+        $)      // INCLUDE TEXT
+
+        //----------------------------------------------------------------------
+        //      Now we're skipping through the code.
+        //      Look only for   '$>(word)'
+        //----------------------------------------------------------------------
+        $(      IF CH='$'
+                $(2     RCH()
+                        TEST CH='>'
+                        $(      RCH()
+                                RDTAG('**')
+                                LOOKUPWORD()
+                                IF TAG=WORDNODE
+                                $(      LET terminate   = CH='*''
+                                        INTAG := INTAG-1
+//                                                                      SKIPPING:=skip;TEST CH='*'' RCH() ELSE IF PRSOURCE>0 & GETP=0 PRCH(CH)  //Just the
+//                                      Is this the expected value ????
+                                        IF terminate THEN RCH()
+//                                      IF (expect=-S.NAME) ~= TERMINATE
+//                                      synreport(?)
+                                        SKIPPING := skip
+PRINTING :=(PRSOURCE<0|(PRSOURCE>0 & NOT SKIPPING)) & (SHOWALL | GETP=0)
+                                        RETURN
+                                $)
+                        $)
+                        ELSE LOOP
+                $)2
+                IF CH=ENDSTREAMCH
+PRINTING :=(PRSOURCE<0|(PRSOURCE>0 & NOT SKIPPING)) & (SHOWALL | GETP=0)
+<> RETURN
+                RCH()
+        $) REPEAT
+$)
+
+AND multichar(chars, a, b, c, d) BE
+$(      LET t = @chars
+        LET i, lim = 1, chars%0
+
+        rch()
+        UNTIL i>lim DO $( IF ch=(chars%i) THEN $( rch(); BREAK $); i := i+1 $)
+        symb := t!i
+$)
+
+

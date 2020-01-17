@@ -1,0 +1,116 @@
+/*********************************************************************
+**             (C) Copyright 1980  Tripos Reaearch Group            **
+**            University of Cambridge Computer Laboratory           **
+**********************************************************************
+
+     #######             ########  ##    ##  ########   ######
+     ########            ########  ###   ##  ########  ########
+     ##    ##               ##     ####  ##  ##        ##    ##
+     #######    #######     ##     ## ## ##  ######    ##    ##
+     ##                     ##     ##  ####  ##        ##    ##
+     ##                     ##     ##  ####  ##        ##    ##
+     ##                  ########  ##   ###  ##        ########
+     ##                  ########  ##    ##  ##         ######
+
+*********************************************************************
+**      Author: Mike Richardson                    April 1980      **
+********************************************************************/
+
+SECTION "PIPEINFO"
+GET     "LIBHDR"
+
+MANIFEST
+$(
+   scb.type             = 2
+   scb.arg2             = 10
+
+   input.pipes.gn       = 150
+   output.pipes.gn      = 151
+   num.pipes.gn         = 152
+   pipes.inuse.gn       = 153
+   pipe.deleted.gn      = 154
+   pipe.name.gn         = 161
+
+   pipe.running         = 0
+   pipe.starting        = -1
+   pipe.waiting         = -2
+$)
+
+LET start () BE
+$(
+   LET arg.vec = VEC 20
+   LET pipes.taskid, pipes.gv = devicetask ( "pipe:" ), ?
+
+   LET input.pipes, output.pipes, num.pipes, pipes.inuse = ?, ?, ?, ?
+   LET pipe.name, pipe.deleted                           = ?, ?
+
+   IF rdargs ( "", arg.vec, 20 ) = 0 THEN $( writes ( "bad arguments*N" )
+                                             FINISH
+                                          $)
+
+   IF pipes.taskid = 0 THEN $( writes ( "pipe handler not loaded*N" )
+                               FINISH
+                            $)
+
+   pipes.gv := rootnode ! rtn.tasktab ! pipes.taskid ! tcb.gbase
+
+   input.pipes  := pipes.gv ! input.pipes.gn
+   output.pipes := pipes.gv ! output.pipes.gn
+   num.pipes    := pipes.gv ! num.pipes.gn
+   pipes.inuse  := pipes.gv ! pipes.inuse.gn
+   pipe.name    := pipes.gv ! pipe.name.gn
+   pipe.deleted := pipes.gv ! pipe.deleted.gn
+
+   writef ( " Pipe handler is task %N*N", pipes.taskid )
+   writef ( " %N pipes available, %N in use*N", num.pipes, pipes.inuse )
+
+   UNLESS pipes.inuse = 0 DO
+   $(
+      writes ( "   output    input       name*N" )
+
+      FOR i = 1 TO num.pipes DO
+       $(
+          IF testflags ( 1 ) THEN
+          $(
+             writes ( "******BREAK*N" )
+             BREAK
+          $)
+
+          IF (  input.pipes ! i = 0 ) &
+             ( output.pipes ! i = 0 ) THEN LOOP
+
+          writef ( "%I2 %S ",i,
+                    VALOF
+                       $(
+                          LET scb = output.pipes ! i
+                          LET st  = scb ! scb.arg2
+
+                          RESULTIS scb = 0            -> "free    ",
+                                   st = pipe.starting -> "starting",
+                                   st = pipe.waiting  -> "waiting ",
+                                                         "running "
+                       $)
+                 )
+
+          writef ( " %S ",
+                    VALOF
+                       $(
+                          LET scb = input.pipes ! i
+                          LET st  = scb ! scb.arg2
+
+                          RESULTIS scb = 0            -> "free    ",
+                                   st = pipe.starting -> "starting",
+                                   st = pipe.waiting  -> "waiting ",
+                                                         "running "
+                       $)
+                 )
+
+          writef ( "   %T9", pipe.name ! i )
+
+          IF pipe.deleted ! i THEN writes ("DynoRod contacted" )
+          newline()
+       $)
+   $)
+$)
+
+

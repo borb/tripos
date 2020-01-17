@@ -1,0 +1,26 @@
+SECTION "T-RSEND"
+
+GET "LIBHDR"
+
+LET start() BE
+$(
+    LET first   = "PB"
+    LET file    = 0     //"t:2"
+    LET a       = "Subject.."
+    LET immed   =
+"No help on ..................................................XXXXXXXXXXXXXXX*N*
+*or anything else !!!!"
+    LET a       = "Pb"
+    LET a       = 0
+    LET a       = "pB"
+    LET a       = 4
+    WRITEF("RCs %N, %N*N",
+                CALLSEG(":l.rsend", 2, @first), RESULT2 )
+    immed       := 0
+    file        := "t:text"
+    WRITEF("RCs %N, %N*N",
+                CALLSEG(":l.rsend", 2, @first), RESULT2 )
+$)
+
+
+

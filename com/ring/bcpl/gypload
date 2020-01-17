@@ -1,0 +1,335 @@
+SECTION "GYPLOAD"
+
+GET "libhdr"
+GET "IOHDR"
+GET "RINGHDR"
+GET "BCPL.bsplib"
+GET "BCPL.ringhdr"
+GET "BCPL.ring"
+GET "BCPL.ringssp"
+
+
+
+GLOBAL
+$(  write.co.finished : ssp.ug+0
+    read.co.finished  : ssp.ug+1
+    reading.errors    : ssp.ug+2
+    tracing.on        : ssp.ug+3
+    trace.out         : ssp.ug+4
+    read.co.output    : ssp.ug+5
+    rec.no            : ssp.ug+6
+    break.made        : ssp.ug+7
+$)
+
+
+
+MANIFEST
+$(  a.from = 0
+    a.mc   = 1
+    a.type = 2
+    a.test = 3
+$)
+
+
+
+
+LET start() BE
+$(  LET rdargs.string = "Hexin/a,Device/a,Mctype,Test/s"
+    LET arg = VEC 100/bytesperword
+    testflags(5)  // clear CTRL-B and CTRL-D break flags
+    TEST 0 = rdargs(rdargs.string, arg, 100/bytesperword) THEN
+    writef("Bad argument for rdargs string:*N*"%S*"*N", rdargs.string) ELSE
+    $(  LET gypdeb.name = VEC 80/bytesperword
+        LET gypdeb.out  = ?
+        LET gypdeb.in   = ?
+        LET mctype      = (arg!a.type=0 -> "Z80", arg!a.type)
+        TEST dr.initialise()\=0 THEN writef("Ring handler not loaded!*N") ELSE
+        IF make.debug.name(gypdeb.name, 80, 
+                           arg!a.mc, mctype, arg!a.test\=0) THEN
+        $(  gypdeb.out := findoutput(gypdeb.name)
+            gypdeb.in := result2
+            TEST gypdeb.out=0 THEN
+            $(  LET rc=gypdeb.in   // return code: not other stream
+                writef("Failed to open *"%S*": ", gypdeb.name)
+                TEST (rc & #X8000)=0 THEN fault(rc) ELSE ringwhy(rc)
+            $) ELSE
+            $(  LET saveout = output()
+                LET savein  = input()
+                LET fromname= (arg!a.from=0 -> "**", arg!a.from)
+                LET termin  = findinput(fromname)
+                LET termout = saveout
+                LET blib.pktwait = pktwait
+                TEST termin=0 THEN
+                $(  LET rc=result2
+                    writef("Failed to open *"%S*" for input: ", fromname)
+                    fault(rc)
+                    selectoutput(gypdeb.out)
+                    endwrite()
+                    selectoutput(saveout)
+                $) ELSE
+                $(  LET in.co   = createco(read,  300)
+                    LET out.co  = createco(write, 700)
+                    LET in.co.pkt  = ?
+                    LET out.co.pkt = ?
+                    TEST in.co=0 | out.co=0 THEN
+                    $(  LET rc = result2
+                        writes("Can't create coroutines: ")
+                        fault(rc)
+                        selectoutput(gypdeb.out)
+                        endwrite()
+                        selectoutput(saveout)
+                    $) ELSE
+                    $(  writef("Loading %S '%S' with hex file %S:*N", 
+                                     mctype, arg!a.mc, arg!a.from)
+                        write.co.finished := FALSE
+                        read.co.finished  := FALSE
+                        reading.errors    := FALSE
+                        tracing.on        := FALSE
+                        trace.out         := termout
+                        read.co.output    := FALSE
+                        rec.no            := 1
+                        break.made        := FALSE
+                        pktwait := copktwait
+                        selectinput(termin)
+                        selectoutput(gypdeb.out)
+                        in.co.pkt := callco(in.co)
+                        selectoutput(termout)
+                        selectinput(gypdeb.in)
+                        out.co.pkt := callco(out.co)
+                        WHILE NOT read.co.finished | NOT write.co.finished DO
+                        $(  LET pkt = taskwait()
+                            IF testflags(4+8) THEN tracing.on := NOT tracing.on
+                            TEST pkt = in.co.pkt THEN
+                            $(  selectinput(termin)
+                                TEST read.co.output THEN 
+                                    selectoutput(trace.out) ELSE
+                                    selectoutput(gypdeb.out)
+                                in.co.pkt := callco(in.co, pkt)
+                            $) ELSE IF pkt = out.co.pkt THEN
+                            $(  selectoutput(termout)
+                                selectinput(gypdeb.in)
+                                out.co.pkt := callco(out.co, pkt)
+                            $)
+                            break.made := testflags(1)
+                        $)
+                        pktwait := blib.pktwait
+                        selectoutput(termout)
+                        IF break.made THEN writes("****** BREAK: in GYPLOAD*N")
+                        writef("%N record%S loaded*N", rec.no-1,
+                                                     (rec.no=2->"", "s"))
+                    $)
+                    deleteco(in.co)
+                    deleteco(out.co)
+                $)
+                selectinput(termin)
+                endread()
+                selectinput(savein)
+            $)
+        $)
+        dr.terminate()
+    $)
+$)
+
+
+
+AND copktwait(dest, pkt) = cowait(pkt)
+
+
+
+
+AND read() BE
+$(  LET ch = rdch()
+    LET saveout = output()
+    WHILE ch\=endstreamch & NOT write.co.finished & NOT break.made DO
+    $(  wrch(ch)
+        IF ch='*N' THEN 
+        $(  // bsp.forceout()
+            IF tracing.on & NOT reading.errors THEN 
+                read.message("Record %N written*C", rec.no)
+            rec.no := rec.no + 1
+        $)
+        ch := rdch()
+    $)
+    IF NOT break.made THEN bsp.forceout()  // if last character was not '*N'
+    delay(2*tickspersecond) REPEATUNTIL NOT reading.errors
+    endwrite()      // close byte stream - which will kill WRITE.CO
+    read.co.finished := TRUE
+    cowait(0)
+$)
+
+
+
+
+AND read.message(string, a1, a2, a3, a4) BE
+$(  LET saveout = output()
+    read.co.output := TRUE
+    selectoutput(trace.out)
+    writef(string, a1, a2, a3, a4)
+    read.co.output := FALSE
+    selectoutput(saveout)
+$)
+
+
+
+
+AND write() BE
+$(  LET ch = rdch()
+    IF bsp.test.reset(input()) THEN 
+    $(  LET error = FALSE
+        reading.errors := TRUE
+        ch := rdch()       // throw away character delivered with reset
+        // wait to use output stream:
+        WHILE read.co.output & NOT break.made DO delay(1*tickspersecond)  
+        writes("Error report arrived from the GYP ")
+        TEST ch=endstreamch THEN error:= TRUE ELSE
+        $(  LET n = ch
+            writef("(%N error%S)*N", n, (n=1 -> "", "s"))
+            ch := rdch()
+            WHILE ch\=endstreamch & NOT break.made & n>0 DO
+            $(  LET rec = ch<<8
+                LET rc  = 0
+                n := n-1
+                error := TRUE
+                ch := rdch()
+                IF ch\=endstreamch THEN
+                $(  writef("In record %N - ", rec+ch)
+                    ch := rdch()
+                    IF ch\=endstreamch THEN
+                    $(  rc := ch<<8
+                        ch := rdch()
+                        IF ch\=endstreamch THEN
+                        $(  rc := rc+ch
+                            ringwhy(rc)
+//                          writef("RC = #X%X4*N", rc)
+                            error := FALSE
+                            ch := rdch()
+                        $)
+                    $)
+                $)
+            $)
+        $)
+        IF error THEN writes("(Unexpected end of file from GYP)*N")
+    $)
+    reading.errors := FALSE
+    write.co.finished := TRUE
+    cowait(0)
+$)
+
+
+
+
+AND make.debug.name(vect, bytes, mc.name, type, testing) = VALOF
+$(  LET ok = FALSE
+    LET site.ring = globlookup(mc.name)
+    vect%0 := 0
+    TEST site.ring=0 THEN 
+    writef("Looking up *"%S*" failed*N", mc.name) ELSE
+    $(  LET mc.ring = "XX"
+        LET mc.site = "XX"
+        LET hex.digit = "0123456789ABCDEF"
+        mc.site%1 := hex.digit % (1+((site.ring >> 12) & #XF))
+        mc.site%2 := hex.digit % (1+((site.ring >>  8) & #XF))
+        mc.ring%1 := hex.digit % (1+((site.ring >>  4) & #XF))
+        mc.ring%2 := hex.digit % (1+((site.ring >>  0) & #XF))
+        IF             concat(vect, bytes, "BSP:G")       THEN
+        IF             concat(vect, bytes, mc.site)       THEN
+        IF             concat(vect, bytes, mc.ring)       THEN
+        IF             concat(vect, bytes, "-")           THEN
+        IF             concat(vect, bytes, type)          THEN
+        IF             concat(vect, bytes, "-MANLOAD")    THEN
+        IF (testing -> concat(vect, bytes, "TEST"), TRUE) THEN
+        IF             concat(vect, bytes, "/")           THEN
+        IF             concat(vect, bytes, mc.name)       THEN ok := TRUE
+        IF NOT ok THEN
+        writef("Machine name *"%S*" is too long*N", mc.name)
+    $)
+    RESULTIS ok
+$)
+
+
+
+
+AND concat(vect, size, string) = VALOF
+$(  LET n = vect%0
+    LET ok = (n+1+string%0 <= size)
+    IF ok THEN
+    $(  FOR i=1 TO string%0 DO vect%(i+n) := string%i
+        vect%0 := n+string%0
+    $)
+    RESULTIS ok
+$)
+
+
+
+     
+AND ringwhy(rc) = VALOF
+$(  MANIFEST $(  n = 80/bytesperword  $)
+    LET vect = VEC n
+    LET level=5
+    LET argvec=VEC 3
+    argvec!0 := rc
+    argvec!1 := vect
+    argvec!2 := n
+    argvec!3 := @level
+    ringfault(argvec)
+    writef(vect, rc)
+    newline()
+$)
+
+
+
+AND ringfault(vect) BE
+$(  LET default.string="Ring error %X4 occured"
+    LET s = vect!1
+    LET s.len = vect!2*bytesperword-1
+    LET ok = FALSE
+    $(  LET why = VEC sv.upb
+        IF dr.lookup("WHY", why)~=0 THEN
+        $(  LET data = VEC 4
+            LET results = VEC 64
+            data!0 := 4
+            results!0 := 64
+            data!4:=vect!0      // return code
+            IF dr.ssp(why, data, results, 0, 2)=0 THEN
+            IF dr.result2=0 THEN
+            $(  LET string = results+4
+                LET len = dr.byteget(string, 0)
+                s%0 := (len > s.len -> s.len, len)
+                FOR i=1 TO s%0 DO s%i := dr.byteget(string, i)
+                ok := TRUE
+                !vect!3 := results!(4+(len/2+1))
+            $)
+        $)
+    $)
+    UNLESS ok THEN
+    $(  s%0 := (default.string%0 > s.len -> s.len, default.string%0)
+        FOR i=1 TO s%0 DO s%i := default.string%i
+    $)
+$)
+
+
+
+
+
+AND globlookup(name) = VALOF
+$(  LET site.subnet = 0
+    $(  LET glookup = VEC sv.upb
+        IF name%0/2+1 <= 30 & dr.lookup("GLOBLOOKUP", glookup)~=0 THEN
+        $(  LET data = VEC 30
+            LET results = VEC 64
+            FOR i=0 TO name%0 DO dr.byteput(data+4, i, name%i)                        
+            data!0 := 4+name%0/2+1
+            results!0 := 64
+            IF dr.ssp(glookup, data, results, 0, 2)=0 THEN
+            IF dr.result2=0 & results!0 > 7 THEN 
+            site.subnet := (dr.byteget(results+4, 0)<<8) |
+                            dr.byteget(results+4, 1)
+//          FOR i=1 TO results!0 DO writef("%N: %X4*N", i, results!i)
+        $)
+    $)
+    RESULTIS site.subnet
+$)
+
+
+       
+

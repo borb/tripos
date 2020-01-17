@@ -1,0 +1,18 @@
+GET "LIBHDR"
+
+LET START() BE
+$(      LET inport      = ?
+        LET port        = ?
+
+        sendpkt(notinuse, rhtaskid, act.reserveport, ?,?, inport)
+        sendpkt(notinuse, rhtaskid, act.tx, 0,0,
+                        txbuff, txwords, station, port | #X1000)
+        txbuff %% 0 :=
+        txbuff %% 1 := 0
+        txbuff %% 2 := 0
+        sendpkt(notinuse, rhtaskid, act.tx, 0,0,
+                        txbuff, txwords, station, port)
+        sendpkt(notinuse, rhtaskid, act.releaseport, ?,?, inport)
+$)
+
+

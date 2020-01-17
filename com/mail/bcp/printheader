@@ -1,0 +1,80 @@
+LET print.header(base, offset, Number, umid, sender, subject,
+                                                version, header, text, flag) BE
+$(  MANIFEST
+    $(  w.num           = 2
+        w.main          = 1+8+2+5+1
+        w.sender        = 11
+        w.first         = w.num+w.main+w.sender+1
+    $)
+    LET t.w             = terminal.width
+    LET clever.select   = FALSE
+    LET clever.typed    = FALSE
+    LET clever          = validroutine(@cur.attr)
+    LET print.bytes = version = 0 |     // Do we have BYTE information ?
+        (md.sizebytes.version <= base%%(offset+version) <= md.max.version)
+                                        // How many chars will they take ?
+    LET bytes.size = print.bytes ->
+                        [(base %% (offset+text) > 9999 $<LSI4TRIPOS |
+                         (base %% (offset+text) < 0) $>LSI4TRIPOS
+        ) -> 9, 8] + ((base%%(offset+header) > 999) -> 1, 0) , 0
+    LET w.subj          = t.w - bytes.size - w.first
+
+    IF clever THEN clever := cur.attr(0, TRUE)
+
+    umid := (offset+umid) * bprw
+    WRITEF(number<0 -> "++", number=(selected+item1) -> "=>", "%I2", number)    //  2
+
+    UNLESS (flag & md.read.flag)=0 IF clever
+        THEN clever.typed := cur.attr(2, TRUE)          // Half intensity
+
+    writef("%C%I2/%I2/%I2%C%C%S%N:%S%N%C",                              // 17
+                (flag & md.deleted.flag)=0 -> '*S', 'd',                // %C
+                (base % (umid+2)) & 31,
+                (base % (umid+1)) & 15,
+                 base % (umid+0),                                       // %I2*3
+                 (flag & md.public.flag)=0  -> ' ', 'P',
+                ((flag & md.read.flag)=0  &
+                 ~(clever & cur.attr(2, FALSE))) -> 'n', ' ',           // %C
+                (base % (umid+3) < 10) ->"0", "",       base % (umid+3),// %S%N
+                (base % (umid+4) < 10) ->"0", "",       base % (umid+4),// %S%N
+                 (flag & md.weak.flag)=0  -> ' ', 'w'
+          )
+    sender := (offset+sender) * bprw
+    IF clever.typed     THEN cur.attr(2, FALSE)                 // For CEB
+    $(  LET written     = 0
+        $(      LET len = base%sender
+                IF len > w.sender 
+                $(      IF len > MAX.sender.display THEN len:=MAX.sender.display
+                        written +:= len - w.sender
+                $)
+                FOR i = 1 TO len          DO WRCH(base%(sender+i))
+                FOR i = 1 TO w.sender-len DO wrch(' ')                  // 11
+        $)
+
+        WRCH(' ')
+
+        UNLESS subject=0
+        $(  LET new.written = 0
+// For CEB  IF clever.typed     THEN cur.attr(2, FALSE)
+            subject := (offset+subject) * bprw
+            new.written := base%subject
+            IF   new.written+written >= w.subj
+            THEN new.written := w.subj - written
+            FOR i = 1 TO new.written DO WRCH(base%(subject+i))
+//For CEB   IF clever.typed     THEN cur.attr(2, TRUE)
+            written +:= new.written
+        $)
+        FOR i = 1 TO w.subj-written DO wrch(' ')                // 40
+    $)
+    IF clever.typed     THEN cur.attr(2, TRUE)                  // For CEB
+
+    IF print.bytes
+    THEN WRITEF("%U3+%U4", base %% (offset+header), base %% (offset+text))
+
+    IF clever.typed     THEN cur.attr(2, FALSE)
+    IF clever           THEN cur.attr(0, FALSE)
+    WRCH('*N' | #X80 )
+    WRCH('*C' | #X80 )  //newline()
+$)
+
+

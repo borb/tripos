@@ -1,0 +1,587 @@
+.unless set style
+.library "a4atl"
+. library "a5atl"
+.fi
+.set system "$sc TRIPOS$unsc"
+. set system "$sc VAXUNIX$unsc"
+. set system "$sc MVS$unsc"
+. set system "Panos"
+. set system "$sc ARM$unsc"
+.
+.flag \ "$sc" "$unsc"
+.flag \PS\ "$rmP$unrm$sc ost$unsc$rm S$unrm$sc cript$unsc"
+.display
+$chead Specification of GTOPS (~!system$$ version)$chead
+.blank 4
+$it Author:$rm$$ P. Hazel $e ~%date
+.blank 2
+.endd
+.
+.section Introduction
+\GTOPS\ is a program for converting output from the \GCAL\
+text processor (called
+\GCODE\) into \PS\, the page description language used by the
+Apple LaserWriter. Options are provided for selecting which
+pages are to be converted, for reducing the size of pages, and for
+outputting the page descriptions in special orders. \GTOPS\ runs under
+a number of different systems. Most of the information given below is
+common to all systems, but the details of the user interface given here are
+specific to ~~system.
+
+.section Physical and logical pages
+There are three different concepts concerned with pages in \GTOPS\:
+.numberpars
+A $it physical $rm page is ultimately a piece of paper that emerges
+from a \PS\ printer. \GTOPS\ supports only one physical page size
+at present, namely A4, and so there are no options to change this.
+.nextp
+A $it logical $rm page is a page of text for printing that is not necessarily
+as big as a physical page. \GTOPS\ supports three sizes of logical page:
+A4, A5 and A6. It automatically arranges to print multiple logical pages
+on a single physical page where appropriate (two A5 pages or four A6
+pages on each A4 page). The $bf pamphlet $rm option can be used to
+specify output in the correct order for folding and stapling A5 or
+A6 pages.
+.nextp
+An $it input $rm page is a page read from the \GCODE\ input. By default, each
+input page is assumed to be an A4 page. There are options to specify that
+the input is formatted at A5 or A6 size, and also to request reduction from
+A4 to A5 or A6 and from A5 to A6.
+.endp
+
+.section User Interface
+The \GTOPS\ command takes the following format:
+.
+.if $%"~~system"="TRIPOS"
+.display
+gtops "from/a,to/k,header/k,trailer/k,opt/k"
+.endd
+The $bf to $rm key specifies the output file (default is the $tt OMS:gtops$rm ).
+The $bf header $rm key specifies an alternate header file (default is
+$ttsys:gcal.gtops-pshdr$rm).
+The $bf trailer $rm key specifies a trailer file (there is no default).
+The $bf opt $rm key introduces an options string, details of which
+are given in the section entitled $it Syntax of options $rm below.
+It must be enclosed in quotes if it contains any spaces or an `='.
+Some examples of calls to the \GTOPS\ command are:
+.display
+gtops
+gtops myfile
+gtops goutput to pscript
+gtops goutput to pscript opt "pages=9,14-16"
+gtops goutput to pscript opt "pages=3,5,12-11;format=a4toa5"
+.endd
+.
+.elif $%"~~system"="VAXUNIX"
+.display
+gtops [-h header] [-o output] [-O options] [-t trailer] [input]
+.endd
+The $bf -o $rm flag specifies the output file (default is the standard output).
+The $bf -h $rm flag specifies an alternate header file (default is
+$tt/usr/lib/gcal/gtops.pshdr$rm).
+The $bf -t $rm flag specifies a trailer file (there is no default).
+The $bf -O $rm flag introduces an options string, details of which
+are given in the section entitled $it Syntax of options $rm below.
+It must be enclosed in quotes if it contains any spaces.
+Some examples of calls to the \GTOPS\ command are:
+.display
+gtops
+gtops myfile
+gtops goutput > pscript
+gcal gcal/myfile | gtops -o pscript -O pages=9,14-16
+gtops -o pscript -O pages=3,5,12-11;format=a4toa5 goutput
+.endd
+.
+.elif $%"~~system"="MVS"
+.display
+gtops [[from] <gcode>] [to <postscript>] [opt <options>]
+      [pictures <picture-library>] [pshdr <header>]
+.endd
+There are also the usual keywords $bf store$rm, $bf time$rm,
+$bf errlabel $rm and $bf rclevel$rm.
+The $bf from $rm keyword, which is optional if the item comes first,
+specifies the input file. If no input is specified, the current
+dataset ($tt %C$rm) is used. The $bf to $rm keyword specifies the
+destination for the \PS\ output. If this item is omitted, the output
+is written to the standard output dataset ($tt %O$rm), which is made
+into a new current dataset at the end of the command.
+The $bf opt $rm keyword introduces an options string, details of which
+are given in the section entitled $it Syntax of options $rm below.
+It must be enclosed in single quotes if it contains any spaces.
+The $bf pshdr $rm keyword specifies an alternate \PS\ header file; this
+facility is for experts only.
+
+The $bf pictures $rm keyword defines a pds whose members contain
+graphics items defined in \PS\. These may be hand-written, or converted
+from the output of graphics packages. They are included in the output
+of \GTOPS\ as a result of calls to the $bf get $rm option embedded
+in the \GCODE\ (see below).
+This is normally generated as a result of obeying the \GCAL\
+$bf picture $rm macro with a name as its first argument. The name
+corresponds to the pds member name.
+
+If the $bf pictures $rm keyword is not used, then any occurrences of
+$bf get $rm cause \GTOPS\ to attempt to open a ddname with the same
+name as that given to $bf get$rm.
+Some examples of calls to the \GTOPS\ command are:
+.display
+gtops
+gtops .myfile
+gtops .goutput to .pscript
+gtops to .pscript opt pages=9,14-16
+gtops .goutput to .pscript opt pages=3,5,12-11;format=a4toa5
+.endd
+.
+.elif $%"~~system"="Panos"
+.display
+gtops [-FROM] <gcode> [-TO <postscript>] [-[NO]Verbose]
+      [-PAGES <pagelist>] [-REVerse] [-FORMat <format>]
+      [-LANDscape] [-Copies <number>]
+      [-Pamphlet [<psize>]]
+      [-HEADer <file>] [-TRAILer <file>]
+.endd
+The standard synonyms $$bf INput $rm and $bf OUTput $rm are
+available for $bf FROM $rm and $bf TO$rm, and $bf PAGE $rm is
+a synonym for $bf PAGES$rm. The standard keys $bf HELP $rm and
+$bf IDentify $rm are also available.
+In the simplest case, the \GTOPS\ command can just be
+.display
+gtops <gcode>
+.endd
+It is always necessary to quote the name of the input file. If
+no file extension is given, then `$tt -gout$rm' is automatically added
+to the name. This matches \GCAL\'s convention of generating output files
+with the extension `$tt -gout$rm'.
+
+If an output file name is quoted
+without an extension, the extension `$tt -ps$rm' is automatically
+added, unless the last character of the name is `:', in which case
+it is assumed to be a device (e.g. `$tt printer:$rm').
+If no output file name is quoted, then
+the Panos global string $tt GTOPS~~$ToDefault $rm is consulted.
+If it exists, it is used as the output file name. No modifications
+of any sort are made. The intention is that $tt GTOPS~~$ToDefault $rm
+should be set to `$tt printer:$rm' on systems that have direct
+access to a \PS\ printer. If $ttGTOPS~~$ToDefault $rm does not
+exist, a file name is manufactured
+from the input file name, with its extension changed to `$tt -ps$rm'.
+
+The $bf Verbose $rm key is used to control information output from
+the program, such as a reflection of the \GCODE\ heading, and the count
+of pages converted. It is on by default, so it is necessary to
+quote $tt -noverbose $rm to suppress this output.
+
+The $bf HEADer $rm and $bf TRAILer $rm keys can be used to override the
+default header and trailer files, whose names are given in the
+global variables $tt GTOPS$Header $rm and $tt GTOPS$Trailer $rm
+respectively. A standard header is always required, in order to generate
+a self-contained \PS\ file, but the trailer is optional. Changing headers
+or trailers is an expert activity.
+
+The remainder of the keys specify \GTOPS\ options as described below. The
+arguments for $bf Copies $rm and $bf Pamphlet $rm are simple integers;
+the syntax for $bf PAGES $rm and $bf FORMat $rm is as described under
+$it Syntax of options$rm.
+Some examples of calls to the \GTOPS\ command are:
+.display
+gtops
+gtops myfile
+gtops goutput -to pscript
+gtops myfile  -pages 9,14-16
+gtops goutput -pages 3,5,12-11 -format a4toa5
+.endd
+.
+.elif $%"~~system"="ARM"
+.display
+gtops [-from] <gcode> | [-file <gcode>]
+      [-to <postscript>] [-opt <options>]
+      [-header <file>] [-trailer <file>]
+.endd
+If no output file name is quoted, output is sent to `$tt printer:$rm'.
+.
+. Not used currently
+.if false
+then one is manufactured by adding the text `$tt ~~_ps.$rm'
+immediately before the last component of the input file name, or
+replacing `$tt ~~_gout$rm' with `$tt ~~_ps$rm' if appropriate.
+.fi
+It is always necessary to quote the name of the input file.
+If the keyword $bf from $rm is used (explicitly or implicitly)
+then the text `$tt~~_gout.$rm' is inserted immediately before the
+last component of the name. This matches \GCAL\'s convention for
+generating output file names. If such a file is not found, then
+the unmodified name is tried.
+If the keyword $bf file $rm is used, then no transformation
+is applied to the name.
+
+When the input file name has had `$tt ~~_gout.$rm' automatically
+inserted, and only in this case, \GTOPS\ applies a timestamp
+interlock. If a file with the quoted input name exists (assumed to
+be the original \GCAL\ source), and if the timestamps on the two
+files are both plausible (i.e. not too small) then if the original file
+has a later timestamp than the
+`$tt ~~_gout.$rm' file, \GTOPS\ issues an error message and stops.
+It is always possible to override this check by using the $bf file $rm
+keyword.
+
+The syntax of the options string is described below. It must normally
+be enclosed in quotes.
+
+The default header file name is built into the program. It is
+`$tt ~~$.gcallib.~~_ps.gpshead$rm'. There is no default trailer file.
+Overriding the header and trailer by means of the keywords on the
+command line is an expert activity.
+Some examples of calls to the \GTOPS\ command are:
+.display
+gtops
+gtops myfile
+gtops goutput -to pscript
+gtops myfile  -opt "pages=9,14-16"
+gtops goutput -opt "pages=3,5,12-11;format=a4toa5"
+.endd
+.
+.else
+.comment Unknown system name ~~system
+.fi
+
+.section GCODE interface
+As well as accepting options on its command line, \GTOPS\ obeys options
+that have been placed in the \GCODE\ by means of \GCAL\'s
+$bf request $rm directive. The format of such directives is
+.display
+~~.request "postscript: <options>"
+.endd
+where the syntax of the options is as described in the next section.
+Any $bf request $rm directive whose text does not begin with
+`$tt postscript:$rm' is ignored. Normally the generation of such
+directives takes place inside macros, and only expert users need be
+aware of this facility. For example, when using the \GCAL\ style
+`$tt a5atl$rm', a \GTOPS\ option `$tt format=A5$rm' is automatically
+inserted into the \GCODE\.
+
+Certain options are permitted only on the command line, and some are
+allowed only inside the \GCODE\. These are described in separate sections
+below.
+
+.section Embedded inline PostScript
+\GCAL\'s $bf control $rm and $bf longcontrol $rm
+directives can be used to embed \PS\ directly
+at any point of the document. This
+is an alternative to the use of the $bf get $rm option
+described below, and can be useful for small pictures.
+\GTOPS\ does not take any precautions against what might be inserted --
+users are advised to make use of $bf save $rm and $rm restore$rm.
+The source of the \GCAL\ $bf picture $rm and $bf endpicture $rm
+macros shows how this can be done.
+
+The \GCAL\ $bf control $rm mechanism supports control characters only
+via escape sequences. It is therefore necessary to end each inserted
+line of \PS\ explicitly with `$tt ~~\N$rm', or alternatively to
+begin each line with a space. Note that the text of each line is
+processed by \GCAL\ for inserts, etc. in the normal way.
+
+.section Syntax of options
+This section describes the syntax of option strings that are decoded
+by the program. In some implementations, some of the command line decoding is
+performed by operating system calls. However, this syntax applies in all
+systems to option strings embedded in the \GCODE\.
+.
+.if $%"~~system"="TRIPOS"
+On \TRIPOS\, command line options are specified as a single string after the
+$bf opt $rm key, and are in the format described here.
+.elif $%"~~system"="VAXUNIX"
+On \UNIX\, command line options are specified as a single string after the
+$bf -o $rm flag, and are in the format described here.
+.elif $%"~~system"="MVS"
+In \MVS\, command line options are specified as a single string attached
+to the $bf opt $rm keyword, and are in the format described here.
+.elif $%"~~system"="Panos"
+In Panos, the option names are used as keywords on the command line, and
+only the format of the values for the $bf pages $rm option is as
+described here (for command line options).
+.elif $%"~~system"="ARM"
+On the \ARM\, command line options are specified as a single string attached
+to the $bf ~~-opt $rm keyword, and are in the format described here.
+.fi
+
+An option string consists of a number of items separated by semicolons.
+Spaces are ignored except in the middle of words or numbers, where they
+serve as delimiters.
+Each item starts with an option name, starting with a letter and containing
+letters and digits. Upper and lower case letters are synonymous. Some
+options consists only of a name. Others require mandatory or optional
+values as well. In these cases, the option name must be followed by a space
+or an equals sign to separate it from the value. Where an option can take
+a list of values, these are separated by commas. For example
+.display
+pages=1-3,5-7,9;reverse
+format a4toa5; pamphlet
+FORMAT = A6; Pages 8-*; Copies=2
+.endd
+The $bf pages $rm option requires a list of values specifying pages to
+be converted. Each value must consist either of a single decimal
+number, or two numbers separated by a minus sign which indicate a
+range of pages. An asterisk may be used to mean `the end of the
+document'.
+
+.section Command options
+This section contains descriptions of those options which can
+be specified only on the command line, and not in the \GCODE\.
+.blank
+$bf Copies$rm: This option takes a single numerical value, specifying
+the number of copies to be printed.
+.blank
+$bf Pages$rm: This option specifies which pages are to be selected for
+conversion to \PS\. If omitted, the entire document is converted.
+$bf Page $rm is a synonym for $bf pages$rm.
+Pages
+are identified by counting from the start of the document -- the first
+page is number one. A list of several pages or ranges of pages may be
+given, and the output appears in the same order as given in the option
+(but see $bf reverse $rm and $bf pamphlet $rm below).
+A range of pages may be specified in descending as well as ascending order,
+and if a page is specified twice, it is printed twice. A silly example might
+be
+.display
+pages = 6-7,9-4,8-*,3,6,*-11
+.endd
+$bf Pamphlet$rm: This option can appear with or without a numerical value.
+Its purpose is to arrange for the pages to be output in a suitable order
+for folding and stapling A5 or A6 pages. For example, an eight-page
+A5 document is output as follows:
+.display
+pages 8 & 1   on physical page 1
+  "   2 & 7          "         2
+  "   6 & 3          "         3
+  "   4 & 5          "         4
+.endd
+If these physical pages are reproduced double-sided, the result can
+simply be folded, and stapled if necessary. In the case of A6 pages,
+four pages are output on each physical page, the bottom two being
+upside down. After folding, a guillotining operation is necessary to
+give access to all pages.
+
+When the $bf pamphlet $rm option has been specified, \GTOPS\ checks that
+all logical pages are of the same size, and generates an error message
+if they are not. If they are all A4-sized, no further action is taken.
+The $bf pages $rm option can be used with $bf pamphlet $rm to select a
+subset of the document's pages; however, it no longer specifes the order
+in which they are output. The $bf reverse $rm option is ignored.
+
+If $bf pamphlet $rm is specified without a value, the total number of
+pages in the document determines the arrangement of the output pages.
+For special effects, a numerical value
+may be specified. \GTOPS\ then uses the supplied value instead of the total
+number of pages. This number (either counted, or supplied) is rounded up
+to a multiple of four for A5 pages, and eight for A6 pages. Any logical
+pages that do not exist (or have been excluded by means of the $bf pages $rm
+option) are simply left blank.
+.blank
+$bf Reverse$rm: This option specifies that the $it logical $rm
+pages are to be
+output in reverse order to what would otherwise happen, and is most useful
+for A4 output. It is ignored if the $bf pamphlet $rm option is specified.
+
+.section General options
+This section contains descriptions of those options that may be specified
+either on the command line or in the \GCODE\.
+.blank
+$bf Format$rm: This option is used to specify the format of the input pages,
+and optionally to request a reduction in size. It must be followed by one
+of the following names:
+.display
+$tt A4        $rm input is A4 (the default)
+$tt A5        $rm input is A5
+$tt A6        $rm input is A6
+$tt A4TOA5    $rm input is A4; reduce it to A5
+$tt A4TOA6    $rm input is A4; reduce it to A6
+$tt A5TOA6    $rm input is A5; reduce it to A6
+.endd
+$bf Format $rm may occur more than once in the \GCODE\. In these cases
+it specifies the format of the next page to be read. It is therefore
+possible to construct a document containing several different page formats.
+However, \GTOPS\ does not mix different logical page formats on the same
+physical page.
+If $bf format $rm is specified on the command line, it overrides
+all occurrences in the \GCODE\. This means that a document that has been
+formatted using the \GCAL\ style $tt a5atl$rm, say (which specifies
+A5 format in the \GCODE\) can be printed at A6 size by specifing
+.display
+format = a5toa6
+.endd
+on the command line, without reprocessing.
+.blank
+$bf Landscape$rm: This option specifies that subsequent pages are to
+be printed in landscape orientation. Its occurrence in the command line
+is not treated specially.
+The orientation applies to the logical page, not the physical page.
+The $bf landscape $rm macro in the \GCAL\
+`$tt atl$rm' styles generates this option.
+.blank
+$bf Portrait$rm: This option specifies that subsequent pages are to
+be printed in portrait orientation (the default). Its occurrence in
+the command line is not treated specially. The $bf portrait $rm macro
+in the \GCAL\ `$tt atl$rm' styles generates this option.
+
+.section GCODE options
+This section contains descriptions of those options that may only
+appear embedded in the \GCODE\, and not on the command line.
+.blank
+$bf Font$rm: This must be followed by a numerical value. It causes
+\GTOPS\ to emit an explicit font selection in the \PS\ output. It
+is sometimes needed when including raw \PS\ in the output
+because \GCAL\ only emits a font change when it
+actually has a character in the font to output.
+.blank
+$bf Get$rm: This must be followed by a file name. The file is assumed
+to contain \PS\, and is included $it verbatim $rm in the output at
+the point where the option is encountered. This is the mechanism used
+by the \GCAL\ $bf picture $rm macro
+when a file name is given. All the characters in the file, including
+newlines, are copied into the \PS\ without any changes.
+.
+.if $%"~~system"="MVS"
+In \MVS\, the name must contain only a single component. It is first
+tried as a pds member name in the file with ddname `$tt pictures$rm'.
+If this fails, it is tried as a ddname in its own right.
+.elif $%"~~system"="Panos"
+.em
+Under Panos, the extension `$tt -ps$rm' is added to the file name if it
+has no extension. An attempt is then made to open the file using this
+name. If this fails, the contents of the global variable
+`$tt Gtops~~$GetLib$rm' are inserted at the front of the file name, and
+another attempt is made. If the global variable does not end with a
+full stop character, one is automatically inserted.
+.nem
+.else
+No special processing is applied to the file name.
+.fi
+
+.section Headers and trailers
+\GTOPS\ has facilities for copying a header file at the start of its
+output and a trailer file at the end. A standard header is normally
+used -- without it, the output from \GTOPS\ is not a complete
+\PS\ program -- but there is no standard trailer. (A possible use for
+a trailer in some installations might be for the generation of a cover
+page.) The header and trailer defaults may be overridden on the command
+line, but this facility is intended for expert use only.
+
+Headers and trailers are assumed to be correct \PS\ files, and they are
+automatically compressed by \GTOPS\ as it copies them. Multiple spaces
+and newlines are compacted, and comments are
+removed.
+In addition, the header file must be in a special conventional format.
+It is copied from the start until the first line that begins
+.display
+%End
+.endd
+The rest of the file consists of optional sections in the form
+.display
+%Name
+<PostScript>
+%End
+.endd
+and these are copied or omitted as necessary. Currently, the
+optional sections contain code for setting up a correct A4 page
+on the Apple LaserWriter
+.if $%"~~system"="MVS"
+(not used under \MVS\ -- \PSOUT\ does it)
+.fi
+.nosep
+, for setting the position of A5 or A6 logical pages on the
+physical page, and for extending a font to
+contain the accented characters. This latter is triggered from the
+\GCAL\ macro $bf extendfont$rm.
+
+.section Warnings and errors
+\GTOPS\ generates a warning message if it comes across an implausible
+font. This usually means that the original \GCAL\ input has been processed
+using the wrong style file.
+However, it can also indicate an error in a call to the
+\GCAL\ $bf bindfont $rm directive. The tests that \GTOPS\ applies are
+.numberpars
+If the font name starts with `Diablo', `FX80', `am', `cm', or `QMS';
+.nextp
+If the font magnification is less than 3000 (which would be smaller than
+3-point for a \PS\ font).
+.endp
+The messages generated are:
+.display
+GTOPS warning: "<name>" does not look like a PostScript
+.if $%"~~system"="MVS"
+font name - check GCAL style.
+.else
+font name - are you sure you used the corrrect GCAL style?
+.fi
+.endd
+and
+.display
+GTOPS warning: font <number> ("<name>") is specified at a
+size of <size> points. This is probably too small to be
+.if $%"~~system"="MVS"
+legible - check GCAL style.
+.else
+legible - are you sure you used the correct GCAL style?
+.fi
+.endd
+If a warning has been generated, \GTOPS\ ends with a return code of
+.if $%"~~system"="TRIPOS"
+$tt return.soft$rm.
+.elif $%"~~system"="VAXUNIX"
+1.
+.elif $%"~~system"="MVS"
+4.
+.elif $%"~~system"="Panos"
+$sp ~~-40$unsp.
+.elif $%"~~system"="ARM"
+4.
+.fi
+
+All errors detected by \GTOPS\ are fatal -- that is, the program produces
+a message and then gives up immediately, with a return code of
+.if $%"~~system"="TRIPOS"
+$tt return.severe$rm.
+.elif $%"~~system"="VAXUNIX"
+1
+.elif $%"~~system"="MVS"
+8.
+.elif $%"~~system"="Panos"
+$sp ~~-80$unsp.
+.elif $%"~~system"="ARM"
+8.
+.fi
+No \PS\ output is produced. The main errors are failures to open files, and
+syntax errors in option strings. In the latter case, the string is
+reflected and the point of error indicated with a circumflex. If an
+error is detected in the \GCODE\ itself (indicating a fault either in
+\GTOPS\ or \GCAL\) the line number in the \GCODE\ is output to aid
+diagnosis.
+
+.section Mode of operation
+\GTOPS\ operates by reading the input file sequentially, generating
+\PS\ for the selected pages as it goes along. However, the \PS\ is
+not immediately written out. Instead it is saved in store until the
+end of the document is reached, or all the necessary pages have been
+read. Certain \GCODE\ constructions, for example, font bindings, are
+extracted from the pages as they are encountered, and collected together
+separately.
+
+\GTOPS\ then outputs the header file, including the appropriate
+optional parts, the font bindings, etc., the selected
+pages in the required order and at the required sizes,
+and the trailer if required. All the files
+are actually opened at the start of processing, in order to check
+for their presence before starting to consume resources.
+
+This mode of operation means that there is a limit to the number of
+pages that can be processed at one time in a given store size.
+Approximately 30 fairly full pages can be processed in 500K.
+However, apart from the obvious advantage of being able to output the pages
+in an arbitrary order, this approach makes for faster running on
+single-disc systems because (apart from copying the header and trailer)
+\GTOPS\ does all its reading before any of its writing, and so
+minimizes disc head movement.
+.blank
+$c *##*##*
+
+

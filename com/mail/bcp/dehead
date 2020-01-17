@@ -1,0 +1,200 @@
+GET "LIBHDR"
+$<FRED
+GET "bcp.dehead-2"
+$>FRED
+
+LET read.byte.from.file() = RDCH()
+LET matches(sub, full) = (sub%0) > (full%0) -> FALSE, VALOF
+$(      FOR i = 1 TO sub%0 UNLESS compch(sub%i, full%i) = 0 RESULTIS FALSE
+        RESULTIS TRUE
+$)
+
+MANIFEST $( buff.size   = 300; keysize = 20 $)
+
+MANIFEST $(
+        km.first        = 1
+        km.join         = 2
+        km.zero.old     = 4
+$)
+
+MANIFEST $(
+        k.key   = 0
+        k.result= 1
+        k.size  = 2
+        k.mode  = 3
+$)
+
+// Find a line beginning with '<key>' in the file whose PUID is <offset> dibytes
+// above base, and put the whole line into <result> which is <res.size> bytes.
+
+LET find.keys(base, offset,
+key1, result1, res.size1, mode.1,
+key2, result2, res.size2, mode.2,
+key3, result3, res.size3, mode.3,
+key4, result4, res.size4, mode.4,
+key5, result5, res.size5, mode.5,
+keyn, resultn, res.sizen, mode.n) = VALOF
+$(
+    LET file    = ?     // VEC file.desc.size
+//  LET buff    = VEC buff.size/rwpw
+    LET keyword = VEC keysize/BYTESPERWORD
+
+    LET byte.pos= 0
+    LET size    = ?
+    LET pos     = 1
+    LET ch      = ?
+    LET last.p  = @keyn
+    LET local.flags     = VEC 6
+
+$<FRED
+    Zap.file(file)
+    copy.uid(base, offset, file+uid, 0)
+
+    file ! cache.address        := buff
+    file ! cache.size           := buff.size
+    file ! next.write           := 0
+    file ! next.read            := 50
+    read.cache(file, 0)
+    size        := buff %% 2
+$>FRED
+    size := 200
+        FOR addr = @key1 TO last.p BY 4
+        $(      LET mode = addr!k.mode
+                IF !addr = -1 last.p := addr-4 <> BREAK
+
+                local.flags ! [(addr - @key1)/4] := 0
+                UNLESS (mode & km.zero.old) = 0
+                THEN (addr!k.result) %0 := 0
+        $)
+    ch          := read.byte.from.file(file)
+
+    UNTIL pos >= size
+    $(Each.line
+        LET match       = FALSE
+        LET completed   = FALSE
+
+IF testflags(1) GOTO done
+
+        WHILE ch=' ' | ch = '*T'
+        $(      ch := read.byte.from.file(file)
+                pos := pos+1
+                IF pos >= size GOTO DONE
+        $)      
+
+        FOR i = 1 TO keysize
+        $(Each.ch.in.key
+            IF ch = ' ' | ch = ':'      THEN keyword%0 := i-1 <> BREAK
+            keyword%i := ch
+            ch := read.byte.from.file(file)
+            pos +:= 1
+            IF pos >= size GOTO DONE
+        $)Each.ch.in.key
+
+        $(      LET coloned = FALSE
+                $(      UNLESS ch=' ' | ch = '*T'
+                        $(      IF coloned | ch ~= ':'  BREAK
+                                coloned := TRUE
+                        $)
+                        ch := read.byte.from.file(file); pos := pos+1
+                        IF pos >= size GOTO DONE
+                $) REPEAT
+        $)      
+
+        FOR addr = @key1 TO last.p BY 4 DO IF matches(addr!k.key, keyword)
+                                        THEN match := addr <> BREAK
+
+        UNTIL completed
+        $(MATCH.FOUND
+                LET lv.flags    = (match=0) -> 0, local.flags +[(match-@key1)/4]
+                LET mode        = (match=0) -> 0, match!k.mode
+                LET result      = (match=0) -> 0, ((mode & km.first) = 0) ->
+                                                match!k.result, valof
+                                $(      IF ((!lv.flags) & 1) = 0 
+                                        THEN RESULTIS match!k.result
+                                        match := 0; mode := 0; resultis 0
+                                $)
+                LET result.size = (match=0) -> MAXINT, match!k.size
+                LET from        = 1
+
+                TEST (mode & km.join) = 0
+                THEN !lv.flags |:= 1
+                ELSE
+                $(      from := result%0 +1
+                        UNLESS from > result.size | result%from=' ' | from=1
+                        $(      result%from := ' '; from +:= 1 $)
+                $)
+
+IF testflags(1) GOTO done
+
+                FOR i = from TO result.size
+                $(
+IF testflags(1) GOTO done
+                    IF pos > size       GOTO end.found
+                    WHILE (ch = '*N')   // Folded .....
+                    $(  ch := read.byte.from.file(file); pos +:= 1
+                        UNLESS ch = ' ' | ch = '*T' GOTO end.found
+                        WHILE (ch = ' ' | ch = '*T')
+                        $(      ch := read.byte.from.file(file); pos +:= 1
+                                IF pos > size THEN GOTO end.found
+                        $)
+                        UNLESS result%[i-1] = ' ' | i=result.size
+                        $( result%i := ' '; i := i+1 $)
+                    $)
+                    IF MATCH & (i <= result.size) THEN result%i := ch
+                    ch := read.byte.from.file(file);        pos +:= 1
+                    IF i = result.size THEN GOTO buff.full
+                    LOOP
+end.found:
+                    completed   := TRUE
+buff.full:
+                    IF match THEN RESULT%0      := i-1
+                    IF pos > size       THEN GOTO Done
+                    match       := 0
+                    UNLESS completed
+                    DO ch := read.byte.from.file(file) <> pos +:= 1
+                    BREAK
+                $)
+                match := 0              // The result buffer is full ....
+        $)MATCH.FOUND
+    $)Each.Line
+
+DONE:
+    RESULTIS FALSE
+$)
+
+LET START() BE
+$(      LET in = FINDINPUT("T:da")
+        LET from. = VEC 40      
+        LET to. = VEC 40        
+        LET cc. = VEC 40        
+        LET bcc. = VEC 40       
+        LET reply. = VEC 40     
+
+        FOR i = 0 TO 10 DO from.%i := "<unset>"%i
+        FOR i = 0 TO 10 DO to.%i := "<unset>"%i
+        FOR i = 0 TO 10 DO cc.%i := "<unset>"%i
+        FOR i = 0 TO 10 DO bcc.%i := "<unset>"%i
+        FOR i = 0 TO 10 DO reply.%i := "<unset>"%i
+
+        IF in=0 $( WRITEF("Failed to find input*N"); STOP(10) $)
+        SELECTINPUT(in)
+
+        find.keys(?, ?,
+                        "From", from., 40, km.join,
+                        "To", to., 40, km.first,
+                        "Cc", cc., 40, 0,
+                        "Bcc", bcc., 40, km.zero.old,
+                        "Reply", reply., 40, 0,
+                        -1)
+
+        WRITEF("Got *N*
+*From: '%s'*N*
+*To:   '%s'*N*
+*Cc:   '%s'*N*
+*Bcc:  '%s'*N*
+*Reply:'%s'*N*
+*",     from., to., cc., bcc., reply.)
+        ENDREAD()
+$)
+
+

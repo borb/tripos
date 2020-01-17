@@ -1,0 +1,38 @@
+/****************************************************************************
+**            (C) Copyright 1980  TRIPOS Research Group                    **
+**           University of Cambridge Computer Laboratory                   **
+*****************************************************************************
+
+
+                #######   ########  #######   ########
+                ########  ########  ########  ########
+                ##    ##     ##     ##    ##  ##
+                #######      ##     #######   ######
+                ##           ##     ##        ##
+                ##           ##     ##        ##
+                ##        ########  ##        ########
+                ##        ########  ##        ########
+
+*****************************************************************************
+**      Author:   Mike Richardson                        April 1980        **
+****************************************************************************/
+
+SECTION "PIPE"
+GET     "LIBHDR"
+GET     "IOHDR"
+
+LET start ( parm, act, scb, string ) = VALOF
+$(
+    LET task = ?
+
+    UNLESS callseg ( "sys:c.mount", "pipe:" ) DO RESULTIS FALSE
+
+    task := devicetask(string) ; IF task=0 THEN RESULTIS FALSE
+
+    scb ! scb.type := task
+    returncode     := 0
+
+    RESULTIS sendpkt ( notinuse, task, act, ?, ?, scb, 0, string )
+$)
+
+

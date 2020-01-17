@@ -1,0 +1,64 @@
+SECTION "RX50-Fill"
+
+GET "libhdr"
+GET "iohdr"
+GET "bcpl.string-to-number"
+
+LET start() BE
+$(
+    MANIFEST
+    $(
+        sectors = 800
+        chunk = 1
+        dudev = -2
+        blksize = 256
+    $)
+
+    GLOBAL
+    $(
+        unit : ug
+    $)
+
+    LET buffer = ?
+    LET argv = VEC 10
+    LET witharg, withval = ?, ?
+    IF rdargs("UNIT/A,WITH/A/K", argv, 10) = 0 THEN $( writes("Bad args*N"); stop(16) $)
+    unit := getunit(argv!0)
+    witharg := argv!1
+    IF witharg ~= 0 THEN
+    $(  IF NOT string.to.number(witharg) THEN
+        $(  writef("WITH argument invalid*N")
+            GOTO exit
+        $)
+        withval := result2
+    $)
+
+    buffer := getvec (chunk * blksize - 1)
+    IF buffer=0 THEN $( writes("cannot GETVEC buffer space*N"); stop(16) $)
+
+    FOR i = 0 TO chunk * blksize - 1 DO buffer!i := withval
+
+    FOR sector = 0 TO sectors-1 BY chunk DO
+    $(  LET rc = sendpkt (notinuse, dudev, act.write, 0, 0,
+                          buffer, chunk*blksize, unit, 0, 0, sector)
+        IF rc ~= 0 THEN
+        $(  writef ("write error, unit %N, sector %N, status %N*N",
+                    unit, sector, result2)
+        $)
+    $)
+
+exit:
+
+    freevec(buffer)
+$)
+
+AND getunit(string) = VALOF
+$(
+    // dangerous: IF compstring(string, "0") = 0 THEN RESULTIS 0
+    IF compstring(string, "1") = 0 THEN RESULTIS 1
+    IF compstring(string, "2") = 0 THEN RESULTIS 2
+    writes("Bad unit number*N")
+    stop(16)
+$)
+
+

@@ -1,0 +1,177 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+                  #####   ##        ##    ##  ##    ##  ##    ## 
+                 #######  ##        ##    ##  ###   ##  ##   ##  
+                ##        ##        ##    ##  ####  ##  ##  ##   
+                ##        ##        ##    ##  ## ## ##  ####     
+                ##        ##        ##    ##  ##  ####  ## ##    
+                ##        ##        ##    ##  ##  ####  ##  ##   
+                 #######  ########  ########  ##   ###  ##   ##  
+                  #####   ########   ######   ##    ##  ##    ## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   03/09/84             *
+\*****************************************************************************/
+
+
+
+SECTION "CLUNK"
+
+
+
+GET "LIBHDR"
+
+
+
+GLOBAL
+$(
+    sysin     :  ug + 0
+    sysout    :  ug + 1
+    address   :  ug + 2
+$)
+
+
+
+LET start()  BE
+$(
+//  Main routine of the CLUNK program.  Open the files, and start clunking.
+
+    LET args      =  "FROM/A,TO/A"
+    LET argv      =  VEC 50
+
+    LET f.file    =  0
+    LET t.file    =  0
+    LET f.stream  =  0
+    LET t.stream  =  0
+
+    sysin    :=  input()
+    sysout   :=  output()
+    
+    address  :=  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** CLUNK:  Bad arguments for string *"%S*"*N", args )
+        
+        stop( 20 )
+    $)
+
+    f.file  :=  argv!0
+    t.file  :=  argv!1
+    
+    f.stream  :=  findinput( f.file )
+    t.stream  :=  findoutput( t.file )
+    
+    IF  f.stream = 0  |  t.stream = 0  THEN
+    $(
+        TEST  f.stream = 0
+            THEN  writef( "****** CLUNK:  Cannot open *"%S*"*N", f.file )
+            ELSE  endstream( f.stream )
+
+        TEST  t.stream = 0
+            THEN  writef( "****** CLUNK:  Cannot open *"%S*"*N", t.file )
+            ELSE  endstream( t.stream )
+            
+        stop( 20 )
+    $)
+
+    //  We now have the relevant streams, so select them, and get going.
+
+    writes( "CLUNK  Version 1.00*N" )
+
+    selectinput( f.stream )
+    selectoutput( t.stream )
+
+    $(  //  Main repeat loop, reading records from the file.
+    
+        LET ch  =  rdch()
+
+        TEST  ch = endstreamch  THEN  BREAK
+        ELSE
+        
+        TEST  ch = '$'  THEN  dollarrecord()
+        ELSE
+        
+        TEST  ch = ':'  THEN  colonrecord()
+        
+        ELSE  errorrecord()
+    $)
+    REPEAT
+
+    endread()
+    endwrite()
+
+    selectinput( sysin )
+    selectoutput( sysout )
+
+    writef( "%N bytes clunked*N", address )
+$)
+
+
+
+AND dollarrecord()  BE  skipline()
+
+
+
+AND errorrecord()  BE  skipline()
+
+
+
+AND skipline()  BE
+$(
+//  A record full of Grilling crud.  Ignore it.
+
+    LET ch  =  rdch()
+
+    UNTIL  ch = '*N'  DO  ch  :=  rdch()
+$)
+
+
+
+AND colonrecord()  BE
+$(
+//  The format of these records is:
+//
+//  <length> <address> <type> <data bytes> <checksum>
+
+    LET buffer  =  VEC 100/bytesperword
+
+    LET length  =  readhex()
+    LET addrh   =  readhex()
+    LET addrl   =  readhex()
+    LET type    =  readhex()
+    
+    LET addr    =  (addrh << 8) + addrl
+
+    FOR  i = 1  TO  length  DO  buffer % i  :=  readhex()
+
+    skipline()
+
+    UNLESS  type = #X00  DO  RETURN
+
+    FOR  i = address  TO  addr-1  DO  wrch( #X00 )
+    FOR  i = 1        TO  length  DO  wrch( buffer % i )
+
+    address  :=  addr + length
+$)
+
+
+
+AND readhex()  =  VALOF
+$(
+    LET ch1  =  rdch()
+    LET ch2  =  rdch()
+
+    RESULTIS  (hexch( ch1 ) << 4)  +  hexch( ch2 )
+$)
+
+
+
+AND hexch( ch )  =  '0' <= ch <= '9'  ->  ch - '0',
+                    'A' <= ch <= 'F'  ->  ch - 'A' + 10,  0
+
+

@@ -1,0 +1,128 @@
+MANIFEST
+$(      do.stamp        = bb.ssp.args
+        do.tuid         = do.stamp + 1
+        do.puid         = do.tuid  + 4
+        do.pointers     = do.puid  + 4
+        Max.words       = 255
+$)
+
+LET z80send(stamp, tuid, puid, to., subject, tripos, cap,
+immediate, cc, bcc, mode, replyto, forward, bits, inreply, header, end) = VALOF
+$(  // This rouine send of an SSP send request to the mailserver using a
+    // previously prepared transmit buffer.
+    LET rxbuff          = VEC 10/rwpw
+    LET txbuff          = GETVEC (Max.words/rwpw)
+    LET nsvec           = VEC 3
+    LET null            = TABLE 0,0,0,0
+    LET args            = 1                     // Zero terminator
+    LET mail.port       = ?
+    LET mail.station    = ?
+    LET rc              = ?
+    LET r2              = #XA003
+    LET bitaddr         = VEC 0
+    LET forwardaddr     = VEC 0
+
+    FOR i = @immediate to @end
+                IF !I = -1 THEN FOR ptr = I TO @end DO !ptr := 0
+
+    !bitaddr    := 0
+     bitaddr%%0 := bits
+    !forwardaddr        := 0
+     forwardaddr%%0     := forward
+
+    IF TXBUFF=0
+    $(  LET r2 = RESULT2;
+        WRITEF("GETVEC FAILED in Z80SEND*N")
+        RESULT2 := r2
+        RESULTIS FALSE
+    $)
+
+    k                   := txbuff
+
+    FOR i = @stamp TO @end -1
+    DO  TEST !I = 0
+        THEN IF (i <= @cap) | (i = @header) THEN !I := null
+        ELSE IF i > @puid THEN args := args+1
+unless mode=0 | mode=null THEN args := args-1
+
+    UNLESS lookup.name("MAIL",nsvec) $( freevec(txbuff); RESULT2 := 1001; RESULTIS FALSE $)
+
+    mail.port   := nsvec!2
+    mail.station:= nsvec!0
+
+    k!0         := do.pointers
+    k!1         := do.pointers+args
+
+//mode,
+//forward,
+    add.string(to.,             send.to)
+    add.string(subject,         send.subject)
+    add.item  (tripos, 7,       send.tripos)
+    add.item  (cap, 7,          send.cap)
+    add.item  (header, 7,       send.tripos.header)
+    add.string(immediate,       send.immediate)
+    add.string(cc,              send.cc)
+    add.string(bcc,             send.bcc)
+    add.string(replyto,         send.replyto)
+    add.string(inreply,         send.inreply)
+    UNLESS bits=0
+    add.item  (bitaddr, 1,      send.bits)
+    UNLESS forward=0
+    add.item  (forwardaddr, 1,  send.forward)
+    add.item  ((TABLE 1), -1,   0)
+
+    k := k!1
+
+    // BEWARE ----- k!1 uses upto k %% (rwpw)-1 i.e. bb.ssp.args on 68000 !!
+
+    // Set a unique tag based on the time of day:
+    txbuff%%do.stamp := stamp=null-> (rootnode!rtn.mins<<12)|rootnode!rtn.ticks,
+                                      stamp
+    // Set the TUID and PUID of the user
+    FOR i=0 TO 3 DO txbuff%%(do.tuid+i) := tuid %% i
+    FOR i=0 TO 3 DO txbuff%%(do.puid+i) := puid %% i
+
+
+    IF k > Max.words    $( freevec(txbuff); RESULT2 := #XD00B; RESULTIS FALSE $)
+
+    FOR i=0 TO 10
+    $(  IF testflags(1)
+        $(  FREEVEC(txbuff)
+            LONGJUMP(ms.user.break.level,ms.user.break.link)
+        $)
+
+        FOR congestion = 0 TO 3
+        DO  TEST ssp((i<3) -> "mail.send", 0, txbuff, k, rxbuff, 10, 0,
+                                ssp.send.request, mail.station, mail.port)
+            $(  FREEVEC(txbuff); RESULTIS TRUE $)
+            ELSE TEST RESULT2 = #XA003
+                 THEN delay(tickspersecond/2) <> RESULT2 := #XA003
+                 ELSE BREAK
+
+        IF R2 = #XA003 THEN R2 := RESULT2       // First non congestion ........
+        IF R2 = #XDF3D THEN BREAK
+    $)
+
+
+    // If this point is reached then the SSP is persistently failing.
+    FREEVEC(txbuff)
+    RESULT2 := r2
+    RESULTIS FALSE
+$)
+
+AND add.item(address, upb, type) BE UNLESS address!0 = 0 | address=0
+$(  LET data = k!1
+    LET pointer = k!0
+//  IF (address!0)%0 = 0 RETURN
+
+    k!1 := data + upb/bprw+1
+    IF k!1 > Max.words wto.mc("delta", "block too long") <> RETURN
+    FOR i=0 TO upb/bprw DO k%%(data + i) := address %% i
+    k%%pointer := (type << 8) + data
+
+    k!0 := pointer      + 1
+$)
+
+AND add.string(users, type) BE add.item(users, users%0, type)
+
+

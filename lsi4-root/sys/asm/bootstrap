@@ -1,0 +1,76 @@
+* This is the initial bootstrap for 80 Mbyte discs.
+* The command MAKEBOOT takes the object module of this program
+* and writes the code to block 0 of the disc.
+
+        ABS     :0000
+* Set the XA bit in the S register
+        SBIT    6,S
+* If the sense switch is unset, schedule to
+* read the emergency bootstrap.
+        JT      SS,ON           IF SENSE GOTO ON
+        IMS     CYL
+        IMS     CYL             CYL := 3
+ON
+* Move the three chained control blocks to the top of store.
+        CEA     CB2,X
+        COPY    =-21,Y          Memory address
+        COPY    =21,A           Wordcount
+        JST     BLKMOVE
+
+
+* Reset the disc controller.
+        SELP    A,:A4
+* Start the transfer.
+        SST     :A0             Skip if idle
+        JMP     $-1
+        COPY    =-13,X          X := @CB1
+        OUT     X,:A0
+        JMPE    -1              Wait for end of transfer.
+
+* Block move routine:
+* From address in X, to address in Y, length in A.
+BLKMOVE DATA    0
+TEST    JEQ     A,EXIT          IF A=0 GOTO EXIT
+        COPY    0(X),Q          Q := !X
+        COPY    Q,0(Y)          !Y := Q
+        ADD     =1,X            X := X+1
+        ADD     =1,Y            Y := Y+1
+        SUB     =1,A            A := A-1
+        JMP     TEST
+
+EXIT    JMP     *BLKMOVE
+
+* The three chained control blocks for the disc transfer follow.
+* They are set up so that the chaining will be correct when
+* they have been copied up to the top of store.
+
+CB2     DATA    30000           Word count
+        DATA    30000           Memory address
+        DATA    0               (Reserved)
+        DATA    -17             Next IOB
+
+CB3     DATA    5536            Word count
+        DATA    60000           Memory address
+        DATA    0               (Reserved)
+        DATA    0               End of chain
+
+CB1     DATA    4               Opcode (read)
+        DATA    0               Unit
+CYL     DATA    1               Cyl
+        DATA    0               Head
+        DATA    0               Sector
+        DATA    30000           Word count
+        DATA    0               Memory address
+        DATA    0               No interrupts
+        DATA    -21             Next IOB
+
+* Space for returncode info from disc controller
+* (this is why block CB1 is last: SYSLINK does not put any of TRIPOS here).
+        DATA    0
+        DATA    0
+        DATA    0
+        DATA    :9E7F           Relative JMP $ (zapped at end of transfer)
+
+        END
+
+

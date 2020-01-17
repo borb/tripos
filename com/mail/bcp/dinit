@@ -1,0 +1,256 @@
+SECTION "DINIT"
+
+GET "header"
+GET "CLIHDR"
+GET "IOHDR"
+GET "BCPL.RMSSPLIB"
+
+
+MANIFEST
+    $(
+    task.ringhandler = 5
+    task.bsphandler  = 6
+    task.ringserv    = 7
+
+    act.connect                 = 800
+    act.disconnect              = 801
+    act.start.rm.refresh        = 802 // packet type to RMVTHAND
+
+    bb.ssp.arg4         = bb.ssp.arg3 + 1
+    rmssp.servicename   = bb.ssp.args + 7 // This word of the reply
+                                          // block gives the word offset
+                                          // of the connection service name
+                                          // string.
+    rmssp.reply.size    = 50 // Words
+    max.name.chars      = 30 // Longest service name we allow
+    bsp.prefix.len      = 0  // Was last char of "BSP:" (now abolished)
+    ringdat.reply.size  = 20 // Words
+    max.logon.wait      = tickspersecond*60*3 // Time user has to reply
+    err.suffix.too.long = 425
+    ms.init.stacksize  = 400 // stack for MS.INIT coroutine
+    initial.rm.timeout  = 2     // Minutes
+    $)
+
+
+
+LET start (parm.pkt) BE
+    $( // Main body of ms.INIT.CO
+    LET pkt             = VEC pkt.arg6
+    LET dummy           = maxglob
+    LET machine.name    = ?
+    LET ssptype         = ?
+
+    // Start up Ring handler first - everything else uses it
+    pkt!pkt.link := notinuse
+    pkt!pkt.id   := task.ringhandler
+    pkt!pkt.type  := act.findfreeport
+    pkt!pkt.arg1 :=
+$<LSI4TRIPOS        -4 // RX device
+    pkt!pkt.arg2 := -3 // TX device
+$>LSI4TRIPOS
+$<68000TRIPOS       -2  // RX and TX
+$>68000TRIPOS
+    pkt!pkt.arg3 := FALSE // Not breakable
+    UNLESS qpkt(pkt)=0 THEN taskwait()
+    rhtaskid := task.ringhandler
+
+    // Start up the virtual terminal handler (solely to operate the dead man's
+    // handle to Resource Mananger).
+    pkt!pkt.id := task.consolehandler
+    qpkt(pkt); taskwait()
+
+    // Call the resource manager to find out how long we've got,
+    // to establish the refresh time interval, and to find out the Demon
+    // function that was requested
+    ssptype := rmssp()
+
+    // Find out this machine's name and number from the nameserver.
+    myname()
+
+    machine.name := rootnode ! rtn.info ! rtninfo.ring ! ri.myname
+
+    // Set the system date and time from the ring clock
+   ringdat()            //THEN commit.suicide()
+
+   // Convert RM expiry time to Tripos minutes time
+   stop.time := stop.time + rootnode!rtn.mins - 2
+   IF stop.time > 1440 THEN stop.time := stop.time - 1440
+   User.puid, User.tuid := 0,0
+
+    // Issue a start-up message to the ring log
+    // Call the appropriate demon.
+    SWITCHON ssptype INTO
+    $(  CASE 0: sdemon();                                               ENDCASE
+        CASE 1:
+                Wto.log("MAIL: Compress demon V 1.4.2 starting");
+                cdemon()
+                WTO.log("MAIL: Compress demon V 1.4.2 finished");       ENDCASE
+        DEFAULT:
+                WTO.LOG("MAIL: Unknown Demon entry reson");
+                commit.suicide()                // Die an honourable death !
+    $)
+
+    // Probably changed things, so tell the Z80 ...
+    z80prod(ssp.demon.end, 0,0, 0,0, -1)
+//    kick.postman(TRUE)        //??
+
+    // Die an honourable death:
+    commit.suicide()
+$)
+
+
+AND myname() BE
+$(
+    LET info.vec = rootnode ! rtn.info ! rtninfo.ring
+    LET oldname  = info.vec ! ri.myname
+    LET newname  = ?
+    LET len      = ?
+    LET tx.block = VEC bb.ssp.args
+    LET rx.buff  = VEC 20
+    LET nsvec    = VEC 3
+
+    If ssp(0, tx.block, 3, rx.buff, 21, nsvec, 0, id.nameserver,
+             4 /* port for own name */)
+    THEN $(
+        len := byteget(rx.buff, bb.ssp.arg1*bytesperringword +  0)
+        newname := getvec(len/bytesperword)  // Small, so won't fail (!)
+        FOR i=0 TO len
+        DO newname%i := byteget(rx.buff, bb.ssp.arg1*bytesperringword + i)
+
+        freevec(oldname)
+        info.vec ! ri.myname := newname
+
+        //  Now do a forward lookup to get our device number.  (Ugh!)
+
+        $(
+            LET nsvec=VEC 3
+            lookup.name(newname,nsvec)
+            info.vec!ri.myaddr:=nsv.machine.id!nsvec
+        $)
+        RETURN
+    $)
+$) REPEAT
+
+
+AND rmssp () = VALOF                            // Required action
+    $(
+    LET txbuff          = VEC 4                 // transmission buffer
+    LET rxbuff          = VEC (rmssp.reply.size*2)/bytesperword // reception
+    LET reply.size      = ?
+    LET nsvec           = VEC 3                 // nameserver info
+    LET r2              = 0
+    LET res             = ?
+    LET allocation.mode = 0                     // Way in which loaded
+    LET revconn.name            = 0             // Vector to hold name string
+    LET revconn.name.offset     = 0             // Offset in reply block
+    LET revconn.name.len        = 0             // Name length
+    LET ringinfo                = rootnode ! rtn.info ! info.ringinfo
+    LET auxdata                 = ?
+    // Set up transmission buffer with the initial timeout period
+
+    put2bytes(txbuff, bb.ssp.args, [2 << 8] | 2) // Param code + length
+    put2bytes(txbuff, bb.ssp.args+1, initial.rm.timeout)
+
+
+    UNLESS ssp("rmssp", txbuff, 5, rxbuff, rmssp.reply.size,
+                                               nsvec, 10 /* info service */)
+    $(  LET faultcode = result2
+        wto.log ( "MAIL DEMON: RMSSP failed!" )
+//      wto.log ( fault.mess (faultcode, rxbuff) )
+        RESULTIS -1
+    $)
+    reply.size  := result2      // Dibytes in received reply
+
+    // Pick up (a) the mode of allocation
+    //         (d) allocation time left in minutes
+    //         (f) auxiliary data (normally a uidset to be presented in
+    //             the reverse connection OPEN block)
+
+    // Get the allocation mode
+    UNLESS rmssp.get.int.param(rxbuff, reply.size, 2 /* allocation mode */)
+    THEN $( wto.log("Allocation mode missing"); RESULTIS FALSE $)
+
+    allocation.mode     := result2
+    // Note the (minutes) time at which the Demon should stop voluntarily
+    // so as to avoid being killed by Resource Manager.
+    TEST rmssp.get.int.param(rxbuff, reply.size, 5 /* allocation time */)
+    THEN stop.time := result2
+    ELSE $( wto.log("Allocation time missing"); stop.time := 0 $)
+
+    TEST rmssp.find.param(rxbuff, reply.size, 7 /* auxiliary data */)
+    $(
+      LET dibyte.offset = result2
+      LET header        = get2bytes(rxbuff, dibyte.offset)
+      LET num.dibytes   = [header & #X00FF] - 1  // Extract parameter size
+      auxdata           := getvec( [num.dibytes+1]*2/bytesperword )
+
+      IF num.dibytes < 2
+      $(        wto.log("Not enought load data")
+                RESULTIS -1
+      $)
+      put2bytes(auxdata, 0, num.dibytes)  // Put size in first dibyte
+      FOR i=1 TO num.dibytes
+      DO put2bytes(auxdata, i, get2bytes[rxbuff, dibyte.offset+i] )
+
+      // Install vector in root node
+
+      freevec(ringinfo ! ri.load.data)          // Free SYSLINKed stuff
+      ringinfo ! ri.load.data   := auxdata      // Install new one
+    $)
+    ELSE
+    $(  wto.log("No load data")
+        RESULTIS -1
+    $)
+
+    // The action to be taken next depends on the mode of allocation.
+    // The codes are as follows:
+    // 0 - booted by SSP to RM, so no terminal to connect to
+    // 1 - booted via SM, so there is a terminal
+    // 2 - booted in 'sub service' mode
+    UNLESS allocation.mode = 0
+    $(
+      /**/ TEST allocation.mode=1
+      THEN wto.log("loaded by BSP")
+      ELSE TEST allocation.mode=2
+      THEN wto.log("loaded in 'sub service' mode")
+      ELSE wto.log("loaded with invalid allocation mode")
+      RESULTIS -1  // I.e. no connection
+    $)
+
+    sendpkt(notinuse, task.consolehandler, act.start.rm.refresh)
+    // Check the "TRACE" boolean in the parameters.
+    IF auxdata%%2 THEN trace := TRUE
+    RESULTIS auxdata%%1
+$)
+
+AND ringdat(quiet) = VALOF
+$(
+    rootnode ! rtn.days := 0
+    rootnode ! rtn.mins := 0
+    rootnode ! rtn.ticks:= 0
+    RESULTIS TRUE
+$)
+
+//==============================================================================
+
+AND commit.suicide() BE
+$(  // Call RM "finish" function to release machine
+    LET txbuff = VEC 5
+    LET rxbuff = VEC 100
+    LET nsvec = VEC 10
+
+    txbuff %%  bb.ssp.args      := #X0202
+    txbuff %% (bb.ssp.args+1)   := 0
+
+    FOR I = 0 TO 20
+    $(  IF ssp("RMSSP", txbuff,bb.ssp.args+2, rxbuff,35, nsvec, 10) THEN BREAK
+        wto.mc("file", "Demon Die attempt %N failed", i)
+        delay(tickspersecond)
+    $)
+    changepri(MAXINT)
+    lab: GOTO lab
+$)
+
+//==============================================================================
+
+

@@ -1,0 +1,48 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "ECHO"
+GET     "LIBHDR"
+
+LET start() BE
+ $( LET ch      = rdch ()
+    LET quoted  = FALSE
+
+    LET termch (ch) = [ ch = '*N' ] | [ ch = '*E' ] | [ ch = endstreamch ]
+
+    WHILE [ ch = '*S' ] | [ ch = '*T' ] DO ch := rdch ()
+
+    IF [ ch = '"' ] THEN $( quoted := TRUE ; ch := rdch () $)
+
+    UNTIL termch (ch) DO
+       $( IF [ ch = ';' ] & [ NOT quoted ] THEN BREAK
+          IF [ ch = '"' ] &       quoted   THEN BREAK
+          IF [ ch = '**' ] & quoted THEN
+          $( ch := rdch ()
+             ch := VALOF SWITCHON capitalch(ch) INTO
+                   $( CASE 'N'  : RESULTIS '*N'
+                      CASE 'E'  : RESULTIS '*E'
+                      CASE 'T'  : RESULTIS '*T'
+                      CASE 'P'  : RESULTIS '*P'
+                      CASE 'S'  : RESULTIS '*S'
+                      CASE 'B'  : RESULTIS '*B'
+                      CASE 'C'  : RESULTIS '*C'
+                      CASE 'L'  : RESULTIS '*C'
+                      CASE '"'  : RESULTIS '"'
+                      CASE '**' : RESULTIS '**'
+                      DEFAULT   : RESULTIS ch
+                   $)
+          $)
+          wrch (ch)
+          ch := rdch ()
+       $)
+
+    UNTIL termch (ch) | [ ch = ';' ] DO ch := rdch ()
+
+    newline ()
+    stop    (0)
+$)
+
+
+

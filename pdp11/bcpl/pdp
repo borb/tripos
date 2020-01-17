@@ -1,0 +1,217 @@
+SECTION "PDP"
+
+GET "libhdr"
+
+GLOBAL
+$(
+    input.file          : ug
+    output.file         : ug+1
+    terminal.input      : ug+2
+    terminal.output     : ug+3
+    pon                 : ug+4
+    buffer              : ug+5
+$)
+
+MANIFEST
+$(
+    ack.char            = '+'
+    nack.char           = '-'
+
+    argv.upb            = 80/bytesperword // argument vector size
+
+    act.dir             = 1
+    act.give            = 2
+    act.take            = 3
+$)
+
+
+LET start() BE
+$(  LET rc = 0
+    LET argv = VEC argv.upb
+    LET rdargs.string = "ACTION/A,NAME/A,FROM/K,TO/K,SWAP/S"
+    LET actions = "DIR,GIVE,TAKE"
+    LET act = ?
+    LET arg.act, arg.name, arg.from, arg.to, arg.swap = ?, ?, ?, ?, ?
+    LET original.input = input()
+    LET original.output = output()
+    terminal.input := findinput("**")
+    terminal.output := findoutput("**")
+    buffer := getvec(256/bytesperword)
+    input.file := 0
+    output.file := 0
+    pon := FALSE
+
+
+    IF buffer=0 THEN
+    $(  writes("failed to get store for buffer*N")
+        rc := 16
+        GOTO exit
+    $)
+
+    // Read command line arguments
+
+    IF rdargs (rdargs.string, argv, argv.upb) = 0 THEN
+    $(  writef ("bad arguments for RDARGS string *"%S*"*N", rdargs.string)
+        rc := 8
+        GOTO exit
+    $)
+
+    arg.act  := argv!0
+    arg.name := argv!1
+    arg.from := argv!2
+    arg.to   := argv!3
+    arg.swap := argv!4
+
+    act := findarg(actions, arg.act) + 1
+
+    IF  VALOF SWITCHON act INTO
+        $(  DEFAULT:            RESULTIS TRUE
+            CASE act.dir:       RESULTIS (arg.from ~= 0) | (arg.to ~= 0) | arg.swap
+            CASE act.give:      RESULTIS (arg.from = 0) | (arg.to ~= 0)
+            CASE act.take:      RESULTIS (arg.from ~= 0) | (arg.to = 0)
+        $)
+    THEN    $(  writef ("invalid arguments*N")
+        rc := 8
+        GOTO exit
+    $)
+
+    SWITCHON act INTO
+    $(  CASE act.give:  input.file := findinput(arg.from)
+                        IF input.file = 0 THEN
+                        $(  LET reason = result2
+                            writef("Failed to open input file %S - ", arg.from)
+                            fault(reason)
+                            GOTO exit
+                        $)
+                        ENDCASE
+
+        CASE act.take:  output.file := findoutput(arg.to)
+                        IF output.file = 0 THEN
+                        $(  LET reason = result2
+                            writef("Failed to open output file %S - ", arg.to)
+                            fault(reason)
+                            GOTO exit
+                        $)
+                        ENDCASE
+    $)
+
+    selectinput(terminal.input)
+    selectoutput(terminal.output)
+
+    out.byte(act)
+    FOR i = 0 TO arg.name%0 DO out.byte(arg.name%i)
+    IF NOT ack() THEN GOTO exit
+
+    SWITCHON act INTO
+    $(  CASE act.give:  $(      LET count = 0
+                                selectinput(input.file)
+                                $(  LET ch = rdch()
+                                    IF ch = endstreamch THEN BREAK
+                                    buffer%count := ch
+                                    count := count + 1
+                                $)  REPEATUNTIL count = 254
+                                selectinput(terminal.input)
+                                IF arg.swap THEN
+                                $(  FOR i = 0 TO count-2 BY 2 DO
+                                    $(  LET a = buffer%i
+                                        buffer%i := buffer%(i+1)
+                                        buffer%(i+1) := a
+                                    $)
+                                $)
+                                out.byte(count)
+                                FOR i = 0 TO count-1 DO out.byte(buffer%i)
+                                IF NOT ack() THEN GOTO exit
+                                IF count=0 THEN BREAK
+                        $)      REPEAT
+                        ENDCASE
+
+        CASE act.take:  $(      LET count = 0
+                                selectoutput(terminal.output)
+                                p.on(); wrch(ack.char); wrch ('*E')
+                                selectinput(terminal.input)
+                                count := in.byte()
+                                FOR i = 0 TO count-1 DO buffer%i := in.byte()
+                                IF arg.swap THEN
+                                $(  FOR i = 0 TO count-2 BY 2 DO
+                                    $(  LET a = buffer%i
+                                        buffer%i := buffer%(i+1)
+                                        buffer%(i+1) := a
+                                    $)
+                                $)
+                                selectoutput(output.file)
+                                FOR i = 0 TO count-1 DO wrch(buffer%i)
+                                IF count=0 THEN BREAK
+                        $)      REPEAT
+                        endwrite()
+                        output.file := 0
+                        selectoutput(terminal.output)
+                        p.off()
+                        ENDCASE
+    $)
+
+exit:
+
+    p.off()
+    IF input.file ~= 0 THEN
+    $(  selectinput(input.file)
+        endread()
+        selectinput(terminal.input)
+        endread()
+        selectinput(original.input)
+    $)
+    IF output.file ~= 0 THEN
+    $(  selectoutput(output.file)
+        endwrite()
+        selectoutput(terminal.output)
+        endwrite()
+        selectoutput(original.output)
+    $)
+    freevec(buffer)
+
+$)
+
+
+AND out.byte(b) BE
+$(  p.on()
+    wrch ('0' + (b>>4))
+    wrch ('0' + (b&15))
+$)
+
+AND ack() = VALOF
+$(  newline()
+    $(  SWITCHON rdch() INTO
+        $(  CASE ack.char:      p.off()
+                                RESULTIS TRUE
+            CASE nack.char:     p.off()
+                                writes("NACK received*N")
+                                RESULTIS FALSE
+        $)
+    $)  REPEAT
+$)
+
+AND in.byte() = VALOF
+$(  LET ms = in.nibble() << 4
+    RESULTIS ms | in.nibble()
+$)
+
+AND in.nibble() = VALOF
+$(  LET ch = rdch() & 127
+    IF '0' <= ch <= '?' THEN RESULTIS ch & 15
+$)  REPEAT
+
+AND p.on() BE
+    IF NOT pon THEN
+    $(  wrch(128+27)
+        wrch('(')
+        pon := TRUE
+    $)
+
+AND p.off() BE
+    IF pon THEN
+    $(  wrch(128+27)
+        wrch(')')
+        wrch('*E') // forceout
+        pon := FALSE
+    $)
+
+

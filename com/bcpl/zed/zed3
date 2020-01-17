@@ -1,0 +1,348 @@
+SECTION "ZED3"
+
+GET "HDR"
+
+LET checkvalidchar() BE
+    TEST comm='*S' | comm='*N' | comm=';'  |
+         comm='**' | comm='.'  | '0'<=comm<='9'
+    THEN
+       uncommrdch()
+    ELSE
+       error(err.udc, sw.comm, comm)
+
+
+AND checkspaceornl() BE
+    TEST comm='*S' | comm='*N' | comm=';'
+    THEN
+       uncommrdch()
+    ELSE
+       error(err.udc, sw.comm, comm)
+
+
+AND readcommline() BE
+ $( commlinel := 0
+    selectinput(edits)
+
+    $( LET ch = rdch()
+       IF ch='*E' | ch='*N' | ch='*C' | ch='*P' BREAK
+       IF ch=endstreamch DO
+       $( IF commlinel=0 DO commlinel := -1
+          BREAK
+       $)
+       commlinel := commlinel+1
+       UNLESS commlinel>maxlinel DO
+          commbuf%commlinel := ch
+    $) REPEAT
+
+    IF commlinel>maxlinel DO
+    $( commlinel := maxlinel
+       writes("****** Command line truncated*N")
+       rc := 10
+    $)
+    commpoint := 0
+ $)
+
+
+AND commrdch() = VALOF
+ $( commpoint := commpoint+1
+    comm := commlinel=-1 -> endstreamch,
+            commpoint>commlinel -> '*N',
+            capitalch(commbuf%commpoint)
+    RESULTIS comm
+ $)
+
+
+AND uncommrdch() BE
+    commpoint := commpoint-1
+
+
+AND nextcomm() BE
+    commrdch() REPEATWHILE comm='*S'
+
+
+AND readplusminus() = VALOF
+ $( commrdch()
+    IF comm='+' RESULTIS TRUE
+    IF comm='-' RESULTIS FALSE
+    error(err.pm, sw.comm)
+ $)
+
+
+AND commreadn() = VALOF
+ $( LET a = 0
+    $( a := a*10+comm-'0'
+       commrdch()
+    $) REPEATWHILE '0'<=comm<='9'
+    uncommrdch()
+    RESULTIS a
+ $)
+
+
+// read a number argument
+// '*' => end of document
+// '.' =>  -> 1, CURRENT
+AND numarg(add, opt, def) = VALOF
+ $( nextcomm()
+    TEST comm = '.' THEN
+       RESULTIS add -> 1, current
+    ELSE TEST comm = '**' THEN
+       RESULTIS maxint
+    ELSE TEST '0'<=comm<='9' THEN
+       RESULTIS commreadn()
+    ELSE TEST opt THEN
+    $( uncommrdch()
+       RESULTIS def $)
+    ELSE
+       error(err.num, sw.comm)
+ $)
+
+
+// read a context string argument
+AND readcontext(v) BE
+ $( LET i = 0
+   IF delim = 0 RETURN // Use previous string
+    $( commrdch()
+       IF comm=delim | comm='*N' BREAK
+       IF i>=smax DO error(err.str)
+       i := i+1
+       v!i := commbuf%commpoint
+    $) REPEAT
+    v!0 := i
+ $)
+
+
+AND abe.args(c) BE  UNLESS repeating DO
+ $( str.comm := c
+    str.qual := getstring( str.match, TRUE )
+    readcontext(str.repl)
+ $)
+
+
+AND getstring(v, qsw) = VALOF
+$( LET q = ?
+   commrdch()
+   IF 'A' <= comm <= 'Z' THEN
+      error( err.udc )
+   uncommrdch()
+   q := getdelim( FALSE )
+   UNLESS qsw | q = 'O' THEN error( err.iql )
+   readcontext(v)
+   RESULTIS q
+$)
+
+
+AND lf.arg(c) BE
+ $( commrdch()
+    IF 'A' <= comm <= 'Z' THEN error( err.udc )
+    uncommrdch()
+    f.qual := getdelim( TRUE )
+    IF delim = 0 & f.qual = c.nc THEN
+       error( err.rep )
+    readcontext(f.match)
+ $)
+
+AND getdelim( flag ) = valof
+$( // Sets global delim and returns string qualifier
+   LET qual = 'O' // signal as no qualifier given
+  LET ufound = FALSE
+   $(
+   commrdch()
+   SWITCHON comm INTO
+   $( CASE '*S': LOOP
+      CASE '*N': CASE '*E': CASE ';':
+      // Repeat last command
+      UNLESS FLAG error( err.cntx, sw.comm )
+      UNLESS qual='O' error( err.iql )
+      delim := 0
+      RESULTIS f.qual
+      CASE 'P': UNLESS FLAG error( err.iql )
+      CASE 'B': CASE 'E': CASE 'L':
+      UNLESS qual = 'O' THEN error( err.iql )
+      qual := comm; LOOP // Valid qualifier
+      CASE 'U': ufound := TRUE; ENDCASE  // Upper case switch
+      CASE '/': CASE '+': CASE '-': CASE '**':
+      CASE ',': CASE '.': CASE ':': CASE '?':
+      delim := comm   // Valid delimiter
+      RESULTIS ufound -> -qual, qual
+      DEFAULT: error( err.uql )
+    $)
+   $) REPEAT
+$)
+
+
+// read a file title argument
+AND readfiletitle(v) = VALOF
+$( nextcomm() // Skip past spaces
+   IF comm = '*N' | comm = ';' | comm = '*E' THEN
+   $( v%0 := 0
+      RESULTIS 0 $) // No filetitle given
+   uncommrdch() // Put it back
+   getstring( svec, FALSE ) // Get unqualified string
+   packstring( svec, v )    // Turn into BCPL string
+   IF svec!0 > fmax*bytesperword DO error( err.str )
+   RESULTIS svec!0
+$)
+
+
+// add a file spec to the file list
+AND addfilespec(v, type) = VALOF
+ $( LET p = newvec(fmin+fmax)
+    LET s = type=s.in -> findinput(v), findoutput(v)
+    IF s=0 DO error(err.ff, v)
+    !p := filelist
+    filelist := p
+    FOR i = 0 TO v%0 DO (p+f.fn)%i := v%i
+    p!f.lc := 0
+    p!f.ex := FALSE
+    p!f.io := type
+    p!f.sp := s
+    RESULTIS p
+ $)
+
+
+// find a file spec in the file list
+AND findfilespec(v, type) = VALOF
+ $( LET p = @filelist
+    UNTIL !p=0 DO
+    $( LET t = !p
+       TEST compstring(t+f.fn, v)=0 & type=t!f.io THEN
+          RESULTIS t
+       ELSE
+          p := t
+    $)
+    RESULTIS 0
+ $)
+
+
+// close a file and remove it from the list
+AND losefilespec(pf) BE
+ $( LET p = @filelist
+    UNTIL !p=0 DO
+    $( LET t = !p
+       TEST t = pf THEN
+       $( LET close = t!f.io=s.in ->
+                  closein, closeout
+          close(t!f.sp)
+          !p := !t
+          discardvec(t)
+          BREAK
+       $)
+       ELSE p := t
+    $)
+ $)
+
+
+AND closefile() BE
+ $( LET v = VEC fmax
+    LET e = readfiletitle(v)
+    IF e=0 DO error(err.fnx)
+    e := findfilespec(v, s.out)
+    UNLESS e=0 DO
+    $( IF e=currentoutput DO
+       $( UNTIL oldestline=currentline DO writeline()
+          currentoutput := primaryoutput
+          textout := currentoutput!f.sp
+       $)
+       losefilespec(e)
+    $)
+    e := findfilespec(v, s.in)
+    UNLESS e=0 DO
+    $( IF e=currentinput DO
+       $( renumber(-1)
+          currentinput := primaryinput
+          current := currentinput!f.lc
+          exhausted := currentinput!f.ex
+          textin := currentinput!f.sp
+       $)
+       losefilespec(e)
+    $)
+ $)
+
+
+// change the command input stream
+// stack the current command line and its pointers
+AND changecom() BE
+ $( LET v = VEC fmax
+    LET e = readfiletitle(v)
+    LET f = 0
+    LET s = 0
+    IF e=0 DO error(err.fnx)
+    IF cfsp>cfmax DO error(err.cfv)
+    e := findinput(v)
+    IF e=0 DO error(err.ff, v)
+    s := commlinel/bytesperword
+    f := newvec(cf.cb+s)
+    f!cf.cp := commpoint
+    f!cf.cl := commlinel
+    f!cf.sp := edits
+    f!cf.el := editlevel
+    FOR i = 0 TO s DO
+       (f+cf.cb)!i := commbuf!i
+    cfstack!cfsp := f
+    cfsp := cfsp+1
+    edits := e
+ $)
+
+
+// revert to the previous command stream
+AND revertcom() BE
+ $( LET f = 0
+    closein(edits)
+    cfsp := cfsp-1
+    f := cfstack!cfsp
+    commpoint := f!cf.cp
+    commlinel := f!cf.cl
+    edits := f!cf.sp
+    editlevel := f!cf.el
+    FOR i = 0 TO commlinel/bytesperword DO
+       commbuf!i := (f+cf.cb)!i
+    discardvec(f)
+ $)
+
+
+// change the current output stream
+// read file name and look it up
+// if not found then open it
+AND changeout() BE
+ $( LET v = VEC fmax
+    LET e = readfiletitle(v)
+    TEST e=0 | compstring(v, "#")=0 THEN
+       e := primaryoutput
+    ELSE
+    $( e := findfilespec(v, s.out)
+       IF e=0 DO e := addfilespec(v, s.out)
+    $)
+    UNTIL oldestline=currentline DO writeline()
+    currentoutput := e
+    textout := currentoutput!f.sp
+ $)
+
+
+// change the current input stream
+AND changein() BE
+ $( LET v = VEC fmax
+    LET e = readfiletitle(v)
+    TEST e=0 | compstring(v, "#")=0 THEN
+       e := primaryinput
+    ELSE
+    $( e := findfilespec(v, s.in)
+       IF e=0 DO e := addfilespec(v, s.in)
+    $)
+    renumber(-1)
+    currentinput := e
+    textin := e!f.sp
+    IF currentline!l.next=0 DO
+       exhausted := e!f.ex
+ $)
+
+
+AND showdata( qual, string ) BE
+$( // Writes out info on qualified strings
+   IF qual < 0 THEN
+   $( wrch('U'); qual := -qual $)
+   UNLESS qual = 'O' DO wrch( qual )
+   wrch('/')
+   FOR i=1 to string!0 DO wrch( string!i )
+$)
+
+

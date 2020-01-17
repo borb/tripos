@@ -1,0 +1,113 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+  #######   ########  ##    ##   ######   ######      ####    ########
+  ########  ########  ###   ##  ########  #######    ######   ########
+  ##    ##     ##     ####  ##  ##        ##    ##  ##    ##     ##
+  ########     ##     ## ## ##  ##  ####  ##    ##  ########     ##
+  #######      ##     ##  ####  ##    ##  ##    ##  ##    ##     ##
+  ##  ##       ##     ##  ####  ##    ##  ##    ##  ##    ##     ##
+  ##   ##   ########  ##   ###  ########  #######   ##    ##     ##
+  ##    ##  ########  ##    ##   ######   ######    ##    ##     ##
+
+************************************************************************
+**    Author:   Brian Knight                            May 1979      **
+***********************************************************************/
+
+
+// Program to find out the date and time from the ring
+// date and time service, and set it as the
+// system date and time.
+
+// Modifications:
+// 16 Jun 82 by BJK: better failure message, word length dependencies removed
+
+SECTION "RingDaT"
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+
+MANIFEST
+    $(
+    buffsize = 20
+    $)
+
+
+LET start() BE
+    $(
+    LET argv           = VEC 10
+    LET quiet          = ?
+    LET rdargs.string  = "quiet/s"
+
+    IF rdargs(rdargs.string, argv, 10) = 0
+    THEN $( writef("Bad args for key string *"%s*"*n", rdargs.string); stop(20) $)
+
+    quiet       := argv!0 \= 0
+
+    TEST ringdat(quiet)
+    THEN stop(0)
+    ELSE
+      $(
+      writes("****** RINGDAT failed: "); fault(result2)
+      writes("****** Use DATE and TIME commands to set same*N")
+      stop(20)
+      $)
+    $)
+
+
+AND ringdat(quiet) = VALOF
+    $(
+    // Result is TRUE iff it works.
+    // The date and time set are printed iff QUIET is FALSE.
+
+    LET word      = ?
+    LET years.since.1978, month, day.of.month = ?, ?, ?
+    LET hour, min, sec = ?, ?, ?
+    LET ns.vec         = VEC 3
+    LET rx.block       = VEC buffsize-1
+    LET tx.block       = VEC 3
+
+    UNLESS ssp("DaT", tx.block, 3, rx.block, buffsize, ns.vec)
+    THEN RESULTIS FALSE
+
+    word                := get2bytes(rx.block, bb.ssp.args)
+    years.since.1978    := (word >> 8) - 78
+    month               := word & #XFF
+    word                := get2bytes(rx.block, bb.ssp.args+1)
+    day.of.month        := word >> 8
+    hour                := word & #XFF
+    word                := get2bytes(rx.block, bb.ssp.args+2)
+    min                 := word >> 8
+    sec                 := word & #XFF
+
+
+      $( // Set the system date and time from these values
+      LET leap.year = ((years.since.1978+2) REM 4) = 0
+      LET days = 365*years.since.1978 + (years.since.1978 + 1)/4
+      LET mtab = leap.year -> (TABLE 0,0,31,60,91,121,152,182,
+                                     213,244,274,305,335),
+                              (TABLE 0,0,31,59,90,120,151,181,
+                                     212,243,273,304,334)
+      LET datvec = VEC 14
+      LET ticks = sec*tickspersecond
+
+      rootnode ! rtn.days := days + mtab!month + day.of.month - 1
+      rootnode ! rtn.mins := 60*hour + min
+      rootnode ! rtn.ticks := ticks
+
+      UNLESS quiet
+      THEN
+        $(
+        // Print verification!
+        datstring(datvec)
+        writef("%S %S %S*N", datvec+10, datvec, datvec+5)
+        $)
+      $)
+
+    RESULTIS TRUE
+    $)
+
+

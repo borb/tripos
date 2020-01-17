@@ -1,0 +1,97 @@
+SECTION "PUID"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+
+
+
+LET start()  BE
+$(
+//  Program to find the puid of a named object.
+
+    LET args  =  "OBJECT/A"
+    LET argv  =  VEC 50
+    LET name  =  0
+    LET lock  =  0
+    LET puid  =  VEC 3
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** PUID:  Bad arguments for *"%S*"*N", args )
+
+        stop( 20 )
+    $)
+
+    name  :=  argv!0
+    lock  :=  locateobj( name )
+
+    IF  lock = 0  THEN
+    $(
+        writef( "****** PUID:  Cannot locate *"%S*"*N", name )
+        
+        stop( 20 )
+    $)
+
+    TEST  extractpuid( lock, puid )  THEN
+    $(
+        //  We have got the PUID.
+        
+        writes( "PUID is:" )
+        
+        FOR  i = 0  TO  3  DO  writef( " %X4", puid!i )
+        
+        newline()
+    $)
+    ELSE  writef( "****** PUID:  Cannot find PUID of *"%S*"*N", name )
+
+    freeobj( lock )
+$)
+
+
+
+AND extractpuid( lock, puid )  =  VALOF
+$(
+//  Given a Filing Machine lock on an object, check that the object is a
+//  directory, and then attempt to extract the directory puid from it.
+
+    LET fhtask     =  lock!lock.task
+    LET entryinfo  =  VEC dirent.size + file.header.size - 1
+    LET dirheader  =  entryinfo + dirent.size
+
+    UNLESS  examine.obj( fhtask, lock, entryinfo )  DO
+    $(
+        //  Failed to examine the object, so return now.
+        
+        writes( "****** Failed to examine directory*N" )
+        
+        RESULTIS  FALSE
+    $)
+
+    //  If the "type" field of the object is not "fm.type.dir", then we cannot
+    //  go any further.
+
+    UNLESS  dirheader!dir.type = fm.type.dir  DO
+    $(
+        writef( "****** Object is not a directory*N" )
+
+        RESULTIS  FALSE
+    $)
+
+    //  Otherwise, the index puid is at offset "dir.index.puid", and so we
+    //  can copy the puid across.
+    
+    FOR  i = 0  TO  3  DO  puid!i  :=  dirheader!(dir.index.puid + i)
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND examine.obj( fhtask, lock, entryinfo )  =
+    sendpkt( notinuse, fhtask, action.examineobject, ?, ?, lock, entryinfo )
+
+

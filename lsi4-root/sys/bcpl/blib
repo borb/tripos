@@ -1,0 +1,1081 @@
+/*===========================================================================*\
+**===========================================================================**
+**                                                                           **
+**              This must NOT be compiled with stack checking on             **
+**                                                                           **
+**                             Use bcp option -SC                            **
+**                                                                           **
+**===========================================================================**
+\*===========================================================================*/
+
+/*******************************************************************************
+**                 (C) Copyright 1980  TRIPOS Research Group                  **
+**                University of Cambridge Computer Laboratory                 **
+********************************************************************************
+
+                     #######   ##        ########  #######
+                     ########  ##        ########  ########
+                     ##    ##  ##           ##     ##    ##
+                     #######   ##           ##     #######
+                     ##    ##  ##           ##     ##    ##
+                     ##    ##  ##           ##     ##    ##
+                     ########  ########  ########  ########
+                     #######   ########  ########  #######
+
+********************************************************************************
+**                                                                            **
+*******************************************************************************/
+
+
+/*******************************************************************************
+*                                                                              *
+* Modified June  1980 by BJK: New interface for operations involving filenames *
+*          April 1982 by MFR                                                   *
+*                        BJK: Extra filing system operations and other odds    *
+*          March 1984 by BJK: RDCH altered to return EMPTYBUFFCH if it gets a  *
+*                             zero length buffer.                              *
+*                             Control-B break detection put in LOADSEG.        *
+*          5 Apr 1984 by BJK: RDCH again: now works if first buffer of stream  *
+*                             is empty!                                        *
+*         12 Apr 1984 by BJK: LOADSEG now clears break flag on entry.          *
+*         21 Jun 1984 by BJK: FINDDEVICE now refuses to look for SYS:H.SYS, so *
+*                             that removing the assignment for SYS: does not   *
+*                             lead to indefinite recursion. ARA's original     *
+*                             code for preventing this has gone astray at some *
+*                             point in BLIB's life!                            *
+*         29 Sep 1984 by IDW: Manifest "mcrelocinc" added to "loadseg" and     *
+*                             LIBHDR, so that byte addressed, word relocated   *
+*                             machines (e.g. the PDP/11) can be handled        *
+*                             properly.                                        *
+*                                                                              *
+*******************************************************************************/
+
+SECTION "BLIB"
+GET     "LIBHDR"
+GET     "IOHDR"
+GET     "MANHDR"
+GET     "FILEHDR"
+
+/*******************************************************************************
+*                                                                              *
+* fault[code] : write out the fault message for some error code                *
+*                                                                              *
+*******************************************************************************/
+
+LET fault(code) BE callseg("SYS:C.FAULT", -1, code)
+
+/*******************************************************************************
+*                                                                              *
+* unpackstring : unpack a string into a vector                                 *
+*   packstring : pack a string into a vector                                   *
+*                                                                              *
+*******************************************************************************/
+
+ AND unpackstring(s, v) BE FOR i = s%0 TO 0 BY -1 DO v!i := s%i
+
+ AND packstring(v, s) = VALOF
+ $( LET n = v!0 & 255
+    LET size = n/bytesperword
+    FOR i = 0 TO n DO s%i := v!i
+    FOR i = n+1 TO (size+1)*bytesperword-1 DO s%i := 0
+    RESULTIS size
+ $)
+
+/*******************************************************************************
+*                                                                              *
+* endtask[segment] : unload a code segment and kill the current task           *
+*                                                                              *
+*******************************************************************************/
+
+AND endtask (seg) BE
+$( unloadseg  (seg)             // safe to unload the task's code as we are
+   deletetask (taskid)          // running in BLIB which is never unloaded
+   abort      (180)             // deletetask fails if there are any packets
+$)
+
+/*******************************************************************************
+*                                                                              *
+* delay[ticks] : suspend the task for a specified number of clock ticks        *
+*                                                                              *
+*******************************************************************************/
+
+AND delay (ticks) = sendpkt (-1, -1, 0, ?, ?, ticks)
+
+/*******************************************************************************
+*                                                                              *
+* sendpkt[link.task,act,r1,r2,a1,a6...a6] : send a packet and wait for it      *
+*                                                                              *
+*******************************************************************************/
+
+AND sendpkt (link, id, type, res1, res2, a1, a2, a3, a4, a5, a6) = VALOF
+$( LET destination = id
+
+   TEST qpkt (@link) = 0
+        THEN abort (181, result2)
+        ELSE $( LET pkt = pktwait (destination, @link)
+                UNTIL pkt = @link DO $( abort (182, pkt)
+                                        pkt := pktwait (destination, @link)
+                                     $)
+                result2  := res2
+                RESULTIS    res1
+             $)
+$)
+
+/*******************************************************************************
+*                                                                              *
+* pktwait[destination,packet] : wait for a packet to return                    *
+*                                                                              *
+*******************************************************************************/
+
+AND pktwait (/*Destination, Pkt*/) = taskwait ()
+
+/*******************************************************************************
+*                                                                              *
+* returnpkt[pkt,res1,res2] : return a packet with result fields set            *
+*                                                                              *
+*******************************************************************************/
+
+AND returnpkt (packet, res1, res2) = VALOF
+$(
+   packet!pkt.res1, packet!pkt.res2 := res1, res2
+   RESULTIS qpkt (packet)
+$)
+
+/*******************************************************************************
+*                                                                              *
+* initio[] : initialise input/output globals                                   *
+*                                                                              *
+*******************************************************************************/
+
+AND initio () BE
+$( cis          := 0                            // no currently selected streams
+   cos          := 0                            // ..
+   currentdir   := 0                            // set to root of filing system
+   consoletask  := task.consolehandler          // default console task
+$)
+
+/*******************************************************************************
+*                                                                              *
+* rdch[] : read the next character from the input stream                       *
+*                                                                              *
+*******************************************************************************/
+
+AND rdch() = VALOF
+$( LET pos, end = cis!scb.pos, cis!scb.end
+
+   // The END field of the SCB is set to -2 when the stream is exhausted.
+   // -2 is used (rather than 0 or -1) because:
+   //    -2 cannot be a valid END (buffer would fill store)
+   //    -1 is the initial value of END for a new stream
+   //    END will be 0 if the handler delivers an empty buffer
+
+   // If RDCH receives an empty buffer, then it delivers EMPTYBUFFCH.
+   // This will never happen for normal streams to files, terminals, etc.,
+   // but can occur with ring byte streams.
+
+   IF pos>=end THEN
+   $( LET func = cis!scb.func1
+      result2 := 0
+      UNLESS cis!scb.id=id.inscb DO abort (186, cis)
+      IF end  = -2 RESULTIS endstreamch // End of stream was detected earlier
+      IF func = 0 | NOT func (cis) DO
+      $( UNLESS result2=0 DO abort (188, result2)
+         cis!scb.pos, cis!scb.end := 0, -2 // END = -2 means stream exhausted
+         RESULTIS endstreamch
+      $)
+      pos := 0
+   $)
+
+   // We have a buffer, but it may be an empty one.
+   // If it is empty, then set the POS field of the SCB to zero so we will
+   // get a new buffer next time, then return EMPTYBUFFCH.
+
+   IF cis!scb.end=0
+   THEN $( cis!scb.pos := 0; RESULTIS emptybuffch $) // Empty buffer - return marker
+
+   // The buffer contains some characters
+   cis!scb.pos := pos+1; RESULTIS cis!scb.buf%pos
+$)
+
+/*******************************************************************************
+*                                                                              *
+* unrdch[] : move back a space in the input stream                             *
+*                                                                              *
+*******************************************************************************/
+
+AND unrdch() = VALOF
+$( LET pos = cis!scb.pos
+
+   //  Note by IDW:  18/03/87
+   //    MFR had the following line which is a) curious and b) has a comment
+   //    which is meaningless.  If anyone can tell me why he did it this way,
+   //    they can claim a pint from me!
+   //
+   //    IF pos<=0 RESULTIS cis!scb.end=0  // Attempt to 'UnRdch' past buffer origin
+
+   IF  pos <= 0  THEN  RESULTIS  FALSE
+
+   cis!scb.pos := pos-1
+   RESULTIS TRUE
+$)
+
+/*******************************************************************************
+*                                                                              *
+* wrch[ch] : write a character to the output stream                            *
+*                                                                              *
+*******************************************************************************/
+
+AND wrch (ch) BE
+$( LET pos, end = cos!scb.pos, cos!scb.end
+   IF pos >= end DO
+   $( UNLESS deplete () DO abort (189, result2)
+      pos := 0
+   $)
+   cos!scb.buf%pos := ch
+   cos!scb.pos     := pos+1
+   IF ch<'*S' & cos!scb.type<0 & (ch='*N' | ch='*E' | ch='*P' | ch='*C') DO
+   $( UNLESS deplete() DO abort(189, result2)
+      cos!scb.pos := 0
+   $)
+$)
+
+/*******************************************************************************
+*                                                                              *
+* deplete[] : cause the output stream SCB for be emptied                       *
+*                                                                              *
+*******************************************************************************/
+
+AND deplete () = VALOF
+$( LET func = cos!scb.func2
+   LET res2 = result2
+   LET res  = TRUE
+   UNLESS cos!scb.id=id.outscb DO abort (187, result2)
+   UNLESS func=0               DO res := func(cos)
+   result2  := res2
+   RESULTIS    res
+$)
+
+/*******************************************************************************
+*                                                                              *
+* find....[name] : find and open appropriate stream                            *
+*                                                                              *
+*******************************************************************************/
+
+AND findinput (string) = findstream(string,  act.findinput,  id.inscb)
+AND findoutput(string) = findstream(string, act.findoutput, id.outscb)
+AND findupdate(string) = findstream(string, act.findupdate, id.updscb)
+AND findappend(string) = findstream(string, act.findappend, id.outscb)
+
+/*******************************************************************************
+*                                                                              *
+* devicetask[name] : find task (and lock) associated with object name          *
+*                                                                              *
+*******************************************************************************/
+
+AND devicetask (name) = VALOF
+$(
+   // Takes a device name string and returns the task number of the
+   // corresponding device handler. The device name may be a filing
+   // system directory, in which case a pointer to a shared directory
+   // lock is returned in result2.
+
+   LET v        = VEC 30/bytesperword
+   LET dir      = currentdir                    // name relative to this lock
+   LET ptr      = splitname (v, ':', name, 1)   // strip of the prefix if any
+   LET task     = ?
+
+   TEST ptr=0 | ptr=2                           // no prefix or just a colon
+                                                // indicates currently set
+                                                // filing system
+        THEN TEST dir=0
+                  THEN $( // no current directory set so use the root of
+                          // the default filing system
+
+                          dir  := 0
+                          task := task.filehandler
+                       $)
+                  ELSE $( task := dir!lock.task
+                          IF ptr=2 THEN dir := 0
+                          // Root of this filing system (i.e. ':')
+                       $)
+   ELSE $( // Look in assignments list
+           LET ass = rootnode!rtn.info!info.assignments
+
+           $( IF ass=0 THEN $( result2  := error.device.not.mounted
+                               RESULTIS    0
+                            $)
+
+              IF compstring (v, ass+ass.name) = 0 THEN
+              $( dir  := ass!ass.dir
+                 task := ass!ass.task
+                 BREAK
+              $)
+
+              ass := ass!ass.link
+           $) REPEAT
+        $)
+
+   result2  := dir
+   RESULTIS    task
+$)
+
+/*******************************************************************************
+*                                                                              *
+* splitname[prefix,ch,string,ptr] : strip a prefix from a name                 *
+*                                                                              *
+*******************************************************************************/
+
+AND splitname (prefix, ch, string, ptr) = VALOF
+$( LET len = string%0-ptr
+   FOR i = 0 TO 255 DO
+   $( prefix%0 := i>30 -> 30, i
+      IF i>len RESULTIS 0
+      IF string%[ptr+i]=ch RESULTIS ptr+i+1
+      IF i<30 THEN prefix%[i+1] := string%[ptr+i]
+   $)
+$)
+
+/*******************************************************************************
+*                                                                              *
+* findstream[name,sction,scbid] : find and open a stream                       *
+*                                                                              *
+*******************************************************************************/
+
+AND findstream (string, act, id) = VALOF
+$( LET scb       = getvec(scb.upb)
+   LET res, task = 0, ?
+
+   IF scb=0 RESULTIS 0
+
+   FOR i = 0         TO scb.upb    DO scb!i := -1
+   FOR i = scb.funcs TO scb.args-1 DO scb!i := 0
+
+   scb!scb.id    := id
+   scb!scb.func3 := actend
+
+   TEST compstring("**", string)=0
+   THEN $( // Console stream
+           scb!scb.type := -consoletask
+           res          := sendpkt (-1, consoletask, act, 0, 0, scb)
+        $)
+   ELSE $( // Look in assignments list
+
+           task := devicetask (string)
+
+           TEST task \= 0
+           THEN $( // The name refers to a MOUNTed device
+                  scb!scb.type := task
+                  res          := sendpkt (notinuse, task, act, ?, ?,
+                                                           scb, result2, string)
+                $)
+           ELSE $( // See if there is a loadable FIND routine for this device
+                   res := finddevice (act, scb, string)
+                   UNLESS res=0 DO scb := res
+                $)
+        $)
+
+   IF res=0 THEN $( freevec (scb) ; RESULTIS 0 $)
+   RESULTIS scb
+$)
+
+/*******************************************************************************
+*                                                                              *
+* actend[scb] : time for a chat with Huey !!!                                  *
+*                                                                              *
+*******************************************************************************/
+
+AND actend(scb) = VALOF
+$( LET task = ABS scb!scb.type
+   LET act  = task\=task.filehandler -> act.end,
+              scb!scb.id=id.inscb    -> action.closeinput, action.closeoutput
+
+   RESULTIS sendpkt(-1, task, act, 0, 0, [act=act.end -> scb, scb!scb.arg1])
+$)
+
+/*******************************************************************************
+*                                                                              *
+* select....[scb] : select an input or output stream                           *
+*                                                                              *
+*******************************************************************************/
+
+AND selectinput (scb) = VALOF
+$( UNLESS scb=0 | scb!scb.id=id.inscb  | scb!scb.id=id.updscb DO abort (186,scb)
+   cis := scb
+   RESULTIS TRUE
+$)
+
+AND selectoutput (scb) = VALOF
+$( UNLESS scb=0 | scb!scb.id=id.outscb | scb!scb.id=id.updscb DO abort (187,scb)
+   cos := scb
+   RESULTIS TRUE
+$)
+
+/*******************************************************************************
+*                                                                              *
+* end...[] : close streams                                                     *
+*                                                                              *
+*******************************************************************************/
+
+AND endread  () BE $( endstream (cis) ; cis := 0 $)
+AND endwrite () BE $( endstream (cos) ; cos := 0 $)
+
+AND endstream (scb) BE UNLESS scb=0 DO
+$( LET func = scb!scb.func3
+   LET res2 = result2
+   UNLESS func=0 DO func(scb)
+   freevec(scb)
+   result2 := res2
+$)
+
+/*******************************************************************************
+*                                                                              *
+* input[], output[] : return currently selected streams                        *
+*                                                                              *
+*******************************************************************************/
+
+AND input  () = cis
+AND output () = cos
+
+/*******************************************************************************
+*                                                                              *
+* readn[] : read a number from the input stream - the terminator is unread     *
+*                                                                              *
+*******************************************************************************/
+
+AND readn() = VALOF
+$( LET sum, ch  = 0, 0
+   LET neg      = FALSE
+
+   skip :   ch := rdch ()
+
+   UNLESS '0'<=ch<='9' DO SWITCHON ch INTO
+                          $( DEFAULT  : unrdch()
+                                        result2 := -1
+                                        RESULTIS 0
+                             CASE '*S':
+                             CASE '*T':
+                             CASE '*N': GOTO skip
+
+                             CASE '-' : neg := TRUE
+                             CASE '+' :  ch := rdch ()
+                          $)
+
+   WHILE '0' <= ch <= '9' DO $( sum := 10*sum + ch - '0'
+                                ch  := rdch ()
+                             $)
+
+   IF neg THEN sum := - sum
+   unrdch()
+   result2  := 0
+   RESULTIS    sum
+$)
+
+/*******************************************************************************
+*                                                                              *
+* newline[] : write out a newline to the output stream                         *
+*                                                                              *
+*******************************************************************************/
+
+AND newline() BE wrch('*N')
+
+/*******************************************************************************
+*                                                                              *
+* writed[num,places] : write a number in a given number of places              *
+*                                                                              *
+*******************************************************************************/
+
+AND writed (n, d) BE
+$( LET t    = VEC 10
+   LET i, k = 0, -n
+
+   IF n<0 DO d, k := d-1, n
+   t!i, k, i := -(k REM 10), k/10, i+1 REPEATUNTIL k=0
+   FOR j = i+1 TO d DO wrch ('*S')
+   IF n<0 THEN wrch ('-')
+   FOR j = i-1 TO 0 BY -1 DO wrch (t!j+'0')
+$)
+
+/*******************************************************************************
+*                                                                              *
+* writed[num] : write a number in a minimum field width                        *
+*                                                                              *
+*******************************************************************************/
+
+AND writen (n) BE writed (n, 0)
+
+/*******************************************************************************
+*                                                                              *
+* writehex[num,places] : write a hex number in a specified field               *
+* writehex[num,places] : write an octal number .....
+*                                                                              *
+*******************************************************************************/
+
+AND writehex (n, d) BE
+$( IF d>1 DO writehex(n>>4, d-1)
+   wrch((n&15)!TABLE
+         '0','1','2','3','4','5','6','7',
+         '8','9','A','B','C','D','E','F' )
+$)
+
+AND writeoct (n, d) BE
+$( IF d>1 DO writeoct (n>>3, d-1)
+   wrch((n&7)+'0')
+$)
+
+/*******************************************************************************
+*                                                                              *
+* writes[string]        : write a string in its own length                     *
+* writet[string,width]  : write a string in a minimum field                    *
+*                                                                              *
+*******************************************************************************/
+
+AND writes (s) BE FOR i = 1 TO s%0 DO wrch (s%i)
+
+AND writet (s, n) BE $( writes (s)
+                        FOR i = 1 TO n-s%0 DO wrch ('*S')
+                     $)
+
+/*******************************************************************************
+*                                                                              *
+* writeu[num,places] : write an unsigned number in a given field               *
+*                                                                              *
+*******************************************************************************/
+
+AND writeu (n, d) BE $( LET m = (n>>1)/5
+                        UNLESS m=0 DO $( writed (m, d-1)
+                                         d := 1
+                                      $)
+                        writed (n-m*10, d)
+                     $)
+
+/*******************************************************************************
+*                                                                              *
+* writef[.....] : write out formatted inbformation                             *
+*                                                                              *
+*******************************************************************************/
+
+AND writef (format, a, b, c, d, e, f, g, h, i, j, k) BE
+$( LET t = @ a
+
+   FOR p = 1 TO format%0 DO
+   $( LET k = format%p
+
+      TEST k='%'
+           THEN $( LET f, arg, n = 0, t!0, 0
+                   LET type      = ?
+                   p    := p + 1
+                   type := capitalch(format%p)
+                   SWITCHON type INTO
+                   $( DEFAULT: wrch(type); ENDCASE
+
+                      CASE 'S': f := writes  ; GOTO l
+                      CASE 'T': f := writet  ; GOTO m
+                      CASE 'C': f := wrch    ; GOTO l
+                      CASE 'O': f := writeoct; GOTO m
+                      CASE 'X': f := writehex; GOTO m
+                      CASE 'I': f := writed  ; GOTO m
+                      CASE 'N': f := writen  ; GOTO l
+                      CASE 'U': f := writeu  ; GOTO m
+
+                      m: p := p + 1
+                         n := format%p
+                         n := '0' <= n <= '9' -> n-'0', 10+n-'A'
+
+                      l: f(arg, n)
+
+                      CASE '$': t := t + 1
+                   $)
+                $)
+           ELSE wrch(k)
+    $)
+$)
+
+/*******************************************************************************
+*                                                                              *
+* capitalch[ch]         : upper case a character                               *
+* compch[ch1,ch2]       : compare upper-cased characters                       *
+* compstring[str1,str2] : compare upper-cased strings                          *
+*                                                                              *
+*******************************************************************************/
+
+AND capitalch (ch) = 'a' <= ch <= 'z' -> ch + 'A' - 'a', ch
+
+AND compch (ch1, ch2) = capitalch (ch1) - capitalch (ch2)
+
+/*******************************************************************************
+*                                                                              *
+* optimised version supplied by courtesy of Nick Ody                           *
+*                                                                              *
+*******************************************************************************/
+
+AND compstring(s1, s2) = VALOF
+$(
+   MANIFEST $( casediff = 'A'-'a' $)
+
+   LET l2 = s2 % 0
+   LET l1 = s1 % 0
+   LET ld = l1 - l2
+   LET n  = -(ld > 0 -> l2, l1)
+   LET i  = 1
+
+   WHILE n < 0 DO
+   $( LET c2 = s2 % i
+      LET c1 = s1 % i
+      LET cd = c1 - c2
+      IF cd ~= 0 THEN $( IF 'a' <= c1 <= 'z' THEN cd := cd + casediff
+                         IF 'a' <= c2 <= 'z' THEN cd := cd - casediff
+                         IF cd ~= 0 RESULTIS cd
+                      $)
+      i := i + 1
+      n := n + 1
+   $)
+   RESULTIS ld
+$)
+
+/*******************************************************************************
+*                                                                              *
+* rdargs[keys,argvec,size] : decode argument line                              *
+*                                                                              *
+*******************************************************************************/
+
+AND rdargs (keys, argv, size) = VALOF
+$( LET w        = argv
+   LET numbargs = ?
+
+   !w := 0
+   FOR p = 1 TO keys%0 DO
+   $( LET kch = keys%p
+      IF  kch = '/' DO
+      $( LET c = capitalch(keys%(p+1))
+         IF  c = 'A' THEN !w := !w | 1
+         IF  c = 'K' THEN !w := !w | 2
+         IF  c = 'S' THEN !w := !w | 4
+         LOOP
+      $)
+      IF kch = ',' THEN $( w  := w+1
+                           !w := 0
+                        $)
+   $)
+   w        := w+1
+   numbargs := w-argv
+
+// At this stage, the argument elements of argv have been
+// initialised to  0    -
+//                 1   /A
+//                 2   /K
+//                 3   /A/K
+//                 4   /S
+//                 5   /S/A
+//                 6   /S/K
+//                 7   /S/A/K
+
+   $( LET argno = -1
+      LET wsize = size + argv - w
+
+      SWITCHON rditem(w, wsize) INTO
+      $( DEFAULT:
+ err:    $( LET ch = ?
+            ch      := rdch() REPEATUNTIL ch='*E' | ch='*N' |
+                                                    ch=';'  | ch=endstreamch
+            result2 := 120
+            RESULTIS 0
+         $)
+
+         CASE 0: // *N, *E, ;, endstreamch
+                 FOR i = 0 TO numbargs - 1 DO
+                 $( LET a = argv!i
+                    IF 0 <= a <= 7 THEN
+                       TEST (a & 1) = 0 THEN argv!i := 0
+                                        ELSE GOTO err
+                 $)
+                 rdch ()
+                 RESULTIS w
+
+         CASE 1: // ordinary item
+                 argno := findarg(keys, w)
+                 TEST argno>=0
+                      THEN // get and check argument
+                      TEST 4 <= argv!argno <= 7
+                           THEN $( // no value for key
+                                   argv!argno := -1
+                                   LOOP
+                                $)
+                           ELSE $( LET item = rditem(w,wsize)
+                                   IF item  = -2 THEN item := rditem(w,wsize)
+                                   IF item <=  0 THEN GOTO err
+                                $)
+                     ELSE TEST rdch()='*N' & compstring("?", w)=0
+                               THEN $( // help facility
+                                       writef ("%S: *E", keys)
+                                       ENDCASE
+                                    $)
+                               ELSE unrdch()
+
+         CASE 2: // quoted item (i.e. arg value)
+                 IF argno<0 THEN FOR i = 0 TO numbargs-1 DO
+                                     SWITCHON argv!i INTO
+                                     $( CASE 0: CASE 1: argno := i
+                                                        BREAK
+                                        CASE 2: CASE 3: GOTO err
+                                     $)
+                 UNLESS argno>=0 GOTO err
+                 argv!argno := w
+                 w          := w + w%0/bytesperword + 1
+      $)
+   $) REPEAT
+$)
+
+
+/*******************************************************************************
+*                                                                              *
+* rditem[vec,size] : read the next item from the command line                  *
+*                                                                              *
+*******************************************************************************/
+
+// Read an item from command line
+// returns -2    "=" Symbol
+//         -1    error
+//          0    *N, *E, ;, endstreamch
+//          1    unquoted item
+//          2    quoted item
+
+AND rditem (v, size) = VALOF
+$( LET p      = 0
+   LET pmax   = (size+1)*bytesperword-1
+   LET ch     = ?
+   LET quoted = FALSE
+
+   FOR i = 0 TO size DO v!i := 0
+
+   ch := rdch() REPEATWHILE ch='*S' | ch='*T'
+
+   IF ch='"' THEN quoted, ch := TRUE, rdch ()
+
+   UNTIL ch='*E' | ch='*N' | ch=endstreamch DO
+   $( TEST quoted
+           THEN $( IF ch='"'  THEN RESULTIS 2
+                   IF ch='**' THEN $( ch := rdch()
+                                      IF capitalch(ch)='E' DO ch := '*E'
+                                      IF capitalch(ch)='N' DO ch := '*N'
+                                   $)
+                $)
+           ELSE IF ch=';' | ch='*S' | ch='=' | ch='*T' THEN BREAK
+
+      p   := p+1
+      IF p>pmax RESULTIS -1
+      v%p := ch
+      v%0 := p
+      ch  := rdch ()
+   $)
+
+   unrdch ()
+   IF quoted RESULTIS -1
+   TEST p=0 THEN $( IF ch='=' DO $( rdch ()
+                                    RESULTIS -2
+                                 $)
+                    RESULTIS 0
+                 $)
+            ELSE RESULTIS 1
+$)
+
+/*******************************************************************************
+*                                                                              *
+* findarg[keys,key] : search for a key in a string of keys                     *
+*                                                                              *
+*******************************************************************************/
+
+AND findarg (keys, w) = VALOF  // =argno if found
+                               // =-1 otherwise
+$( MANIFEST $( matching = 0; skipping = 1 $)
+
+   LET state, wp, argno = matching, 0, 0
+
+   FOR i = 1 TO keys % 0 DO
+   $( LET kch = keys % i
+      IF state = matching THEN
+      $( IF (kch = '=' | kch= '/' | kch =',') & wp = w % 0 THEN RESULTIS argno
+         wp    := wp + 1
+         UNLESS compch(kch,w % wp) = 0 THEN
+         state := skipping
+      $)
+      IF kch = ',' | kch = '=' THEN state, wp := matching, 0
+      IF kch = ','             THEN argno     := argno+1
+   $)
+   TEST state = matching & wp = w % 0 THEN RESULTIS argno
+                                      ELSE RESULTIS -1
+$)
+
+/*******************************************************************************
+*                                                                              *
+* loadseg[file] : load a file into store and relocate addresses                *
+*                                                                              *
+*******************************************************************************/
+
+AND loadseg (file) = VALOF
+$( LET dummy    = testflags(1) // Clear break flag so we don't fail if it was set earlier
+   LET list     = 0
+   LET liste    = @list
+   LET oldinput = input()
+   LET newinput = findinput(file)
+
+   IF newinput=0 RESULTIS 0
+   selectinput(newinput)
+
+   $( LET base  = 0
+      LET limit = -1
+
+      $( LET type = 0
+
+         IF readwords(@type, 1)=0 THEN
+            TEST [limit=-1] & [list\=0] THEN GOTO ok ELSE GOTO err121
+
+         IF testflags(1) THEN $( result2 := 190; GOTO err $)
+
+         SWITCHON type INTO
+         $( CASE t.hunk :
+            CASE t.reloc:
+            $( LET space = ?
+               LET n     = ?
+               readwords (@n, 1)
+               space := getvec (n)
+               IF space=0 GOTO err
+               readwords (space+1, n)
+
+               TEST type = t.hunk
+                    THEN $( space!0 := 0
+                            !liste  := space
+                            liste   := space
+                            limit   := n
+                            base    := space+1
+                         $)
+                    ELSE // t.reloc
+                         $( FOR i=1 TO n DO
+                            $( LET a = space!i
+                               LET b = a/mcrelocinc
+                               UNLESS 0<=b<=limit DO $( freevec (space)
+                                                        GOTO err121
+                                                     $)
+                               base!b := base!b+base*mcaddrinc
+                            $)
+                            freevec (space)
+                         $)
+               LOOP
+            $)
+
+            CASE t.end: BREAK
+         $)
+         GOTO err121
+
+      $) REPEAT
+   $) REPEAT
+
+err121: result2 := 121
+err   : unloadseg (list)
+        list    := 0
+ok    : endread ()
+        selectinput (oldinput)
+        RESULTIS list
+$)
+
+/*******************************************************************************
+*                                                                              *
+* unloadseg[segment] : unload a code segment from store                        *
+*                                                                              *
+*******************************************************************************/
+
+AND unloadseg (seg) BE UNTIL seg=0 DO $( LET s = !seg
+                                         freevec (seg)
+                                         seg := s
+                                      $)
+
+/*******************************************************************************
+*                                                                              *
+* callseg[file,a1,a2,a3,a4] : load a file into store and execute it            *
+*                                                                              *
+*******************************************************************************/
+
+AND callseg (file, arg1, arg2, arg3, arg4) = VALOF
+$( LET res = 0
+   LET seg = loadseg (file)
+   LET s   = start
+   UNLESS seg=0 | globin (seg)=0 DO res := start (arg1, arg2, arg3, arg4)
+   unloadseg(seg)
+   start := s
+   RESULTIS res
+$)
+
+/*******************************************************************************
+*                                                                              *
+* datstring[vec] : get the time and data as a string                           *
+* datstamp [vec] : get a copy of the current time stamp                        *
+*                                                                              *
+*******************************************************************************/
+
+AND datstring (v) = VALOF $( LET datv = VEC 2
+                             datstamp (datv)
+                             RESULTIS callseg ("SYS:L.DAT-TO-STRINGS", datv, v)
+                          $)
+
+AND datstamp(v) = VALOF $( $( v!1 := rootnode ! rtn.mins
+                              v!0 := rootnode ! rtn.days
+                              v!2 := rootnode ! rtn.ticks
+                           $) REPEATUNTIL v!1 = rootnode!rtn.mins
+                           RESULTIS v
+                        $)
+
+/*******************************************************************************
+*                                                                              *
+* deleteobj[name] : delete an object                                           *
+* createdir[name] : create a new directory                                     *
+* locateobj[name] :                                                            *
+* locatedir[name] : locate an object (or directory)                            *
+*                                                                              *
+*******************************************************************************/
+
+AND deleteobj(name) = objact    (name, action.deleteobject)
+AND createdir(name) = objact    (name, action.createdir)
+AND locateobj(name) = locatedir (name)
+AND locatedir(name) = objact    (name, action.locateobject)
+
+AND objact (name, action) = VALOF
+$(
+   // Common routine for operations involving one filename
+
+   LET task = devicetask(name)
+
+   RESULTIS task=0 -> 0, sendpkt(notinuse, task, action, ?, ?, result2, name)
+$)
+
+/*******************************************************************************
+*                                                                              *
+* renameobj[from,to] : cause an object (file) to be renamed                    *
+*                                                                              *
+*******************************************************************************/
+
+AND renameobj (fromname, toname) = VALOF
+$(
+   // Rename a file or directory (to the same device).
+
+   LET fromtask        = devicetask (fromname)
+   LET fromdir         = result2
+   LET totask          = devicetask (toname)
+   LET todir           = result2
+
+   IF fromtask=0 | totask=0 THEN RESULTIS 0
+
+   IF fromtask \= totask THEN
+   $( result2 := error.renameacrossdevices; RESULTIS 0 $)
+
+   RESULTIS sendpkt (notinuse, fromtask, action.renameobject,  ?, ?,
+                                         fromdir,   fromname, todir, toname)
+$)
+
+/*******************************************************************************
+*                                                                              *
+* freeobj[lock] : release a lock on an object (file or directory)              *
+*                                                                              *
+*******************************************************************************/
+
+AND freeobj (lock) BE UNLESS lock = 0 DO
+$(
+   LET res2 = result2
+   sendpkt (notinuse, lock ! lock.task, action.freelock, ?, ?, lock)
+   result2 := res2
+$)
+
+/*******************************************************************************
+*                                                                              *
+* readwords [vec,size] : read a vector of words from a file                    *
+* writewords[vec,size] : write a vector of words to a file                     *
+*                                                                              *
+*******************************************************************************/
+
+AND readwords (v, n) = VALOF
+$( LET task = ABS [cis!scb.type]
+   IF task=0 RESULTIS 0
+   RESULTIS sendpkt (-1, task, 'R', ?, ?, cis!scb.arg1, v, n)
+$)
+
+AND writewords(v, n) = VALOF
+$( LET task = ABS [cos!scb.type]
+   IF task=0 RESULTIS TRUE
+   RESULTIS sendpkt (-1, task, 'W', ?, ?, cos!scb.arg1, v, n)
+$)
+
+/*******************************************************************************
+*                                                                              *
+* copydir[lock] : get a copy of an object lock                                 *
+*                                                                              *
+*******************************************************************************/
+
+AND copydir (dir) = dir=0 -> 0,
+    sendpkt (notinuse, dir!lock.task, action.copydir, ?, ?, dir)
+
+/*******************************************************************************
+*                                                                              *
+* finddevice[name,a1,a2,a3] : search for a loadable device                     *
+*                                                                              *
+*******************************************************************************/
+
+// AND findevice (act, scb, string) = callseg ("sys:l.find", act, scb, string)
+
+AND finddevice (act, scb, string) = VALOF
+$( LET res    = 0
+   LET prefix = VEC 40/bytesperword
+   LET ptr    = ?
+
+   ptr := splitname (prefix, ':', string, 1)
+
+   UNLESS ptr > 0 DO RESULTIS 0
+
+   // Loading "SYS:" as a pseudo-device fundamentally does not work. It can only
+   // happen if there is no assignment for "SYS:" and will then recurse
+   // indefinitely. Hence it is explicitly locked out.
+   IF compstring(prefix, "SYS")=0 THEN $( result2 := 179; RESULTIS 0 $)
+
+   FOR i = prefix%0 TO 1 BY -1 DO prefix%[i+6] := prefix%i
+   FOR i = 1        TO 6 BY  1 DO prefix% i    := "SYS:H."%i
+
+   prefix%0     := prefix%0 + 6
+
+   RESULTIS callseg (prefix, 0, act, scb, string)
+$)
+
+/*******************************************************************************
+*                                                                              *
+* endtoinput[] : reopen current output stream for input                        *
+*                                                                              *
+*******************************************************************************/
+
+AND endtoinput () = VALOF
+$( LET scb  = cos
+   LET task = ABS[scb!scb.type]
+   LET pos  = scb!scb.pos
+   LET end  = scb!scb.end
+   IF pos>0 THEN UNLESS deplete () DO abort (189, result2)
+   UNLESS task=0 DO
+          TEST sendpkt (-1,task,action.endtoinput,?,?,scb!scb.arg1,scb)
+          THEN $( cos := 0
+                  scb!scb.pos,scb!scb.end,scb!scb.id := -1,-1, id.inscb
+                  RESULTIS scb
+               $)
+          ELSE RESULTIS 0
+$)
+
+/*******************************************************************************
+*                                                                              *
+* rewind[] : reposition the current input stream at the start                  *
+*                                                                              *
+*******************************************************************************/
+
+AND rewind () = VALOF
+$( LET task = ABS[cis!scb.type]
+   UNLESS task=0 DO
+          TEST sendpkt (-1,task,action.rewind,?,?,cis!scb.arg1,cis)
+               THEN $( cis!scb.pos,cis!scb.end := -1,-1
+                       RESULTIS cis
+                    $)
+               ELSE RESULTIS 0
+$)
+
+

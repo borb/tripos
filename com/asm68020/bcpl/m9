@@ -1,0 +1,715 @@
+//****************************************************************************
+//*                                                                          *
+//*        M68KASM  -  Assembler for the MC68000 family  -  Section 9        *
+//*                                                                          *
+//*                         Object Module Generation                         *
+//*                                                                          *
+//****************************************************************************
+//*     I. D. Wilson    -    Last Modified    -    IDW    -    18/11/86      *
+//****************************************************************************
+
+
+
+SECTION "M9"
+
+
+
+GET "LIBHDR"
+GET "M68KHDR"
+
+
+
+LET addexternalref( symbol, address )  BE  IF  pass2  &  NOT dummysection  THEN
+$(
+    LET s  =  extrnsymbols
+
+    UNTIL  s = 0  DO
+    $(
+        TEST  s!e.symbol = symbol  THEN
+        $(
+            LET refsr   =  s!e.refsr
+            LET refsa   =  s!e.refsa
+            LET countr  =  s!e.countr
+            LET counta  =  s!e.counta
+
+            TEST  locmode = s.abs  THEN
+            $(
+                //  Update the absolute list.
+
+                s!e.refsa   :=  heap2( refsa, address )
+                s!e.counta  :=  counta + 1
+            $)
+            ELSE
+            $(
+                //  Update the relocatable list
+
+                s!e.refsr   :=  heap2( refsr, address )
+                s!e.countr  :=  countr + 1
+            $)
+
+            RETURN
+        $)
+
+        ELSE  s  :=  s!e.link
+    $)
+
+    complain( 0 )
+$)
+
+
+
+AND codeword( word )  BE
+$(
+    codewords  :=  codewords + 1
+
+    stackvalue( s.abs16, 2, word, FALSE, 0 )
+$)
+
+
+
+
+AND stackvalue( dtype, dsize, dvalue, dext, dsymb )  BE
+$(
+    LET offset  =  nitems * cb.size
+
+    codebuff!(offset + cb.dtype)   :=  dtype
+    codebuff!(offset + cb.dsize)   :=  dsize
+    codebuff!(offset + cb.dvalue)  :=  dvalue
+    codebuff!(offset + cb.dext)    :=  dext
+    codebuff!(offset + cb.dsymb)   :=  dsymb
+
+    nitems                         :=  nitems + 1
+
+    IF  nitems > codesize  THEN  error( 178 )
+$)
+
+
+
+AND clearbuffer()  BE
+    FOR  i = 0  TO  charsperline-1  DO  outbuff % i  :=  '*S'
+
+
+
+AND swapoperands()  BE
+$(
+    LET t1  =  op.ea
+    LET t2  =  exptype
+    LET t3  =  exp
+    LET t4  =  registers
+    LET t5  =  externalref
+    LET t6  =  externalsymb
+    LET t7  =  outertype
+    LET t8  =  outer
+    LET t9  =  eatype
+
+    op.ea             :=  op1.ea
+    exptype           :=  op1.exptype
+    exp               :=  op1.exp
+    registers         :=  op1.registers
+    externalref       :=  op1.externalref
+    externalsymb      :=  op1.externalsymb
+    outertype         :=  op1.outertype
+    outer             :=  op1.outer
+    eatype            :=  op1.eatype
+
+    op1.ea            :=  t1
+    op1.exptype       :=  t2
+    op1.exp           :=  t3
+    op1.registers     :=  t4
+    op1.externalref   :=  t5
+    op1.externalsymb  :=  t6
+    op1.outertype     :=  t7
+    op1.outer         :=  t8
+    op1.eatype        :=  t9
+$)
+
+
+
+AND setloc( newloc )  BE
+$(
+    UNLESS  (newloc & addressmask) = 0  DO  complain( 138 )
+
+    IF  newloc > maxloc  THEN  maxloc  :=  newloc
+    IF  newloc < minloc  THEN  minloc  :=  newloc
+
+    location  :=  newloc
+$)
+
+
+
+AND changemode( newmode )  BE  UNLESS  locmode = newmode  DO
+$(
+    TEST  locmode = s.abs  THEN
+    $(
+        absmin      :=  minloc
+        absmax      :=  maxloc
+        absloc      :=  location
+        absrp16     :=  relp16
+        absrp32     :=  relp32
+        minloc      :=  relmin
+        maxloc      :=  relmax
+        location    :=  relloc
+        codevec     :=  relvec
+        relocvec16  :=  relrvec16
+        relocvec32  :=  relrvec32
+        relp16      :=  relrp16
+        relp32      :=  relrp32
+    $)
+    ELSE
+    $(
+        relmin      :=  minloc
+        relmax      :=  maxloc
+        relloc      :=  location
+        relrp16     :=  relp16
+        relrp32     :=  relp32
+        minloc      :=  absmin
+        maxloc      :=  absmax
+        location    :=  absloc
+        codevec     :=  absvec
+        relocvec16  :=  absrvec16
+        relocvec32  :=  absrvec32
+        relp16      :=  absrp16
+        relp32      :=  absrp32
+    $)
+
+    locmode  :=  newmode
+$)
+
+
+
+AND triposmodule()  BE
+$(
+//  Output the object module.
+
+    LET o     =  output()
+    LET eabs  =  countextrnsymbols( e.counta )
+    LET erel  =  countextrnsymbols( e.countr )
+
+    selectoutput( codestream )
+
+    //  First output the Relocatable section...
+    //  Buffered in units of 4 bytes.
+
+    UNLESS  relmax = 0  DO
+    $(
+        LET r  =  relmax/bytesper68000word
+
+$<TRIPOS
+        IF  toobig( r )  THEN  error( 167 )
+$>TRIPOS
+
+        systemword( t.hunk )
+        writeword( r )
+        writewordvec( relvec, r )
+    $)
+
+    UNLESS  relrp16 = 0   DO
+    $(
+        selectoutput( sysout )
+        writes( "TRIPOS module cannot handle 16-bit relocation*N" )
+        selectoutput( o )
+    $)
+
+    //  Now the 32 bit relocation info
+
+    UNLESS  relrp32 = 0  DO
+    $(
+$<TRIPOS
+        IF  toobig( relrp32 )  THEN  error( 169 )
+$>TRIPOS
+
+        systemword( t.reloc )
+        writeword( relrp32 )
+
+        FOR  i = 0  TO  relrp32-1  DO  writeword( relrvec32!i )
+    $)
+
+    //  We must now put out the external references in the relocatable
+    //  section, and the internal definitions of both sections.
+
+    UNLESS  entrysymbols = 0  &  erel = 0  DO
+    $(
+        LET ptr  =  entrysymbols
+
+        systemword( t.ext1 )
+
+        UNTIL  ptr = 0  DO
+        $(
+            writeentry( ptr )
+
+            ptr  :=  ptr!e.link
+        $)
+
+        //  Now do the external references.
+
+        ptr  :=  extrnsymbols
+
+        UNTIL  ptr = 0  DO
+        $(
+            writeextrn( ptr, ptr!e.refsr, ptr!e.countr )
+
+            ptr  :=  ptr!e.link
+        $)
+
+        systemword( 0 )
+    $)
+
+    //  Now the absolute section - very much the same as before.
+
+    UNLESS  absmax = 0  DO
+    $(
+        LET a  =  (absmax - absmin)/bytesper68000word
+
+$<TRIPOS
+        IF  toobig( a )  THEN  error( 170 )
+$>TRIPOS
+
+        systemword( t.abshunk )
+        writeword( absmin/bytesper68000word )
+        writeword( a )
+        writewordvec( absvec + absmin/bytesperword, a )
+    $)
+
+    UNLESS  absrp16 = 0   DO
+    $(
+        selectoutput( sysout )
+        writes( "TRIPOS module cannot handle 16-bit relocation*N" )
+        selectoutput( o )
+    $)
+
+    //  Now the 32 bit relocation info
+
+    UNLESS  absrp32 = 0  DO
+    $(
+$<TRIPOS
+        IF  toobig( absrp32 )  THEN  error( 172 )
+$>TRIPOS
+
+        systemword( t.absrel )
+        writeword( absrp32 )
+
+        FOR  i = 0  TO  absrp32-1  DO  writeword( absrvec32!i )
+    $)
+
+    //  Now the external references for the absolute section.
+
+    UNLESS  eabs = 0  DO
+    $(
+        LET ptr  =  extrnsymbols
+
+        systemword( t.ext1 )
+
+        UNTIL  ptr = 0  DO
+        $(
+            writeextrn( ptr, ptr!e.refsa, ptr!e.counta )
+
+            ptr  :=  ptr!e.link
+        $)
+
+        systemword( 0 )
+    $)
+
+    systemword( t.end )
+
+$<IBM370.CAP1
+    newline()
+$>IBM370.CAP1
+
+    selectoutput( o )
+$)
+
+
+
+AND writeentry( ptr )  BE
+$(
+//  Write an ENTRY symbol.  We must cope with 16 and 32 bit machines.
+
+    LET symbol  =  ptr!e.symbol
+    LET type    =  symbol!st.type
+    LET value   =  symbol!st.value
+    LET name    =  symbol+st.name
+
+    LET namel   =  name % 0
+    LET namet   =  relocatable( type )  ->  ext.defrel, ext.defabs
+
+    LET words   =  (namel + bytesper68000word - 1) / bytesper68000word
+    LET bytes   =  words * bytesper68000word
+
+    LET buffer  =  VEC tagsize
+
+    FOR  i = 1  TO  namel  DO
+        buffer % (i-1)  :=  ascii.value( name % i )
+
+    FOR  i = namel+1  TO  bytes  DO
+        buffer % (i-1)  :=  ascii.value( '*S' )
+
+    writeword( (namet << 8) + namel )
+    writewordvec( buffer, words )
+    writeword( value )
+$)
+
+
+
+AND writeextrn( ptr, refs, count )  BE  UNLESS  count = 0  DO
+$(
+//  Write an external symbol.  Like the ENTRY case, we must cope with
+//  16 and 32 bit machines.
+
+    LET symbol  =  ptr!e.symbol
+    LET name    =  symbol+st.name
+
+    LET namel   =  name % 0
+    LET namet   =  ext.ref
+
+    LET words   =  (namel + bytesper68000word - 1) / bytesper68000word
+    LET bytes   =  words * bytesper68000word
+
+    LET buffer  =  VEC tagsize
+
+    FOR  i = 1  TO  namel  DO
+        buffer % (i-1)  :=  ascii.value( name % i )
+
+    FOR  i = namel+1  TO  bytes  DO
+        buffer % (i-1)  :=  ascii.value( '*S' )
+
+    writeword( (namet << 8) + namel )
+    writewordvec( buffer, words )
+    writeword( count )
+
+    FOR  i = 1  TO  count  DO
+    $(
+        writeword( refs!r.address )
+
+        refs  :=  refs!r.link
+    $)
+$)
+
+
+
+$<TRIPOS
+//  The following function is needed if the version of TRIPOS is
+//  using the Cambridge File Server directly, without the Filing
+//  Machine to split up large blocks
+//
+//  AND toobig( v )  =  v > (32767 / bytesperword)
+
+AND toobig( v )  =  FALSE
+$>TRIPOS
+
+
+
+AND countextrnsymbols( offset )  =  VALOF
+$(
+    LET count  =  0
+    LET ptr    =  extrnsymbols
+
+    UNTIL  ptr = 0  DO
+    $(
+        count  :=  count + ptr!offset
+        ptr    :=  ptr!e.link
+    $)
+
+    RESULTIS  count
+$)
+
+
+
+$<TRIPOS.MINOS
+AND systemword( word )  BE
+    writeword( word )
+
+
+
+AND writeword( word )  BE
+
+//  Write a single word out.  How we do this depends on the size of the word
+//  for the current machine.  We only handle 16 and 32 bit words.
+
+    TEST  wordsper68000word = 1  THEN  writewords( @word, 1 )
+    ELSE
+    $(
+        LET buff  =  VEC 1
+
+        buff!0  :=  0
+        buff!1  :=  word
+
+        writewords( buff, 2 )
+    $)
+
+
+AND writewordvec( wordvec, words )  BE
+    writewords( wordvec, words*wordsper68000word )
+$>TRIPOS.MINOS
+
+
+
+$<IBM370.CAP1
+AND systemword( word )  BE
+$(
+    writef( "*N*N%X8", word )
+    totalwords  :=  0
+$)
+
+
+
+AND writewordvec( wordvec, words )  BE
+    FOR  i = 0  TO  words-1  DO
+        writeword( wordvec!i )
+
+
+
+AND writeword( word )  BE
+$(
+    IF  totalwords REM 8  =  0  THEN  newline()
+    writef( "%X8  ", word )
+    totalwords  :=  totalwords + 1
+$)
+$>IBM370.CAP1
+
+
+
+$<PANOS
+//  Under 32016 Panos, we must be careful to get the byte ordering within
+//  the words correct.  In order to be compatible with the BCPL compiler,
+//  the bytes in all words should be in the 68000 order rather than the
+//  32016 order.  The "wordvec" is already in this order (having been packed
+//  in bytes), but the single words must have their bytes swapped.
+
+
+
+AND systemword( word )  BE  writeword( word )
+
+
+
+AND writeword( word )  BE
+$(
+//  Write the word "word" with its bytes swapped.
+
+    LET buff  =  VEC 1
+
+    FOR  i = bytesperword-1  TO  0  BY  -1  DO
+    $(
+        buff % i  :=  word & #XFF
+        word      :=  word >> 8
+    $)
+
+    writebytes( buff, 0, bytesperword )
+$)
+
+
+
+AND writewordvec( wordvec, words )  BE
+    writebytes( wordvec, 0, words*bytesperword )
+$>PANOS
+
+
+
+AND motorolamodule()  BE
+$(
+// Output a Motorola type Object Module.  The Specification of this module
+// does not allow for relocation, and so, if the user has compiled relocatable
+// code, this is an error.
+
+    LET o  =  output()
+
+    UNLESS  relmax = 0  &  relrp16 = 0  &  relrp32 = 0  DO
+    $(
+        selectoutput( sysout )
+        writes( "MOTOROLA module cannot handle Relocatable code*N" )
+        selectoutput( o )
+
+        RETURN
+    $)
+
+    UNLESS  extrnsymbols = 0  &  entrysymbols = 0  DO
+    $(
+        selectoutput( sysout )
+        writes( "MOTOROLA module cannot handle External Symbols*N" )
+        selectoutput( o )
+
+        RETURN
+    $)
+
+    selectoutput( codestream )
+
+    $(  //  Loop to write out the records of the module.
+
+        LET cs  =  0
+
+        FOR  addr = absmin  TO  absmax-1  BY  32  DO
+        $(
+            LET left    =  absmax - addr
+            LET nbytes  =  left > 32  ->  32, left
+            LET length  =  4 + nbytes
+
+            cs  :=  length + ((addr)       & #XFF) +
+                             ((addr >> 8)  & #XFF) +
+                             ((addr >> 16) & #XFF)
+
+            writef( "S2%X2", length )
+
+            writehex( addr, 6 )
+
+            FOR  i = addr  TO  addr + nbytes - 1  DO
+            $(
+                LET byte  =  absvec % i
+
+                cs  :=  cs + byte
+
+                writehex( byte, 2 )
+            $)
+
+            writef( "%X2*N", NOT cs )
+        $)
+
+        cs    :=  length + ((absmin)       & #XFF) +
+                           ((absmin >> 8)  & #XFF) +
+                           ((absmin >> 16) & #XFF)
+
+        writef( "S804%X6%X2*N", absmin, NOT cs )
+    $)
+
+    UNLESS  absrp16 = 0  &  absrp32 = 0  DO
+    $(
+        selectoutput( sysout )
+        writes( "MOTOROLA module cannot deal with Relocation within code*N" )
+    $)
+
+    selectoutput( o )
+$)
+
+
+
+AND intelhexmodule()  BE
+$(
+//  Output an INTEL standard HEX module.  This will work with both
+//  absolute and relocatable code, provided that there are no 32-bit
+//  relocatable values involved.  Unfortunately, it is not possible to mix
+//  Relocatable and Absolute code in this module format, and so if both have
+//  been produced, this is also an error.
+
+    LET o  =  output()
+
+    UNLESS  relmax = 0  NEQV  absmax = 0  DO
+    $(
+        selectoutput( sysout )
+
+        UNLESS  relmax = 0  &  absmax = 0  DO
+            writes( "INTEL HEX module cannot deal with mixed Absolute and *
+                    *Relocatable code*N" )
+
+        selectoutput( o )
+
+        RETURN
+    $)
+
+    UNLESS  relrp32 = 0  &  absrp32 = 0  DO
+    $(
+        selectoutput( sysout )
+        writes( "INTEL HEX module cannot deal with 32-bit relocation*N" )
+        selectoutput( o )
+
+        RETURN
+    $)
+
+    UNLESS  extrnsymbols = 0  &  entrysymbols = 0  DO
+    $(
+        selectoutput( sysout )
+        writes( "INTEL HEX module cannot handle External symbols*N" )
+        selectoutput( o )
+
+        RETURN
+    $)
+
+    $(  //  Loop to write the records of the INTEL format.
+
+        LET absm   =  relmax = 0
+
+        LET base   =  absm  ->  absmin, 0
+        LET size   =  absm  ->  (absmax - absmin), relmax
+
+        LET top    =  base + size
+
+        LET bvec   =  absm  ->  absvec,    relvec
+        LET rvec   =  absm  ->  absrvec16, relrvec16
+        LET rvecp  =  absm  ->  absrp16,   relrp16
+
+        selectoutput( codestream )
+
+        writes( absm -> "$      0500FE*N", "$      0501FD*N" )
+
+        FOR  addr = base  TO  top-1  BY  32  DO
+        $(
+            LET left    =  top - addr
+            LET nbytes  =  left > 32  ->  32, left
+
+            LET lbyte   =  (addr)       &  #XFF
+            LET hbyte   =  (addr >> 8)  &  #XFF
+
+            LET cs      =  nbytes + lbyte + hbyte
+
+            UNLESS  wordsized( addr )  DO
+            $(
+                selectoutput( sysout )
+                writes( "INTEL HEX module cannot handle 24-bit addresses*N" )
+                selectoutput( o )
+                RETURN
+            $)
+
+            writef( ":%X2%X2%X200", nbytes, hbyte, lbyte )
+
+            FOR  i = addr  TO  addr + nbytes - 1  DO
+            $(
+                LET byte  =  bvec % i
+
+                cs  :=  cs + byte
+
+                writehex( byte, 2 )
+            $)
+
+            writef( "%X2*N", -cs )
+        $)
+
+        //  Now the relocation information.
+
+        FOR  i = 0  TO  rvecp-1  BY  16  DO
+        $(
+            LET nwords  =  rvecp - i
+            LET nbytes  =  (nwords > 16  ->  16, nwords) * 2
+            LET cs      =  nbytes + 4
+
+            writef( "$%X2000004", nbytes )
+
+            FOR  j = 0  TO  nbytes/2 - 1  DO
+            $(
+                LET reladdr  =  rvec!j
+                LET lbyte    =  (reladdr)       &  #XFF
+                LET hbyte    =  (reladdr >> 8)  &  #XFF
+
+                UNLESS  wordsized( reladdr )  DO
+                $(
+                    selectoutput( sysout )
+                    writes( "INTEL HEX module cannot handle 24-bit relocation *
+                            *addresses" )
+                    selectoutput( o )
+                    RETURN
+                $)
+
+                writehex( hbyte, 2 )
+                writehex( lbyte, 2 )
+
+                cs  :=  cs + hbyte + lbyte
+            $)
+
+            writef( "%X2*N", -cs )
+
+            rvec  :=  rvec + nbytes/2
+        $)
+
+        writes( ":00000001FF*N" )
+    $)
+
+    selectoutput( o )
+$)
+
+

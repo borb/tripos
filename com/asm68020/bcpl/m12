@@ -1,0 +1,895 @@
+//****************************************************************************
+//*                                                                          *
+//*        M68KASM  -  Assembler for the MC68000 family  -  Section 12       *
+//*                                                                          *
+//*                  Definition Table and Storage Allocation                 *
+//*                                                                          *
+//****************************************************************************
+//*     I. D. Wilson    -    Last Modified    -    IDW    -    18/11/86      *
+//****************************************************************************
+
+
+
+SECTION "M12"
+
+
+
+GET "LIBHDR"
+GET "M68KHDR"
+
+
+
+LET declsyswords()  BE
+$(
+    datavector  :=  TABLE
+
+/* Instruction     Mask      Arguments    Type       Source     Destination  */
+/* ===========     ====      =========    ====       ======     ===========  */
+
+/* ABCD      */    #XC100,   ins.2op.b,      0,           0,              1,
+/* ADD       */    #XD000,   ins.2op.bwl,    0,           0,              3,
+/* ADDA      */    #XD0C0,   ins.2op.wl,     0,           0,             13,
+/* ADDI      */    #X0600,   ins.2op.bwl,    2,      am.imm,    am.data.alt,
+/* ADDQ      */    #X5000,   ins.2op.bwl,    5,     am.imm3,         am.alt,
+/* ADDX      */    #XD100,   ins.2op.bwl,    0,           1,              1,
+/* AND       */    #XC000,   ins.2op.bwl,    0,           0,              2,
+/* ANDI      */    #X0200,   ins.2op.bwl,    0,           0,             12,
+/* ASL       */    #XE000,   ins.2op.bwl,    0,       #B001,              5,
+/* ASR       */    #XE000,   ins.2op.bwl,    0,       #B000,              5,
+/* BCC       */    #X6000,   ins.1op.bwl,    0,      #B0100,              4,
+/* BCHG      */    #X0000,   ins.2op,        0,        #B01,              6,
+/* BCLR      */    #X0000,   ins.2op,        0,        #B10,              6,
+/* BCS       */    #X6000,   ins.1op.bwl,    0,      #B0101,              4,
+/* BEQ       */    #X6000,   ins.1op.bwl,    0,      #B0111,              4,
+/* BFCHG     */    #XEAC0,   ins.1op,        0,           0,             25,
+/* BFCLR     */    #XECC0,   ins.1op,        0,           0,             25,
+/* BFEXTS    */    #XEBC0,   ins.2op,        0,           0,             26,
+/* BFEXTU    */    #XE9C0,   ins.2op,        0,           0,             26,
+/* BFFFO     */    #XEDC0,   ins.2op,        0,           0,             26,
+/* BFINS     */    #XEFC0,   ins.2op,        0,           1,             26,
+/* BFSET     */    #XEEC0,   ins.1op,        0,           0,             25,
+/* BFTST     */    #XE8C0,   ins.1op,        0,           0,             25,
+/* BGE       */    #X6000,   ins.1op.bwl,    0,      #B1100,              4,
+/* BGT       */    #X6000,   ins.1op.bwl,    0,      #B1110,              4,
+/* BHI       */    #X6000,   ins.1op.bwl,    0,      #B0010,              4,
+/* BHS       */    #X6000,   ins.1op.bwl,    0,      #B0100,              4,
+/* BKPT      */    #X4848,   ins.1op,        0,           0,             27,
+/* BLE       */    #X6000,   ins.1op.bwl,    0,      #B1111,              4,
+/* BLO       */    #X6000,   ins.1op.bwl,    0,      #B0101,              4,
+/* BLS       */    #X6000,   ins.1op.bwl,    0,      #B0011,              4,
+/* BLT       */    #X6000,   ins.1op.bwl,    0,      #B1101,              4,
+/* BMI       */    #X6000,   ins.1op.bwl,    0,      #B1011,              4,
+/* BNE       */    #X6000,   ins.1op.bwl,    0,      #B0110,              4,
+/* BPL       */    #X6000,   ins.1op.bwl,    0,      #B1010,              4,
+/* BVC       */    #X6000,   ins.1op.bwl,    0,      #B1000,              4,
+/* BVS       */    #X6000,   ins.1op.bwl,    0,      #B1001,              4,
+/* BRA       */    #X6000,   ins.1op.bwl,    0,      #B0000,              4,
+/* BSET      */    #X0000,   ins.2op,        0,        #B11,              6,
+/* BSR       */    #X6000,   ins.1op.bwl,    0,      #B0001,              4,
+/* BTST      */    #X0000,   ins.2op,        0,        #B00,              6,
+/* CALLM     */    #X06C0,   ins.2op,        0,           0,             24,
+/* CAS       */    #X08C0,   ins.3op.bwl,    0,           0,             23,
+/* CAS2      */    #X08FC,   ins.3op.wl,     0,           1,             23,
+/* CHK       */    #X4000,   ins.2op.wl,     0,           0,             22,
+/* CHK2      */    #X00C0,   ins.2op.bwl,    0,           0,             21,
+/* CLR       */    #X4200,   ins.1op.bwl,    2,           0,    am.data.alt,
+/* CMP       */    #XB000,   ins.2op.bwl,    1,      am.all,          am.Dr,
+/* CMP2      */    #X00C0,   ins.2op.bwl,    0,           1,             21,
+/* CMPA      */    #XB0C0,   ins.2op.bwl,    0,           0,             13,
+/* CMPI      */    #X0C00,   ins.2op.bwl,    2,      am.imm,    am.data.alt,
+/* CMPM      */    #XB108,   ins.2op.bwl,    0,           0,             14,
+/* DBCC      */    #X50C8,   ins.2op,        0,      #B0100,              4,
+/* DBCS      */    #X50C8,   ins.2op,        0,      #B0101,              4,
+/* DBEQ      */    #X50C8,   ins.2op,        0,      #B0111,              4,
+/* DBF       */    #X50C8,   ins.2op,        0,      #B0001,              4,
+/* DBGE      */    #X50C8,   ins.2op,        0,      #B1100,              4,
+/* DBGT      */    #X50C8,   ins.2op,        0,      #B1110,              4,
+/* DBHI      */    #X50C8,   ins.2op,        0,      #B0010,              4,
+/* DBHS      */    #X50C8,   ins.2op,        0,      #B0100,              4,
+/* DBLE      */    #X50C8,   ins.2op,        0,      #B1111,              4,
+/* DBLO      */    #X50C8,   ins.2op,        0,      #B0101,              4,
+/* DBLS      */    #X50C8,   ins.2op,        0,      #B0011,              4,
+/* DBLT      */    #X50C8,   ins.2op,        0,      #B1101,              4,
+/* DBMI      */    #X50C8,   ins.2op,        0,      #B1011,              4,
+/* DBNE      */    #X50C8,   ins.2op,        0,      #B0110,              4,
+/* DBPL      */    #X50C8,   ins.2op,        0,      #B1010,              4,
+/* DBT       */    #X50C8,   ins.2op,        0,      #B0000,              4,
+/* DBVC      */    #X50C8,   ins.2op,        0,      #B1000,              4,
+/* DBVS      */    #X50C8,   ins.2op,        0,      #B1001,              4,
+/* DBRA      */    #X50C8,   ins.2op,        0,      #B0001,              4,
+/* DIVS      */    #X0000,   ins.2op.wl,     0,           0,             16,
+/* DIVSL     */    #X0000,   ins.2op.l,      0,           1,             16,
+/* DIVU      */    #X0000,   ins.2op.wl,     0,           2,             16,
+/* DIVUL     */    #X0000,   ins.2op.l,      0,           3,             16,
+/* EOR       */    #XB100,   ins.2op.bwl,    0,           0,             15,
+/* EORI      */    #X0A00,   ins.2op.bwl,    0,           0,             12,
+/* EXG       */    #XC100,   ins.2op.l,      0,        #B11,              7,
+/* EXGD      */    #XC100,   ins.2op.l,      0,        #B01,              7,
+/* EXGA      */    #XC100,   ins.2op.l,      0,        #B10,              7,
+/* EXGM      */    #XC100,   ins.2op.l,      0,        #B11,              7,
+/* EXT       */    #X4880,   ins.1op.wl,    10,           0,          am.Dr,
+/* EXTB      */    #X49C0,   ins.1op.l,     10,           0,          am.Dr,
+/* FABS      */    #X0018,   ins.2op.bwl,    0,           0,             28,
+/* FACOS     */    #X001C,   ins.2op.bwl,    0,           0,             28,
+/* FADD      */    #X0022,   ins.2op.bwl,    0,           1,             28,
+/* FASIN     */    #X000C,   ins.2op.bwl,    0,           0,             28,
+/* FATAN     */    #X000A,   ins.2op.bwl,    0,           0,             28,
+/* FATANH    */    #X000D,   ins.2op.bwl,    0,           0,             28,
+/* FBEQ      */    #X0000,   ins.1op.wl,     0,    #B000001,             34,
+/* FBF       */    #X0000,   ins.1op.wl,     0,    #B000000,             34,
+/* FBGE      */    #X0000,   ins.1op.wl,     0,    #B010011,             34,
+/* FBGL      */    #X0000,   ins.1op.wl,     0,    #B010110,             34,
+/* FBGLE     */    #X0000,   ins.1op.wl,     0,    #B010111,             34,
+/* FBGT      */    #X0000,   ins.1op.wl,     0,    #B010010,             34,
+/* FBLE      */    #X0000,   ins.1op.wl,     0,    #B010101,             34,
+/* FBLT      */    #X0000,   ins.1op.wl,     0,    #B010100,             34,
+/* FBNE      */    #X0000,   ins.1op.wl,     0,    #B001110,             34,
+/* FBNGE     */    #X0000,   ins.1op.wl,     0,    #B011100,             34,
+/* FBNGL     */    #X0000,   ins.1op.wl,     0,    #B011001,             34,
+/* FBNGLE    */    #X0000,   ins.1op.wl,     0,    #B011000,             34,
+/* FBNGT     */    #X0000,   ins.1op.wl,     0,    #B011101,             34,
+/* FBNLE     */    #X0000,   ins.1op.wl,     0,    #B011010,             34,
+/* FBNLT     */    #X0000,   ins.1op.wl,     0,    #B011011,             34,
+/* FBOGE     */    #X0000,   ins.1op.wl,     0,    #B000011,             34,
+/* FBOGL     */    #X0000,   ins.1op.wl,     0,    #B000110,             34,
+/* FBOGT     */    #X0000,   ins.1op.wl,     0,    #B000010,             34,
+/* FBOLE     */    #X0000,   ins.1op.wl,     0,    #B000101,             34,
+/* FBOLT     */    #X0000,   ins.1op.wl,     0,    #B000100,             34,
+/* FBOR      */    #X0000,   ins.1op.wl,     0,    #B000111,             34,
+/* FBSEQ     */    #X0000,   ins.1op.wl,     0,    #B010001,             34,
+/* FBSF      */    #X0000,   ins.1op.wl,     0,    #B010000,             34,
+/* FBSNE     */    #X0000,   ins.1op.wl,     0,    #B011110,             34,
+/* FBST      */    #X0000,   ins.1op.wl,     0,    #B011111,             34,
+/* FBT       */    #X0000,   ins.1op.wl,     0,    #B001111,             34,
+/* FBUEQ     */    #X0000,   ins.1op.wl,     0,    #B001001,             34,
+/* FBUGE     */    #X0000,   ins.1op.wl,     0,    #B001011,             34,
+/* FBUGT     */    #X0000,   ins.1op.wl,     0,    #B001010,             34,
+/* FBULE     */    #X0000,   ins.1op.wl,     0,    #B001101,             34,
+/* FBULT     */    #X0000,   ins.1op.wl,     0,    #B001100,             34,
+/* FBUN      */    #X0000,   ins.1op.wl,     0,    #B001000,             34,
+/* FCMP      */    #X0038,   ins.2op.bwl,    0,           1,             28,
+/* FCOS      */    #X001D,   ins.2op.bwl,    0,           0,             28,
+/* FCOSH     */    #X0019,   ins.2op.bwl,    0,           0,             28,
+/* FDBEQ     */    #X0000,   ins.2op,        0,    #B000001,             34,
+/* FDBF      */    #X0000,   ins.2op,        0,    #B000000,             34,
+/* FDBGE     */    #X0000,   ins.2op,        0,    #B010011,             34,
+/* FDBGL     */    #X0000,   ins.2op,        0,    #B010110,             34,
+/* FDBGLE    */    #X0000,   ins.2op,        0,    #B010111,             34,
+/* FDBGT     */    #X0000,   ins.2op,        0,    #B010010,             34,
+/* FDBLE     */    #X0000,   ins.2op,        0,    #B010101,             34,
+/* FDBLT     */    #X0000,   ins.2op,        0,    #B010100,             34,
+/* FDBNE     */    #X0000,   ins.2op,        0,    #B001110,             34,
+/* FDBNGE    */    #X0000,   ins.2op,        0,    #B011100,             34,
+/* FDBNGL    */    #X0000,   ins.2op,        0,    #B011001,             34,
+/* FDBNGLE   */    #X0000,   ins.2op,        0,    #B011000,             34,
+/* FDBNGT    */    #X0000,   ins.2op,        0,    #B011101,             34,
+/* FDBNLE    */    #X0000,   ins.2op,        0,    #B011010,             34,
+/* FDBNLT    */    #X0000,   ins.2op,        0,    #B011011,             34,
+/* FDBOGE    */    #X0000,   ins.2op,        0,    #B000011,             34,
+/* FDBOGL    */    #X0000,   ins.2op,        0,    #B000110,             34,
+/* FDBOGT    */    #X0000,   ins.2op,        0,    #B000010,             34,
+/* FDBOLE    */    #X0000,   ins.2op,        0,    #B000101,             34,
+/* FDBOLT    */    #X0000,   ins.2op,        0,    #B000100,             34,
+/* FDBOR     */    #X0000,   ins.2op,        0,    #B000111,             34,
+/* FDBSEQ    */    #X0000,   ins.2op,        0,    #B010001,             34,
+/* FDBSF     */    #X0000,   ins.2op,        0,    #B010000,             34,
+/* FDBSNE    */    #X0000,   ins.2op,        0,    #B011110,             34,
+/* FDBST     */    #X0000,   ins.2op,        0,    #B011111,             34,
+/* FDBT      */    #X0000,   ins.2op,        0,    #B001111,             34,
+/* FDBUEQ    */    #X0000,   ins.2op,        0,    #B001001,             34,
+/* FDBUGE    */    #X0000,   ins.2op,        0,    #B001011,             34,
+/* FDBUGT    */    #X0000,   ins.2op,        0,    #B001010,             34,
+/* FDBULE    */    #X0000,   ins.2op,        0,    #B001101,             34,
+/* FDBULT    */    #X0000,   ins.2op,        0,    #B001100,             34,
+/* FDBUN     */    #X0000,   ins.2op,        0,    #B001000,             34,
+/* FDIV      */    #X0020,   ins.2op.bwl,    0,           1,             28,
+/* FETOX     */    #X0010,   ins.2op.bwl,    0,           0,             28,
+/* FETOXM1   */    #X0008,   ins.2op.bwl,    0,           0,             28,
+/* FGETEXP   */    #X001E,   ins.2op.bwl,    0,           0,             28,
+/* FGETMAN   */    #X001F,   ins.2op.bwl,    0,           0,             28,
+/* FINT      */    #X0001,   ins.2op.bwl,    0,           0,             28,
+/* FINTRZ    */    #X0003,   ins.2op.bwl,    0,           0,             28,
+/* FLOG10    */    #X0015,   ins.2op.bwl,    0,           0,             28,
+/* FLOG2     */    #X0016,   ins.2op.bwl,    0,           0,             28,
+/* FLOGN     */    #X0014,   ins.2op.bwl,    0,           0,             28,
+/* FLOGNP1   */    #X0006,   ins.2op.bwl,    0,           0,             28,
+/* FMOD      */    #X0021,   ins.2op.bwl,    0,           1,             28,
+/* FMOVE     */    #X0000,   ins.2op.bwl,    0,           0,             31,
+/* FMOVECR   */    #X0000,   ins.2op,        0,           0,             36,
+/* FMOVEM    */    #X0000,   ins.2op.l,      0,           0,             32,
+/* FMUL      */    #X0023,   ins.2op.bwl,    0,           1,             28,
+/* FNEG      */    #X001A,   ins.2op.bwl,    0,           0,             28,
+/* FNOP      */    #X0000,   ins.zop,        0,           0,             35,
+/* FREM      */    #X0025,   ins.2op.bwl,    0,           1,             28,
+/* FRESTORE  */    #X0000,   ins.1op,        0,           1,             33,
+/* FSAVE     */    #X0000,   ins.1op,        0,           0,             33,
+/* FSCALE    */    #X0026,   ins.2op.bwl,    0,           1,             28,
+/* FSEQ      */    #X0000,   ins.1op.b,      0,    #B000001,             38,
+/* FSF       */    #X0000,   ins.1op.b,      0,    #B000000,             38,
+/* FSGE      */    #X0000,   ins.1op.b,      0,    #B010011,             38,
+/* FSGL      */    #X0000,   ins.1op.b,      0,    #B010110,             38,
+/* FSGLDIV   */    #X0024,   ins.2op.bwl,    0,           1,             28,
+/* FSGLE     */    #X0000,   ins.1op.b,      0,    #B010111,             38,
+/* FSGLMUL   */    #X0027,   ins.2op.bwl,    0,           1,             28,
+/* FSGT      */    #X0000,   ins.1op.b,      0,    #B010010,             38,
+/* FSIN      */    #X000E,   ins.2op.bwl,    0,           0,             28,
+/* FSINCOS   */    #X0030,   ins.2op.bwl,    0,           0,             29,
+/* FSINH     */    #X0002,   ins.2op.bwl,    0,           0,             28,
+/* FSLE      */    #X0000,   ins.1op.b,      0,    #B010101,             38,
+/* FSLT      */    #X0000,   ins.1op.b,      0,    #B010100,             38,
+/* FSNE      */    #X0000,   ins.1op.b,      0,    #B001110,             38,
+/* FSNGE     */    #X0000,   ins.1op.b,      0,    #B011100,             38,
+/* FSNGL     */    #X0000,   ins.1op.b,      0,    #B011001,             38,
+/* FSNGLE    */    #X0000,   ins.1op.b,      0,    #B011000,             38,
+/* FSNGT     */    #X0000,   ins.1op.b,      0,    #B011101,             38,
+/* FSNLE     */    #X0000,   ins.1op.b,      0,    #B011010,             38,
+/* FSNLT     */    #X0000,   ins.1op.b,      0,    #B011011,             38,
+/* FSOGE     */    #X0000,   ins.1op.b,      0,    #B000011,             38,
+/* FSOGL     */    #X0000,   ins.1op.b,      0,    #B000110,             38,
+/* FSOGT     */    #X0000,   ins.1op.b,      0,    #B000010,             38,
+/* FSOLE     */    #X0000,   ins.1op.b,      0,    #B000101,             38,
+/* FSOLT     */    #X0000,   ins.1op.b,      0,    #B000100,             38,
+/* FSOR      */    #X0000,   ins.1op.b,      0,    #B000111,             38,
+/* FSQRT     */    #X0004,   ins.2op.bwl,    0,           0,             28,
+/* FSSEQ     */    #X0000,   ins.1op.b,      0,    #B010001,             38,
+/* FSSF      */    #X0000,   ins.1op.b,      0,    #B010000,             38,
+/* FSSNE     */    #X0000,   ins.1op.b,      0,    #B011110,             38,
+/* FSST      */    #X0000,   ins.1op.b,      0,    #B011111,             38,
+/* FST       */    #X0000,   ins.1op.b,      0,    #B001111,             38,
+/* FSUB      */    #X0028,   ins.2op.bwl,    0,           1,             28,
+/* FSUEQ     */    #X0000,   ins.1op.b,      0,    #B001001,             38,
+/* FSUGE     */    #X0000,   ins.1op.b,      0,    #B001011,             38,
+/* FSUGT     */    #X0000,   ins.1op.b,      0,    #B001010,             38,
+/* FSULE     */    #X0000,   ins.1op.b,      0,    #B001101,             38,
+/* FSULT     */    #X0000,   ins.1op.b,      0,    #B001100,             38,
+/* FSUN      */    #X0000,   ins.1op.b,      0,    #B001000,             38,
+/* FTAN      */    #X000F,   ins.2op.bwl,    0,           0,             28,
+/* FTANH     */    #X0009,   ins.2op.bwl,    0,           0,             28,
+/* FTENTOX   */    #X0012,   ins.2op.bwl,    0,           0,             28,
+/* FTRAPEQ   */    #X0000,   ins.1op.wl,     0,    #B000001,             37,
+/* FTRAPF    */    #X0000,   ins.1op.wl,     0,    #B000000,             37,
+/* FTRAPGE   */    #X0000,   ins.1op.wl,     0,    #B010011,             37,
+/* FTRAPGL   */    #X0000,   ins.1op.wl,     0,    #B010110,             37,
+/* FTRAPGLE  */    #X0000,   ins.1op.wl,     0,    #B010111,             37,
+/* FTRAPGT   */    #X0000,   ins.1op.wl,     0,    #B010010,             37,
+/* FTRAPLE   */    #X0000,   ins.1op.wl,     0,    #B010101,             37,
+/* FTRAPLT   */    #X0000,   ins.1op.wl,     0,    #B010100,             37,
+/* FTRAPNE   */    #X0000,   ins.1op.wl,     0,    #B001110,             37,
+/* FTRAPNGE  */    #X0000,   ins.1op.wl,     0,    #B011100,             37,
+/* FTRAPNGL  */    #X0000,   ins.1op.wl,     0,    #B011001,             37,
+/* FTRAPNGLE */    #X0000,   ins.1op.wl,     0,    #B011000,             37,
+/* FTRAPNGT  */    #X0000,   ins.1op.wl,     0,    #B011101,             37,
+/* FTRAPNLE  */    #X0000,   ins.1op.wl,     0,    #B011010,             37,
+/* FTRAPNLT  */    #X0000,   ins.1op.wl,     0,    #B011011,             37,
+/* FTRAPOGE  */    #X0000,   ins.1op.wl,     0,    #B000011,             37,
+/* FTRAPOGL  */    #X0000,   ins.1op.wl,     0,    #B000110,             37,
+/* FTRAPOGT  */    #X0000,   ins.1op.wl,     0,    #B000010,             37,
+/* FTRAPOLE  */    #X0000,   ins.1op.wl,     0,    #B000101,             37,
+/* FTRAPOLT  */    #X0000,   ins.1op.wl,     0,    #B000100,             37,
+/* FTRAPOR   */    #X0000,   ins.1op.wl,     0,    #B000111,             37,
+/* FTRAPSEQ  */    #X0000,   ins.1op.wl,     0,    #B010001,             37,
+/* FTRAPSF   */    #X0000,   ins.1op.wl,     0,    #B010000,             37,
+/* FTRAPSNE  */    #X0000,   ins.1op.wl,     0,    #B011110,             37,
+/* FTRAPST   */    #X0000,   ins.1op.wl,     0,    #B011111,             37,
+/* FTRAPT    */    #X0000,   ins.1op.wl,     0,    #B001111,             37,
+/* FTRAPUEQ  */    #X0000,   ins.1op.wl,     0,    #B001001,             37,
+/* FTRAPUGE  */    #X0000,   ins.1op.wl,     0,    #B001011,             37,
+/* FTRAPUGT  */    #X0000,   ins.1op.wl,     0,    #B001010,             37,
+/* FTRAPULE  */    #X0000,   ins.1op.wl,     0,    #B001101,             37,
+/* FTRAPULT  */    #X0000,   ins.1op.wl,     0,    #B001100,             37,
+/* FTRAPUN   */    #X0000,   ins.1op.wl,     0,    #B001000,             37,
+/* FTST      */    #X003A,   ins.1op.bwl,    0,           0,             30,
+/* FTWOTOX   */    #X0011,   ins.2op.bwl,    0,           0,             28,
+/* ILLEGAL   */    #X4AFC,   ins.zop,       15,           0,              0,
+/* JMP       */    #X4EC0,   ins.1op.l,      0,           0,              9,
+/* JSR       */    #X4E80,   ins.1op.l,      0,           1,              9,
+/* LEA       */    #X41C0,   ins.2op.l,      7,    am.contr,          am.Ar,
+/* LINK      */    #X0000,   ins.2op.wl,     0,           0,             17,
+/* LSL       */    #XE008,   ins.2op.bwl,    0,       #B011,              5,
+/* LSR       */    #XE008,   ins.2op.bwl,    0,       #B010,              5,
+/* MOVE      */    #X0000,   ins.2op.bwl,    0,           0,              8,
+/* MOVEA     */    #X0040,   ins.2op.bwl,    0,           1,              8,
+/* MOVEM     */    #X4880,   ins.2op.wl,     0,           2,              8,
+/* MOVEP     */    #X0008,   ins.2op.wl,     0,           3,              8,
+/* MOVEQ     */    #X7000,   ins.2op.l,      0,           4,              8,
+/* MOVEC     */    #X4E7A,   ins.2op.l,      0,           5,              8,
+/* MOVES     */    #X0E00,   ins.2op.bwl,    0,           6,              8,
+/* MULS      */    #X0000,   ins.2op.wl,     0,           4,             16,
+/* MULU      */    #X0000,   ins.2op.wl,     0,           5,             16,
+/* NBCD      */    #X4800,   ins.1op.b,      9,           0,    am.data.alt,
+/* NEG       */    #X4400,   ins.1op.bwl,    2,           0,    am.data.alt,
+/* NEGX      */    #X4000,   ins.1op.bwl,    2,           0,    am.data.alt,
+/* NOP       */    #X4E71,   ins.zop,       15,           0,              0,
+/* NOT       */    #X4600,   ins.1op.bwl,    2,           0,    am.data.alt,
+/* OR        */    #X8000,   ins.2op.bwl,    0,           0,              2,
+/* ORI       */    #X0000,   ins.2op.bwl,    0,           0,             12,
+/* PACK      */    #X8140,   ins.3op,        0,           0,             18,
+/* PEA       */    #X4840,   ins.1op.l,      9,           0,       am.contr,
+/* RESET     */    #X4E70,   ins.zop,       15,           0,              0,
+/* ROL       */    #XE018,   ins.2op.bwl,    0,       #B101,              5,
+/* ROR       */    #XE018,   ins.2op.bwl,    0,       #B100,              5,
+/* ROXL      */    #XE010,   ins.2op.bwl,    0,       #B111,              5,
+/* ROXR      */    #XE010,   ins.2op.bwl,    0,       #B110,              5,
+/* RTE       */    #X4E73,   ins.zop,       15,           0,              0,
+/* RTD       */    #X4E74,   ins.1op,       15,           0,       am.imm16,
+/* RTM       */    #X06C0,   ins.1op,        0,           0,             19,
+/* RTR       */    #X4E77,   ins.zop,       15,           0,              0,
+/* RTS       */    #X4E75,   ins.zop,       15,           0,              0,
+/* SBCD      */    #X8100,   ins.2op.b,      0,           0,              1,
+/* SCC       */    #X50C0,   ins.1op.b,      6,      #B0100,    am.data.alt,
+/* SCS       */    #X50C0,   ins.1op.b,      6,      #B0101,    am.data.alt,
+/* SEQ       */    #X50C0,   ins.1op.b,      6,      #B0111,    am.data.alt,
+/* SF        */    #X50C0,   ins.1op.b,      6,      #B0001,    am.data.alt,
+/* SGE       */    #X50C0,   ins.1op.b,      6,      #B1100,    am.data.alt,
+/* SGT       */    #X50C0,   ins.1op.b,      6,      #B1110,    am.data.alt,
+/* SHI       */    #X50C0,   ins.1op.b,      6,      #B0010,    am.data.alt,
+/* SHS       */    #X50C0,   ins.1op.b,      6,      #B0100,    am.data.alt,
+/* SLE       */    #X50C0,   ins.1op.b,      6,      #B1111,    am.data.alt,
+/* SLO       */    #X50C0,   ins.1op.b,      6,      #B0101,    am.data.alt,
+/* SLS       */    #X50C0,   ins.1op.b,      6,      #B0011,    am.data.alt,
+/* SLT       */    #X50C0,   ins.1op.b,      6,      #B1101,    am.data.alt,
+/* SMI       */    #X50C0,   ins.1op.b,      6,      #B1011,    am.data.alt,
+/* SNE       */    #X50C0,   ins.1op.b,      6,      #B0110,    am.data.alt,
+/* SPL       */    #X50C0,   ins.1op.b,      6,      #B1010,    am.data.alt,
+/* ST        */    #X50C0,   ins.1op.b,      6,      #B0000,    am.data.alt,
+/* SVC       */    #X50C0,   ins.1op.b,      6,      #B1000,    am.data.alt,
+/* SVS       */    #X50C0,   ins.1op.b,      6,      #B1001,    am.data.alt,
+/* STOP      */    #X4E72,   ins.1op,       15,           0,       am.imm16,
+/* SUB       */    #X9000,   ins.2op.bwl,    0,           0,              3,
+/* SUBA      */    #X90C0,   ins.2op.wl,     0,           0,             13,
+/* SUBI      */    #X0400,   ins.2op.bwl,    2,      am.imm,    am.data.alt,
+/* SUBQ      */    #X5100,   ins.2op.bwl,    5,     am.imm3,         am.alt,
+/* SUBX      */    #X9100,   ins.2op.bwl,    0,           1,              1,
+/* SWAP      */    #X4840,   ins.1op.w,      4,           0,          am.Dr,
+/* TAS       */    #X4AC0,   ins.1op.b,      9,           0,    am.data.alt,
+/* TRAP      */    #X4E40,   ins.1op,        0,           0,             11,
+/* TRAPCC    */    #X50C0,   ins.1op.wl,     0,      #B0100,             20,
+/* TRAPCS    */    #X50C0,   ins.1op.wl,     0,      #B0101,             20,
+/* TRAPEQ    */    #X50C0,   ins.1op.wl,     0,      #B0111,             20,
+/* TRAPF     */    #X50C0,   ins.1op.wl,     0,      #B0001,             20,
+/* TRAPGE    */    #X50C0,   ins.1op.wl,     0,      #B1100,             20,
+/* TRAPGT    */    #X50C0,   ins.1op.wl,     0,      #B1110,             20,
+/* TRAPHI    */    #X50C0,   ins.1op.wl,     0,      #B0010,             20,
+/* TRAPHS    */    #X50C0,   ins.1op.wl,     0,      #B0100,             20,
+/* TRAPLE    */    #X50C0,   ins.1op.wl,     0,      #B1111,             20,
+/* TRAPLO    */    #X50C0,   ins.1op.wl,     0,      #B0101,             20,
+/* TRAPLS    */    #X50C0,   ins.1op.wl,     0,      #B0011,             20,
+/* TRAPLT    */    #X50C0,   ins.1op.wl,     0,      #B1101,             20,
+/* TRAPMI    */    #X50C0,   ins.1op.wl,     0,      #B1011,             20,
+/* TRAPNE    */    #X50C0,   ins.1op.wl,     0,      #B0110,             20,
+/* TRAPPL    */    #X50C0,   ins.1op.wl,     0,      #B1010,             20,
+/* TRAPT     */    #X50C0,   ins.1op.wl,     0,      #B0000,             20,
+/* TRAPV     */    #X4E76,   ins.zop,       15,           0,              0,
+/* TRAPVC    */    #X50C0,   ins.1op.wl,     0,      #B1000,             20,
+/* TRAPVS    */    #X50C0,   ins.1op.wl,     0,      #B1001,             20,
+/* TST       */    #X4A00,   ins.1op.bwl,    2,           0,    am.data.alt,
+/* UNLK      */    #X4E58,   ins.1op,        4,           0,          am.Ar,
+/* UNPK      */    #X8180,   ins.3op,        0,           0,             18,
+
+
+      /*  End of the instructions, now deal with the Directives  */
+      /*  =====================================================  */
+
+/* EQU       */         0,   s.dir,          0,           0,          d.equ,
+/* EQUR      */         0,   s.dir,          0,           0,         d.equr,
+/* SET       */         0,   s.dir,          0,           0,          d.set,
+/* ORG       */         0,   s.dir,          0,           0,          d.org,
+/* RORG      */         0,   s.dir,          0,           0,         d.rorg,
+/* DORG      */         0,   s.dir,          0,           0,         d.dorg,
+/* DC        */         0,   s.dir,          0,           0,           d.dc,
+/* DS        */         0,   s.dir,          0,           0,           d.ds,
+/* PAGE      */         0,   s.dir,          0,           0,         d.page,
+/* LIST      */         0,   s.dir,          0,           0,         d.list,
+/* NOLIST    */         0,   s.dir,          0,           0,       d.nolist,
+/* NOL       */         0,   s.dir,          0,           0,       d.nolist,
+/* SPC       */         0,   s.dir,          0,           0,          d.spc,
+/* NOPAGE    */         0,   s.dir,          0,           0,       d.nopage,
+/* LLEN      */         0,   s.dir,          0,           0,         d.llen,
+/* PLEN      */         0,   s.dir,          0,           0,         d.plen,
+/* TTL       */         0,   s.dir,          0,           0,          d.ttl,
+/* NOOBJ     */         0,   s.dir,          0,           0,        d.noobj,
+/* IFEQ      */         0,   s.dir,          0,           0,         d.ifeq,
+/* IFNE      */         0,   s.dir,          0,           0,         d.ifne,
+/* IFLT      */         0,   s.dir,          0,           0,         d.iflt,
+/* IFLE      */         0,   s.dir,          0,           0,         d.ifle,
+/* IFGT      */         0,   s.dir,          0,           0,         d.ifgt,
+/* IFGE      */         0,   s.dir,          0,           0,         d.ifge,
+/* IFDEF     */         0,   s.dir,          0,           0,        d.ifdef,
+/* IFNDEF    */         0,   s.dir,          0,           0,       d.ifndef,
+/* ENDC      */         0,   s.dir,          0,           0,         d.endc,
+/* MACRO     */         0,   s.dir,          0,           0,        d.macro,
+/* ENDM      */         0,   s.dir,          0,           0,         d.endm,
+/* MEXIT     */         0,   s.dir,          0,           0,        d.mexit,
+/* GET       */         0,   s.dir,          0,           0,          d.get,
+/* INCLUDE   */         0,   s.dir,          0,           0,          d.get,
+/* END       */         0,   s.dir,          0,           0,          d.end,
+/* FAIL      */         0,   s.dir,          0,           0,         d.fail,
+/* CNOP      */         0,   s.dir,          0,           0,         d.cnop,
+/* EXTRN     */         0,   s.dir,          0,           0,        d.extrn,
+/* XREF      */         0,   s.dir,          0,           0,        d.extrn,
+/* ENTRY     */         0,   s.dir,          0,           0,        d.entry,
+/* XDEF      */         0,   s.dir,          0,           0,        d.entry,
+/* REG       */         0,   s.dir,          0,           0,          d.reg,
+/* DCB       */         0,   s.dir,          0,           0,          d.dcb,
+
+
+    /*  Now the registers, and their Mnemonic Synonyms  */
+    /*  ==============================================  */
+
+/* D0        */         0,   s.Dr,           0,           0,              0,
+/* D1        */         0,   s.Dr,           0,           0,              1,
+/* D2        */         0,   s.Dr,           0,           0,              2,
+/* D3        */         0,   s.Dr,           0,           0,              3,
+/* D4        */         0,   s.Dr,           0,           0,              4,
+/* D5        */         0,   s.Dr,           0,           0,              5,
+/* D6        */         0,   s.Dr,           0,           0,              6,
+/* D7        */         0,   s.Dr,           0,           0,              7,
+
+/* A0        */         0,   s.Ar,           0,           0,              0,
+/* A1        */         0,   s.Ar,           0,           0,              1,
+/* A2        */         0,   s.Ar,           0,           0,              2,
+/* A3        */         0,   s.Ar,           0,           0,              3,
+/* A4        */         0,   s.Ar,           0,           0,              4,
+/* A5        */         0,   s.Ar,           0,           0,              5,
+/* A6        */         0,   s.Ar,           0,           0,              6,
+/* A7        */         0,   s.Ar,           0,           0,              7,
+
+/* FP0       */         0,   s.FPr,          0,           0,              0,
+/* FP1       */         0,   s.FPr,          0,           0,              1,
+/* FP2       */         0,   s.FPr,          0,           0,              2,
+/* FP3       */         0,   s.FPr,          0,           0,              3,
+/* FP4       */         0,   s.FPr,          0,           0,              4,
+/* FP5       */         0,   s.FPr,          0,           0,              5,
+/* FP6       */         0,   s.FPr,          0,           0,              6,
+/* FP7       */         0,   s.FPr,          0,           0,              7,
+
+/* SR        */         0,   s.SR,           0,           0,              0,
+/* CCR       */         0,   s.CCR,          0,           0,              0,
+/* SP        */         0,   s.Ar,           0,           0,              7,
+/* SFC       */         0,   s.SFC,          0,           0,              0,
+/* DFC       */         0,   s.DFC,          0,           0,              0,
+/* CACR      */         0,   s.CACR,         0,           0,              0,
+/* CAAR      */         0,   s.CAAR,         0,           0,              0,
+/* VBR       */         0,   s.VBR,          0,           0,              0,
+/* MSP       */         0,   s.MSP,          0,           0,              0,
+/* ISP       */         0,   s.ISP,          0,           0,              0,
+/* USP       */         0,   s.USP,          0,           0,              0,
+/* PC        */         0,   s.PC,           0,           0,              0,
+/* ZPC       */         0,   s.ZPC,          0,           0,              0,
+/* FPIAR     */         0,   s.FPIAR,        0,           0,              0,
+/* FPSR      */         0,   s.FPSR,         0,           0,              0,
+/* FPCR      */         0,   s.FPCR,         0,           0,              0,
+
+/* .W        */         0,   s.dotW,         0,           0,              0,
+/* .L        */         0,   s.dotL,         0,           0,              0
+
+
+    dataptr   :=   datavector
+
+
+    //  Now declare the Instruction Mnemonics.
+    //  ======================================
+
+    declare( tagtable1, "ABCD/ADD/ADDA/ADDI/ADDQ/ADDX/AND/ANDI/ASL/ASR/*
+                        *BCC/BCHG/BCLR/BCS/BEQ/BFCHG/BFCLR/BFEXTS/BFEXTU/*
+                        *BFFFO/BFINS/BFSET/BFTST/BGE/BGT/BHI/BHS//" )
+
+    declare( tagtable1, "BKPT/BLE/BLO/BLS/BLT/BMI/BNE/BPL/BVC/BVS/BRA/BSET/*
+                        *BSR/BTST/CALLM/CAS/CAS2/CHK/CHK2/CLR/CMP/CMP2/CMPA/*
+                        *CMPI/CMPM/DBCC/DBCS/DBEQ/DBF/DBGE/DBGT/DBHI/DBHS//" )
+
+    declare( tagtable1, "DBLE/DBLO/DBLS/DBLT/DBMI/DBNE/DBPL/DBT/DBVC/DBVS/*
+                        *DBRA/DIVS/DIVSL/DIVU/DIVUL/EOR/EORI/EXG/EXGD/EXGA/*
+                        *EXGM/EXT/EXTB/FABS/FACOS/FADD/FASIN/FATAN/FATANH//" )
+
+    declare( tagtable1, "FBEQ/FBF/FBGE/FBGL/FBGLE/FBGT/FBLE/FBLT/FBNE/FBNGE/*
+                        *FBNGL/FBNGLE/FBNGT/FBNLE/FBNLT/FBOGE/FBOGL/FBOGT/*
+                        *FBOLE/FBOLT/FBOR/FBSEQ/FBSF/FBSNE/FBST/FBT/FBUEQ//" )
+
+    declare( tagtable1, "FBUGE/FBUGT/FBULE/FBULT/FBUN/FCMP/FCOS/FCOSH/*
+                        *FDBEQ/FDBF/FDBGE/FDBGL/FDBGLE/FDBGT/FDBLE/FDBLT/*
+                        *FDBNE/FDBNGE/FDBNGL/FDBNGLE/FDBNGT/FDBNLE/FDBNLT//" )
+
+    declare( tagtable1, "FDBOGE/FDBOGL/FDBOGT/FDBOLE/FDBOLT/FDBOR/FDBSEQ/*
+                        *FDBSF/FDBSNE/FDBST/FDBT/FDBUEQ/FDBUGE/FDBUGT/*
+                        *FDBULE/FDBULT/FDBUN/FDIV/FETOX/FETOXM1/FGETEXP//" )
+
+    declare( tagtable1, "FGETMAN/FINT/FINTRZ/FLOG10/FLOG2/FLOGN/FLOGNP1/FMOD/*
+                        *FMOVE/FMOVECR/FMOVEM/FMUL/FNEG/FNOP/FREM/FRESTORE/*
+                        *FSAVE/FSCALE/FSEQ/FSF/FSGE/FSGL/FSGLDIV/FSGLE//" )
+
+    declare( tagtable1, "FSGLMUL/FSGT/FSIN/FSINCOS/FSINH/FSLE/FSLT/FSNE/*
+                        *FSNGE/FSNGL/FSNGLE/FSNGT/FSNLE/FSNLT/FSOGE/FSOGL/*
+                        *FSOGT/FSOLE/FSOLT/FSOR/FSQRT/FSSEQ/FSSF/FSSNE//" )
+
+    declare( tagtable1, "FSST/FST/FSUB/FSUEQ/FSUGE/FSUGT/FSULE/FSULT/FSUN/*
+                        *FTAN/FTANH/FTENTOX/FTRAPEQ/FTRAPF/FTRAPGE/FTRAPGL/*
+                        *FTRAPGLE/FTRAPGT/FTRAPLE/FTRAPLT/FTRAPNE//" )
+
+    declare( tagtable1, "FTRAPNGE/FTRAPNGL/FTRAPNGLE/FTRAPNGT/FTRAPNLE/*
+                        *FTRAPNLT/FTRAPOGE/FTRAPOGL/FTRAPOGT/FTRAPOLE/*
+                        *FTRAPOLT/FTRAPOR/FTRAPSEQ/FTRAPSF/FTRAPSNE//" )
+
+    declare( tagtable1, "FTRAPST/FTRAPT/FTRAPUEQ/FTRAPUGE/FTRAPUGT/FTRAPULE/*
+                        *FTRAPULT/FTRAPUN/FTST/FTWOTOX/ILLEGAL/JMP/JSR//" )
+
+    declare( tagtable1, "LEA/LINK/LSL/LSR/MOVE/MOVEA/MOVEM/MOVEP/MOVEQ/*
+                        *MOVEC/MOVES/MULS/MULU/NBCD/NEG/NEGX/NOP/NOT//" )
+
+    declare( tagtable1, "OR/ORI/PACK/PEA/RESET/ROL/ROR/ROXL/ROXR/RTE/RTD/*
+                        *RTM/RTR/RTS/SBCD/SCC/SCS/SEQ/SF/SGE/SGT/SHI/SHS/*
+                        *SLE/SLO/SLS/SLT/SMI/SNE/SPL/ST/SVC/SVS//" )
+
+    declare( tagtable1, "STOP/SUB/SUBA/SUBI/SUBQ/SUBX/SWAP/TAS/TRAP/TRAPCC/*
+                        *TRAPCS/TRAPEQ/TRAPF/TRAPGE/TRAPGT/TRAPHI/TRAPHS/*
+                        *TRAPLE/TRAPLO/TRAPLS/TRAPLT/TRAPMI/TRAPNE//" )
+
+    declare( tagtable1, "TRAPPL/TRAPT/TRAPV/TRAPVC/TRAPVS/TST/UNLK/UNPK//" )
+
+
+    //  Now the directives:
+    //  ===================
+
+    declare( tagtable1, "EQU/EQUR/SET/ORG/RORG/DORG/DC/DS/PAGE/LIST/NOLIST/*
+                        *NOL/SPC/NOPAGE/LLEN/PLEN/TTL/NOOBJ/IFEQ/IFNE/IFLT/*
+                        *IFLE/IFGT/IFGE/IFDEF/IFNDEF//" )
+
+    declare( tagtable1, "ENDC/MACRO/ENDM/MEXIT/GET/INCLUDE/END/FAIL/CNOP/*
+                        *EXTRN/XREF/ENTRY/XDEF/REG/DCB//" )
+
+
+    //  Register names  and synonyms:
+    //  =============================
+
+    declare( tagtable2, "D0/D1/D2/D3/D4/D5/D6/D7/A0/A1/A2/A3/A4/A5/A6/A7/*
+                        *FP0/FP1/FP2/FP3/FP4/FP5/FP6/FP7/SR/CCR/SP/SFC/DFC/*
+                        *CACR/CAAR/VBR/MSP/ISP/USP/PC/ZPC/FPIAR/FPSR/FPCR/*
+                        *.W/.L//" )
+$)
+
+
+
+AND block1( a )  =  VALOF
+$(
+    LET ptr  =  expspace( 1 )
+
+    ptr!p.ptr0  :=  a
+
+    RESULTIS  ptr
+$)
+
+
+
+AND block2( a, b )  =  VALOF
+$(
+    LET ptr  =  expspace( 2 )
+
+    ptr!p.ptr0  :=  a
+    ptr!p.ptr1  :=  b
+
+    RESULTIS  ptr
+$)
+
+
+
+AND block3( a, b, c )  =  VALOF
+$(
+    LET ptr  =  expspace( 3 )
+
+    ptr!p.ptr0  :=  a
+    ptr!p.ptr1  :=  b
+    ptr!p.ptr2  :=  c
+
+    RESULTIS  ptr
+$)
+
+
+
+AND block4( a, b, c, d )  =  VALOF
+$(
+    LET ptr  =  expspace( 4 )
+
+    ptr!p.ptr0  :=  a
+    ptr!p.ptr1  :=  b
+    ptr!p.ptr2  :=  c
+    ptr!p.ptr3  :=  d
+
+    RESULTIS  ptr
+$)
+
+
+
+AND expspace( n )  =  VALOF
+$(
+    expvecp  :=  expvecp - n
+
+    IF  expvecp < expvec  THEN  error( 94 )
+
+    RESULTIS expvecp
+$)
+
+
+
+AND makefile( name )  =  VALOF
+$(
+//  Add a new file to the list of those used already.
+
+    filenumber  :=  filenumber + 1
+
+    IF  filenumber > maxfile  THEN  error( 255 )
+
+    UNLESS  pass2  DO  filelist!filenumber  :=  copyfile( name )
+
+    RESULTIS  filenumber
+$)
+
+
+
+AND copyfile( name )  =  VALOF
+$(
+//  Return a copy of the file name given, truncating it to a reasonable
+//  number of characters if necessary.
+
+    LET namel   =  name % 0
+    LET length  =  namel > 50  ->  50, namel
+    LET store   =  getstore( length/bytesperword )
+
+    //  If we can copy the whole string, then all well and good.  If not, then
+    //  we should put an indication that the file has been truncated.
+
+    TEST  namel > length  THEN
+    $(
+        //  This means a truncation is necessary.  Take the last letters of
+        //  the filename, but put some dots to imply truncation.
+
+        FOR  i = 1  TO  3       DO  store % i  :=  '.'
+        FOR  i = 4  TO  length  DO  store % i  :=  name % (namel - length + i)
+    $)
+    ELSE
+
+        //  Easier.  All we need do is to copy the string across verbatim,
+        //  since it fits anyway.
+
+        FOR  i = 1  TO  namel  DO  store % i  :=  name % i
+
+    //  Having copied the characters, we can set the length, and return a
+    //  pointer to the copied string.
+
+    store % 0  :=  length
+
+    RESULTIS  store
+$)
+
+
+
+AND initstore( chunksize )  BE
+$(
+//  Initialise the storage package, defining the size of chunks which will
+//  be grabbed from the standard storage manager.
+
+    storage.chunksize   :=  chunksize
+    storage.root        :=  0
+    storage.high        :=  0
+    storage.low         :=  0
+
+    storage.wordsused   :=  0
+    storage.totalwords  :=  0
+$)
+
+
+
+AND getstore( upb )  =  VALOF
+$(
+//  Analagous to "getvec"  -  allocate a vector whose word upperbound
+//  is "upb" from the heap.  If there is not enough room in the current
+//  chunk, then allocate a new chunk.
+
+    LET size   =  upb + 1
+    LET chunk  =  0
+
+    IF  size > storage.chunksize  THEN  error( 179 )
+
+    IF  (storage.high - storage.low)  <  size  THEN
+    $(
+        //  Not enough room left in the current chunk, so allocate a
+        //  new chunk, and try again.
+
+        LET newchunk  =  getchunk( storage.chunksize, FALSE )
+
+        storage.low   :=  newchunk
+        storage.high  :=  storage.low + storage.chunksize
+    $)
+
+    chunk              :=  storage.low
+    storage.low        :=  storage.low + size
+    storage.wordsused  :=  storage.wordsused + size
+
+    RESULTIS  chunk
+$)
+
+
+
+AND getchunk( chunksize, allused )  =  VALOF
+$(
+//  Get a new chunk of store, and link it onto the chain of those chunks
+//  which have been allocated already.
+
+    LET size   =  chunksize + 1
+    LET chunk  =  getvec( size )
+
+    IF  chunk = 0  THEN
+    $(
+        //  We have failed to allocate the storage, and so we should do
+        //  something about out.  Perhaps we can put out a helpful
+        //  message?
+
+        selectoutput( sysout )
+
+        writef( "******  Failed to allocate %N words*N", size )
+        writef( "******  %S*N", (size < 10000  ->  "Increase workspace size",
+                                                   "Bad 'ORG' or 'DS' directive?") )
+
+        selectoutput( liststream )
+
+        error( 93 )
+    $)
+
+    chunk!0             :=  storage.root
+    storage.root        :=  chunk
+    storage.totalwords  :=  storage.totalwords + size + 1
+
+    IF  allused  THEN  storage.wordsused  :=  storage.wordsused + size + 1
+
+    RESULTIS  chunk + 1
+$)
+
+
+
+AND uninitstore()  BE
+$(
+//  Free all the storage in use by the storage package.  The base of the
+//  storage chain is pointed to by "storage.root".
+
+    UNTIL  storage.root = 0  DO
+    $(
+        LET next  =  storage.root!0
+
+        freevec( storage.root )
+
+        storage.root  :=  next
+    $)
+$)
+
+
+
+AND printequates( stream, sourcename )  BE  UNLESS  stream = 0  DO
+$(
+//  Print out the symbol table as a series of equates which are acceptable
+//  to the assembler.
+
+    LET o  =  output()
+
+    selectoutput( stream )
+
+    printbanner()
+
+    writef( "**  Equates for file *"%S*" written on %S at %S*N",
+             sourcename, datestring, timestring )
+
+    printbanner()
+
+    newline()
+
+    //  Now, scan the symbol table itself, and print out all equates we
+    //  can.  Only absolute symbols are printed out properly.
+
+    FOR  i = 0  TO  tagtablesize-1  DO
+    $(
+        LET t  =  tagtable2!i
+
+        UNTIL  t = 0  DO
+        $(
+            //  Look at the current item on the tag table chain, and decide
+            //  whether to print it out.
+
+            UNLESS  t!st.definition = 0  DO
+            $(
+                //  This is a user symbol, so decide how to print it out.
+
+                LET line   =  t!st.definition
+                LET type   =  t!st.type
+                LET value  =  t!st.value
+
+                IF  line > 0  &  absolute( type )  THEN
+                $(
+                    LET name    =  t + st.name
+                    LET length  =  name % 0
+
+                    writef( "%S  ", name )
+
+                    FOR  j = length  TO  30  DO  wrch( '*S' )
+
+                    writef( "EQU    $%X8*N", value )
+                $)
+            $)
+
+            t  :=  t!st.link
+        $)
+    $)
+
+    //  When we drop out of there, we can do no more than close the stream
+    //  down, and return to the caller.
+
+    endwrite()
+
+    selectoutput( o )
+$)
+
+
+
+AND printbanner()  BE
+$(
+    FOR  i = 1  TO  80  DO  wrch( '**' )
+
+    newline()
+$)
+
+
+
+AND dumpsymbols( stream, sourcename )  BE  UNLESS  stream = 0  DO
+$(
+//  Print out the symbol table in a form which as acceptable to the 68000
+//  debugger.
+
+    LET o  =  output()
+
+    selectoutput( stream )
+
+    writef( "[{!}]*N*
+            *Symbol table of *"%S*" dumped on %S at %S*N",
+             sourcename, datestring, timestring )
+
+    //  Now, scan the symbol table itself, and print out all the symbols we
+    //  can.
+
+    FOR  i = 0  TO  tagtablesize-1  DO
+    $(
+        LET t  =  tagtable2!i
+
+        UNTIL  t = 0  DO
+        $(
+            //  Look at the current item on the tag table chain, and decide
+            //  whether to print it out.
+
+            UNLESS  t!st.definition = 0  DO
+            $(
+                //  This is a user symbol, so decide how to print it out.
+
+                LET line   =  t!st.definition
+                LET type   =  t!st.type
+                LET value  =  t!st.value
+
+                IF  line > 0  &  (absolute( type ) | relocatable( type ))  THEN
+                $(
+                    LET name    =  t + st.name
+                    LET length  =  name % 0
+
+                    writef( "%S/", name )
+                    writef( "%S/", absolute( type )  ->  "A", "R" )
+                    writef( "%N*N", value )
+                $)
+            $)
+
+            t  :=  t!st.link
+        $)
+    $)
+
+    //  When we drop out of there, we can do no more than close the stream
+    //  down, and return to the caller.
+
+    endwrite()
+
+    selectoutput( o )
+$)
+
+

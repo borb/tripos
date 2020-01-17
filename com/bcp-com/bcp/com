@@ -1,0 +1,265 @@
+SECTION "COMpact"
+
+// This is used to remove extrenuous T.ENDs from a file (& null reloc)
+// OR
+// Make a file from multiple files (or a single file), and put at the beginning a table
+// |files| pnt1 | pnt2 | ... | pntfiles | data of file 1 | data of file 2 |
+// making each file into a SINGLE HUNK + a SINGLE relocation block
+
+
+GET "LIBHDR"
+GET "MANHDR"
+GET "IOHDR"
+
+MANIFEST
+$( Point.size   =    3
+   Vecsize      =12000
+   Gsize        =  400
+   Rsize        = 2000
+   Local.R      = 1000
+   max.files=15; BASELEN=max.files*Point.size
+   A.to         = max.files
+   A.REL        = A.to+1
+   A.SINGLE     = A.REL+1
+   A.NOVER      = A.SINGLE+1
+   argv.upb     = 100/BYTESPERWORD +A.NOVER*2   // For rounding ...
+$)
+
+GLOBAL
+$(      rc:UG;          SYSOUT:UG+1;    L.P:UG+2;       L.L:UG+3;
+        VER:UG+4;       V:UG+5;
+        Pend:UG+6;      Vsize:UG+7
+$)
+
+LET START() BE
+$( LET in, out, name =?, ?, "T:compact-T??"
+   LET arg.string =
+        "file/A,,,,,,,,,,,,,,,TO/K/A,REL=RELOCATIONVER/S,SINGLE/S,VER/S"
+   LET GLOBS    = GETVEC(Gsize)         // List of global pairs
+   LET Reloc    = GETVEC(Rsize)         // List of relocation points
+   LET Rvec     = GETVEC(Local.R)       // Buffer for relocation data
+   LET base     = VEC baselen           // Table of start points
+   LET ARGV     = VEC argv.upb
+   LET base.note= VEC 2
+   LET SYSIN    = INPUT()
+   LET data     = ?
+   LET files    = 0
+   LET reloc.ver= ?
+   LET single   = ?
+   LET reformat = ?
+
+   V            := GETVEC(VECSIZE)      // FOR i = 0 TO N-1
+   data         := V-1                  // FOR i = 1 TO N
+   L.p          := level()
+   Pend         := FALSE
+   SYSOUT       := OUTPUT()
+   RC           := 0
+
+   FOR I = 0 TO BASELEN DO BASE!I := 0
+
+   IF V=0 | Globs=0 | reloc=0 errmess(20, "No heap")
+
+   IF RDARGS(arg.string, argv, argv.upb)=0
+   THEN errmess(20, "bad args for *"%S*"", arg.string)
+
+   RELOC.ver    := ARGV!A.REL
+   ver          := ARGV!A.nover
+   name%(name%0  ) := '0' + taskid REM 10
+   name%(name%0-1) := '0' + taskid  /  10
+   out := findoutput(name); IF out=0 ERRMESS(20, "Failed to open %S", name)
+   SELECTOUTPUT(out)
+   NOTE(base.note)                              // save start
+   FOR I = 0 TO max.files-1 DO UNLESS argv!I=0 DO files := files+1
+
+   SINGLE       := ARGV!A.single ~= 0
+   REFORMAT     := (~ single) & (files = 1)
+   IF REFORMAT
+   $(   in := findinput(argv!0)
+        IF in=0 errmess(20, "Failed to open file '%N' input", ARGV!0);
+        SELECTINPUT(in)
+        READWORDS(BASE, 1)
+        files := BASE!0
+        IF files < 2 | files > max.files
+        THEN errmess(20, "%N files seems a peculiar number !*N", files)
+        READWORDS(BASE+1, files*Point.size) // write dummy table
+        FOR I = 0 TO files*Point.size
+        DO mess("%I2: %X8 ", I, BASE!I)
+        mess("*N")
+        FOR i = 1 TO files-1 DO argv!I := argv!0
+   $)
+
+   UNLESS SINGLE DO WRITEWORDS(BASE, files*Point.size+1) // write dummy table
+
+   FOR I = 0 TO max.files-1 UNLESS ARGV!I = 0   // Try all files
+   $(Each.file
+
+      LET len   = 1                             // No of words written to file
+      LET lastn = 0                             // Size of last hunk
+      LET GPTR  = 0                             // Next free global slot
+      LET RPTR  = 2                             // Next free Reloc slot
+      LET Max.g = 0                             // Max global accessed
+      LET hunk  = T.hunk                        // for writewords(@hunk,1)
+      LET dummy.len     = TABLE -99, -99        // Hunk len, Prog size
+      LET WAS   = VEC 2                         // Point to dummy.len
+
+      UNLESS REFORMAT DO in := FINDINPUT(ARGV!I);
+      IF in=0 errmess(20, "Failed to open file %N, '%N' input", I, ARGV!I);
+      SELECTINPUT(in)
+      NOTE(BASE+I*Point.size+1)
+      MESS("*NFile '%S' at %X4 %X4 %X4.*N",
+                        argv!I, BASE!(I*3+1), BASE!(I*3+2), BASE!(I*3+3))
+      WRITEWORDS(@hunk, 1)
+      NOTE(was)
+      WRITEWORDS(dummy.len, 2)  // Hunk.len, prog.len
+      BASE!0 := I+1
+      $(Each.hunk
+
+         LET n, type = ?, ?
+         IF testflags(1) THEN errmess(20, "******BREAK in COM")
+         IF readwords(@type,1) =0 $( UNLESS TYPE=T.END DO RC := 20; BREAK $)
+         IF type = T.end $( mess("End "); TEST REFORMAT THEN BREAK ELSE LOOP $)
+         UNLESS type=t.hunk | type=t.reloc errmess(20, "Type %N found", type)
+         readwords(@n,1)                        // Words in a block
+         IF n > vecsize THEN errmess(20, "object %N of size %N  ", type, n)
+         TEST n=0 THEN mess(" null%C ", type=T.hunk ->'H', 'R')
+         ELSE                                   // There really is something!
+         $(
+            TEST type=T.hunk                    // DATA
+            $( Check.pend()
+               readwords(V,n)
+               Pend := TRUE
+               IF V!0 ~= n $( mess("Part segment"); RC := 20; BREAK $)
+                                                        // Not a whole section
+               Len := len+lastn                 // update
+               Mess("Maxg=%N, using store %N/%X4-> ~%N/%X4",
+                                DATA!n, len, len, n+len-1, n+len-1)
+               IF DATA!n > max.g THEN max.g := DATA!n
+               n := n-1                         // skip max value
+               IF v!1=12345 & (v+2)%0=17 THEN MESS("Section '%S' ", v+2)
+               FOR I = n TO 1 BY -2 DO
+               $( IF DATA!I = 0 BREAK
+                  Mess(" G%N @ %X4 ", DATA!(I-1), DATA!I )
+                  N := n-2
+                  GLOBS!Gptr, GLOBS!(GPTR+1)    := DATA!I + mcaddrinc*(len-1), DATA!(I-1)
+                  GPTR := GPTR+2
+                  IF GPTR >= GSIZE THEN MESS("Too many globals*N")
+               $)
+               lastn := n - 2                           // 0 at back
+               MEss(" Actually%N/%X4.*N", len+lastn, len+lastn)
+               Vsize := lastn
+               //UNLESS n <= 1 DO Writewords(V+1, lastn)        // Len at front,
+            $)
+            ELSE
+            $( readwords(Rvec, n)
+               IF RPTR+N >= RSIZE THEN ERRMESS(20, "Too many relocations*N")
+               MESS("|%NRe@%N/%X4|", n,len, len)        //======================
+               FOR I = 0 TO N-1
+               DO $( RELOC!(RPTR+I) := Rvec!I + LEN -1  // Table the addresses
+                     V!(RVEC!I) := V!(RVEC!I) + mcaddrinc * (LEN -1)
+                                                        // The base has moved...
+                     IF RELOC.ver THEN MESS("%N^%N|", Rvec!I, RELOC!(RPTR+I))
+                  $)
+               RPTR := RPTR + N
+            $)
+         $)
+      $)Each.hunk REPEAT
+      check.pend()
+      IF RC > 0 BREAK
+      UNLESS REFORMAT DO ENDREAD()
+
+      $( LET END = 0; WRITEWORDS(@end,1) $)
+      FOR I = GPTR-1 TO 0 BY -1 $( V!I := Globs!(Gptr-I-1); MESS("%X4 ", V!I) $)
+
+      $( LET over = VER         // Muliply assigned globals?
+         LET errors = FALSE
+         ver := TRUE
+         FOR J = 0 TO GPTR-4 BY 2 FOR I = J+2 TO GPTR-2 BY 2 IF V!I = V!J
+         $( MESS("%SGlobal %N redefined (%N and %N)",
+                                        errors -> ", ", "", V!I, I, J);
+            errors := TRUE
+         $)
+         IF errors MESS(over -> "*N", " in %S*N", ARGV!I)
+         ver := OVER
+      $)
+      UNLESS GPTR = 0 DO WRITEWORDS(V, GPTR)
+      LEN := LEN+GPTR+2 + lastn
+      MESS("*N(%N Globs, max refed=%N)%C",
+                                GPTR/2, max.g, (RPTR=2 | reloc.ver)->'*N', ' ')
+      WRITEWORDS(@max.g, 1)
+
+      Reloc!0 := T.reloc
+      Reloc!1 := RPTR-2
+      UNLESS RPTR = 2
+      $( WRITEWORDS(Reloc, RPTR)
+         IF RELOC.ver THEN FOR I = 2 TO RPTR-1 DO MESS("%X4 ", Reloc!I)
+         MESS(" (%N Reloc)*N", Rptr-2)
+      $)
+
+      $( LET END = T.end; WRITEWORDS(@end,1) $)
+
+      $( LET V = VEC 2
+         NOTE(V)
+         POINT(was)
+         WRITEWORDS(@len, 1)            // Hunk length
+         WRITEWORDS(@len, 1)            // Proglength
+         POINT(V)
+      $)
+   $)Each.file
+
+   IF REFORMAT THEN ENDREAD()
+
+   UNLESS SINGLE
+   $( Mess("*NPOINT table is*N")
+      FOR I = 0 TO files*Point.size DO MESS("%X4 ", BASE!I )
+      MESS("*N")
+      POINT(BASE.NOTE)
+      WRITEWORDS(BASE, files*Point.size+1)
+   $)
+   SELECTINPUT(0)
+   l.l:
+   UNLESS INPUT()  = SYSIN      ENDREAD()
+   UNLESS OUTPUT() = SYSOUT     ENDWRITE()
+   TEST RC=0
+   $( UNLESS RENAMEOBJ(name, ARGV!A.to)
+      // TEST RESULT2=215 THEN copy & delete ELSE
+      DO errmess(20, "Rename %S as %S failed %N ", name, argv!A.to, RESULT2)
+      mess("%S created*N", ARGV!A.to)
+   $)
+   ELSE Mess("  Compaction failed*N")
+
+   FREEVEC(V)
+   FREEVEC(globs)
+   FREEVEC(reloc)
+   FREEVEC(rvec)
+   stop(rc)
+$)
+
+AND check.pend() BE IF pend
+$( pend := FALSE
+   UNLESS VSIZE < 0 DO WRITEWORDS(V+1, Vsize)
+$)
+
+AND mess(s, a,b,c,d,e) BE IF ver
+$( LET O = OUTPUT()
+   SELECTOUTPUT(SYSOUT)
+   WRITEF(s, a,b,c,d,e)
+   WRCH('*E')
+   SELECTOUTPUT(o)
+$)
+
+AND errmess(n, s, a,b,c) BE
+$( VER := TRUE
+   mess(s,a,b,c)
+   RC := n
+   LONGJUMP(L.P, L.L)
+$)
+
+AND TIDYUP() BE errmess(20, "******TIDYUP from COM")
+
+AND NOTE(ADDR) BE
+SENDPKT(notinuse, ABS COS ! scb.type, action.note, ?,?, COS!SCB.arg1, addr)
+
+AND POINT(ADDR) =
+SENDPKT(notinuse, ABS COS ! scb.type, action.point, ?,?, COS!SCB.arg1, addr)
+
+

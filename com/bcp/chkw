@@ -1,0 +1,355 @@
+//////////////////////////////////////////////////////////////////
+//                                                              //
+//                   C H E C K   W O R D S                      //
+//                                                              //
+//                      Tripos version                          //
+//                                                              //
+// D. STRICKLAND-CLARK                                 DEC 1977 //
+//   (Modified from CAP version: J.J.GIBBONS           JUL 1978 //
+//   (Adapted for word checking only from RSX version:          //
+//                               A.J.Wilkes            AUG 1982 //
+//                                                              //
+//////////////////////////////////////////////////////////////////
+
+$<PDPRSX
+  NEEDS "TITLE"
+  NEEDS "IOERROR"
+$>PDPRSX
+
+
+GET "LIBHDR"
+$<PDPRSX
+  MANIFEST $(   StopError   = 4
+                StopSuccess = 0
+           $)
+$>PDPRSX
+$<TRIPOS
+  MANIFEST $(   StopError   = 20
+                StopSuccess = 0
+                FUG         = UG
+           $)
+$>TRIPOS
+
+
+GLOBAL
+$(
+        Nullcount    : fug+ 0   // Number of blank lines
+        Linecount    : fug+ 1   // Total number of lines
+        Charcount    : fug+ 2   // Total number of characters (low part)
+        Charcount.1  : fug+ 3   // Extra *10000 number of characters
+        Wordcount    : fug+ 4   // Total number of words (low part)
+        Wordcount.1  : fug+ 5   // Extra *10000 number of words
+        Longest      : fug+ 6   // Length of longest line
+        Shortest     : fug+ 7   // Length of shortest non-blank line
+        Totrim       : fug+ 8   // TRUE if to strip trailing spaces
+        ExpandTabs   : fug+ 9   // TRUE if to expand tabs to spaces
+$<Tripos
+        SysIn        : fug+ 10  // Standard  input stream
+        SysOut       : fug+ 11  // Standard output stream
+$>Tripos
+$)
+
+
+
+
+LET Start() BE
+$(START
+$<PDPRSX
+  LET cml = Open( Findcml("CHW"), "CML stream", "CML stream" )
+  IF (cml <= 0) STOP( 4 )
+
+$(OUTER
+$>PDPRSX
+
+  LET line = VEC 255
+  AND in, out  = ?, ?
+  AND opstr, rc = ?, ?
+  AND inName, toName = ?, ?
+
+$<Tripos
+  LET rdArgsStr = "FROM/a,TO/k,TRIM/s,NOEXPAND/s"
+  AND rdArgsVec = line
+  LET rdArgsRes = RdArgs( rdArgsStr, rdArgsVec, 255/BytesPerWord+1 )
+  SysOut := Output()
+  SysIn  := Input()
+  IF (rdArgsRes = 0)   Moan( "Invalid response to RdArgs string *"%S*"*N", rdArgsStr )
+  inName := rdArgsVec!0
+  toName := rdArgsVec!1
+$>Tripos
+
+$<PDPRSX
+        SelectInput( cml )
+        rc := FindTitles( 1, line, "" )
+        IF (rc = Endstreamch)   BREAK
+        IF (rc < 0)
+        THEN    Writes( "Syntax error in command line*N" )
+             <> LOOP
+        inName := line!2
+        toName := (rc = 1) -> line!0, 0         // Use o/p if given
+$>PDPRSX
+
+        in := Open( Findinput(inName), "input", inName )
+$<PDPRSX  TEST (in <= 0)        THEN  LOOP      ELSE
+$>PDPRSX  SelectInput(in)
+
+
+// The output stream, if any;  otherwise default to current output.
+
+        TEST (toName = 0)
+        THEN    out := SysOut
+        ELSE $( out := Open( Findoutput(toName), "output", toName )
+$<PDPRSX        TEST (out <= 0)  THEN   EndRead()  <>  LOOP             ELSE
+$>PDPRSX        SelectOutput(out)
+             $)
+
+
+
+// Set up the default state of all the variables (needs to be done inside the
+// loop OUTER for RSX, which can go around many times ...)
+
+        Nullcount    :=   0     // Number of blank lines
+        Linecount    :=   0     // Total number of lines
+        Charcount    :=   0     // Total number of characters (low part)
+        Charcount.1  :=   0     // Extra *10000 number of characters
+        Wordcount    :=   0     // Total number of words (low part)
+        Wordcount.1  :=   0     // Extra *10000 number of words
+        Longest      :=   0     // Length of longest line
+        Shortest     := MaxInt  // Length of shortest non-blank line
+        Totrim       := FALSE   // TRUE if to strip trailing spaces
+        ExpandTabs   :=  TRUE   // TRUE if to expand tabs to spaces
+
+
+// Decode any options given
+$<PDPRSX
+     opstr := line!3                    // The option string
+     FOR optptr=1 TO opstr%0
+     DO   SWITCHON  CapitalCh( opstr%optptr )  INTO
+          $(SW
+            CASE 'T':   Totrim     := TRUE;             ENDCASE
+            CASE 'X':   ExpandTabs := FALSE;            ENDCASE
+            CASE '*N':  CASE '*S':  CASE ',': CASE '/': ENDCASE
+            DEFAULT:    Moan( "Unknown option character *'%C*'*N",opstr%optptr )
+                                                        ENDCASE
+          $)SW
+$>PDPRSX
+$<Tripos
+    ToTrim     :=     rdArgsVec!3
+    ExpandTabs := NOT rdArgsVec!4
+$>Tripos
+
+
+//------------------------------------------------------------------------------
+//                      Main program loop
+//------------------------------------------------------------------------------
+
+  $(MAINLOOP
+        LET length = readstream(line)   // Read a line from the input stream
+
+        IF (length < 0)  BREAK          // End of stream read?
+        Linecount +:= 1                 // Bump total line count
+
+        TEST (length = 0)
+        THEN    Nullcount +:= 1         // Bump null line count
+        ELSE $( Charcount +:= length    // Count characters in the line
+                IF (charcount >= 10000)
+                THEN    Charcount.1 +:= 1
+                     <> Charcount   -:= 10000
+
+                IF ExpandTabs           // Adjust length to cope with tabs
+                THEN $( length := 0
+                        FOR i=1 TO line%0
+                        DO      TEST (line%i = '*T')
+                                THEN    length := (length/8+1)*8
+                                ELSE    length +:= 1
+                     $)
+                longest  := Max( length, longest )
+                shortest := Min( length, shortest )
+
+                WordCount +:= Countwords( line )        // Count the words
+                IF (Wordcount >= 10000)
+                THEN    Wordcount.1 +:= 1
+                     <> Wordcount   -:= 10000
+            $)
+
+  $)MAINLOOP  REPEAT
+
+
+
+//------------------------------------------------------------------------------
+//                      Here at end of input stream
+//------------------------------------------------------------------------------
+
+
+        IF (linecount = 0)
+        THEN    Writes( "Null file*N" )
+             <> GOTO endreport
+
+        IF (Linecount = Nullcount)
+        THEN    Writef( "%N blank line%S*N", nullcount, plural(nullcount) )
+             <> GOTO endreport
+
+
+        Writef( "%N line%S,  ", linecount, plural(linecount) )
+
+        TEST (charcount.1 > 0)
+        THEN    WriteN( charcount.1 )
+             <> WriteLow( charcount, 4 )
+             <> Writes( " characters,  " )
+        ELSE    WriteF( "%N character%S,  ", charcount, plural(charcount) )
+
+        TEST (wordcount.1 > 0)
+        THEN    WriteN( wordcount.1 )
+             <> WriteLow( wordcount, 4 )
+             <> Writes( " words*N" )
+        ELSE    WriteF( "%N word%S*N", wordcount, plural(wordcount) )
+
+
+        IF (linecount = 1)      GOTO endreport
+
+        UNLESS (nullcount = 0)
+        DO      WriteF( "%N blank line%S*N", nullcount, plural(nullcount) )
+
+        writef( "Longest line %N character%S,*S", longest, plural(longest) )
+        writef( "shortest non-blank line %N character%S*N",
+                shortest, plural(shortest) )
+
+EndReport:
+  Cleanup()
+
+$<PDPRSX
+$)OUTER REPEAT
+$>PDPRSX
+
+  Stop( StopSuccess )
+
+$)START
+
+
+
+
+//------------------------------------------------------------------------------
+//                      Utility functions
+//------------------------------------------------------------------------------
+
+AND Max( a,b )  =  (a >= b) -> a, b
+AND Min( a,b )  =  (a <= b) -> a, b
+
+
+AND plural(number) = number = 1 -> "" , "s"
+
+
+AND Moan( format, a,b,c,d,e,f )  BE
+$(
+        Cleanup()
+        Writes( "CHKW -- " )
+        WriteF( format, a,b,c,d,e,f )
+        Newline()
+        Stop( StopError )
+$)
+
+
+AND Cleanup()  BE
+$(
+        UNLESS (Output() = SysOut)  DO  EndWrite()  <>  SelectOutput( SysOut )
+        UNLESS (Input()  = SysIn)   DO  EndRead()   <>  SelectInput ( SysIn  )
+$)
+
+
+
+AND WriteLow( n, d ) BE
+$(
+        IF (d > 1  |  n >= 10)  THEN  WriteLow( n/10, d-1 )
+        WrCh( n REM 10 + '0' )
+$)
+
+
+
+AND open( stream, forWhat, name )  =  VALOF
+$(
+$<PDPRSX  LET streamError  =  [Stream <= 0]     $>PDPRSX
+$<Tripos  LET streamError  =  [Stream  = 0]     $>Tripos
+
+        TEST streamError
+        THEN $( Cleanup()
+                WriteF( "CHKW -- error with %S stream *"%S*" -- ", forWhat, name )
+$<PDPRSX        WriteF( IOERROR(stream), stream, name )         $>PDPRSX
+$<Tripos        Fault( Result2 )                                $>Tripos
+                NewLine()
+$<Tripos        Stop( StopError )                               $>Tripos
+             $)
+        ELSE    RESULTIS  stream
+$)
+
+
+
+
+//////////////////////////////////////////////////////////////////
+//                                                              //
+// Read a record from the input stream                          //
+//                                                              //
+//////////////////////////////////////////////////////////////////
+
+AND readstream(string) = VALOF
+$(rds
+  LET count, char, lastcharpos = 0, ?, 0
+  string%0 := 0
+
+  $(rdc
+    char := RdCh()                      // Read next character from stream
+    IF (char = '*N' | char = '*C' | char = '*P')   BREAK        // End of record
+    IF (char = EndstreamCh)                        RESULTIS -1  // End of stream
+
+    count +:= 1                         // Bump count of chars-on-line
+    string%count := char                // Add character to string
+  $)rdc  REPEAT
+
+
+  IF Totrim                             // Strip trailing blanks if required
+  THEN  FOR posn = count  TO 1  BY -1
+        DO $(  LET char = string%posn
+                TEST (char = '*S')  |  (char='*T' & Expandtabs)
+                THEN    count -:= 1
+                ELSE    BREAK
+           $)
+  string%0 := count                     // Tell the string how long it is
+
+  RESULTIS count
+$)rds
+
+
+
+
+// Count the number of words in a given string.  The algorithm is that of Tripos
+// and CAP's SPELL.
+
+AND CountWords( string )  =  VALOF
+$(
+  LET len, posn, count, ch  =  string%0, 1, 0, ?
+
+  string%(len+1) := 0                           // eos-marker
+  ch := string%posn                             // First character
+
+    $(LOOP
+        WHILE (ch = '*S' |  ch = '*T' |  ch = '*'' |  ch = '*"' |
+               ch = '-'  |  ch = '+'  |  ch = '**' |  ch = '/'  |
+               ch = '('  |  ch = ')'  |  ch = '['  |  ch = ']'  |
+               ch = '{'  |  ch = '}'  |  ch = '<'  |  ch = '>'  |
+               ch = '_'  |  ch = '='  |  ch = '#'  |  ch = '\')
+        DO      posn +:= 1
+             <> ch := string%posn
+
+        IF    (posn <= len)
+        THEN    count +:= 1
+
+        UNTIL (ch = '*S' |  ch = '*T' |  ch = '*"' |  ch = 0    |
+               ch = '('  |  ch = ')'  |  ch = '['  |  ch = ']'  |
+               ch = '{'  |  ch = '}'  |  ch = '<'  |  ch = '>'  |
+               ch = '_'  |  ch = '='  |  ch = '#'  |  ch = '\')
+        DO      posn +:= 1
+             <> ch := string%posn
+    $)LOOP  REPEATUNTIL  (ch = 0)
+
+  RESULTIS  count
+$)
+
+

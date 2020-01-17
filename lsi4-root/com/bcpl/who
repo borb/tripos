@@ -1,0 +1,868 @@
+SECTION "Who"
+
+GET "libhdr"
+GET "ringhdr"
+
+
+/*
+    This is a program to find out who is logged on to the processor
+    bank, where they are, and what they are running.  It makes use
+    of the resource manager, the filing machine and the MAP service.
+
+    The interfaces it uses are mostly well-defined public ones, the
+    exception being the 'PROBE' facility of the filing machine.
+    Unlike an earlier program of the same name, it does not go near
+    the user machines themselves, and hence does not rely on them
+    running a ring services task.
+
+    M. A. Johnson, November 1984
+*/
+
+
+MANIFEST
+$(
+    // Version & revision: update on EVERY change!
+
+    version = 2
+    revision = 11
+
+
+    // Trace control bits (set in global 'tracing')
+
+    tr.id       = #X0001        // identification
+    tr.store    = #X0002        // store utilisation
+    tr.flow     = #X0004        // control flow
+    tr.nlu      = #X0008        // name lookup
+    tr.rm       = #X0010        // RM transactions
+    tr.fm       = #X0020        // FM transactions
+    tr.mc       = #X0040        // 'find.mc' routine
+    tr.sspf     = #X0080        // SSP failures
+
+
+    // Main data structure giving all known data about a machine
+
+    mc.link     = 0             // field for chaining hashtable entries
+    mc.thread   = 1             // field for threading entries in right order
+    mc.name     = 2             // machine name string
+    mc.puid     = 3             // pointer to user's PUID
+    mc.state    = 4             // RM state
+    mc.time     = 5             // RM time left (to distinguish withdrawn substates)
+    mc.owner    = 6             // RM owner (actually the line address)
+    mc.system   = 7             // Name of loaded system
+    mc.upb      = 7             // Upper bound for store allocation
+
+
+    // Hashtable parameters
+
+    ht.upb      = 26            // Upper bound for allocation of hashtable
+
+
+    // Coroutine stack sizes
+
+    rm.co.size  = 300           // Resource manager coroutine
+    fm.co.size  = 300           // Filing machine coroutine
+
+
+    // Transmission and reception block sizes
+
+    rm.tx.bytes = 16            // For transmission to RM
+    rm.rx.bytes = 128           // For reception from RM
+    fm.tx.bytes = 16            // For transmission to FM
+    fm.rx.bytes = 128           // For reception from FM
+
+
+    // Constants associated with RM
+
+    rm.list.fn  = 13            // function code for 'LIST MC' function
+
+    rm.pc.item  = 1 << 8        // parameter code for item number
+    rm.pc.msg   = 1 << 8        // parameter code for message
+    rm.pc.name  = 2 << 8        // parameter code for machine name
+    rm.pc.st    = 3 << 8        // parameter code for machine status
+        rm.st.f = 0             // status free
+        rm.st.a = 1             // status allocated
+        rm.st.w = 2             // status withdrawn
+        rm.st.l = 3             // status loading
+    rm.pc.wflag = 4 << 8        // parameter code for 'to be withdrawn' flag
+    rm.pc.owner = 6 << 8        // parameter code for RM 'owner' (= terminal)
+    rm.pc.atime = 8 << 8        // parameter code for allocation time
+    rm.pc.rtime = 9 << 8        // parameter code for refresh time
+    rm.pc.sys   = 10 << 8       // parameter code for system name
+
+    rm.maxent   = 100           // max entry number to look for (backstop in
+                                // case communication breaks down)
+
+    rm.rc.badno = #XCED1        // rc for invalid item number
+
+
+    // Constants associated with FM
+
+    fm.info.fn  = 2             // function code for 'INFO' function
+
+    fm.sess.lwb = 1             // lower bound of session numbers
+    fm.sess.upb = 31            // upper bound of session numbers
+
+
+    // Flag values (used in 'flags')
+
+    fl.costop   = #X0001        // used to tell coroutines to stop
+    fl.broken   = #X0002        // 'break' detected
+    fl.rmbad    = #X0004        // error talking to RM
+    fl.fmbad    = #X0008        // error talking to FM
+
+
+    // Argument vector offsets
+
+    argv.minmc  = 0             // first positional machine name
+    argv.maxmc  = 9             // last positional machine name
+    argv.all    = argv.maxmc+1  // ALL switch
+    argv.alloc  = argv.maxmc+2  // ALLOC switch
+    argv.who    = argv.maxmc+3  // WHO switch
+    argv.what   = argv.maxmc+4  // WHAT switch
+    argv.where  = argv.maxmc+5  // WHERE switch
+    argv.state  = argv.maxmc+6  // STATE switch
+    argv.full   = argv.maxmc+7  // FULL switch
+    argv.trace  = argv.maxmc+8  // TRACE argument
+
+
+    // Output field sizes.  These are a compromise: if they are too
+    // small the output will be ragged; if they are too large lines
+    // will be longer than a line on a terminal.
+
+    fs.mc       = 9             // Machine name
+    fs.state    = 10            // State
+    fs.name     = 13            // User name
+    fs.system   = 13            // System name
+    fs.terminal = 14            // Line name
+
+
+    // Misc constants
+
+    bb.ssp.arg9 = bb.ssp.arg5+4 // RINGHDR doesn't go that far
+    argv.upb = 200/bytesperword // upper bound of rdargs vector
+    puid.bytes  = 17            // size of a PUID string in bytes
+    map.result.bytes = 64       // size of buffer for result of 'ringmap'
+    store.blocksize = 500       // amount of store obtained at once
+    max.ssp.try = 5             // number of times to try an ssp
+    ssp.short.timeout = 2*tickspersecond // change default timeout
+$)
+
+
+GLOBAL
+$(
+    storechain  : ug+0          // Chain of store blocks
+    hashtable   : ug+1          // Hash table of machine entries
+    tracing     : ug+2          // Whether tracing
+    mc.list.h   : ug+3          // Head of list of machines in print order
+    mc.list.t   : ug+4          // Tail of list of machines in print order
+    store.count : ug+5          // Count of store blocks
+    store.ptr   : ug+6          // Pointer into current store block
+    store.end   : ug+7          // End of current store block
+    flags       : ug+8          // General purpose flags
+    exit.level  : ug+9          // The usual arguments
+    exit.label  : ug+10         //  for a LONGJUMP to get out
+    root.sbase  : ug+11         // 'stackbase' in root coroutine (for error rtn)
+    ssp         : ug+12         // defined in "bcpl.ssplib"
+    ssplib.ssp  : ug+13         // will refer to the 'ssp' in ssplib
+    iolock      : ug+14         // lock for BLIB I/O from coroutines
+    argv        : ug+15         // rdargs argument vector
+    map.result  : ug+16         // result vector for 'ringmap'
+$)
+
+
+GET "bcpl.ssplib"
+GET "bcpl.ringmap"
+GET "bcpl.string-to-number"
+
+
+LET start() BE
+$(
+    LET ident = GET "INFO:*"version %%N.%%N compiled at %T on %D*""
+    LET rdargs.string = ",,,,,,,,,,ALL/S,ALLOC/S,WHO/S,WHAT/S,WHERE/S,STATE/S,FULL/S,TRACE/K"
+    LET std.pktwait = pktwait   // Standard pktwait
+    LET rm.co, fm.co = 0, 0     // Coroutine pointers
+    LET rm.pkt, fm.pkt = ?, ?   // The packet each coroutine is waiting for
+    LET rm.nsvec, fm.nsvec = ?, ? // Temp storage for name lookup result
+    LET mc = ?                  // Pointer to a machine information block
+
+
+    // Basic initialization which must be done before an error can occur
+
+    iolock := FALSE             // Nobody has got lock
+    tracing := 0                // No tracing yet
+    storechain := 0             // Initialize chain of claimed store blocks
+    store.count := 0            //
+    store.ptr := 0              // No store block yet
+    store.end := 0              // Ditto
+    flags := 0                  // Clear all flags
+    exit.level := level()       // Set up a way out
+    exit.label := exit          //
+    root.sbase := stackbase     // Remember root coroutine base
+
+
+    // Read command line arguments
+
+    argv := getstore(argv.upb)  // get rdargs vector
+
+    IF rdargs(rdargs.string, argv, argv.upb) = 0 THEN
+        moan(0, "bad arguments for RDARGS string *"%S*"", rdargs.string)
+
+    IF  VALOF // Test for mutually exclusive selection options
+    $(  LET count = 0
+        IF argv!argv.minmc ~= 0 THEN count := count + 1
+        IF argv!argv.all THEN count := count + 1
+        IF argv!argv.alloc THEN count := count + 1
+        RESULTIS count > 1
+    $)
+    THEN moan(0, "explicit machine names, *"ALL*" and *"ALLOC*" are mutually exclusive")
+
+    IF argv!argv.trace ~= 0 THEN
+    $(  IF NOT string.to.number(argv!argv.trace) THEN moan(0, "TRACE argument *"%S*" invalid", argv!argv.trace)
+        tracing := result2
+    $)
+
+    IF argv!argv.full THEN
+        argv!argv.who, argv!argv.what, argv!argv.where, argv!argv.state := TRUE, TRUE, TRUE, TRUE
+
+    IF NOT (argv!argv.who | argv!argv.what | argv!argv.where | argv!argv.state) THEN
+        argv!argv.who, argv!argv.where := TRUE, TRUE
+
+    // Remainder of initialization
+
+    hashtable := getstore(ht.upb) // Make hash table
+    mc.list.h := 0              // Initialise machine list head pointer
+    mc.list.t := 0              //  and tail pointer
+    trace(tr.id|tr.flow, ident, version, revision) // Say hello
+
+
+    // Create coroutines
+
+    rm.co := createco(rm.info, rm.co.size)
+    IF rm.co = 0 THEN moan(result2, "failed to create RM coroutine")
+
+    fm.co := createco(fm.info, fm.co.size)
+    IF fm.co = 0 THEN moan(result2, "failed to create FM coroutine")
+
+
+    // Set up the local replacement for 'ssp' in 'bcpl.ssplib'. The
+    // standard routine is basically fine, except that it has no outer
+    // retry loop.  Therefore a local write-around is provided which
+    // does those retries.  The replacement is done by tweaking globals
+    // to ensure that the calls of 'ssp' within 'bcpl.ssplib' and
+    // 'bcpl.ringmap' will pick up the retrying version.
+
+    ssplib.ssp := ssp
+    ssp := local.ssp
+
+
+    // Look up service names. It would be more elegant to look up each
+    // name within the appropriate coroutine, but this would this would
+    // inevitably lead to the second lookup being attempted while the
+    // first was still in progress.
+
+    rm.nsvec := getstore(nsv.upb)
+    IF NOT lookup.name("RMSSP", rm.nsvec) THEN
+        moan(result2, "RM nameserver lookup failed")
+    trace(tr.nlu, "RMSSP %X2 %X2 %X4 %X4", rm.nsvec!0, rm.nsvec!1, rm.nsvec!2, rm.nsvec!3)
+
+    fm.nsvec := getstore(nsv.upb)
+    IF NOT lookup.name("PROBE-TRIPOS-FM", fm.nsvec) THEN
+        moan(result2, "FM nameserver lookup failed")
+    trace(tr.nlu, "PROBE-TRIPOS-FM %X2 %X2 %X4 %X4", fm.nsvec!0, fm.nsvec!1, fm.nsvec!2, fm.nsvec!3)
+
+
+    // Each coroutine returns the address of the packet it is waiting for,
+    // or zero when it has finished its work. This is done by changing
+    // the 'pktwait' routine so that it calls 'cowait'.
+
+    pktwait := co.pktwait
+
+
+    // Fire up coroutines
+
+    rm.pkt := callco(rm.co, rm.nsvec)
+    fm.pkt := callco(fm.co, fm.nsvec)
+
+
+    // Now enter loop waiting for packets, passing them to the appropriate
+    // coroutine, until both coroutines have finished.
+
+    UNTIL (rm.pkt = 0) & (fm.pkt = 0) DO
+    $(  LET pkt = taskwait()
+        IF testflags(1) THEN flags := flags | fl.costop | fl.broken
+        IF pkt = rm.pkt THEN $( rm.pkt := callco(rm.co, rm.pkt); LOOP $)
+        IF pkt = fm.pkt THEN $( fm.pkt := callco(fm.co, fm.pkt); LOOP $)
+        abort(1, 2)
+    $)
+
+    pktwait := std.pktwait      // Restore standard pktwait routine
+
+    IF (flags & fl.costop) ~= 0 THEN GOTO exit
+
+    deleteco(rm.co); rm.co := 0
+    deleteco(fm.co); fm.co := 0
+
+
+    // Comment on any communication trouble.
+
+    $(  LET errors = flags & (fl.rmbad | fl.fmbad)
+        IF errors ~= 0 THEN
+        $(  LET which = errors = fl.rmbad -> "RM",
+                        errors = fl.fmbad -> "FM",
+                                             "RM and FM"
+            writef("Errors in communication with %S - *
+                   *information may be incomplete*N*N", which)
+        $)
+    $)
+
+
+    // The results can now be printed out.
+
+    map.result := getstore((map.result.bytes-1)/bytesperword)
+
+    TEST argv!argv.minmc ~= 0 THEN
+    $(  // We have explicit machines to deal with
+        FOR arg = argv.minmc TO argv.maxmc DO
+        $(  IF testflags(1) THEN
+            $(  flags := flags | fl.broken
+                GOTO exit
+            $)
+            IF argv!arg = 0 THEN BREAK
+            mc := find.mc(argv!arg)
+            TEST mc = 0 THEN
+            $(  (argv!arg)%1 := capitalch((argv!arg)%1) // make it look better
+                writef("%S:", argv!arg)
+                pos.to(fs.mc)
+                writes("no information available*N")
+            $)
+            ELSE
+                print.mc(mc)
+        $)
+    $)
+    ELSE
+    $(  // No explicit machines - scan list of those known to RM
+        mc := mc.list.h
+        WHILE mc ~= 0 DO
+        $(  IF testflags(1) THEN
+            $(  flags := flags | fl.broken
+                GOTO exit
+            $)
+            IF  argv!argv.all |
+                (mc!mc.state = rm.st.a) |
+                ((NOT argv!argv.alloc) & (mc!mc.state = rm.st.w) & (mc!mc.time ~= 0)) THEN
+                    print.mc(mc)
+            mc := mc!mc.thread
+        $)
+    $)
+
+exit:
+    IF (flags & fl.broken) ~= 0 THEN writes("****** BREAK*N")
+    IF rm.co ~= 0 THEN deleteco(rm.co)
+    IF fm.co ~= 0 THEN deleteco(fm.co)
+    WHILE storechain ~= 0 DO // free chain of allocated blocks
+    $(  LET store = storechain
+        storechain := !storechain
+        freevec(store)
+    $)
+    trace(tr.store|tr.flow, "Exiting: %N store blocks", store.count)
+$)
+
+
+AND rm.info(nsvec) = VALOF
+$(
+    // The resource manager knows almost everything we need about the
+    // state of the machines. The 'listing information' function is
+    // used to extract this: see "Resource Manager RPC Interface (V6)"
+    // by D. H. Craft.
+
+    // Note also that the order in which the RM tells us about the
+    // machines is the order in which people expect to see them. The
+    // data structures describing machines are therefore threaded
+    // together by this routine for the benefit of the output printing
+    // routine.
+
+    LET txbuff = VEC (rm.tx.bytes-1)/bytesperword
+    LET rxbuff = VEC (rm.rx.bytes-1)/bytesperword
+
+    LET ssp.good = ?
+    LET rxwords = ?
+
+    LET find.param(pc, rxbuff, rxwords) = VALOF
+    $(
+        // Internal function to find a given RM parameter in the reply
+        // block.  'pc' is the parameter code sought, 'rxbuff' is the
+        // reply buffer, and 'rxwords' is its length in ring words.
+        // The function returns the offset in ring words of the parameter,
+        // or zero if it cannot be found.
+
+        LET ptr = bb.ssp.args   // initialise pointer into block
+
+        WHILE ptr < rxwords DO  // until end of block
+        $(  LET descriptor = get2bytes(rxbuff, ptr)
+            TEST (descriptor & #XFF00) = pc THEN
+                RESULTIS ptr + 1 // found it, return pointer to data
+            ELSE
+                ptr := ptr + (descriptor & #XFF) // step pointer to next
+        $)
+
+        RESULTIS 0
+    $)
+
+    trace(tr.flow|tr.rm, "Entering RM coroutine")
+
+    FOR item = 1 TO rm.maxent DO
+    $(  LET ptr, mc = ?, ?
+        IF (flags & fl.costop) ~= 0 THEN RESULTIS 0
+        put2bytes(txbuff, bb.ssp.args, rm.pc.item | 2)
+        put2bytes(txbuff, bb.ssp.args+1, item)
+        ssp.good := ssp(0, txbuff, bb.ssp.args+2,
+                        rxbuff, (rm.rx.bytes-1)/bytesperringword+1, 0,
+                        rm.list.fn, nsvec!nsv.machine.id, nsvec!nsv.port)
+
+        IF NOT ssp.good THEN
+        $(  IF result2 = rm.rc.badno THEN BREAK // break out on bad item number
+            flags := flags | fl.rmbad
+            LOOP
+        $)
+
+        rxwords := result2
+        ptr := find.param(rm.pc.name, rxbuff, rxwords)
+
+        IF ptr = 0 THEN moan(0, "invalid reply from RM (m/c name missing)")
+
+        mc := get.mc(rxbuff, ptr*bytesperringword, TRUE)
+
+        ptr := find.param(rm.pc.st, rxbuff, rxwords)
+        IF ptr ~= 0 THEN mc!mc.state := get2bytes(rxbuff, ptr)
+        ptr := find.param(rm.pc.rtime, rxbuff, rxwords)
+        IF ptr ~= 0 THEN mc!mc.time := get2bytes(rxbuff, ptr)
+        IF (mc!mc.time & #X8000) ~= 0 THEN mc!mc.time := 0 // zero a negative time
+        ptr := find.param(rm.pc.owner, rxbuff, rxwords)
+        IF ptr ~= 0 THEN mc!mc.owner := getstring(rxbuff, ptr*bytesperringword)
+        ptr := find.param(rm.pc.sys, rxbuff, rxwords)
+        IF ptr ~= 0 THEN mc!mc.system := getstring(rxbuff, ptr*bytesperringword)
+
+        trace(tr.rm, "RM: %S %N %N", mc!mc.name, mc!mc.state, mc!mc.time)
+
+        // Thread the information block onto the list of machines.  This
+        // is a singly linked list with tail pointer; 'mc.list.h' is the
+        // head pointer, 'mc.list.t' is the tail pointer, and the entries
+        // are chained through the 'mc.thread' field.
+
+        TEST mc.list.h = 0 THEN
+        $(  mc.list.h := mc     // this is the first
+            mc.list.t := mc     //  and last entry
+        $)
+        ELSE
+        $(  mc.list.t!mc.thread := mc
+            mc.list.t := mc     // add new entry to tail
+        $)
+    $)
+
+    trace(tr.flow|tr.rm, "Leaving RM coroutine")
+
+    RESULTIS 0
+$)
+
+
+AND fm.info(nsvec) = VALOF
+$(
+    // The filing machine knows the identity of the person using the
+    // machine, assuming that one of the standard public Tripos systems
+    // is being used. Unfortunately the interface to extract this
+    // information from the filing machine is not publicly defined.
+    // The method of obtaining the information was deduced by reading
+    // the source of M. F. Richardson's 'PROBE' program.
+
+    // A particular dependency is that the constants 'fm.sess.lwb' and
+    // 'fm.session.upb' (range of FM internal session numbers) must be
+    // correct. The filing machine gives no return code for a session
+    // number out of range, but just gives garbage answers.
+
+    // If all else fails, this code can be disabled simply by inserting
+    // a 'RESULTIS 0' statement after the declarations in this routine,
+    // and the only effect should be that information about who is using
+    // the machines will not be printed.
+
+    LET txbuff = VEC (fm.tx.bytes-1)/bytesperword
+    LET rxbuff = VEC (fm.rx.bytes-1)/bytesperword
+
+    LET ssp.good = ?
+    LET rxwords = ?
+
+    trace(tr.flow|tr.fm, "Entering FM coroutine")
+
+    FOR sess = fm.sess.lwb TO fm.sess.upb DO
+    $(  LET mc, puid = ?, ?
+        IF (flags & fl.costop) ~= 0 THEN RESULTIS 0
+        put2bytes(txbuff, bb.ssp.arg1, sess)
+        ssp.good := ssp(0, txbuff, bb.ssp.args+1,
+                        rxbuff, (fm.rx.bytes-1)/bytesperringword+1, 0,
+                        fm.info.fn, nsvec!nsv.machine.id, nsvec!nsv.port)
+
+        IF NOT ssp.good THEN
+        $(  flags := flags | fl.fmbad
+            LOOP
+        $)
+
+        rxwords := result2
+
+        // Check that this is an active session.
+
+        IF get2bytes(rxbuff, bb.ssp.arg1) = 0 THEN LOOP // no session
+
+
+        // Pick out the machine name.
+
+        mc := get.mc(rxbuff, bb.ssp.arg9*bytesperringword, FALSE)
+
+
+        // The PUID is in binary - convert it to a hexadecimal text string.
+
+        puid := getstore((puid.bytes-1)/bytesperword)
+        FOR i = 0 TO 7 DO
+        $(  LET hexdigits = "0123456789ABCDEF"
+            LET byte = byteget(rxbuff, (bb.ssp.arg5*bytesperringword+i))
+            puid%(i*2+1) := hexdigits%((byte>>4)+1)
+            puid%(i*2+2) := hexdigits%((byte&#XF)+1)
+        $)
+        puid%0 := puid.bytes-1
+        mc!mc.puid := puid
+
+        trace(tr.fm, "FM: %S %S", mc!mc.name, mc!mc.puid)
+    $)
+
+    trace(tr.flow|tr.fm, "Leaving FM coroutine")
+
+    RESULTIS 0
+$)
+
+
+AND print.mc(mc) BE
+$(
+    // Routine to print out the requested information for machine 'mc'.
+
+    LET valid = FALSE           // set TRUE if information about use of mc is valid
+    LET state = ?               // will be set to RM state as a string
+    LET pos = 0                 // this is the char position we 'should' be at
+    LET written.something = FALSE // flag to avoid saying nothing at all
+
+    state := VALOF SWITCHON mc!mc.state INTO
+                   $(   CASE rm.st.f:   RESULTIS "free"
+                        CASE rm.st.a:   valid := TRUE
+                                        RESULTIS "allocated"
+                        CASE rm.st.w:   IF mc!mc.time ~= 0 THEN valid := TRUE
+                                        RESULTIS "withdrawn"
+                        CASE rm.st.l:   RESULTIS "loading"
+                        DEFAULT:        RESULTIS "unknown state"
+                   $)
+
+    writef("%S:", mc!mc.name)   // put out the machine name
+    pos := fs.mc                // and establish next field position
+
+
+    // Put out the machine state if either it was explicitly requested or
+    // there is known to be nothing else to say.
+
+    IF (argv!argv.state) | NOT valid THEN
+    $(  pos.to(pos)
+        writes(state)
+        written.something := TRUE
+        pos := pos + fs.state
+    $)
+
+
+    // Only look at the other fields in 'mc' if 'valid' is set, since
+    // experience indicates that they might contain garbage if it isn't.
+
+    IF valid THEN
+    $(  IF argv!argv.who THEN   // the person using the machine
+        $(  IF (mc!mc.puid ~= 0) THEN
+            $(  pos.to(pos)
+                writes(ringmap(mc!mc.puid, "PUID", "WORLD",
+                       map.result, map.result.bytes) -> map.result,
+                                                        mc!mc.puid
+                      )
+                written.something := TRUE
+            $)
+            pos := pos + fs.name
+        $)
+
+        IF argv!argv.what THEN  // the system they are running
+        $(  IF (mc!mc.system ~= 0) THEN
+            $(  pos.to(pos)
+                writes(mc!mc.system)
+                written.something := TRUE
+            $)
+            pos := pos + fs.system
+        $)
+
+        IF argv!argv.where THEN // where they are running it from
+        $(  IF (mc!mc.owner ~= 0) THEN
+            $(  pos.to(pos)
+                writes(mc!mc.owner)
+                written.something := TRUE
+                pos := pos + fs.terminal
+                IF ringmap(mc!mc.owner, "WORLD", "LOCATION",
+                           map.result, map.result.bytes) THEN
+                $(  pos.to(pos)
+                    writes(map.result)
+                $)
+            $)
+        $)
+
+    $)
+
+    // If no information has been printed out so far, say something
+    // to that effect to avoid having output which looks silly. This
+    // is only likely to happen with selective printout options.
+
+    IF NOT written.something THEN
+    $(  pos.to(fs.mc)
+        writes("information not available")
+    $)
+
+    newline()
+$)
+
+
+AND pos.to(pos) BE
+$(
+    // This is a rather dirty routine to align the output to a
+    // particular column.  It always writes at least one space,
+    // and leaves the output stream such that there are at least
+    // 'pos' characters on the line.
+
+    GET "iohdr"         // for scb definitions
+    wrch(' ')           // first constraint
+    WHILE cos!scb.pos < pos DO wrch(' ') // second constraint
+$)
+
+
+AND get.mc(rxbuff, byte.ptr, copyname) = VALOF
+$(
+    // 'rxbuff' is a pointer to a vector, and 'byte.ptr' is the
+    // byte offset within it it which a machine name is stored.
+    // (The name does not necessarily start on a word boundary)
+    // Find the information block for the given machine, creating
+    // it if necessary. There are just about enough machines in our
+    // world to make linear search a bit long, so hashing is worth
+    // while, provided that the hash function is simple to compute.
+    // The hash function used takes advantage of knowledge of the
+    // machine name space: we simply hash on the first letter of the
+    // name.  This is perfect for the LSI4s, and not bad for the
+    // 68000s and miscellaneous machines.
+
+    // The parameter 'copyname' is a Boolean indicating whether
+    // the name presented as a parameter should be copied over the
+    // name found in an existing information block.  The names may
+    // differ in the case of letters: RM presents names in mixed
+    // case, whereas FM presents them in upper case.  By forcing
+    // a copy from one source, consistent output can be achieved.
+
+    LET len = byteget(rxbuff, byte.ptr)
+    LET firstch = capitalch(byteget(rxbuff, (byte.ptr+1)))
+    LET hashvalue = 'A' <= firstch <= 'Z' -> firstch - 'A' + 1, 0
+    LET entry = hashtable!hashvalue
+    LET entryname = ?
+
+    WHILE entry ~= 0 DO
+    $(  entryname := entry!mc.name
+        IF VALOF // test for equal strings
+        $(
+            IF len ~= entryname%0 THEN RESULTIS FALSE
+            FOR i = 1 TO len DO
+                IF compch(byteget(rxbuff, (byte.ptr+i)), entryname%i) ~= 0 THEN RESULTIS FALSE
+            RESULTIS TRUE
+        $)
+        THEN
+        $(  IF copyname THEN FOR i = 1 TO len DO entryname%i := byteget(rxbuff, (byte.ptr+i))
+            trace(tr.mc, "MC %S found at %U, hash value %N", entryname, entry, hashvalue)
+            RESULTIS entry
+        $)
+        entry := entry!mc.link
+    $)
+
+    // Not found on hash chain - must create it
+
+    entry := getstore(mc.upb)
+    entry!mc.link := hashtable!hashvalue
+    hashtable!hashvalue := entry
+    entryname := getstring(rxbuff, byte.ptr)
+    entry!mc.name := entryname
+    trace(tr.mc, "MC %S created at %U, hash value %N", entryname, entry, hashvalue)
+    RESULTIS entry
+$)
+
+
+AND find.mc(name) = VALOF
+$(
+    // This routine is like 'get.mc', except that it takes an ordinary
+    // string as argument, and returns 0 if it cannot find the entry.
+
+    LET firstch = capitalch(name%1)
+    LET hashvalue = 'A' <= firstch <= 'Z' -> firstch - 'A' + 1, 0
+    LET entry = hashtable!hashvalue
+
+    WHILE entry ~= 0 DO
+    $(  IF compstring(name, entry!mc.name) = 0 THEN RESULTIS entry
+        entry := entry!mc.link
+    $)
+
+    RESULTIS 0
+$)
+
+
+AND getstring(rxbuff, byte.ptr) = VALOF
+$(
+    // 'rxbuff' is a pointer to a vector, and 'byte.ptr' is the
+    // byte offset within it it which a string is stored.
+    // (The string does not necessarily start on a word boundary)
+    // This routine copies the string to a 'getvec'ed piece of store,
+    // properly aligned, and returns a pointer to it.
+
+    LET len = byteget(rxbuff, byte.ptr)
+    LET string = getstore(len/bytesperword)
+    FOR i = 0 TO len DO string%i := byteget(rxbuff, (byte.ptr+i))
+    RESULTIS string
+$)
+
+
+AND local.ssp(name, txbuff, txwords, rxbuff, rxwords, nsvec,
+              func, station, port) = VALOF
+$(
+    // This is the local write-around for the 'ssp' routine in 'ssplib'.
+    // It adds an outer loop to retry on common communications errors,
+    // with suitable backoffs.
+
+    LET res2 = ?
+    FOR try = 1 TO max.ssp.try DO
+    $(  IF ssplib.ssp(name, txbuff, txwords, rxbuff, rxwords, nsvec,
+                      func, station, port) THEN RESULTIS TRUE
+        res2 := result2
+        trace(tr.sspf, "SSP fail %N %N %N rc %N (%X4)", try, station, port, res2, res2)
+        IF (flags & fl.costop) ~= 0 THEN BREAK // don't retry if stopping
+        SWITCHON res2 INTO
+        $(
+            CASE 409:   // No reply
+                        // Nothing to do, as no backoff needed after timeout.
+                        ENDCASE
+
+            CASE 411:   // Ring error
+            CASE 412:   // Unselected on header
+            CASE 413:   // Unselected during block
+            CASE 414:   // Busy
+            CASE 417:   // Ring not working
+                        // These are all transmission errors. Unless this was
+                        // the last attempt, back off by an amount which
+                        // increases progressively.
+                        IF try ~= max.ssp.try THEN delay((try/2)*tickspersecond)
+                        ENDCASE
+
+            DEFAULT:    BREAK
+        $)
+    $)
+    result2 := res2
+    RESULTIS FALSE
+$)
+
+
+AND trace(trbits, s, a, b, c, d, e, f, g) BE
+$(
+    // The global 'tracing' is used as a bit map to control tracing.
+    // If a bit in the 'trbits' argument corresponds with a bit in
+    // 'tracing', then this event is traced.
+
+    IF (tracing & trbits) ~= 0 THEN
+    $(  WHILE iolock DO delay(2) // await lock
+        iolock := TRUE          // claim lock
+        writes("WHO: ")
+        writef(s, a, b, c, d, e, f, g)
+        newline()
+        iolock := FALSE         // release lock
+    $)
+$)
+
+
+AND getstore(upb) = VALOF
+$(
+    // This routine is like 'getvec', except that:
+    //
+    // 1. If it returns, it has worked
+    // 2. It is designed to deal with lots of small allocations efficiently,
+    //    by carving up larger chunks.
+    // 3. The result must NOT be 'freevec'ed.
+
+    // It is assumed that allocation requests are for amounts of store
+    // which are small compared with the chunk size. If there is not
+    // enough room in the current chunk, a new one is started, and any
+    // remaining space in the old one is never used.
+
+    // The larger chunks are themselves put onto a chain, for ease of
+    // freeing at the end of the program.
+
+    LET store = store.ptr       // tentatively this is the answer
+    LET amount = upb + 1        // amount of store needed
+    store.ptr := store.ptr + amount // bump up the pointer
+    IF store.ptr <= store.end THEN RESULTIS store // if it didn't overflow, OK
+    store := getvec(store.blocksize) // didn't fit - get another chunk
+    IF store = 0 THEN moan(result2, "GETVEC failed")
+    store.count := store.count + 1 // log it
+    store!0 := storechain       // chain on to list of claimed blocks
+    storechain := store         //
+    FOR offset = 1 TO store.blocksize DO store!offset := 0 // clear it
+    store := store + 1          // point at the actual store
+    store.ptr := store + amount // set up the store pointer beyond this block
+    store.end := store + store.blocksize // one beyond end of chunk
+    IF store.ptr <= store.end THEN RESULTIS store // if it didn't overflow, OK
+    moan(0, "Internal error in GETSTORE")
+$)
+
+
+AND moan(res2, string, a, b, c, d) BE
+$(  // This is a general purpose 'fatal error' routine. It can be called
+    // from any coroutine.
+
+    LET in.coroutine = (stackbase ~= root.sbase)
+
+    IF  in.coroutine THEN
+    $(  // Only one coroutine should be allowed to print out an error message,
+        // to avoid confusion.
+
+        // When this routine is called from a coroutine, it checks the
+        // 'fl.costop' flag, and stops the coroutine immediately if it is
+        // set. If the flag was not set, then it sets it. Thus the flag acts
+        // as a semaphore for entry to the part of the routine which does
+        // output. It also causes the other coroutines to stop as soon as
+        // is convenient.
+
+        IF  (flags & fl.costop) ~= 0 THEN cowait(0)
+        flags := flags | fl.costop
+        WHILE iolock DO delay(2) // await I/O lock
+        iolock := TRUE          // claim lock
+    $)
+
+
+    writes("WHO: error - ")
+    writef(string, a, b, c, d)
+
+    TEST res2 ~= 0 THEN
+    $(  writes(" - ")
+        fault(res2)
+    $)
+    ELSE newline()
+
+    // A coroutine exits by returning zero to its caller, indicating that
+    // it has finished. The main routine jumps to the exit label.
+
+    TEST in.coroutine THEN
+    $(  iolock := FALSE         // release lock
+        cowait(0)
+    $)
+    ELSE longjump(exit.level, exit.label)
+$)
+
+
+AND co.pktwait(dest, pkt) = cowait(pkt)
+
+

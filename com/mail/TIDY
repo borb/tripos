@@ -1,0 +1,15 @@
+.key all/s
+. Clean up
+FAILAT 30
+IF mctype=LSI4; protect mobj:n.sys-demon RW; protect mobj:sys-demon RW
+                protect mobj:n.system    RW; protect mobj:system    RW
+scratch dir=mobj:n
+IF EQ selective <all$selective>; SKIP safe
+scratch dir=mobj:
+QUIT 0
+
+LAB safe
+DELETE mobj:n.trmail mobj:n.tcom mobj:n.trsend mobj:n.trmessage
+DELETE mobj:mail-system mobj:newmail-system mobj:mail-demon mobj:newmail-demon
+
+

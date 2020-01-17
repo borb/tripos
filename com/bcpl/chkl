@@ -1,0 +1,359 @@
+//////////////////////////////////////////////////////////////////
+//                                                              //
+//                   C h e c k   L i n e s                      //
+//                                                              //
+//                       TRIPOS Version                         //
+//                                                              //
+// D. Strickland-Clark                                 Dec 1977 //
+//                                                              //
+//////////////////////////////////////////////////////////////////
+SECTION "CHKL"
+GET "LIBHDR"
+
+ STATIC
+$(   upperlimit    = -1       // Upper limit of window if >=0
+     lowerlimit    = -1       // Lower limit of window if >=0
+     upcount       =  0       // Number of lines > UPPERLIMIT
+     lowcount      =  0       // Number of lines < LOWERLIMIT
+     nullcount     =  0       // Number of blank lines
+     linecount     =  0       // Total number of lines
+     mschcount     =  0       // Total number of chars (ms word)
+     lschcount     =  0       // L.s word
+     longest       =  0       // Length of longest line
+     shortest      = -1<<1>>1 // Length of shortest line
+     length        =  0       // Length of current line
+     maxoutlen     =  80      // Max length of output lines
+     chwritten     =  0       // Number of characters written
+                              //  on curr. o/p line.
+     optlen        =  0       // Length of option string
+     opstring      =  0       // String of options
+     optptr        =  0       // Pointer to current option
+     fprint        =  FALSE   // PRINT mode flag
+     fbrief        =  FALSE   // BRIEF mode flag
+     fnull         =  FALSE   // TRUE when ignoring blank lines
+     foutside      =  FALSE   // TRUE when current line violates
+                              // window.
+     ftrim         =  TRUE    // Default stripping of trailing spaces
+     fwritten      =  FALSE   // True when output from main section
+$)
+
+MANIFEST
+$( line.buffer.chars = 80
+$)
+
+//////////////////////////////////////////////////////////////////
+//                                                              //
+//      Functions used                                          //
+//                                                              //
+//      Programmer defined                                      //
+//                                                              //
+//    VERIFY             RDOPTN             PLURAL              //
+//    START              WRERR              RDSTREAM            //
+//                                                              //
+//      System defined                                          //
+//                                                              //
+//    GETBYTE            PUTBYTE            RDCH                //
+//    WRCH               WRITEF             WRITES              //
+//    FINDINPUT          FINDOUTPUT         SELECTINPUT         //
+//    SELECTOUTPUT                                              //
+//                                                              //
+//////////////////////////////////////////////////////////////////
+
+
+LET start() BE
+$(main
+  LET line          = VEC line.buffer.chars/bytesperword
+  LET out           = 0
+  LET in            = 0
+  LET rdargs.string = "FROM/A,TO,OPT/K"
+  LET argv          = VEC 40
+
+  IF rdargs(rdargs.string, argv, 40) = 0
+  THEN
+    $(
+    writef("Bad args for key *"%S*"*N", rdargs.string)
+    stop(20)
+    $)
+
+  in := findinput(argv!0)
+  IF in = 0 DO
+  $(
+    WRITEF("*N FAILED TO OPEN %S*N", ARGV!0)
+    stop(12)
+  $)
+
+  UNLESS argv!1 = 0
+  THEN
+      $(
+      out := findoutput(argv!1)
+      UNLESS out = 0 THEN selectoutput(out)
+      $)
+
+  selectinput(in)                 // Open input
+
+  opstring := argv!2 = 0 -> "", argv!2
+  optlen    := getbyte(opstring, 0)       //Length of option string
+
+// Decode any options given
+
+  UNTIL optptr = optlen DO
+  $(opts
+    optptr := optptr + 1           // Bump option pointer
+    SWITCHON getbyte(opstring,optptr) INTO
+    $(sw
+      CASE 'U': CASE 'u':  upperlimit := rdoptn() ; ENDCASE
+      CASE 'L': CASE 'l':  lowerlimit := rdoptn() ; ENDCASE
+      CASE 'W': CASE 'w':  maxoutlen  := rdoptn() ; ENDCASE
+      CASE 'T': CASE 't':  ftrim := FALSE ; ENDCASE
+      CASE 'N': CASE 'n':  fnull := TRUE ; ENDCASE
+      CASE 'P': CASE 'p':  fprint := TRUE ; ENDCASE
+      CASE 'B': CASE 'b':  fbrief := TRUE ; ENDCASE
+      CASE '*S':  CASE ',':  CASE '/':  ENDCASE
+
+      DEFAULT:
+      wrerr(4,"*NUnknown option - %C",getbyte(opstring,optptr) )
+    $)sw
+  $)opts
+
+// If both options P & B are given print warning and unset P
+
+  IF fprint & fbrief DO
+  $(
+    wrerr(0,"*NBoth options P & B set - P ignored")
+    fprint := FALSE
+  $)
+
+// Test that MAXOUTLEN has not been given a silly value
+
+  IF (maxoutlen >= 130) \/ (maxoutlen < 30) DO
+  $(
+    wrerr(0,"*NWidth of %N unreasonable. Set to 80",maxoutlen)
+    maxoutlen := 80
+  $)
+
+
+// Main program loop
+
+  newline()                       // Give 'em a blank line!
+
+  $(mainloop
+    length := readstream(line)     // read from input stream
+    IF length = -1 BREAK           // End of stream read
+    linecount := linecount + 1      // Bump line count
+
+    TEST length = 0 THEN
+    $(
+      nullcount := nullcount + 1    // Bump null line count
+      IF fnull THEN LOOP           // Skip rest of block if ignoring
+                                   // blank lines.
+    $)
+    ELSE
+    $(
+      lschcount := lschcount + length // Count characters
+      IF lschcount >= 10000
+      THEN mschcount, lschcount := mschcount+1, lschcount-10000
+      IF length > longest
+      THEN longest := length  // Record longest line
+      IF length < shortest
+      THEN shortest := length // Record shortest line
+    $)
+
+    IF (upperlimit \= -1) & (length > upperlimit) DO
+    $(
+      foutside := TRUE
+      upcount := upcount + 1        // Count offending lines
+    $)
+
+    IF (lowerlimit \= -1) & (length < lowerlimit) DO
+    $(
+      foutside := TRUE
+      lowcount := lowcount + 1      // Count offending lines
+    $)
+
+    UNLESS foutside THEN LOOP      // If line OK skip rest of block
+    foutside := FALSE              // Unset flag
+    IF fbrief THEN LOOP            // BRIEF mode - not printing lines
+
+// Print information about this line
+
+    IF chwritten >= maxoutlen DO
+    $(
+      newline()                   // This line is full - write new line
+      chwritten := 0               // Clear character/line count
+    $)
+
+    writef("%I5=%I3*S" , linecount , length)
+    fwritten := TRUE               // Show something written
+    chwritten := chwritten + 10     // Count characters written
+
+    IF fprint THEN
+    $(
+      verify(line)
+      chwritten := 0               // reset count if printing
+                                   // contents of line
+    $)
+
+  $)mainloop
+  REPEAT
+
+// Here at end of input stream
+
+
+  TEST linecount = 0 THEN writes(" Null file*N")
+  ELSE
+  $(prtinfo
+    IF fwritten THEN writes("*N*N")
+    IF linecount = nullcount THEN
+    $(
+      writef(" %N blank line%S*N",nullcount,plural(nullcount))
+      GOTO exit
+    $)
+
+    writef(" %U0 line%S  ",linecount, plural(linecount))
+    TEST mschcount = 0
+    THEN writen(lschcount)
+    ELSE
+      $( // Write out MS part, then LS part with leading zeros
+      LET power10  = 1000
+      writen(mschcount)
+      FOR i=1 TO 4
+      DO $( writen( [lschcount/power10] REM 10 ); power10 := power10/10 $)
+      $)
+
+    writes(" characters*N")
+    IF linecount = 1 THEN GOTO exit
+
+    UNLESS nullcount = 0 writef(" %N blank line%S*N",
+                                nullcount,plural(nullcount))
+    writef(" longest line %N character%S,*S",longest,plural(longest))
+    writef(" shortest line %N character%S*N",shortest,plural(shortest))
+
+    UNLESS upperlimit = -1 THEN
+    writef(" %N line%S > %N.*S",upcount,plural(upcount),upperlimit)
+
+    UNLESS lowerlimit = -1 THEN
+    writef(" %N line%S < %N.",lowcount,plural(lowcount),lowerlimit)
+
+    newline()
+
+  $)prtinfo
+
+exit:
+
+  UNLESS in = 0 THEN endread()
+  UNLESS out = 0 THEN endwrite()
+$)main
+
+
+//////////////////////////////////////////////////////////////////
+//                                                              //
+//  Function definitions                                        //
+//                                                              //
+//////////////////////////////////////////////////////////////////
+
+
+
+//////////////////////////////////////////////////////////////////
+//                                                              //
+//   Function to read a number from the option string           //
+//                                                              //
+//////////////////////////////////////////////////////////////////
+
+AND rdoptn() = VALOF
+
+$(rdn1
+  LET optn , rdn = 0 , ?
+  optptr := optptr + 1                   // Bump option pointer
+
+  IF optptr > optlen THEN RESULTIS 0
+
+  rdn := getbyte(opstring,optptr)
+  WHILE ('9' >= rdn >= '0') & (optptr <= optlen) DO
+  $(
+    optn := optn * 10 + rdn - '0'
+    optptr := optptr + 1
+    rdn := getbyte(opstring,optptr)
+  $)
+  optptr := optptr - 1
+  RESULTIS optn
+$)rdn1
+
+//////////////////////////////////////////////////////////////////
+//                                                              //
+//  Returns "" if argument is 1 else "s"                        //
+//                                                              //
+//////////////////////////////////////////////////////////////////
+
+AND plural(number) = number = 1 -> "" , "s"
+
+//////////////////////////////////////////////////////////////////
+//                                                              //
+// Writes an error message and quits if first arg non-zero      //
+//                                                              //
+//////////////////////////////////////////////////////////////////
+
+AND wrerr(code,format,value) BE
+
+$(
+  writef(format,value)
+  IF code = 0 RETURN
+
+  stop(code)
+$)
+
+//////////////////////////////////////////////////////////////////
+//                                                              //
+// Reads a record from the input stream                         //
+//                                                              //
+//////////////////////////////////////////////////////////////////
+
+AND readstream(string) = VALOF
+
+$(rds
+  LET count, char, lastcharpos = 0, ?, 0
+
+  $(rdc
+    char := rdch()                      // Read next character from stream
+    IF char = '*N' BREAK                // End of record
+    IF char = endstreamch               // End of stream
+    $( TEST count = 0
+       DO RESULTIS -1
+       OR BREAK
+    $)
+
+    count := count + 1                  // Bump count
+    UNLESS char = '*S' THEN lastcharpos := count
+                                        // Remember last non-space char posn.
+    IF count <= line.buffer.chars THEN
+       putbyte(string, count, char)     // Add character to string
+  $)rdc
+  REPEAT
+
+// Strip trailing blanks if required
+
+  IF ftrim THEN count := lastcharpos  // Trim off spaces
+  putbyte(string, 0, count <= line.buffer.chars -> count, line.buffer.chars)
+                                      // Tell the string how long it is
+
+  RESULTIS count
+$)rds
+
+
+
+//////////////////////////////////////////////////////////////////
+//                                                              //
+// Prints a string truncating at maxoutlen                      //
+//                                                              //
+//////////////////////////////////////////////////////////////////
+
+AND verify(string) BE
+
+$(v
+  IF getbyte(string,0) + chwritten > maxoutlen
+  THEN putbyte(string,0,maxoutlen - chwritten)
+
+  writes(string)
+  newline()
+$)v
+
+

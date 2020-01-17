@@ -1,0 +1,389 @@
+
+
+SECTION "asm-cond"
+
+
+
+
+
+
+
+/*<RSX
+NEEDS "TITLE"
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+
+
+
+//
+//                  Conditional    Assembly
+//
+
+
+
+
+
+LET ifproc(lab, test.spec) BE
+$(  // TEST.SPEC has fields layed out as follows:
+    //              bit 0   -  not (the following condition)
+    //              bit 1   -  2 args if set, otherwise one
+    //              bit 2   -  Less than if set. Otherwise equal.
+    //              bit 3   -  Type is STRING if set, Number otherwise
+    //              bit 7   -  Test is for defined symbol if set
+    LET reverse   = (test.spec & bit0)\=0
+    LET two.args  = (test.spec & bit1)\=0
+    LET less.than = (test.spec & bit2)\=0
+    LET is.string = (test.spec & bit3)\=0
+    LET symbolset = (test.spec & bit7)\=0
+    LET arg2 = (is.string -> "", 0)
+    LET arg1 = ?
+    LET ans = TRUE
+    get.and.declare(lab)
+    TEST symbolset THEN
+    $(  LET type = type.lab // default type to check
+        IF item.type=i.number THEN
+        $(  type := item.info
+            getitem()
+            scan(i.comma)
+        $)
+        TEST item.type = i.iden THEN
+        $(  looktype(type, item.info)
+            ans := iden.valid
+        $) ELSE error(e.nolab)
+        getitem()
+    $) ELSE
+    $(  LET comparison = ?
+        arg1 := (is.string -> strexp(null, 0, \two.args), expression())
+        TEST dontknow THEN error(e.forward) ELSE
+        $(  LET mark.mem = memory!0
+            IF two.args THEN
+            $(  IF is.string THEN arg1 := getstr(arg1, tempgetvec)
+//              IF is.string THEN writef("first arg is *"%S*"*N", arg1)
+                // make sure string is not overwritten
+                UNLESS scan(i.comma) THEN error(e.expected, ',')
+                arg2 := (is.string -> strexp(null, 0, FALSE), expression())
+            $)
+            comparison := (is.string -> compstring(arg2, arg1), arg2-arg1)
+//          IF is.string THEN
+//          writef("Comparing *"%S*" and *"%S*" dif=%N*N",arg1,arg2,comparison)
+            ans := (less.than -> comparison<0, comparison=0)
+            // reclaim TEMPGETVEC memory
+            memory!0 := mark.mem
+        $)
+    $)
+    IF reverse THEN ans := \ans
+    TEST ans THEN
+        IF print.expansions THEN endline(FALSE)
+    ELSE TEST print.expansions THEN
+    $(  LET savelist = list
+        list := 0
+        endline(FALSE)
+        IF read.if.body(TRUE) THEN endline(FALSE)
+        list := savelist
+    $) ELSE
+    $(  endline(TRUE)
+        read.if.body(TRUE)
+    $)
+$)
+
+
+
+
+AND elseproc(lab) BE
+$(  get.and.declare(lab)
+    // read through rest of IF body - ELSE not terminator
+    TEST print.expansions THEN
+    $(  LET savelist = list
+        list := 0
+        endline(TRUE)
+        IF read.if.body(TRUE) THEN endline(FALSE)
+        list := savelist
+    $) ELSE
+    $(  endline(TRUE)
+        read.if.body(TRUE)
+    $)
+$)
+
+
+
+AND fiproc(lab) BE
+$(  get.and.declare(lab)
+    IF print.expansions THEN endline(FALSE)
+$)
+
+
+
+
+AND read.if.body(else.is.a.terminator) = VALOF
+$(  LET mnemproc = ?
+    LET found = TRUE
+    LET lab = lab.space
+    LET depth = 1
+    $(rpt
+        mnemproc := find.mnem(@lab, 4, endproc, ifproc, fiproc, elseproc)
+        TEST mnemproc=null | mnemproc=endproc THEN found := FALSE ELSE
+        TEST mnemproc=elseproc THEN
+            IF depth=1 THEN
+            $(  depth := 0
+                UNLESS else.is.a.terminator THEN error(e.noif)
+            $)
+        ELSE depth := depth + (mnemproc=fiproc -> -1, 1)
+        UNLESS depth=0 | \found THEN endline(TRUE)
+    $)rpt REPEATUNTIL depth=0 | \found
+    UNLESS mnemproc=null THEN getitem()
+    RESULTIS found
+$)
+
+
+
+
+
+
+//
+//                   String   Expressions
+//
+
+
+
+
+
+LET strexp(buffer, startpos, allow.concatination) = VALOF
+$(  // This procedure uses TEMPGETVEC space and returns a pointer to
+    // a freed area at the top - consequently the next call to TEMPGETVEC
+    // will destroy the answer returned.  The result must be copied
+    // immediately if it is to be used.
+    LET new = (buffer=0)
+    LET ans = ?
+    IF new THEN
+    $(  buffer := tempgetvec(256/bytesperword)
+        TEST buffer=0 THEN error(e.memfull) ELSE
+        $(  buffer%0 := 0
+            startpos := 1
+        $)
+    $)
+    $(rpt
+        ans := strterm(buffer, startpos)
+        IF ans THEN startpos := buffer%0 + 1
+    $)rpt REPEATUNTIL \allow.concatination | \ans | \scan(i.comma)
+    IF new THEN memory!0 := buffer - memory   // return TEMPGETVECed space
+    UNLESS ans THEN warn(e.nostr)
+    RESULTIS buffer
+$)
+
+
+
+
+
+AND strterm(buffer, startpos) = VALOF
+$(  LET ans = (item.type=i.comma | item.type=i.strrbkt)
+    UNLESS ans THEN
+    $(  ans := strpart(buffer, startpos)
+        IF ans & scan(i.lbkt) THEN
+        $(  LET chno = expression()
+            LET len = 1               // default
+            LET partlen = buffer%0 - startpos + 1
+            TEST dontknow THEN warn(e.forward) ELSE
+            TEST chno <= 0 THEN warn(e.posnum) ELSE
+            $(  IF scan(i.comma) THEN
+                $(  LET templen = expression()
+                    TEST dontknow THEN warn(e.forward) ELSE
+                    TEST templen < 0 THEN warn(e.posnum) ELSE
+                    len := templen
+                $)
+                FOR i=startpos TO startpos+chno-2 DO
+                    buffer%i := buffer%(i+chno-1)
+                IF len > partlen - (chno-1) THEN
+                FOR i=1 TO len-partlen+(chno-1) DO
+                    buffer%(startpos+partlen-chno-1+i) := '*S'
+                buffer%0 := startpos + len - 1
+                UNLESS scan(i.rbkt) THEN error(e.expected, ')')
+            $)
+        $)
+    $)
+    RESULTIS ans
+$)
+
+
+
+
+AND strpart(buffer, startpos) = VALOF
+$(  LET ans = TRUE
+    IF item.type = i.pling THEN
+    $(  LET save.expand = expand.text
+        expand.text := FALSE
+        ans := FALSE
+        getitem()
+        TEST item.type = i.iden THEN
+        $(  LET macro = looktype(type.text, item.info)
+            TEST iden.valid THEN
+            $(  ans := TRUE
+                item.info := macro
+            $) ELSE warn(e.badtype)
+        $) ELSE warn(e.badlab)
+        expand.text := save.expand
+    $)
+    IF ans THEN
+    TEST item.type = i.string | item.type = i.sstring | item.type = i.iden THEN
+    $(  LET newlen = buffer%0 + item.info%0
+        TEST newlen > 255 THEN
+        $(  warn(e.fullstring)
+            ans := FALSE
+        $) ELSE
+        $(  buffer%0 := newlen
+            FOR i=1 TO item.info%0 DO buffer%(startpos+i-1) := item.info%i
+        $)
+        getitem()
+    $) ELSE
+    TEST scan(i.strlbkt) THEN
+    $(  strexp(buffer, startpos)
+        UNLESS scan(i.strrbkt) THEN warn(e.expected, ',')
+    $) ELSE
+    TEST scan(i.percent) THEN
+    $(  LET format = 'N'
+        LET width = 0
+        LET i = expression()
+        ans := FALSE
+        TEST dontknow THEN warn(e.forward) ELSE
+        $(  LET base.power = 0
+            LET base.proc = null
+            IF scan(i.colon) THEN
+            TEST item.type \= i.iden THEN warn(e.badbase, ':') ELSE
+            TEST item.info%0>2 THEN
+               warn(e.badbase, item.info%3) ELSE
+            $(  format := capitalch(item.info%1)
+                IF item.info%0>1 THEN
+                $(  LET widthch = item.info%2
+                    TEST '0' <= widthch <= '9' THEN width := widthch-'0' ELSE
+                    warn(e.badbase, widthch)
+                $)
+                getitem()
+            $)
+            base.proc := VALOF SWITCHON format INTO
+            $(  CASE 'N':
+                CASE 'D':
+                CASE 'I': RESULTIS wrint
+                CASE 'B': base.power := 1
+                          RESULTIS wrbin
+                CASE 'O': base.power := 3
+                          RESULTIS wrbin
+                CASE 'X': base.power := 4
+                          RESULTIS wrbin
+                CASE 'C': RESULTIS wrchr
+                DEFAULT : RESULTIS null
+            $)
+            TEST base.proc=null THEN error(e.badbase, format) ELSE
+            TEST base.proc(i, width, buffer, 255, base.power) THEN
+            ans := TRUE ELSE warn(e.fullstring)
+        $)
+    $) ELSE ans := FALSE
+    RESULTIS ans
+$)
+
+
+
+
+
+AND wrint(n, width, buffer, maxpos, dummy) = VALOF
+$(  LET digs = VEC 10
+    LET i = 0
+    LET k = n
+    LET error = FALSE
+    IF n<0 THEN
+    $(  width := width-1
+        k := -n
+    $)
+    $(rpt
+        digs!i := -(-k REM 10)      // to get MAXINT &c right
+        k := k/10
+        i := i+1
+    $)rpt REPEATUNTIL k=0
+    TEST buffer%0+(width-i) > maxpos THEN error := TRUE ELSE
+    $(  FOR j=i+1 TO width DO
+        $(  buffer%0 := buffer%0 + 1
+            buffer%(buffer%0) := '*S'
+        $)
+        IF n<0 THEN
+        TEST buffer%0+1 > maxpos THEN error:= TRUE ELSE
+        $(  buffer%0 := buffer%0 + 1
+            buffer%(buffer%0) := '-'
+        $)
+        TEST buffer%0+i > maxpos THEN error := TRUE ELSE
+        FOR j = i-1 TO 0 BY -1 DO
+        $(  buffer%0 := buffer%0 + 1
+            buffer%(buffer%0) := digs!j+'0'
+        $)
+    $)
+    RESULTIS \error
+$)
+
+
+
+AND wrbin(n, width, buffer, maxpos, power) = VALOF
+$(  LET ok = (buffer%0+width <= maxpos)
+    IF ok THEN
+    $(  IF width>1 THEN wrbin(n>>power, width-1, buffer, maxpos, power)
+        buffer%0 := buffer%0 + 1
+        buffer%(buffer%0) := (TABLE '0','1','2','3',
+                                    '4','5','6','7',
+                                    '8','9','A','B',
+                                    'C','D','D','F') ! (n&((1<<power)-1))
+    $)
+    RESULTIS ok
+$)
+
+
+
+
+
+AND wrchr(n, width, buffer, maxpos, dummy) = VALOF
+$(  LET ok = (buffer%0+width <= maxpos)
+    IF ok THEN
+    $(  LET ch = n&#XFF
+        IF width>1 THEN wrchr(n>>8, width-1, buffer, maxpos)
+        buffer%0 := buffer%0 + 1
+        buffer%(buffer%0) := (ch=0 -> '*S', ch)
+    $)
+    RESULTIS ok
+$)
+
+
+
+
+
+
+AND is.strexp() = VALOF
+SWITCHON item.type INTO
+$(  CASE i.iden:
+    CASE i.string:
+    CASE i.sstring:
+    CASE i.pling:
+    CASE i.percent:
+        RESULTIS TRUE
+    DEFAULT:
+        RESULTIS item.type = i.strlbkt
+$)
+
+
+
+

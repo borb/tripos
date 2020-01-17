@@ -1,0 +1,505 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+      ########  ######    ##    ##  #######   ########  ##    ##   ######  
+      ########  #######   ##    ##  ########  ########  ###   ##  ######## 
+         ##     ##    ##  ##    ##  ##    ##     ##     ####  ##  ##       
+         ##     ##    ##  ##    ##  ########     ##     ## ## ##  ##  #### 
+         ##     ##    ##  ## ## ##  #######      ##     ##  ####  ##    ## 
+         ##     ##    ##  ########  ##  ##       ##     ##  ####  ##    ## 
+      ########  #######   ###  ###  ##   ##   ########  ##   ###  ######## 
+      ########  ######    ##    ##  ##    ##  ########  ##    ##   ######  
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   10/07/84             *
+\*****************************************************************************/
+
+
+
+
+SECTION "IDWRING"
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+GET ":idw.bcpl.idwhdr"
+
+
+
+LET m68k.start( pkt )  BE
+$(
+//  Initialisation section.  Create all packet templates, and
+//  set up port addresses etc.
+
+    veclist      :=  0
+    pktqueue     :=  0
+    rh.task      :=  rootnode!rtn.info!rtninfo.ring!ri.rhtaskid
+
+    selectmachine( "BLACK" )   //  !?!
+    selectpage( 0 )
+
+    main( pkt )
+
+    m68k.freevectors()
+$)
+
+
+AND error( format, arg )  BE
+$(
+    writes( "*N******  Error:  " )
+    writef( format, arg )
+    writes( "*N******  Abandoned.*N" )
+
+    m68k.freevectors()
+
+    stop( 20 )
+$)
+
+
+
+AND packet( link, dest, type, res1, res2, buff, size, mc, port, time ) = VALOF
+$(
+//  Create a new packet with the arguments as given...
+
+    LET p  =  m68k.getvec( 10 )
+
+    IF  p = 0  THEN  error( "No more heap for packets" )
+
+    p!pkt.link     :=  link
+    p!pkt.dest     :=  dest
+    p!pkt.type     :=  type
+    p!pkt.res1     :=  res1
+    p!pkt.res2     :=  res2
+    p!pkt.buff     :=  buff
+    p!pkt.size     :=  size
+    p!pkt.mc       :=  mc
+    p!pkt.port     :=  port
+    p!pkt.timeout  :=  time
+
+    RESULTIS  p
+$)
+
+
+
+AND selectpage( pagenumber )  =  VALOF
+$(
+    TEST  0 <= pagenumber <= 255  THEN
+    $(
+        m68k.page  :=  pagenumber
+
+        RESULTIS  TRUE
+    $)
+    ELSE  RESULTIS  FALSE
+$)
+
+
+
+AND selectmachine( name )  =  VALOF
+$(
+    LET sv  =  m68k.getvec( nsv.upb )
+    LET ok  =  lookup.name( name, sv )
+    LET mc  =  sv!nsv.machine.id
+
+    IF  ok  THEN  m68k.machine  :=  mc
+
+    m68k.freevec( sv )
+
+    RESULTIS  ok
+$)
+
+
+AND findfreeport()    = m68k.sendpkt( notinuse, rh.task, act.findfreeport, ?, ? )
+
+
+
+AND freeport( port )  = m68k.sendpkt( notinuse, rh.task, act.releaseport, ?, ?, port )
+
+
+
+AND m68k.halt()   BE  m68k.reqpkt( m68k.req.halt )
+
+
+
+AND m68k.run()    BE  m68k.reqpkt( m68k.req.run )
+
+
+
+AND m68k.reset()  BE  m68k.reqpkt( m68k.req.reset )
+
+
+
+AND  m68k.int7()  BE  m68k.reqpkt( m68k.req.int7 )
+
+
+
+AND m68k.reqpkt( code )  BE
+$(
+    LET rc          =  ?
+    LET reqb        =  VEC 1
+    LET packet.req  =  packet( notinuse, rh.task, 0, ?, ?, reqb, 1, m68k.machine, #X8000, 0 )
+
+    put2bytes( packet.req!pkt.buff, 0, code )
+    rc                     :=  queue.tx( packet.req, TRUE )
+
+    UNLESS  rc = 0  DO  writef( "****Request %N failed: %S*N", code, string( rc ) )
+
+    m68k.freevec( packet.req )
+$)
+
+
+
+AND m68k.setvec( req, rep )  BE
+$(
+    LET rc        =  0
+    LET reqb      =  VEC  4
+    LET packet.req=  packet( notinuse, rh.task, 0, ?, ?, reqb, 5, m68k.machine, #X8000, 0 )
+
+    put2bytes( packet.req!pkt.buff, 0, m68k.req.setvec )
+    put2bytes( packet.req!pkt.buff, 1, 0 )
+    put2bytes( packet.req!pkt.buff, 2, req )
+    put2bytes( packet.req!pkt.buff, 3, 0 )
+    put2bytes( packet.req!pkt.buff, 4, rep )
+
+    rc  :=  queue.tx( packet.req, TRUE )
+
+    UNLESS  rc = 0  DO  writef( "****SETVEC request failed:  %S*N", string( rc ) )
+
+    m68k.freevec( packet.req )
+$)
+
+
+
+AND queue.tx( pkt, wait )  =  VALOF
+$(
+    pkt!pkt.type  :=  act.tx
+
+    RESULTIS  queue( pkt, wait )
+$)
+
+
+
+AND queue.rx( pkt, wait )  =  VALOF
+$(
+    pkt!pkt.type     :=  act.rx.chain
+    pkt!pkt.timeout  :=  m68k.timeout
+
+    RESULTIS  queue( pkt, wait )
+$)
+
+
+
+AND queue( pkt, wait )  =  VALOF
+$(
+//  Send the packet "pkt" off, waiting for it to be returned.
+
+    qpkt( pkt )
+
+    RESULTIS  wait  ->  waitforpkt( pkt ),  pkt
+$)
+
+
+
+AND waitforpkt( pkt )  =  VALOF
+$(
+    m68k.pktwait( ?, pkt )
+    result2  :=  pkt!pkt.res2
+
+    RESULTIS  pkt!pkt.res1
+$)
+
+
+
+
+AND m68k.sendpkt( link, id, type, res1, res2, arg1, arg2, arg3, arg4, arg5, arg6) = VALOF
+$(
+    LET destination = id
+
+    TEST qpkt( @link ) = 0  THEN  abort( 181 )
+    ELSE
+    $(
+        UNTIL  m68k.pktwait( destination, @link ) = @link  DO  abort( 182 )
+
+        result2  :=  res2
+
+        RESULTIS res1
+    $)
+$)
+
+
+
+AND m68k.pktwait( id, pkt )  =  VALOF
+$(
+//  Wait for the packet "pkt".  This may already have been queued onto the
+//  "pktqueue", or we may have to wait for it.  While waiting, queue
+//  any unwanted packets for use later.
+
+    LET p  =  lookinpktqueue( id, pkt )
+
+    TEST  p \= 0  THEN  RESULTIS  p
+    ELSE
+    $(
+        p  :=  pktwait( id, pkt )
+
+        TEST  p = pkt  THEN  RESULTIS  p
+                       ELSE  queuepacket( p )
+    $)
+    REPEAT
+$)
+
+
+
+AND lookinpktqueue( id, pkt )  =  VALOF
+$(
+//  Look in the current "pktqueue" for the packet "pkt", and if found,
+//  extract it, and return it as the result from the function.
+
+    LET ptr   =  pktqueue
+    AND pptr  =  @pktqueue
+
+    UNTIL  ptr = 0  DO
+    $(
+        IF  ptr = pkt  THEN
+        $(
+            !pptr  :=  !ptr
+            !ptr   :=  -1
+
+            RESULTIS  ptr
+        $)
+
+        pptr  :=  ptr
+        ptr   :=  !ptr
+    $)
+
+    RESULTIS  0
+$)
+
+
+
+AND queuepacket( pkt )  BE
+$(
+    !pkt      :=  pktqueue
+    pktqueue  :=  pkt
+$)
+
+
+
+AND m68k.getvec( vecsize )  =  VALOF
+$(
+    LET node  =  getvec( 2 )
+    AND vec1  =  getvec( vecsize )
+
+    TEST  node = 0  |  vec1 = 0
+          THEN  error( "Failed to get vector of size %N", vecsize )
+          ELSE
+          $(
+              node!0   :=  veclist
+              node!1   :=  vec1
+              veclist  :=  node
+
+              RESULTIS  vec1
+          $)
+$)
+
+
+
+AND m68k.freevec( vector )  BE
+$(
+    LET ptr   =  veclist
+    AND pptr  =  @veclist
+
+    UNTIL  ptr = 0  DO
+    $(
+        IF  ptr!1  =  vector  THEN
+        $(
+            !pptr  :=  !ptr
+
+            freevec( ptr )
+            freevec( vector )
+
+            RETURN
+        $)
+
+        pptr  :=  ptr
+        ptr   :=  !ptr
+    $)
+    error( "Failed to free vector #X%X4", vector )
+$)
+
+
+
+AND m68k.freevectors()  BE
+$(
+//  Free all the vectors currently on the Veclist.
+
+    UNTIL  veclist = 0  DO
+    $(
+        LET node  =  veclist
+        AND vec1  =  veclist!1
+
+        veclist  :=  !veclist
+
+        freevec( node )
+        freevec( vec1 )
+    $)
+$)
+
+
+
+AND m68k.readword( word )  =  VALOF
+$(
+    LET buff  =  VEC 1
+
+    put2bytes( buff, 0, #XEEEE )
+
+    m68k.readbuff( buff, word, 2 )
+
+    RESULTIS  get2bytes( buff, 0 )
+$)
+
+
+
+AND m68k.writeword( word, value )  BE  m68k.writebuff( @value, word, 2 )
+
+
+AND m68k.readbuff( buffer, address, length )  BE
+$(
+//  Read "length" bytes from the MC68000, starting at address "address",
+//  into buffer "buffer".
+
+    LET wordlength    =  (length + 1) / 2
+    LET timeouts      =  0
+    LET retries       =  0
+    LET rxb           =  VEC 4
+    LET rport         =  findfreeport()
+    LET packet.rx     =  packet( notinuse, rh.task, 0, ?, ?, rxb, 5, m68k.machine, #X8000, 0 )
+    LET packet.rxreq  =  packet( notinuse, rh.task, 0, ?, ?,   ?, ?, m68k.machine, rport,  0 )
+
+    length  :=  wordlength * 2
+
+    packet.rxreq!pkt.buff     :=  buffer
+    packet.rxreq!pkt.size     :=  wordlength
+
+    put2bytes( packet.rx!pkt.buff, 0, m68k.req.rx )
+    put2bytes( packet.rx!pkt.buff, 1, rport )
+    put2bytes( packet.rx!pkt.buff, 2, m68k.page )
+    put2bytes( packet.rx!pkt.buff, 3, address )
+    put2bytes( packet.rx!pkt.buff, 4, length )
+
+
+    UNTIL  timeouts = 8  |  retries = 8  |  testflags( #B0001 )  DO
+    $(
+        LET timeout  =  ?
+
+        UNLESS  retries = 0  DO  writef( "****Retry %N  *E", retries )
+
+        queue.rx( packet.rxreq, FALSE )
+
+        $(
+            LET rc    =  queue.tx( packet.rx, TRUE )
+
+            timeout  :=  waitforpkt( packet.rxreq )
+
+            UNLESS  rc = 0  DO
+            $(
+                writef( "****Rx data failed: %S*N", string( rc ) )
+                retries  :=  retries + 1
+                LOOP
+            $)
+
+            retries  :=  0
+        $)
+
+        TEST  timeout = 0  THEN
+              timeouts  :=  timeouts + 1
+
+        ELSE  BREAK
+    $)
+
+    IF  retries  = 8  THEN  writes( "**** Abandoned*N" )
+    IF  timeouts = 8  THEN  writes( "****Rx request timed out*N" )
+
+    m68k.freevec( packet.rxreq )
+    m68k.freevec( packet.rx    )
+
+    freeport( rport )
+$)
+
+
+
+AND m68k.writebuff( buffer, address, length )  BE
+$(
+//  Write "length" bytes to the MC68000, from buffer "buffer", starting at
+//  address "address".
+
+    LET wordlength  =  (length + 1) / 2
+    LET rc          =  ?
+    LET retries     =  0
+    LET txb         =  VEC 3
+    LET packet.tx   =  packet( notinuse, rh.task, 0, ?, ?, txb, 4, m68k.machine, #X8000, 0 )
+    LET packet.data =  packet( notinuse, rh.task, 0, ?, ?,   ?, ?, m68k.machine, #X80FF, 0 )
+
+
+    length  :=  wordlength * 2
+
+    put2bytes( packet.tx!pkt.buff, 0, m68k.req.tx )
+    put2bytes( packet.tx!pkt.buff, 1, m68k.page )
+    put2bytes( packet.tx!pkt.buff, 2, address )
+    put2bytes( packet.tx!pkt.buff, 3, length )
+
+    packet.data!pkt.buff  :=  buffer
+    packet.data!pkt.size  :=  wordlength
+
+    UNTIL  retries = 8  |  testflags( #B0001 )  DO
+    $(
+        UNLESS  retries = 0  DO  writef( "****Retry %N  *E", retries )
+
+        rc  :=  queue.tx( packet.tx, TRUE )
+
+        UNLESS  rc = 0  DO
+        $(
+            writef( "****Tx request failed: %S*N", string( rc ) )
+            retries  :=  retries + 1
+            LOOP
+        $)
+
+        rc  :=  queue.tx( packet.data, TRUE )
+
+        UNLESS  rc = 0  DO
+        $(
+            writef( "****Tx data failed: %S*N", string( rc ) )
+            retries  :=  retries + 1
+            LOOP
+        $)
+
+        BREAK
+    $)
+
+    IF  retries = 8  THEN  writes( "**** Abandoned*N" )
+
+    m68k.freevec( packet.data )
+    m68k.freevec( packet.tx   )
+$)
+
+
+
+AND string( rc )  =  VALOF
+$(
+    SWITCHON  rc  INTO
+    $(
+        CASE 409  :  RESULTIS "Ring destination didn't reply"
+        CASE 410  :  RESULTIS "Ring destination ignored packet"
+        CASE 411  :  RESULTIS "Ring error"
+        CASE 412  :  RESULTIS "Ring destination unselected"
+        CASE 413  :  RESULTIS "Ring destination went unselected during basic block"
+        CASE 414  :  RESULTIS "Ring destination busy"
+
+        DEFAULT   :  writef( "Unknown error code %N", rc )
+                     RESULTIS  ""
+    $)
+$)
+
+

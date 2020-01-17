@@ -1,0 +1,1278 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+
+
+// TRIPOS console handler header.
+
+// The lines below which start with /**/ are
+//  those which can be removed (by changing
+//  the /**/ to ////) to make a smaller console
+//  handler, as long as those lines which start
+//  with //// are inserted.
+
+//***** Updated  4 Oct 1985 by PB  to understand the RMVTHAND packets.
+//      Updated 29 Apr 1986 by PB  to use ABS taskid
+//                                 to support Xon/Xoff
+
+GET "LIBHDR"
+
+MANIFEST $( cg                 =  ug
+
+            case.offset        = 'A' - 'a'
+            case.mask          = NOT (- case.offset)
+
+            n.ttyin.pkts       = 2
+
+            input.buffer.upb   = 128
+            echo.buffer.upb    = 127
+            safety.area        = 12
+            echo.mask          = echo.buffer.upb
+
+            min.width          = 20
+            default.width      = -1
+
+
+/**/        act.self.immolation=  998
+            act.ttyin          =  999
+            act.ttyout         = 1000
+            type.echo          = 1234   // Not act.write or act.sc.write
+
+            pkt.charg          = pkt.arg1
+            pkt.chres          = pkt.res1
+            pkt.bufarg         = pkt.arg1
+            pkt.bufres         = pkt.res1
+            pkt.endarg         = pkt.arg2
+            pkt.endres         = pkt.res2
+            pkt.minarg         = pkt.arg3
+
+            buf.task           = pkt.taskid
+            buf.end            = buf.task + 1
+            buf.data.size      = buf.end  + 1
+
+            ttyin.pkt.upb      = pkt.res2
+            ttyout.pkt.upb     = pkt.arg1
+
+            char.cr            = #015
+            char.rubout        = #177
+            char.esc1          = #033
+            char.esc2          = #033
+            char.ctrla         = #001
+            char.ctrlb         = #002
+            char.ctrlc         = #003
+            char.ctrld         = #004
+            char.ctrle         = #005
+            char.bs            = #010
+/**/        char.tab           = #011
+            char.lf            = #012
+            char.xon           = #021
+            char.xoff          = #023
+
+/**/        char.delete.char   = #377
+/**/        line.delete.char   = #376
+
+            at.l               =    1
+            at.ncr             =    2
+            at.uy              =    3
+            at.r               =    4
+            at.st              =    5
+            at.x               =    6
+/**/        at.octdig          =    7
+            at.f               =    8
+/**/        at.q               =    9
+/**/        at.z               =   10
+
+            in.stsiz           = 100
+            out.stsiz          = 100
+
+            console.line.words = 80
+            console.line.chars =
+             (console.line.words+1)*bytesperword
+          $)
+
+
+
+GLOBAL $( char.bell              :  cg +   0
+          terminal.width         :  cg +   1
+/**/      do.tabs                :  cg +   2
+/**/      escapeout              :  cg +   3
+          output.devtaskid       :  cg +   4
+          input.devtaskid        :  cg +   5
+          input.pkts             :  cg +   6
+/**/      rubout.vdu             :  cg +   7
+/**/      print.check            :  cg +   8
+/**/      tagged.messages        :  cg +   9
+
+          read.pkt.queue         :  cg +  10
+          pending.input.queue    :  cg +  10
+          write.pkt.queue        :  cg +  11
+          pending.output.queue   :  cg +  11
+          ttyout.pkt             :  cg +  12
+          out.pkt.back           :  cg +  13
+
+          current.task.number    :  cg +  15
+          current.task           :  cg +  15
+          shared.output          :  cg +  16
+
+          out.coroutine          :  cg +  17
+          in.coroutine           :  cg +  18
+
+          input.buffer           :  cg +  20
+          input.write.ptr        :  cg +  21
+          input.ptr              :  cg +  21
+          echo.buffer            :  cg +  22
+          echo.iptr              :  cg +  23
+          echo.optr              :  cg +  24
+          input.line.queue       :  cg +  25
+          pending.line.queue     :  cg +  25
+/**/      reflect.on             :  cg +  26
+
+/**/      rubout.started         :  cg +  27
+          force.case             :  cg +  28
+          force.lower            :  cg +  29
+
+          number.of.escapes      :  cg +  30
+          original.string        :  cg +  31
+          escape.table           :  cg +  32
+
+          cr.or.esc              :  cg +  33
+          bell.pending           :  cg +  34
+
+          carriage.position      :  cg +  35
+/**/      print.table            :  cg +  36
+
+/**/      esc.done               :  cg +  40
+/**/      esc.done.p             :  cg +  41
+
+$<DEBUG   debug                  :  cg +  42
+$>DEBUG   input.read.ptr         :  cg +  43
+          term.info.vec          :  cg +  44
+          in.single.char.input.mode:cg +  45
+          input.no.of.chars      :  cg +  46
+          def.reflect            :  cg +  47
+          xon.xoff               :  cg +  48
+       $)
+.
+
+
+SECTION "COHAND"
+
+// TRIPOS console handler version 3.3
+
+GET ""
+GET "IOHDR"
+GET "TERMHDR"
+GET "MANHDR"    // Error.ActionNotKnown
+
+
+LET actendinput(scb) = VALOF
+  $( IF scb.buf ! scb \= -1 THEN
+       freevec(scb.buf ! scb - buf.data.size)
+     scb.buf ! scb := -1
+     RESULTIS TRUE
+  $)
+
+AND actread(scb) = VALOF
+  $( actendinput(scb)
+
+/**/ // Check for @q typed previously
+
+/**/ IF scb.arg1 ! scb = 0 THEN
+/**/   RESULTIS FALSE
+     scb.buf!scb := sendpkt(-1, ABS scb.type!scb, act.read)
+
+/**/ // Check for @q typed now
+
+/**/ IF result2 <= 0 THEN
+/**/   $( scb.arg1 ! scb := 0
+/**/      result2 := - result2
+/**/   $)
+
+     scb.end ! scb := result2
+     RESULTIS result2 > 0
+  $)
+
+LET actendoutput(scb) = VALOF
+  $( IF scb.buf ! scb \= -1 THEN
+       sendpkt(-1, ABS scb.type!scb, act.write,?,
+          ?, scb.buf ! scb, scb.pos ! scb)
+     RESULTIS TRUE
+  $)
+
+AND actwrite(scb) = VALOF
+  $( // Get new buffer for next line
+     actendoutput()
+     scb.buf ! scb := getvec(console.line.words)
+     scb.end ! scb := console.line.chars
+     RESULTIS scb.buf ! scb \= 0
+
+  $)
+
+
+
+LET hex(ch) = VALOF
+$(      ch := ch & 15
+        if (ch < 10) RESULTIS ch + '0'
+        RESULTIS ch + 'A' - 10
+$)
+
+
+LET start(parm.pkt) BE
+
+  $( LET ttyin.pkts =
+       VEC n.ttyin.pkts * [ttyin.pkt.upb+1] -1
+     LET ttyout.pkt.space = VEC ttyout.pkt.upb
+     LET ibuf = VEC (input.buffer.upb + 1) / bytesperword
+     LET obuf = VEC echo.buffer.upb / bytesperword
+
+/**/ LET self.immolation.pkt = 0
+
+     LET sysout = ?
+
+     initio()
+
+$<DEBUG
+     sysout := findoutput("**")
+
+     TEST sysout = 0
+     THEN abort(1001, RESULT2) <> debug := -1
+     ELSE
+     $( SELECTOUTPUT(sysout)
+        debug := 0
+        WRITES("SYSOUT opened to driving console*N")
+     $)
+$>DEBUG
+
+     input.buffer, echo.buffer := ibuf, obuf
+
+
+     pending.input.queue, pending.output.queue := 0,0
+     term.info.vec := 0
+     in.single.char.input.mode := FALSE
+     out.pkt.back := TRUE
+     ttyout.pkt := ttyout.pkt.space
+
+
+     out.coroutine := createco(check.tty.output,out.stsiz)
+     in.coroutine  := createco(handle.input,    in.stsiz)
+
+     // Two modes of calling seen --
+     // In system       parm.pkt!pkt.arg1,      parm.pkt!pkt.arg2
+     // mounted         parm.pkt!pkt.arg1!0,    parm.pkt!pkt.arg1!1
+     //
+     // Sigh !!! PB
+     $( LET pntr = pkt.arg1 + parm.pkt
+        UNLESS (-40 <= !pntr < 0) pntr := !pntr
+        input.devtaskid  := pntr ! 0
+        output.devtaskid := pntr ! 1
+     $)
+
+     pkt.taskid ! ttyout.pkt := output.devtaskid
+     pkt.link   ! ttyout.pkt := notinuse
+     pkt.type   ! ttyout.pkt := act.ttyout
+
+     input.pkts := ttyin.pkts
+
+     FOR j=1 TO n.ttyin.pkts DO
+       $( pkt.taskid ! ttyin.pkts := input.devtaskid
+          pkt.link   ! ttyin.pkts := notinuse
+          pkt.type   ! ttyin.pkts := act.ttyin
+          qpkt(ttyin.pkts)
+          ttyin.pkts := ttyin.pkts + ttyin.pkt.upb + 1
+       $)
+
+/**/ original.string := "@BV<>/-()LN*NUYRSTXFQZ01234567"
+//// original.string := "@BV<>/-()LN*NUYRSTXF"
+
+     escape.table := TABLE
+
+        0, '@', '*B', #X7C, #X5F, #X5E, '\', '?',
+        #X7B, #X7D,
+        -at.l,  -at.ncr, -at.ncr, -at.uy, -at.uy, -at.r,
+        -at.st, -at.st,  -at.x,   -at.f
+/**/   ,-at.q,  -at.z,
+/**/    -at.octdig, -at.octdig, -at.octdig, -at.octdig,
+/**/    -at.octdig, -at.octdig, -at.octdig, -at.octdig
+
+     number.of.escapes := original.string % 0
+
+     // Finished with parameter packet...send back...
+     qpkt(parm.pkt)
+
+     // Current task is 1: in case they dont send a `setcurrentinputtask' pkt
+     current.task.number := 1
+
+     // Initialise states, etc...
+     terminal.width := default.width
+
+     carriage.position := 0
+/**/ print.table:= TABLE #B0011111110000000, // SI  to NUL
+/**/                     #B0000100000000000, // DLE to US
+/**/                     #B1111111111111111, // /   to SP
+/**/                     #B1111111111111111, // ?   to 0
+/**/                     #B1111111111111111, // O   to @
+/**/                     #B1111111111111111, // _   to P
+/**/                     #B1111111111111111, // o   to `
+/**/                     #B0111111111111111  // DEL to p
+
+     char.bell     := #X07
+
+/**/ do.tabs       := TRUE
+/**/ escapeout     := TRUE
+/**/ rubout.vdu    := TRUE
+     shared.output := TRUE
+/**/ reflect.on    := TRUE
+/**/ def.reflect   := TRUE
+     xon.xoff      := TRUE
+
+/**/ print.check     := FALSE
+/**/ tagged.messages := FALSE
+     bell.pending    := FALSE
+     force.case      := FALSE
+/**/ rubout.started  := FALSE
+
+     echo.iptr, echo.optr := -1, -1
+
+     input.ptr := -1
+     pending.line.queue := 0
+
+
+     // Initialise coroutines
+
+     callco(in.coroutine)
+     callco(out.coroutine)
+
+
+     $( LET pkt = taskwait()
+
+
+        SWITCHON pkt.type ! pkt INTO
+
+          $( DEFAULT:
+$<DEBUG        writef("[pkt type %n] *E", pkt!pkt.type)
+               UNLESS (pkt!pkt.type = 0) abort(pkt ! pkt.type, pkt)
+$>DEBUG        returnpkt(pkt, FALSE, Error.ActionNotKnown);
+               LOOP
+
+             CASE act.findinput:
+               pkt!pkt.arg1!scb.func1 := actread
+               pkt!pkt.arg1!scb.func3 := actendinput
+               returnpkt(pkt, -1, 0)
+               LOOP
+
+             CASE act.findoutput:
+               pkt!pkt.arg1!scb.func2 := actwrite
+               pkt!pkt.arg1!scb.func3 := actendoutput
+               returnpkt(pkt, -1, 0)
+               LOOP
+
+         CASE act.sc.read:
+              $(
+              // Deliver one input character completely uninterpreted
+              // In line input mode this is illegal: ENDSTREAMCH is returned.
+              // In single character input mode we deliver the next character
+              // from the circular input buffer if there is one, otherwise
+              // append this packet to READ.PKT.QUEUE until one comes.
+
+              LET ch = ?
+
+              IF NOT in.single.char.input.mode
+              THEN $( returnpkt(pkt, endstreamch, 0); LOOP $) // Illegal call
+
+              ch := get.input.char() // get next char from circular buffer
+
+              TEST ch = endstreamch
+              THEN add.to.queue(@read.pkt.queue, pkt) // No character yet
+              ELSE returnpkt(pkt, ch, 0)              // Return the character
+
+              ENDCASE
+              $)
+
+         CASE act.read:
+              // Return an input line for this task.
+              // In single character input mode send all characters
+              // currently buffered.
+
+              TEST in.single.char.input.mode
+                // Return buffered chars (as a line) or queue the packet
+                TEST input.no.of.chars = 0
+                THEN add.to.queue(@read.pkt.queue, pkt) // No char yet
+                ELSE return.replenish.buffer (pkt)
+              ELSE      // Return a line or queue the request packet
+              $( LET qb = findpkt(@input.line.queue, pkt.taskid ! pkt)
+                 LET qp = add.to.queue(@read.pkt.queue, pkt)
+                 IF !qb \= 0 THEN transmit(qp,qb) // Line waiting
+              $)
+
+              ENDCASE
+
+         CASE act.write:
+         CASE act.sc.write:
+$<DEBUG        writef("[write %n buf %X8 end %X8 %X2 %X2 %X2 ...]*N",
+                        pkt!pkt.type, pkt!pkt.bufarg, pkt!pkt.endarg,
+                        (0 <= pkt!pkt.bufarg <= 255) -> 0, pkt!pkt.bufarg%0,
+                        (0 <= pkt!pkt.bufarg <= 255) -> 0, pkt!pkt.bufarg%1,
+                        (0 <= pkt!pkt.bufarg <= 255) -> 0, pkt!pkt.bufarg%2)
+$>DEBUG
+              // Write an output line
+              add.to.queue(@write.pkt.queue,pkt)
+              ENDCASE
+
+             CASE act.ttyin:
+               $( LET char = (pkt.chres ! pkt) & #177
+                  LET res2 = pkt.res2 ! pkt
+                  qpkt(pkt)
+                  IF res2 = 0 THEN
+                    callco(in.coroutine,char)
+                  ENDCASE
+               $)
+
+
+             CASE act.ttyout:
+               out.pkt.back := TRUE
+               ENDCASE
+
+/**/  // DOESN'T WORK (dismount)       CASE action.die:
+/**/         CASE act.self.immolation:
+/**/           // Suicide order.
+/**/           // Allow shared output, to clear the queue.
+/**/           shared.output       := TRUE
+/**/           self.immolation.pkt := pkt
+/**/           ENDCASE
+
+
+         CASE act.sc.mode:
+              // Set or unset single character input mode according
+              // to the value of ARG1.
+
+              // Becomes owner of terminal
+              current.task              := pkt ! pkt.id
+
+              TEST pkt ! pkt.arg1
+              // Going into single char input mode
+              THEN set.single.char.input.mode()
+              ELSE set.line.input.mode()
+
+              // Clear all outstanding read packets for this task
+              return.all.read.packets(current.task)
+
+              returnpkt(pkt, TRUE, 0)
+              LOOP
+
+
+         CASE act.non.reflect.mode:
+              // Set or unset input reflection mode according
+              // to the value of ARG1.
+
+              // Becomes owner of terminal
+              current.task              := pkt ! pkt.id
+
+              TEST pkt ! pkt.arg1
+                  THEN  set.non.reflect.input.mode()
+                  ELSE  set.reflect.input.mode()
+              returnpkt(pkt, TRUE, 0)
+
+         CASE act.how.much.input:
+              // Return number of typed ahead chars
+              TEST in.single.char.input.mode
+              THEN returnpkt (pkt, input.no.of.chars, 0)
+              ELSE
+                $(
+                // Count up the number of characters in all pending lines
+                // for the requesting task. Do NOT include characters from
+                // the current line buffer, as the user cannot ask for
+                // them anyway (and they may be revoked).
+
+                LET count = 0
+                LET queue = input.line.queue
+                LET task  = pkt ! pkt.taskid
+
+                UNTIL queue = 0
+                DO $(
+                   IF queue ! buf.task = task
+                   THEN count := count + ABS (queue ! buf.end)
+                   queue := ! queue
+                   $)
+
+                returnpkt (pkt, count, 0)
+                $)
+
+              ENDCASE
+
+
+         CASE act.read.buffer:
+              // Return a buffer of characters
+              IF NOT in.single.char.input.mode
+              THEN $( returnpkt (pkt, 0, -1); LOOP $)   // Illegal call
+
+              $( LET buffer  = pkt ! pkt.bufarg
+                 LET max.req = pkt ! pkt.endarg
+                 LET min.req = pkt ! pkt.minarg
+
+                 TEST input.no.of.chars = 0
+                 THEN
+                   TEST min.req = 0                     // Easily satisfied?
+                   THEN returnpkt (pkt, 0, 0)
+                   ELSE add.to.queue (@read.pkt.queue, pkt) // no char yet
+                 ELSE
+                   $(
+                   LET real.no = max.req < input.no.of.chars ->
+                                                 max.req, input.no.of.chars
+                   FOR i = 0 TO real.no-1 DO buffer%i := get.input.char()
+                   returnpkt (pkt, real.no, 0)
+                   $)
+                 ENDCASE
+              $)
+
+
+         CASE act.set.termvec:
+              // Set terminal info vector.
+              freevec(term.info.vec)  // Free old one (if any)
+              term.info.vec     := pkt ! pkt.arg1
+              returnpkt(pkt, TRUE, 0)
+              ENDCASE
+
+
+         CASE act.read.termvec:
+              // Read terminal info vector.
+              returnpkt(pkt, term.info.vec, 0)
+              ENDCASE
+
+
+         CASE act.set.currentinputtask:
+              $(
+              // Set task to which input is directed, and whether this task
+              // is the only one allowed to write output.
+
+              LET old.task      = current.task
+              LET old.shared    = shared.output
+
+              current.task      := pkt ! pkt.arg1
+              shared.output     := pkt ! pkt.arg2
+
+              returnpkt(pkt, old.task, old.shared) // Return old values
+              ENDCASE
+              $)
+
+
+         CASE act.return.read.packets:
+              $( // Return all outstanding read packets to the specified task or calling task.
+              LET arg1  = pkt ! pkt.arg1
+              return.all.read.packets(arg1=0 -> pkt!pkt.id, arg1)
+              returnpkt(pkt, TRUE, 0)
+              ENDCASE
+              $)
+        $)
+
+        IF out.pkt.back & xon.xoff <= 0 THEN callco(out.coroutine)
+
+/**/    // If the packet is now here, then suicide can
+/**/    //  be done safely, since nothing is being output
+/**/    //  at the moment.
+
+/**/    IF out.pkt.back & self.immolation.pkt \= 0 THEN
+/**/      // See the plot of "Ruddigore".
+/**/      $( (pkt.arg1!self.immolation.pkt)(self.immolation.pkt)
+/**/         RETURN
+/**/      $)
+
+
+     $) REPEAT
+
+  $) // End of START
+
+
+
+AND read() = VALOF
+  $( LET char = cowait()
+
+     IF xon.xoff THEN IF ((NOT in.single.char.input.mode) | ABS xon.xoff > 1)
+     $(
+        IF char = char.xon
+        $(
+         xon.xoff := - (ABS xon.xoff)
+         LOOP
+        $)
+
+        IF char = char.xoff
+        $(
+         xon.xoff := ABS xon.xoff
+         LOOP
+        $)
+     $)
+
+     IF (in.single.char.input.mode) RESULTIS char
+
+     IF char = char.lf THEN char := char.cr
+
+     cr.or.esc := char = char.cr | char = char.esc1 |
+                         char = char.esc2
+
+     IF cr.or.esc THEN
+       char := (char = char.cr -> '*N', '*E')
+
+
+     // Check for CTRL/A, B, C, D or E
+     //   CTRL/A      Break the task
+     //   CTRL/B      Set flag 1
+     //   CTRL/C      Set flag 2
+     //   CTRL/D      Set flag 4
+     //   CTRL/E      set flag 8
+
+     IF char = char.ctrla THEN
+       $( abort(0, current.task.number)
+          LOOP
+       $)
+
+     IF char.ctrlb <= char <= char.ctrle THEN
+       $( setflags(current.task.number,
+            1 << (char - char.ctrlb))
+          LOOP
+       $)
+
+/**/ // Check for end of rubout verify sequence
+
+/**/ IF char \= char.rubout & rubout.started THEN
+/**/   $( rubout.started := FALSE
+/**/      put.echo(']')
+/**/   $)
+
+
+     // Check for @U and @Y:
+
+     $( LET c = char & case.mask
+        IF force.case & ('A' <= c <= 'Z') THEN
+          char := (force.lower -> c - case.offset,c)
+     $)
+
+     // Put in echo buffer.
+
+     put.echo(char)
+
+     IF
+/**/    reflect.on &
+        ((echo.optr - echo.iptr) &
+        echo.mask) <= safety.area THEN
+       $( signal.error()
+          LOOP
+       $)
+     RESULTIS char
+
+  $) REPEAT
+
+AND readesc() = VALOF
+  $( LET c = capitalch(read())
+/**/ IF c = 'N' THEN
+/**/   longjump(esc.done.p, esc.done)
+     RESULTIS c
+  $)
+
+AND readnum(radix,n) = VALOF
+ $( LET i = 2
+    WHILE i > 0 DO
+      $( LET c = readesc()
+         LET v = '0' <= c <= '9' -> c - '0',
+                 'A' <= c <= 'F' -> c - 'A' + 10,
+                                    100
+         TEST v < radix THEN
+           $( n := n * radix + v
+              i := i - 1
+           $)
+          ELSE
+           signal.error()
+       $)
+     RESULTIS n
+  $)
+
+
+
+
+
+AND handle.input() BE
+  $( LET char         = read()
+/**/ LET stream.ended = FALSE
+
+     IF in.single.char.input.mode
+     $( // See if there is a packet waiting for this character
+        LET qp  = findpkt(@read.pkt.queue, current.task)
+        LET pkt = !qp
+
+        put.input.char(char)
+        UNLESS pkt = 0
+        $(  LET type    = pkt ! pkt.type
+            !qp     := !pkt        // Dequeue packet
+            !pkt    := notinuse
+
+            TEST type = act.read.buffer
+            $(  LET buffer = pkt!pkt.bufarg;
+                buffer%0 := get.input.char() // Only one character to send
+                returnpkt(pkt, 1, 0)
+            $)
+            ELSE TEST type = act.sc.read
+                 THEN returnpkt(pkt, get.input.char(), 0) // Send back single char
+                 ELSE return.replenish.buffer(pkt)      // ACT.READ
+        $)
+        LOOP
+     $)
+
+/**/ esc.done.p := level()
+
+     IF char = '@' THEN // Escape combination
+
+       $( LET radix = 8
+
+          char := readesc()
+
+          FOR j = 1 TO number.of.escapes DO
+            IF char = original.string % j THEN
+              $( LET item = escape.table ! j
+
+                 SWITCHON -item INTO
+
+                   $( CASE at.f:  // Throw away lines.
+                        unloadseg(pending.line.queue)
+                        pending.line.queue := 0
+
+                      CASE at.l:  // Throw away line.
+/**/                    reflect.on := def.reflect
+                        input.ptr:=-1
+/**/                    TEST rubout.vdu THEN
+/**/                      put.echo(line.delete.char)
+/**/                     ELSE
+                        put.echo('*N')
+
+                      CASE at.r:
+                        force.case := FALSE
+
+                      CASE at.ncr: ENDCASE
+
+                      CASE at.uy:
+                        force.case := TRUE
+                        force.lower := char = 'Y'
+                        ENDCASE
+
+                      CASE at.st:
+                        current.task.number:=readnum(10,0)
+                        shared.output := char = 'S'
+                        ENDCASE
+
+/**/                  CASE at.q:
+/**/                    cr.or.esc := TRUE
+/**/                    stream.ended := TRUE
+/**/                    put.echo('*N')
+/**/                    IF input.ptr >= 0 THEN
+/**/                      put.input.char('*N')
+/**/                    GOTO not.escape
+
+/**/                  CASE at.z:
+/**/                    reflect.on := NOT reflect.on
+/**/                    ENDCASE
+
+                      CASE at.x:
+                        radix := 16
+                        char := '0'
+
+/**/                  CASE at.octdig:
+                        item := readnum(radix,char - '0')
+
+                      DEFAULT: // Normal escape
+                        put.input.char(item)
+
+                   $)
+
+                 GOTO esc.done
+              $)
+
+          signal.error()
+
+       $) REPEAT  // Until legal escape
+
+
+     IF char = char.rubout THEN
+       $( unecho()
+/**/      IF rubout.vdu THEN
+/**/        $( put.echo(char.delete.char)
+/**/           IF input.ptr >= 0 THEN
+/**/             input.ptr := input.ptr - 1
+/**/           LOOP
+/**/        $)
+          IF input.ptr >= 0 THEN
+            $(
+/**/           UNLESS rubout.started THEN
+/**/             $( rubout.started := TRUE
+/**/                put.echo('[')
+/**/             $)
+/**/           put.echo(input.buffer%input.ptr)
+////           put.echo('_')
+               input.ptr := input.ptr - 1
+            $)
+          LOOP
+       $)
+
+/**/ IF char = char.tab & do.tabs THEN
+/**/   $( LET n = ((input.ptr + 1) & #177770) + 6
+/**/      TEST n < input.buffer.upb THEN
+/**/        $( unecho()
+/**/           FOR j = input.ptr TO n DO
+/**/             $( put.echo(' ')
+/**/                put.input.char(' ')
+/**/             $)
+/**/        $)
+/**/       ELSE
+/**/        signal.error()
+/**/      LOOP
+/**/   $)
+
+
+     UNLESS put.input.char(char) THEN
+       LOOP
+
+not.escape:
+
+     IF cr.or.esc THEN
+       $( LET buffer = getvec(input.ptr/bytesperword+
+                              buf.data.size)
+          LET char.buffer = buffer + buf.data.size
+          IF buffer \= 0 THEN
+            $( LET qp=findpkt(@ pending.input.queue,
+                                current.task.number)
+               LET qb =
+                 add.to.queue(@ pending.line.queue,
+                                 buffer)
+
+
+               buffer!buf.task := current.task.number
+               buffer!buf.end  := input.ptr + 1
+
+               FOR j=0 TO input.ptr DO
+                 char.buffer % j := input.buffer % j
+
+/**/           IF stream.ended THEN
+/**/             buffer ! buf.end := - buffer ! buf.end
+
+               IF !qp \= 0 THEN
+                 transmit(qp,qb)
+
+               force.case := FALSE
+               input.ptr:=-1
+               LOOP
+            $)
+
+          signal.error()
+          input.ptr:=input.ptr - 1
+       $)
+
+esc.done: LOOP
+
+  $) REPEAT
+
+
+
+
+
+
+
+AND check.tty.output() BE
+  $(
+     // This routine outputs one buffer or one echo
+     //  line each time round its main loop
+
+     TEST echo.iptr = echo.optr THEN
+
+       // Try for task buffer.
+
+       $( LET q = (shared.output ->
+                     @ pending.output.queue,
+             findpkt(@ pending.output.queue,
+                       current.task.number))
+          LET p = !q
+
+          UNLESS p = 0 // Output request!
+            $( LET buf = pkt.bufarg ! p
+               LET end = pkt.endarg ! p
+               LET type= pkt.type   ! p
+               TEST (0 <= buf <= 255)
+               THEN writech( buf, type )
+               ELSE
+               $(
+               LET last= buf % (end-1)
+
+               !q := !p; !p := notinuse
+
+/**/           IF tagged.messages
+/**/           $(   LET task = pkt.taskid ! p;
+/**/                if (task > 9) writech((task / 10) + '0', type)
+/**/                writech((task REM 10) + '0', type)
+/**/                writech(':', type)
+/**/                writech(' ', type)
+/**/           $)
+
+               IF end > 1 THEN FOR i = 0 TO end - 2 DO writech(buf % i, type)
+               UNLESS (last = '*E' & type = act.write) IF end > 0
+                        writech( last, type)
+               if (type = act.write) freevec(buf)
+               $)
+               qpkt(p)
+               LOOP
+            $)
+       $)
+      ELSE
+       // Echo line waiting: output it:
+       $( LET c = ?
+          $( WHILE echo.optr = echo.iptr DO workwait()
+
+             echo.optr := echo.optr + 1
+             c := echo.buffer % (echo.optr & echo.mask)
+/**/         IF c = char.delete.char & rubout.vdu THEN
+/**/           $( IF carriage.position > 0 THEN
+/**/              $( writech('*X08', type.echo);
+/**/                    writech(' ', type.echo);
+/**/                    writech('*X08', type.echo)
+/**/              $)
+/**/              LOOP
+/**/           $)
+/**/         IF c = line.delete.char & rubout.vdu THEN
+/**/           $( LET cp = carriage.position
+/**/              print(char.cr, type.echo)
+/**/              FOR j = 1 TO cp DO print(' ', type.echo)
+/**/              print(char.cr, type.echo)
+/**/              BREAK
+/**/           $)
+             writech(c, type.echo)
+
+             IF c = '*N' | c = '*E' THEN
+               BREAK
+
+          $) REPEAT
+          LOOP
+       $)
+
+     // No work whatsoever: wait
+     workwait()
+
+  $) REPEAT
+
+
+
+AND writech(ch, type) BE
+// Higher level output routine
+$(  UNLESS type = act.sc.write
+    TEST ch = '*N'
+    $(  print(char.cr, type)
+        print(char.lf, type)
+        RETURN
+    $)
+    ELSE IF type = type.echo
+    $(
+/**/    LET c = ch & #177  // No parity
+/**/    LET word, bit = c >> 4, c & 15
+/**/    IF ch = '*P' & print.check
+/**/    THEN print('*N', type)
+/**/    IF ((print.table ! word >> bit) & 1) = 0 & print.check
+/**/    THEN TEST escapeout
+/**/         $( writech('@'); writech('X');
+/**/            writech(hex(ch >> 4))
+/**/            writech(hex(ch     ))
+/**/            RETURN
+/**/         $)
+/**/         ELSE print('?', type) <> RETURN
+    $)
+    print(ch, type)
+$)
+
+AND print(ch, type) BE
+  // Lower level output routine
+  $( LET ci = 1
+     IF ch = '*E' | ch = char.lf | ch = #X07 THEN ci := 0
+     IF ch = char.bs             THEN ci := -1
+
+     IF terminal.width < min.width THEN
+       terminal.width := default.width
+
+     UNLESS type = act.sc.write
+     TEST ch = char.cr THEN
+       carriage.position := 0
+      ELSE
+       $( IF
+/**/         print.check &
+             carriage.position+ci > terminal.width
+          THEN
+            writech('*N')
+          carriage.position := carriage.position + ci
+       $)
+
+     pkt.charg  ! ttyout.pkt := ch
+     pkt.taskid ! ttyout.pkt := output.devtaskid
+     qpkt(ttyout.pkt)
+     out.pkt.back := FALSE
+     workwait()
+  $)
+
+
+AND workwait() BE
+  // Waits for PKT or more work for output.
+  $( cowait()
+     IF bell.pending THEN
+       $( bell.pending := FALSE
+          print(char.bell, type.echo)
+       $)
+  $)
+
+
+AND findpkt(lv.queue,task) = VALOF
+  $( UNTIL !lv.queue = 0 |
+       pkt.taskid ! (!lv.queue) = task DO
+       lv.queue := !lv.queue
+     RESULTIS lv.queue
+  $)
+
+
+AND add.to.queue(lv.q,item) = VALOF
+  $( LET q = findpkt(lv.q,-1)
+     !q := item; !item := 0
+     RESULTIS q
+  $)
+
+
+AND transmit(lv.pq,lv.bq) BE
+  $( LET b = !lv.bq
+     LET p = !lv.pq
+     !lv.bq, !lv.pq := !b, !p
+     !p := notinuse
+     pkt.bufres ! p := b + buf.data.size
+     pkt.endres ! p := b ! buf.end
+     qpkt(p)
+  $)
+
+
+AND return.replenish.buffer(pkt) BE
+    $(
+    // Send back all outstanding input chars in buffer for REPLENISH
+    LET buff            = getvec(buf.data.size + input.no.of.chars/bytesperword)
+    LET charbuff        = buff + buf.data.size
+    LET nchars          = input.no.of.chars
+
+    IF buff = 0 THEN $( add.to.queue(@read.pkt.queue, pkt); RETURN $)
+
+    buff ! buf.task     := pkt ! pkt.id
+    buff ! buf.end      := nchars
+
+    FOR i=0 TO nchars-1 DO charbuff%i := get.input.char()
+
+    returnpkt(pkt, charbuff, nchars)
+    $)
+
+
+AND return.all.read.packets(task) BE
+    $( // Return all read packets belonging to TASK
+    LET qp      = findpkt(@read.pkt.queue, task)
+    LET pkt     = !qp
+    LET type    = ?
+
+    IF pkt=0 THEN RETURN // All sent back
+
+    type        := pkt ! pkt.type
+    !qp         := !pkt
+    !pkt        := notinuse
+
+    TEST type = act.sc.read
+    THEN returnpkt(pkt, endstreamch, 0)
+    ELSE TEST type = act.read
+         THEN return.replenish.buffer(pkt)      // Know input buffer empty
+         ELSE returnpkt(pkt, 0, -1)             // ACT.READ.BUFFER
+
+    $) REPEAT  // Until all packets sent back
+
+
+AND copktwait(dest,pkt) = cowait(pkt)   // Used to replace BLIB PKTWAIT
+
+
+
+AND set.single.char.input.mode() BE
+    $(
+    LET doreset  =  NOT in.single.char.input.mode
+
+    in.single.char.input.mode := TRUE
+
+    IF  doreset  THEN  reset.input.buffer()
+    $)
+
+
+
+AND set.line.input.mode() BE
+    $(
+    LET doreset  =  in.single.char.input.mode
+
+    in.single.char.input.mode := FALSE
+
+    IF  doreset  THEN  reset.input.buffer()
+    $)
+
+
+
+AND set.non.reflect.input.mode() BE
+    reflect.on := FALSE <> def.reflect := FALSE
+
+
+
+AND set.reflect.input.mode() BE
+    reflect.on := TRUE <> def.reflect := TRUE
+
+
+
+AND clear.input.buffer() BE
+    $( // Empty normal/circular input buffer
+    input.write.ptr     := in.single.char.input.mode -> input.buffer.upb, -1
+    input.read.ptr      := input.buffer.upb // Applies to circ buffer only
+    input.no.of.chars   :=  0
+    $)
+
+
+
+AND reset.input.buffer()  BE
+$(
+//  Change by IDW:  18 Sep 85
+//
+//      When entering and leaving single character mode, it is no longer
+//      necessary to clear the input buffer, since the byte stream is not
+//      being reset.  We should just reformat the buffer, changing it from
+//      line buffer to circular buffer, and so on.
+
+    TEST  in.single.char.input.mode  THEN
+    $(
+        //  This is the easier case of the two, since all we have to do is
+        //  to translate a line buffer into a circular buffer.  This means
+        //  simply setting up the correct pointers.
+
+        input.no.of.chars  :=  input.write.ptr + 1
+        input.read.ptr     :=  input.buffer.upb
+
+        IF  input.write.ptr = -1  THEN
+            input.write.ptr  :=  input.buffer.upb
+    $)
+    ELSE
+    $(
+        //  This is slightly more tricky, since we have to copy characters
+        //  between the circular buffer and the line buffer.
+
+        LET char  =  get.input.char()
+
+        TEST  char = endstreamch  THEN
+        $(
+            //  Not too bad, since there are no characters in the buffer
+            //  anyway.  Just reset the pointer values.
+
+            input.write.ptr    :=  -1
+            input.read.ptr     :=  input.buffer.upb
+            input.no.of.chars  :=  0
+        $)
+        ELSE
+        $(
+            //  The worst case of all.  We have to copy characters from the
+            //  circular buffer down into the line buffer.
+
+            LET tempbuff  =  getvec( (input.buffer.upb+1)/bytesperword )
+
+            TEST  tempbuff = 0  THEN
+            $(
+                //  Failed to get the workspace, so simply forget the
+                //  characters in the buffer.
+
+                input.write.ptr    :=  -1
+                input.read.ptr     :=  input.buffer.upb
+                input.no.of.chars  :=  0
+            $)
+            ELSE
+            $(
+                LET count  =  0
+
+                UNTIL  char = endstreamch  DO
+                $(
+                    tempbuff % count  :=  char
+                    count             :=  count + 1
+                    char              :=  get.input.char()
+                $)
+
+                FOR  i = 0  TO  count-1  DO
+                    input.buffer % i  :=  tempbuff % i
+
+                input.write.ptr    :=  count-1
+                input.read.ptr     :=  input.buffer.upb
+                input.no.of.chars  :=  count
+
+                freevec( tempbuff )
+            $)
+        $)
+    $)
+$)
+
+
+
+
+
+AND put.echo(char) BE
+/**/IF reflect.on | ((char = '*N' | char = '*E') & def.reflect) THEN
+    $( echo.iptr := echo.iptr + 1
+       echo.buffer % (echo.iptr & echo.mask) := char
+/**/   reflect.on := def.reflect
+    $)
+
+
+
+
+AND unecho() BE
+/**/IF reflect.on THEN
+    echo.iptr := echo.iptr - 1
+
+
+AND get.input.char() = VALOF
+$(
+    // This is called only in single character input mode.
+    // It returns the oldest character in the circular buffer INPUT.BUFFER,
+    // or ENDSTREAMCH if the buffer is empty.
+
+    IF input.read.ptr=input.write.ptr THEN RESULTIS endstreamch // Buffer empty
+
+    input.read.ptr      := (input.read.ptr+1) REM (input.buffer.upb+1)
+    input.no.of.chars   := input.no.of.chars - 1
+    RESULTIS input.buffer % input.read.ptr
+$)
+
+
+
+AND put.input.char(c) = VALOF
+    $(
+    // In line input mode this puts C at the next position in INPUT.BUFFER
+    // and sets the LINE.ENDED flag if the buffer is then full.
+    //
+    // In single character input mode LINE.BUFFER is used as a circular
+    // buffer.  If it fills up, then the character is ignored and a
+    // bell reflected.
+
+    TEST in.single.char.input.mode
+    $(  LET new.write.ptr = (input.write.ptr+1) REM (input.buffer.upb+1)
+
+        IF   new.write.ptr=input.read.ptr
+        THEN signal.error() <> RESULTIS FALSE
+        input.buffer%new.write.ptr := c
+        input.write.ptr            := new.write.ptr
+        input.no.of.chars          := input.no.of.chars + 1
+    $)
+    ELSE
+    $( // Puts character into buffer.
+        IF input.ptr>=input.buffer.upb & NOT cr.or.esc
+        THEN signal.error() <> RESULTIS FALSE
+        input.ptr:=input.ptr+1
+        input.buffer % input.ptr := c
+    $)
+    RESULTIS TRUE
+$)
+
+
+AND signal.error() BE
+  $( bell.pending := TRUE
+     unecho()
+  $)
+
+

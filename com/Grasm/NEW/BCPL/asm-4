@@ -1,0 +1,463 @@
+SECTION "asm4"
+
+
+
+
+/*<RSX
+NEEDS "TITLE"
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+
+//
+//                  Character  Input  and  Output
+//
+
+
+
+
+
+/*  The following are kept for reference:
+GLOBAL
+$(     linbuf   : ioman+1       //  buffer for text of assembly line
+       linbuf.out:ioman+2       //  next char no to be taken from linbuf
+       ch       : ioman+5       //  last character read from the input file
+       pagetitle: ioman+7       //  title string for the top of the page
+       linbuf.top:ioman+8       //  top of line buffer pointer
+$)
+*/
+
+
+
+
+STATIC $( saved.rdch = 0 $)
+
+
+
+
+
+LET deleteline() BE
+$(  linbuf.top := 0
+    linbuf.out := 0
+$)
+
+
+AND putch(ch) BE
+UNLESS linbuf.top >= linbufsize DO
+   $(  linbuf.top := linbuf.top + 1
+       linbuf.out:=linbuf.out+1
+       linbuf%(linbuf.top) := ch
+   $)
+
+
+
+AND position.ch(pos) BE
+$(  LET delim = linbuf%linbuf.top
+    IF delim='*S' THEN   // attempt to stop layout justification in silly places
+    TEST pos < linbuf.top THEN
+    $(  LET n = linbuf.top - pos
+        LET savepos = ?
+        WHILE linbuf%(linbuf.top-1) = '*S' & n>0 DO
+        $(  n := n-1
+            linbuf.top := linbuf.top - 1
+        $)
+        linbuf%linbuf.top := delim
+        savepos := linbuf.top
+        WHILE ch='*S' & n>0 DO
+        $(  rch()
+            n := n-1
+        $)
+        // leave at least one space between this item and next non blank
+        // character if possible
+        TEST ch\='*S' & linbuf.top>savepos THEN linbuf.top := savepos+1 ELSE
+        linbuf.top := savepos
+        linbuf%linbuf.top := ch
+    $) ELSE
+    $(  FOR i=linbuf.top TO (pos-1>linbufsize -> linbufsize, pos-1) DO
+        $(  linbuf%i := '*S'
+            linbuf.top := linbuf.top + 1
+        $)
+        UNLESS linbuf.top > linbufsize THEN linbuf%linbuf.top := delim
+    $)
+$)
+
+
+
+
+AND tab.rdch() = VALOF
+$(  // this routine is used for 'rdch' when tabs are being expanded.
+    // having a separate routine saves a test on a global for each
+    // call of 'rdch': this results in a significant difference in speed.
+    // the number of times that '*S' must be returned is kept in
+    // 'linbuf.out' and is decremented on each call.  The original 'rdch'
+    // is reenstated when the tab has been fully expanded.
+    linbuf.out:=linbuf.out-1
+    IF linbuf.out<=0 THEN
+    $(  rdch := saved.rdch
+        saved.rdch := tab.rdch
+    $)
+    RESULTIS '*S'
+$)
+
+
+
+AND rch() BE
+$(  // the assembler spends a significant amount of time in this routine so
+    // nothing must be done to slow it down.  It uses 'rdch' to read characters
+    // and it accumulates them in the buffer 'linbuf', a pointer to the current
+    // character of which is held in 'linbuf.top'.
+    // Tabs are tested for and expanded on input: this being the proper place
+    // to do them!
+    // 'linbuf' is not used for any other purpose other than printing out in
+    // the listing.  Hence its truncation when 'linbuf.top' reaches the set
+    // value of 'linbufsize' represents the truncation of the listing set by
+    // the P option.  (see initialisation in which 'linbufsize' is calculated
+    // in terms of this value).
+    ch:=rdch()
+    IF ch='*T' THEN
+    $(  linbuf.out := 7 - ((linbuf.top) REM 8)
+        ch := '*S'
+        UNLESS linbuf.out=0 THEN
+        $(  saved.rdch := rdch
+            rdch := tab.rdch
+        $)
+    $)
+    UNLESS linbuf.top>=linbufsize DO
+    IF print.expansions THEN
+    $(  linbuf.top := linbuf.top + 1
+        linbuf%(linbuf.top):=ch
+    $)
+    UNLESS filling.macro=0 THEN macro.wrch(filling.macro, ch)
+$)
+
+
+
+
+
+
+AND error(arg1,arg2,arg3,arg4) BE
+$(
+
+    /*  Note:  THIS  PROCEDURE  PRODUCES  A  DYNAMIC  GOTO
+               SO  THAT  EXECUTION  CONTINUES
+               AT  "ERRORLABEL"  ON  EXIT
+    */
+
+    // This routine is called either because there has been a 'warning'
+    // or because there was a genuine error.  The difference being that
+    // in a warning, the arguments are kept in 'warnvec' until a line is
+    // assembled and then used in 'error' so that the normal processing
+    // of the line is not affected.
+    // If the routine is called as an 'error' when a warning is already
+    // outstanding it is the warning that is printed: only one message
+    // ever gets printed for any particular line.
+    // If 'arg1' (the error code) is negative the error is judged to be
+    // fatal and the flag 'finishpass' is set TRUE to terminate the
+    // processing of the assembly.  It also writes a message to the initial
+    // output stream of the program.
+    // Error messages for the error codes are given by 'geterror'
+    // This routine and 'outline' are the main two routines which write
+    // to the output listing file.
+    LET pos=item.start          // forward reference
+    LET crosses = "**************************  "
+    errcount:=errcount+1
+//  writef("jumping to level %N, to label %N*N",errorlevel,errorlabel)
+    TEST arg1<0
+    THEN $(  finishpass:=TRUE
+             fatal:=TRUE
+         $)
+    ELSE IF warning DO
+            $(  arg1:=warnvec!1
+                arg2:=warnvec!2
+                arg3:=warnvec!3
+                arg4:=warnvec!4
+                warning:=FALSE
+                pos:=warnvec!0
+//              writef("Error is warning , pos=%N*N",pos)
+            $)
+    TEST pass=first & \finishpass
+    THEN outline('*S', TRUE)
+    ELSE $(  LET savelist=list
+             LET charsperasmword = 2*bytesperasmword + 1
+             LET error.message = geterror(arg1)
+             neads(short->2,3)
+             IF restartpage THEN wrch('*P')
+             UNLESS fatal DO
+                $(  list:=1
+                    outline('**', TRUE)
+                    list:=savelist
+                $)
+             TEST pass=first
+             THEN writes("*N*N*N")
+             ELSE UNLESS short DO
+                     $(  writes(crosses)
+                         FOR i=1 TO binbufwidth*charsperasmword+2+pos
+                         DO wrch('*S')
+                         writes("|*N")
+                     $)
+             writes(crosses)
+             FOR i=1 TO binbufwidth*charsperasmword+2 DO wrch('*S')
+             writef("%C Error: ",comntch)
+             TEST error.message=0 THEN
+             writef("number %N") ELSE
+             writef(error.message,arg2,arg3,arg4)
+             wrch('*N')
+             IF finishpass DO
+                $(  LET saveout=output()
+                    selectoutput(out)
+                    writef("*N*NFatal error (file %N line %N): ",
+                           file.id, line.of.file)
+                    TEST error.message = 0 THEN
+                    writef("number %N", -arg1) ELSE
+                    writef(error.message,arg2,arg3,arg4)
+                    wrch('*N')
+                    selectoutput(saveout)
+                $)
+         $)
+
+    longjump(errorlevel,errorlabel)
+
+$)
+
+
+AND warn(arg1, arg2, arg3, arg4) BE UNLESS warning DO
+   $(  warning:=TRUE
+       warnvec!1:=arg1
+       warnvec!2:=arg2
+       warnvec!3:=arg3
+       warnvec!4:=arg4
+       warnvec!0:=item.start
+//     writef("Warn called: warnvec!0=%N*N",warnvec!0)
+   $)
+
+
+//  AND executeanywarning() BE IF warning DO error(0)
+
+
+
+
+
+AND outline(firstchar, print) BE
+$(  // This procedure is produces all the lines of output for a line of
+    // assembler input.  It also deals with '*P' and '*N' characters
+    // generated by appropriate directives.
+    STATIC $( line.just.outlined = -1 $)
+    // This is used to ensure that the same line is not written out when two
+    // successive calls of OUTLINE are made and none to NEWLINE in the mean-
+    // time.  It assumes that LINENO -1 will never occur.
+    // First the rest of the line is read so that it will all be accumulated
+    // in 'linbuf' for output:
+    WHILE ('*N'\=ch\=endstreamch) DO rch()
+    // don't output anything on the first pass!
+    TEST pass=second & (lineno \= line.just.outlined) THEN
+    $(  // don't generate any output unless 'list' is positive either
+        IF list > 0 & print THEN
+        $(  LET bufpos=b.nextmod+1
+            // this points into 'binbuf', a vector of hex produced by this
+            // assembly line.  It is initialised to point at the begining and
+            // is later used to advance in increments correspondin to the
+            // maximum number of bytes that can be displayed on one line
+            // (successive lots being output on successive lines on their own).
+            LET firstflag = TRUE
+            // This is true only for the first line written out.  The line read
+            // into 'linbuf' is only output on the first line, successive lines
+            // are marked by their program counter and the hex only.
+            LET control.line = ?
+            // This will be true if the only character on the line is '*P' or
+            // '*C' or is empty (except of spaces): in this case the line is not
+            // output but either the appropriate number of '*N's output or a new
+            // page summoned (by seting 'restartpage')
+            LET no.output = (rdch=macro.rdch) & \print.expansions
+            // i.e. still in text expansion
+            // If the end of the line happens to have fallen in the middle of
+            // the expansion of a TEXT variable (see later) the generation of
+            // output on this line is with  held until the TEXT expansion is
+            // complete: care is taken to ensure that a deletion of the line
+            // in one of the "text expansion lines" also results in the
+            // deletion of the actual line.
+            LET i=1
+            // work out if this is a 'control.line':
+            WHILE i<=linbuf.top & (linbuf%i='*S' | linbuf%i='*N') DO i:=i+1
+            control.line:= i>linbuf.top | linbuf.top=0
+            $(rpt
+                // The code in this repeat loop generates a line of output
+                // Lines continue to be printed until 'bufpos' reaches the
+                // end of the hex buffer 'binbuf' (or stops if no output is to
+                // be generated anyway).
+                IF restartpage & (\control.line | \firstflag) THEN wrch('*P')
+                // i.e. there is something to output and 'restart page' is
+                // pending so do a page throw!
+                UNLESS no.output | restartpage & control.line THEN
+                UNLESS firstchar='*S' THEN wrch(firstchar)
+                UNLESS no.output | binbuf!b.top<=b.nextmod & control.line THEN
+                $(  IF firstchar='*S' THEN
+                    // if the first character of this line is "free" and we
+                    // are in a file (the number of which we are shortly to
+                    // print) print a '+' for a warning.
+                    wrch(file.id=0 -> '*S', '+')
+                    UNLESS firstflag THEN
+                    // keep 'startpc' up to date: it is a global which should
+                    // always hold the program counter value at the begining
+                    // of this line of output.  (i.e. the address of the first
+                    // byte to be generated on or after this line).
+                    startpc:=pc+(bufpos-(b.nextmod+1))
+                    TEST file.id=0
+                    THEN writef("  %I5 ",line.of.file) ELSE
+                    // in a GET directive: print number of file
+                    TEST file.id<10 THEN
+                    writef("%I1  %I4 ",file.id,line.of.file)
+                    ELSE writef("%I2 %I4 ",file.id,line.of.file)
+                    // don't bother to print program counter on comment lines
+                    TEST linbuf%1=comntch |
+                         pc=startpc+binbuf!b.top-b.nextmod
+                    THEN writes("      ")
+                    ELSE writef("%X4  ",startpc)
+//                  writef("bufpos = %N, binbufwidth= %N*N",bufpos,binbufwidth)
+                    // print out hex generated on this line
+                    FOR i=bufpos TO bufpos+binbufwidth-1 DO
+                       TEST i<=binbuf!b.top
+                       THEN $(  outhex(binbuf!i)
+                                wrch('*S')
+                            $)
+                       ELSE FOR j=1 TO bytesperasmword*2+1
+                            DO wrch('*S')
+                    bufpos:=bufpos+binbufwidth
+                $)
+                // echo input line if this is the first line:
+                TEST firstflag THEN
+                $(  IF (control.line->\restartpage,\no.output) THEN
+                    writes("  ")
+                    FOR i=1 TO linbuf.top-1 DO
+                    IF (control.line->\restartpage,\no.output) THEN
+                    wrch(linbuf%i)
+                    firstflag := FALSE
+                    // If 'control.line' is TRUE then there is nothing worth
+                    // printing on the line so dont write out the contents of
+                    // the line if waiting for output before we start a new
+                    // page (i.e. 'restartpage' is TRUE).  Otherwise don't
+                    // bother if no output is to be generated anyway
+                    // (i.e. 'no.output' is TRUE)
+                    IF (control.line->\restartpage,\no.output) THEN wrch('*N')
+                $) ELSE wrch('*N')
+            $)rpt REPEATUNTIL bufpos>binbuf!b.top | no.output
+        $)
+        // tell loader format generator what our current program counter is:
+        IF binbuf!b.top>b.nextmod THEN code.gen(cd.newpc, pc)
+        // output data:
+        FOR i=1+b.nextmod TO binbuf!b.top DO code.gen(cd.data, binbuf!i)
+        // don't output this line again:
+        line.just.outlined := lineno
+    $) ELSE
+    $(  pass := pass   // have to put some code here - so I put this
+/*<TIMBIN
+        // tell loader format generator what our current program counter is:
+        IF binbuf!b.top>b.nextmod THEN code.gen(cd.newpc, pc)
+        // tell loader how much output data:
+        FOR i=1+b.nextmod TO binbuf!b.top DO code.gen(cd.data, binbuf!i)
+/*TIMBIN>*/
+    $)
+    pc:=pc+binbuf!b.top-b.nextmod
+    // set 'binbuf' to empty
+    binbuf!b.top := b.nextmod
+    binbuf!b.nextmod := binbuf!b.top
+    ch:='*N'
+$)
+
+
+
+
+
+AND endline(print) BE outline('*S', print)
+
+
+
+
+AND newlyne() BE
+$(  deleteline()
+    UNLESS ch=endstreamch THEN
+    $(  lineno := lineno + 1
+        UNLESS rdch = macro.rdch THEN line.of.file := line.of.file + 1
+        rch()
+    $)
+$)
+
+
+
+
+
+AND mywrch(c) BE
+$(  // This procedure is used to replace the normal BCPL 'wrch': it manages
+    // the output listing.  In particular it knows the lenght of a page 'pw'
+    // and generates a heading at the top of each page when a '*P' is written.
+    // When a '*P' is necessary as the next character (if there is any more
+    // output) the flag 'restartpage' is SET.
+    // It is up to other parts of the program to test this flag and write
+    // '*P' before generating any non-blank output.  This is necessary in
+    // order to prevent a final headed blank page.
+    LET savewrch=wrch
+    wrch:=syswrch
+    SWITCHON c INTO
+    $(  DEFAULT: wrch (c)
+                 ENDCASE
+        CASE '*N':
+             outpos:=outpos+1
+             wrch(c)
+             IF (outpos&byte1)>pl THEN restartpage:=throws
+             ENDCASE
+        CASE '*P':
+             restartpage:=FALSE
+             UNLESS throws ENDCASE
+             $(  LET len=?
+                LET dat = VEC 10
+                 dat := get.time(dat, 10)
+                 wrch('*P')
+                 writef("%S assembler %S",name,dat)
+                 len:=10+name%0+1+dat%0
+                 UNLESS pagetitle=0 DO
+                    $(  FOR i=len TO (pw-pagetitle%0)/2
+                        DO $(  wrch('*S'); len := len+1
+                           $)
+                        writes(pagetitle)
+                        len:=len+pagetitle%0
+                    $)
+                 FOR i=len+1 TO pw-8 DO wrch('*S')
+                 writef("Page %I3*N*N*N",(outpos&byte2)>>8)
+                 outpos:= (outpos&byte2) + (1<<8)
+             $)
+    $)
+    wrch:=savewrch
+$)
+
+
+
+
+AND neads(lines) BE
+  IF lines+(outpos&byte1)>pl DO  restartpage:=TRUE
+
+
+
+
+
+
+
+

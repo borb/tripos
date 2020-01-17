@@ -1,0 +1,107 @@
+SECTION "RUN"
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "IOHDR"
+
+//STATIC $( current.task=187 $)
+MANIFEST $( current.task=187 $)
+
+LET start(junk, act, given.scb, command) = VALOF
+ $( LET string = VEC 50
+    LET FUDGE = COMMAND-2                       //UGH!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    LET p = SPLITNAME(string, ':', command, 1)
+    LET l, scb, svec = ?,?,?
+    LET task    = 0
+    LET seg     = 0
+    LET console.gvec = ROOTNODE ! RTN.TASKTAB ! CONSOLETASK ! TCB.GBASE
+    LET old.task=       //      Might still be runninhg on old RMVThandler
+//    UNLESS 0 <= console.gvec!current.task <= 100 DO current.task := 177
+//    old.task :=
+        console.gvec ! current.task
+
+    IF (COMPSTRING(string, "RUN")=0) & (command%0>3)
+    $( SPLITNAME(string, ENDSTREAMCH, command, p); command:=string $)
+    l := command%0
+
+    scb := getvec(l/bytesperword+1+scb.upb)
+    IF scb=0 GOTO err
+
+    FOR I = start-1 TO start-20 BY -1 DO IF !I = 12345 $( seg := i-2; BREAK $)
+    IF seg=0 $( WRITEF("Seg not found*N"); GOTO err $)
+
+    svec := scb+scb.upb+1
+    FOR j = 0 TO l/bytesperword DO svec!j := command!j
+
+    FOR i = 500 TO 1 BY -1
+    $( task := createtask(tcb!tcb.seglist, tcb!tcb.stsiz, i);
+       UNLESS task=0 BREAK
+    $)
+    IF task=0 $( freevec(scb); GOTO err $)
+
+    scb!scb.link := 0
+    scb!scb.id   := id.inscb
+    scb!scb.type := 0
+    scb!scb.buf  := svec
+    scb!scb.pos  := 1
+    scb!scb.end  := l+1
+    scb!scb.func1 := 0
+    scb!scb.func3 := 0
+
+    seg!(seg!1) := globsize
+
+    rootnode!rtn.tasktab!task!tcb.seglist!3 := seg
+
+    sendpkt(-1, task, 0, 0, 0,
+// Scc says that it used to give the wrong directory!
+                copydir(((!FUDGE)=9876) -> FUDGE!1, currentdir),
+                consoletask,
+                scb,
+                copydir(cli.commanddir),
+                cli.defaultstack)
+
+    UNTIL ROOTNODE ! RTN.TASKTAB ! task = 0  DO DELAY(10)
+    console.gvec ! current.task := old.task
+
+    RESULTIS 0
+err:freevec(scb)
+    RESULTIS 20
+ $)
+
+
+// This module is called by CLI with the initial packet.
+// It is running as a different task. It tells CLI to return the packet.
+
+LET cli.init(parm.pkt) = VALOF
+ $( initio()
+    currentdir  := parm.pkt!pkt.arg1
+    consoletask := parm.pkt!pkt.arg2
+    selectoutput(findoutput("**"))
+
+    cli.background      := TRUE
+
+    cli.standardinput   := parm.pkt!pkt.arg3
+    cli.currentinput    := cli.standardinput
+
+    cli.standardoutput  := output()
+    cli.currentoutput   := cli.standardoutput
+
+    cli.commanddir      := parm.pkt!pkt.arg4
+    returncode          := 0
+    cli.returncode      := 0
+    cli.faillevel       := cli.initialfaillevel
+    cli.result2         := 0
+    cli.commandfile%0   := 0
+    cli.defaultstack    := parm.pkt!pkt.arg5
+    cli.module          := 0
+
+    tcb!tcb.seglist!3   := 0
+    start               := cli.undefglobval
+    ROOTNODE ! RTN.TASKTAB ! CONSOLETASK ! TCB.GBASE ! current.task := taskid
+                        // Send input to me!!!!
+
+    result2             := parm.pkt
+    RESULTIS qpkt                       // => qpkt(parm.pkt)
+ $)
+
+

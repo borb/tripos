@@ -1,0 +1,60 @@
+SYNTAX:
+iebupdte <dir> [P=Pat=<pattern$!>] [Disckeys] [Dates] [Nodates] [To=<file$*>]
+   [S=<substring$!>] [Since=<date$start of time>] [Upto=<date$end of time>]
+   [I] [Titles] [IBM]
+
+Creates an IEBUPDTE for member of amat file from a file or directory.
+
+If P is quoted, any file matching pattern is examined
+
+If Disckeys is quoted, the disckeys are also included
+
+If Dates is quoted, then the date will not be changed to 'Today' etc..
+
+If Nodates is quoted, then the dates will be omitted
+
+If to is quoted the output is send to file
+
+If S is quoted, any file including substring is examined
+
+If since and/or upto are quoted, only the relavent file are examined
+
+If Titles is quoted, only the filetitles are given
+
+If I is quoted, the examine is interactive. The reply to '?' is one of:
+
+(CR)               Include the file
+?         Help:    Type the list of options
+"x" (-)   Substr:  Set search string to x
+'x' (-)   Pattern: Set pattern to x
+*         Rewind:  returns to the beginning of this directory
+A         All:     Include all subsequent files
+F (-)     Full:    Type full information
+HELP      Help:    types some information
+K (-)     Key:     from here on, type the key of each file
+L         List:    i.e. cease being interactive including all files
+N         No:      Omit this file
+P         Previous:move back one file
+Q         Quit:    don't look at rest of the directory
+T (-)     Titles:  Only show filenames
+TYPE opts Type:    Type the current file. Waits each page. Q/W exit
+                   'TYPE to lp:' will list the file on the line-printer
+                   ( see spec of SCAN for full option list ).
+W         Windup:  Exit to top level
+Y         Yes:     Include this file
+
+(-) indicates that the option may be negated by preceding it with a '-'.
+In the case of matching, this indictes examine Mis-Mathes only.
+
+If IBM is quoted it is more 'STANDARD'.  This means that the names
+are made to be capitals and all files start "./ ADD NAME=".
+THIS MAY CAUSE ERRORS.  If there are two files with similar final
+names, the destination program may loose data.
+The default is to put N dots before the "/ ADD NAME=", where N is
+the directory depth.  It also adds n dots before any lines beginning
+with some dots followed by "/ ".
+Each directory has begins with its own name, and wnds up with a
+"./ ENDUP".
+
+
+

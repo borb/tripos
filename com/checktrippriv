@@ -1,0 +1,39 @@
+//  Procedure for checking to see whether the current user is logged on
+//  with "TRIPPRIV" or not.  The headers required are:
+//
+//  GET "LIBHDR"
+//  GET "RINGHDR"
+//  GET "UIDHDR"
+//  GET "BCPL.SSPLIB"
+
+
+LET checktrippriv()  =  VALOF
+$(
+//  Call PRIVMAN to see if the currently logged on user would be allowed
+//  TRIPPRIV on the day of reckoning.
+
+    LET puid    =  rootnode!rtn.info!rtninfo.ring!ri.uidset + cap.puid
+
+    LET priv    =  TABLE #XFF02, #XF742, #XFD8A, #XAEC5
+    LET user    =  TABLE #XFF02, #XFBF7, #X8FB0, #X14C3
+
+    LET txbuff  =  VEC 16 / dibytesperword
+    LET rxbuff  =  VEC  4 / dibytesperword
+
+    //  Construct the SSP block which we are going to send to PRIVMAN.  All
+    //  we want to know is whether the currently logged on user would be
+    //  ALLOWED to have TRIPPRIV.
+
+    put2bytes( txbuff, bb.ssp.arg1, 0 )   //  ALLOW opcode
+
+    FOR  i = 0  TO  3  DO
+    $(
+        put2bytes( txbuff, 4  + i, get2bytes( puid, i ) )
+        put2bytes( txbuff, 8  + i, user!i )
+        put2bytes( txbuff, 12 + i, priv!i )
+    $)
+
+    RESULTIS  ssp( "PRIVMAN", txbuff, 16, rxbuff, 4, 0 )
+$)
+
+

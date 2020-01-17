@@ -1,0 +1,407 @@
+SECTION $<NOVL  $<SOVL "SMST" $>SOVL $<SOVL' "NMST" $>SOVL' $>NOVL
+        $<NOVL' $<SOVL "SMST" $>SOVL $<SOVL'  "MST" $>SOVL' $>NOVL' 
+$<PDPRSX NEEDS "OVRLAY" $>PDPRSX
+
+$$CGCOMHDR := TRUE
+$$BCOMHDR := TRUE
+GET "COMHDR"
+
+$<TRIPOS GLOBAL $( Touch : 350 $) $>TRIPOS
+
+MANIFEST
+$(
+magic.number    = 1234
+nametablesize   = 73
+getmax          = 20
+wordmax         = 255/bytesperword+1
+becomesbit      = 512
+savespacesize   = 2
+maxocount       = 62                    // max chars for numeric ocode
+def.reportmax   = 10
+$<LSI4TRIPOS
+                                // 82.06.12 with -DBSNFN trn =  8523 == 17046
+                                // 82.06.12 with -DBSN   trn =  8164 == 16328
+                                //          with ~OP    -2345=  7038 == 14076
+                                //          with ~op2        =  6564 == 13128
+                                // 82.06.15                     6672 == 13344
+                                // 82.07.06                     6698 == 13396
+                                // 84.03.05                     6860 == 13720
+                                //    ++                        7025 == 14050
+OV.size         = 14100/BYTESPERWORD
+$<SOVL
+OV.size         = 13410/BYTESPERWORD
+$>SOVL
+                                // 82.06.12 with -DBFNSN lcg = 10697 == 21394
+                                // 82.06.15       make       = 10985 == 21970
+OV.CG.size      = 22600/BYTESPERWORD
+$<SOVL
+OV.CG.size      = 22040/BYTESPERWORD
+$>SOVL
+$>LSI4TRIPOS
+$<68000TRIPOS
+                                // 82.06.12 with -DBFNSN trn =  5091 == 20364
+                                // 83.04.21 ???????????? trn =  ???? == ?????
+                                // 86.11.27 with SN      trn =  5320 == 21280
+OV.size         = 21500/BYTESPERWORD
+                                // 82.06.12 with -DBFNSN mcg =  6517 == 26068
+                                // 82.06.13 with -DBFNSN mcg =  6532 == 26128
+                                // 82.06.13 with datstringmcg=  6742 == 26968
+                                // 82.09.10 with stkchk,*/REM=     ?        ?
+                                // 86.11.27 with SN      mcg =  7186 == 28744
+OV.CG.size      = 30000/BYTESPERWORD
+$>68000TRIPOS
+$)
+
+GET "TRNHDR"            // Ocount
+
+STATIC $( V.ERR = 1; V.SYN = 2; V.TRN = 3; V.CG = 4; SYSTAG1=0; SYSTAG2=0 $)
+
+/******************************************************************************\
+        STREAMS
+                ASSEMBLER listing goes to TO on TRIPOS, or LISTOUT on RSX
+
+        SELECTED STREAMS
+
+                When CGSTART is called, SYSOUT is selected for TRIPOS
+
+        OCODE for Multi sections:
+                1) TRIPOS:      $( Build ocode $) REPEAT $( CG $) REPEAT
+                2) RSX          $( Build ocode; CG $) REPEAT
+                Use 1 if SLOW or overlay expensive, 2 normally
+                N.B. If the user wants ocode, DON'T CLOSE IT BETWEEN PASSES
+
+        FILEOCODE       User supplied ocode file
+        SLOW            Use OCODE file - Generate it if not FILEOCODE
+        NUMERIC(OCODE)  If fileing, use NUMERIC ocode
+
+\******************************************************************************/
+
+$<TRIPOS
+                GET "BCP.TWF"
+                GET "BCP.LOG"
+                GET "BCPL.validpointer"
+
+LET CLEAR.POINTER(addr) BE !addr := 0
+
+LET lookat() BE
+$(  LET base    = ovbase-2
+    LET len     = validpointer(@base) -> !base, 0
+    LET from    = base+len-1
+    TEST validpointer(@base) & validpointer(@from)
+    THEN FOR i = from TO base BY -1 UNLESS !I=magic.number
+    $(  UNLESS base+len-i >= 20
+        deb("BCP: lookat: At %N from top, found %N not %N*N",
+                                                base+len-i, !I, magic.number)
+        BREAK
+    $)
+    ELSE deb("BCP: lookat: Given values of %N to %N*N", base, from)
+//  abort(len, base)
+$)
+
+AND setup() BE
+$(  LET base    = ovbase-2
+    TEST valid.pointer(@base) & valid.pointer(@ovbase)
+    $(  LET len = !base
+//deb("%N words at %N*N", len, base)
+        UNLESS -2 <= base <= 2
+                FOR i = base+2 TO base+len-1 DO  !I := magic.number
+    $)
+    ELSE
+    $(  deb("BCP: Debugging abort: SETUP found invalid OVBASE %N/%N*N",
+                                                                ovbase, base)
+        deb("BCP: Try continuing ...*N")
+        abort(1000, base, @ovbase)
+    $)
+$)
+
+LET cleanup() BE
+$(
+   lookat()
+   IF VALID.POINTER(@OVBASE) & OVBASE~=1        FREEVEC(OVBASE-1)
+   IF VALID.POINTER(@SOURCESTREAM)              ENDSTREAM(SOURCESTREAM)
+   IF VALID.POINTER(@OCODE      )               ENDSTREAM(OCODE)
+   IF VALID.POINTER(@CODEOUT)           ENDSTREAM(CODEOUT)
+   IF LISTOUT~=SYSOUT & VALID.POINTER(@LISTOUT) ENDSTREAM(LISTOUT)
+   STFLAGS, OVBASE, SOURCESTREAM, OCODE, CODEOUT, LISTOUT := 0,0,0,0,0,0
+$)
+
+LET tidyup(R1, R2) BE
+$(
+$<DEBUG
+   UNLESS R1=0
+   $( DEB("*NTidy(%N,%N)-(Ovb%N,", R1, R2, OVBASE)
+      DEB("Ocode%N, Codeout%N, Ovfile%N", OCODE, CODEOUT,OVFILE)
+      DEB(", Listout%N", LISTOUT)
+      UNLESS LISTOUT=SYSOUT DEB(", Sysout%N", SYSOUT)
+      DEB(")*N")
+   $)
+$>DEBUG
+   cleanup()
+   IF VALID.POINTER(@OVFILE)    ENDSTREAM(OVFILE)
+   IF DEB.FILE~=-1 & VALID.POINTER(@DEB.FILE) ENDSTREAM(DEB.FILE)
+   SYSIN, SYSOUT, OVFILE := 0, 0, 0
+   RESULT2 := R2
+   STOP(R1)
+$)
+$>TRIPOS
+
+LET START() = VALOF
+$(1
+   LET V = VEC  $<PDPRSX        200 $>PDPRSX
+                $<LSI4TRIPOS    160 $>LSI4TRIPOS
+                $<68000TRIPOS   160 $>68000TRIPOS
+$<PDPRSX
+   LET VERSION = "3.00 03-Nov-83 09:43:00 (pb)"
+   V.ERR        := "ERR"
+   V.SYN        := "SYN"
+   V.TRN        := "TRN"
+   TASKNAME     := $<BC1' "BCP" $>BC1' $<BC1 "BC1" $>BC1
+   ENDREAD()   //SYSIN
+   SYSIN        := FINDCML(TASKNAME)
+   SYSTAG1      := "PDPRSX"
+$>PDPRSX
+$<TRIPOS
+   $(   LET junk = touch $)     // Ensure touch globals !!
+   SYSIN        := INPUT()
+   SYSOUT       := OUTPUT()
+   LISTOUT      := SYSOUT
+   PRSOURCE     := FALSE
+$<68000TRIPOS
+   SYSTAG1      := "MC68000TRIPOS"              //Relic
+$>68000TRIPOS
+$<68000TRIPOS'
+   SYSTAG1      := "TRI"                        //Relic
+$>68000TRIPOS'
+   SYSTAG2      := "TRIPOS"
+   OVFILE       := 0                    // All globals are 0 EXCEPT naughties
+   STFLAGS, OVBASE, SOURCESTREAM, OCODE, CODEOUT, LISTOUT, OVFILE := 0,0,0,0,0,0,0
+$>TRIPOS
+
+   DEB.FILE := -1
+   $<PDPRSX   CLOSELIST := ENDWRITE $>PDPRSX
+   RST.P := LEVEL(); RST.L := CONTINUE
+   Reportcount := 1                     // so that early errors are trapped.
+   LOADOVERLAY(-1)      // Reset the overlay stuff to make it reentrant.
+$(R
+$<TRIPOS
+   OVBASE := GETVEC(12000/BYTESPERWORD); IF OVBASE=0 GOTO Fail;
+   OVBASE := OVBASE +1
+   setup()
+   OVBASE!-1 := ov.size         // Max allowable overlay size
+$>TRIPOS
+   LOADOVERLAY(V.ERR)   // call the ERROR overlay in
+   Workspace := FINDPARMS(V, loadoverlay(-2), systag1, systag2) // to get the run info.
+   IF workspace=0                                       GOTO fail
+
+   $<TRIPOS FREEVEC(OVBASE-1); OVBASE := 0 $>TRIPOS
+
+$<BC1 $<PDPRSX
+   IF OCODEFILE%0=0
+   $(  WRITEF("%S -- Use ,,FILE=FILE to generate OCODE", taskname)
+       GOTO CONTINUE
+   $)
+       $>PDPRSX
+$>BC1
+                MAXUSED, PROGSIZE := 0,0
+$<PDPRSX        APTOVEC(COMP, WORKSPACE)                        $>PDPRSX
+$<TRIPOS        OVBASE := GETVEC(WORKSPACE+OV.size+20+1 + 20)+1
+                UNLESS OVBASE=1 setup()
+                COMP(OVBASE, WORKSPACE+20)                              $>TRIPOS
+
+$<BC1' $<PDPRSX
+   SELECTOUTPUT(CODEOUT)
+   $( LET R=6; WRITEREC(@R, 2) $)
+   ENDWRITE()           // CLOSE OUTPUT
+       $>PDPRSX
+$>BC1'
+
+CONTINUE:
+fail:
+
+//                      These are not used by TRIPOS ???????
+$<PDPRSX $<BC1' FREEVEC(CGIDENT); FREEVEC(CGTITLE) $>BC1' $>PDPRSX
+        SELECTOUTPUT(LISTOUT)
+                                // TRIPOS Warn user if 0 words !!
+   IF NOT QUIET \/ REPORTCOUNT>0 \/ PRSOURCE $<TRIPOS \/ PROGSIZE=0 $>TRIPOS
+   $( $<PDPRSX LOADOVERLAY(V.ERR); $>PDPRSX BCPLOG() $)
+$<TRIPOS
+    IF reportcount>0    THEN tidyup(20, RESULT2)                        // rc)
+    IF repeat.again=0 | NOT VALID.POINTER(@repeat.again)
+                        THEN tidyup( 0, RESULT2)
+    cleanup()
+$>TRIPOS
+ $)R REPEAT
+$)1
+
+$<TRIPOS
+AND COMP(V, SIZE) = (V=0 | V=1) -> VALOF
+$( WRITEF("Failed to get a vector of size %U1 [%N]*N", ov.size+Size+1, RESULT2);
+   REPORTCOUNT := REPORTMAX
+   RESULTIS 0
+$) , VALOF
+$(1
+  LET CGCLOSEocode(keep) BE
+  $( //DEB("CGCLOSE(%C%N). ", keep-> 'K', 'D', ocode)
+     IF VALID.POINTER(@OCODE)
+     $( ENDSTREAM(OCODE); IF COS=OCODE THEN COS:=0; OCODE:=0 $)
+     UNLESS keep | FILEOCODE | OCODEFILE=0 DELETEOBJ(OCODEFILE)
+  $)
+  V := V+OV.size+1
+  $(C LET A=?
+     OVBASE!(-1) := OV.SIZE
+     OBUFP := OBUF.byte.offset
+     OBUF  := V+SIZE-OBUF.word.offset
+     SELECTINPUT(SOURCESTREAM)
+     SELECTOUTPUT(LISTOUT)
+     TEST (CGFLAGS & cgf.Cgonly) = 0
+     $( LOADOVERLAY(V.SYN)
+        A := FORMTREE(V+1, SIZE-20)
+        IF A=0 BREAK
+        $( LET ln = linecount
+           LOADOVERLAY(V.TRN)
+           COMPILEAE(A, TREEP+1)
+           linecount := ln
+        $)
+     $)
+     ELSE
+     $( UNLESS SLOW TASKWRITEF("CGONLY, but not SLOW*N")
+        LASTSECT := TRUE                // Must be slow, so only one CGSTART
+     $)
+
+     IF (CGFLAGS & cgf.Codegen)=0 $( /* Why ... CGcloseocode(FALSE);*/ LOOP $)
+     IF OBUFP=OBUF.byte.offset-5 THEN LOOP
+     //WRITEF("Null input file", OBUFP)
+
+     IF REPORTCOUNT>0 LOOP
+     CGcloseocode(TRUE);                // Just close it!
+     OVBASE!(-1) := OV.CG.SIZE;
+     LOADOVERLAY(V.CG)
+     CGSTART(OVBASE+OV.CG.SIZE, OBUF+OBUFP/BYTESPERWORD - 1)
+//   IF (CGFLAGS & cgf.Cgonly) = 0 | SLOW DO
+     CGCLOSEocode(FALSE)                // Close and delete
+   $)C REPEATUNTIL /*SOURCESTREAM = 0 | */ LASTSECT | TESTFLAGS(1)
+$)1
+$>TRIPOS
+
+$<PDPRSX
+AND COMP(V, SIZE) = VALOF
+$(1
+  LET CGCLOSEocode(READ) BE
+  $( TEST FILEOCODE
+     THEN (READ -> ENDREAD, ENDWRITE)()
+     ELSE (READ -> DELETEINPUT, deleteoutput)()
+     OCODE := 0
+  $)
+
+  $(C LET A=?
+     OBUFP := OBUF.byte.offset
+     OBUF  := V+SIZE+OBUF.word.offset
+     SELECTINPUT(SOURCESTREAM)
+     SELECTOUTPUT(LISTOUT)
+     IF (CGFLAGS & cgf.Cgonly) = 0
+     $( LOADOVERLAY(V.SYN)
+        A := FORMTREE(V+1, SIZE-20)
+        IF A=0 BREAK
+        LOADOVERLAY(V.TRN)
+        COMPILEAE(A, TREEP+1)
+     $)
+
+     IF (CGFLAGS & cgf.Codegen) = 0
+     $( UNLESS OCODE=0 | OCODEFILE=0 | OCODEFILE%0=0 CGcloseocode(FALSE); LOOP $)
+     IF REPORTCOUNT>0 LOOP
+
+     LOADOVERLAY("CGS")
+     CGSTART(V, OBUF+OBUFP/BYTESPERWORD - 1)
+     LOADOVERLAY("CG1")
+     CGSECT()
+//   IF (CGFLAGS & cgf.Cgonly)=0 | SLOW DO
+     CGCLOSEocode(FALSE)
+     LOADOVERLAY("CG2")
+     outputsection()
+   $)C REPEATUNTIL /*SOURCESTREAM = 0 | */ LASTSECT
+$)1
+$>PDPRSX
+
+$<NEW
+AND COMP(V, SIZE) = (V=0 | V=1) -> VALOF
+$( WRITEF("Failed to get a vector of size %N [%N]*N", Size, RESULT2); RESULTIS 0 $) ,
+VALOF
+$(1
+  LET CGCLOSEocode(keep) BE
+  $( //DEB("CGCLOSE(%C%N). ", keep-> 'K', 'D', ocode)
+     UNLESS OCODE=0 $( ENDSTREAM(OCODE); IF COS=OCODE THEN COS:=0; OCODE:=0 $)
+     UNLESS keep | FILEOCODE  DELETEOBJ(OCODEFILE)
+  $)
+  V := V+OV.size+1
+  $(C LET A=?
+     LET sections = 1
+
+     $<TRIPOS OVBASE!(-1) := OV.SIZE $>TRIPOS
+     OBUFP := OBUF.byte.offset
+     OBUF  := V+SIZE+OBUF.WORD.offset
+     SELECTINPUT(SOURCESTREAM)
+     SELECTOUTPUT(LISTOUT)
+     IF (CGFLAGS & cgf.Cgonly) = 0
+     $( LOADOVERLAY(V.SYN)
+        A := FORMTREE(V+1, SIZE-20)
+        IF A=0 BREAK
+        LOADOVERLAY(V.TRN)
+        COMPILEAE(A, TREEP+1)
+     $) REPEATUNTIL NOT SLOW | ??? Source exhausted
+
+     IF (CGFLAGS & cgf.Codegen)=0 $( CGcloseocode(FALSE); LOOP $)       //??????
+     IF REPORTCOUNT>0 LOOP                                              //??????
+     CGcloseocode(TRUE);                // Just close it!
+
+$<TRIPOS
+     OVBASE!(-1) := OV.CG.SIZE;
+     LOADOVERLAY(V.CG)
+$>TRIPOS
+     FOR I = 1 TO SECTIONS DO
+     $( LASTSECT := (I=SECTIONS) & Was.lastsect
+$<TRIPOS
+        CGSTART(OVBASE+OV.CG.SIZE, WORKSPACE+OV.SIZE-OV.CG.SIZE)
+     $)
+$>TRIPOS
+$<PDPRSX
+        LOADOVERLAY("CGS")
+        CGSTART(V, OBUF+OBUFP/BYTESPERWORD - 1)
+        LOADOVERLAY("CG1")
+        CGSECT()
+        LOADOVERLAY("CG2")
+        outputsection()
+     $)
+$>PDPRSX
+   $)C REPEATUNTIL /*SOURCESTREAM = 0 | */ LASTSECT
+$)1
+$>NEW
+
+AND TRANSREPORT(N, A,B,C,D,E ) BE
+$( LOADOVERLAY(V.ERR)
+   OVTRANSREPORT(N, A, B, C, D, E)
+   LOADOVERLAY(V.TRN)
+   CHECKOCODE()   // BECAUSE OF DYNAMIC GLOBAL INITIALISATION   //??????????????
+$)
+
+AND CALLSYNREPORT(N, A, B) BE
+$(  LOADOVERLAY(V.ERR)
+    OVSYNREPORT(N, A, B)
+    LOADOVERLAY(V.SYN)
+$)
+
+AND DEB(s, a,b,c,d,e,f) BE
+$( LET oldout=OUTPUT()
+$<LOGFILE   IF deb.file=-1
+   THEN deb.file := FINDOUTPUT( $<TRIPOS "DEB:BCP" $>TRIPOS
+                                $<PDPRSX "DB:BCP"  $>PDPRSX )
+   SELECTOUTPUT(DEB.FILE $<PDPRSX  <0 $>PDPRSX $<TRIPOS =0 $>TRIPOS -> SYSOUT, DEB.FILE)
+$>LOGFILE
+$<LOGFILE'
+   SELECTOUTPUT(SYSOUT)
+$>LOGFILE'
+   WRITEF(s, a,b,c,d,e,f)
+   $<TRIPOS WRCH('*E') $>TRIPOS
+   SELECTOUTPUT(oldout)
+$)
+
+

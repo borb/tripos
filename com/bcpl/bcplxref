@@ -1,0 +1,645 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "BCPLXREF"
+
+GET "LIBHDR"
+
+MANIFEST $(
+s.null=0
+s.let=1
+s.proc=2
+s.lab=3
+s.global=4
+s.manifest=5
+s.static=6
+s.for=7
+s.eq=8
+s.be=9
+s.and=10
+s.name=11
+s.get=12
+s.string=13
+s.colon=14
+s.lparen=15
+s.case=16
+s.end=17
+s.semicol=18
+s.rsect=19
+wspacesize = 15000
+$)
+
+GLOBAL $(
+nextsymb:ug + 0
+lookupword:ug + 1
+cmpstr:ug + 2
+declsyswords:ug + 3
+d:ug + 4
+rch:ug + 5
+rdtag:ug + 6
+performget:ug + 7
+readnumber:ug + 8
+value:ug + 9
+rdstrch: ug + 10
+newvec: ug + 11
+list2: ug + 12
+addref: ug + 13
+xref: ug + 14
+prtree: ug + 15
+wrnameinfo: ug + 16
+error: ug + 17
+match: ug + 18
+
+symb: ug + 20
+ch: ug + 21
+wordv: ug + 22
+wordsize: ug + 23
+charv: ug + 24
+ptr: ug + 25
+treevec: ug + 26
+treep: ug + 27
+getv: ug + 30
+getp: ug + 31
+gett: ug + 32
+sourcestream: ug + 33
+linecount: ug + 34
+nametree: ug + 35
+wordnode: ug + 36
+word: ug + 37
+pattern: ug + 38
+fileno: ug + 39
+nextfile: ug + 40
+matchall: ug + 41
+oldtype: ug + 42
+nlpending: ug + 43
+tostream : ug + 44
+workspace : ug + 45
+$)
+
+
+LET nextsymb() BE
+$(1 symb := s.null
+    IF nlpending
+    THEN
+        $(
+        linecount := linecount + 1
+        nlpending:=FALSE
+        $)
+
+    SWITCHON ch INTO
+
+$(s CASE '*P':
+    CASE '*N': nlpending := TRUE
+               rch()
+               symb:=s.semicol
+               RETURN
+
+    CASE '*T':
+    CASE '*S': rch() REPEATWHILE ch='*S'
+               LOOP
+
+    CASE '0':CASE '1':CASE '2':CASE '3':CASE '4':
+    CASE '5':CASE '6':CASE '7':CASE '8':CASE '9':
+         readnumber(10)
+         RETURN
+
+    CASE 'a':CASE 'b':CASE 'c':CASE 'd':CASE 'e':
+    CASE 'f':CASE 'g':CASE 'h':CASE 'i':CASE 'j':
+    CASE 'k':CASE 'l':CASE 'm':CASE 'n':CASE 'o':
+    CASE 'p':CASE 'q':CASE 'r':CASE 's':CASE 't':
+    CASE 'u':CASE 'v':CASE 'w':CASE 'x':CASE 'y':
+    CASE 'z':
+    CASE 'A':CASE 'B':CASE 'C':CASE 'D':CASE 'E':
+    CASE 'F':CASE 'G':CASE 'H':CASE 'I':CASE 'J':
+    CASE 'K':CASE 'L':CASE 'M':CASE 'N':CASE 'O':
+    CASE 'P':CASE 'Q':CASE 'R':CASE 'S':CASE 'T':
+    CASE 'U':CASE 'V':CASE 'W':CASE 'X':CASE 'Y':
+    CASE 'Z':
+         rdtag(ch)
+         symb := lookupword()
+         UNLESS symb=s.get RETURN
+         performget()
+         LOOP
+
+    CASE '$': rch()
+              symb := 0
+              IF ch=')' DO symb := s.rsect
+              TEST ch='(' | ch=')'
+                THEN rdtag('$')
+                ELSE rch()
+              RETURN
+
+    CASE '[':
+    CASE '(': symb := s.lparen
+              rch()
+              RETURN
+
+    CASE '=': symb := s.eq
+              rch()
+              RETURN
+
+    CASE '#':
+       $( LET radix = 8
+          rch()
+          IF ch='B' DO radix := 2
+          IF ch='X' DO radix := 16
+          UNLESS 'O'<=ch<='7' DO rch()
+          readnumber(radix)
+          RETURN  $)
+
+    CASE '/':
+         rch()
+         IF ch='\' DO $( rch(); LOOP  $)
+         IF ch='/' DO
+            $( rch() REPEATUNTIL ch='*N' | ch=endstreamch
+               LOOP  $)
+
+         UNLESS ch='**' RETURN
+
+         $( rch()
+            IF ch='**' DO
+               $( rch() REPEATWHILE ch='**'
+                  IF ch='/' BREAK  $)
+            IF ch='*N' DO linecount := linecount+1
+         $) REPEATUNTIL ch=endstreamch
+
+         rch()
+         LOOP
+
+
+    CASE '|':
+         rch()
+         IF ch='|' DO
+            $( rch() REPEATUNTIL ch='*N' | ch=endstreamch
+               LOOP $)
+
+         UNLESS ch='**' RETURN
+
+         $( rch()
+            IF ch='**' DO
+             $( rch() REPEATWHILE ch='**'
+                IF ch='|' BREAK $)
+            IF ch='*N' DO linecount:=linecount+1
+         $) REPEATUNTIL ch=endstreamch
+
+         rch()
+         LOOP
+
+    CASE '<':
+    CASE '>':
+    CASE '\': rch()
+              IF ch='=' DO rch()
+              RETURN
+
+    CASE '-': rch()
+              IF ch='>' DO rch()
+              RETURN
+
+    CASE ';': symb:=s.semicol
+              rch()
+              RETURN
+
+    CASE ':': rch()
+              IF ch='=' DO $( rch(); RETURN  $)
+              symb := s.colon
+              RETURN
+
+
+    CASE '"': rch()
+              charv!0 := 0
+              FOR i = 1 TO 255 DO
+              $( IF ch='"' BREAK
+                 charv!0 := i
+                 charv!i := rdstrch()  $)
+              wordsize := packstring(charv, wordv)
+              symb := s.string
+              rch()
+              RETURN
+
+    CASE '*'':rch()
+              rdstrch()
+              rch()
+              RETURN
+
+
+    CASE '.': UNLESS getp=0 DO ch := endstreamch
+    DEFAULT:  UNLESS ch=endstreamch DO
+              $( rch()
+                 RETURN  $)
+              IF getp=0 DO $( symb := s.end
+                              RETURN   $)
+              endread()
+              getp := getp - 3
+              sourcestream := getv!getp
+              selectinput(sourcestream)
+              linecount := getv!(getp+1)>>3
+              fileno := getv!(getp+1)&7
+              ch := getv!(getp+2)
+              LOOP
+$)s
+$)1 REPEAT
+
+LET lookupword() = VALOF
+$(1 LET p = @nametree
+
+    wordnode := !p
+
+    UNTIL wordnode=0 DO
+    $( LET cmp = cmpstr(wordv, wordnode+4)
+       IF cmp=0 RESULTIS !wordnode
+       p := wordnode + (cmp<0->1,2)
+       wordnode := !p  $)
+
+    wordnode := newvec(wordsize+4)
+    wordnode!0, wordnode!1 := s.name, 0
+    wordnode!2, wordnode!3 := 0, 0
+    FOR i = 0 TO wordsize DO wordnode!(i+4) := wordv!i
+
+    !p := wordnode
+    RESULTIS s.name
+$)1
+
+AND cmpstr(s1, s2) = VALOF
+$(1 LET len1, len2 = s1%0, s2%0
+    FOR i = 1 TO len1 DO
+    $( LET ch1, ch2 = s1%i, s2%i
+       IF i>len2  RESULTIS 1
+       IF 'a'<=ch1<='z' DO ch1:=ch1-'a'+'A'
+       IF 'a'<=ch2<='z' DO ch2:=ch2-'a'+'A'
+       IF ch1>ch2 RESULTIS 1
+       IF ch1<ch2 RESULTIS -1  $)
+    IF len1<len2 RESULTIS -1
+    RESULTIS 0
+$)1
+
+AND declsyswords() BE
+$(1 ptr := TABLE
+      0,s.and,
+      s.be,0,0,
+      s.case,
+      0,0,
+      s.eq,0,0,0,
+      0,0,s.for,0,
+      0,0,0,s.global,s.get,
+      0,0,
+      s.let,0,0,0,0,0,0,0,
+      s.manifest,
+      0,0,0,0,
+      0,
+      0,0,0,0,0,
+      0,0,0,
+      0,0,s.static,
+      0,0,0,0,0,
+      0,0,
+      0,0,
+      0
+
+    d("ABS/AND/*
+      *BE/BREAK/BY/*
+      *CASE/*
+      *DO/DEFAULT/*
+      *EQ/EQV/ELSE/ENDCASE/*
+      *FALSE/FLOAT/FOR/FINISH/*
+      *GOTO/GE/GR/GLOBAL/GET/*
+      *IF/INTO/*
+      *LET/LV/LE/LS/LOGOR/LOGAND/LOOP/LSHIFT//")
+
+    d("MANIFEST/*
+      *NEEDS/NE/NOT/NEQV/*
+      *OR/*
+      *RESULTIS/RETURN/REM/RSHIFT/RV/*
+      *REPEAT/REPEATWHILE/REPEATUNTIL/*
+      *SECTION/SWITCHON/STATIC/*
+      *TO/TEST/TRUE/THEN/TABLE/*
+      *UNTIL/UNLESS/*
+      *VEC/VALOF/*
+      *WHILE//")
+
+$)1
+
+
+AND d(words) BE
+$(1 LET i, length = 1, 0
+
+    $( LET ch = words%i
+       TEST ch='/'
+           THEN $( IF length=0 RETURN
+                   charv!0 := length
+                   wordsize := packstring(charv, wordv)
+                   lookupword()
+                   !wordnode := !ptr
+                   ptr := ptr + 1
+                   length := 0  $)
+           ELSE $( length := length + 1
+                   charv!length := ch  $)
+       i := i + 1
+    $) REPEAT
+$)1
+
+
+
+LET rch() BE
+$(  ch := rdch()
+$)
+
+AND rdtag(char1) BE
+    $( LET n = 1
+       charv!1 := char1
+
+       $( rch()
+          UNLESS 'A'<=ch<='Z' |
+                 'a'<=ch<='z' |
+                 '0'<=ch<='9' |
+                  ch='.' BREAK
+          n := n+1
+          charv!n := ch  $) REPEAT
+
+       charv!0 := n
+       wordsize := packstring(charv, wordv)  $)
+
+
+AND performget() BE
+$( LET s = 0
+   nextsymb()
+   IF symb=s.string DO
+   $( s := findinput(wordv)
+      IF s=0 THEN
+      $( // Look in directory G
+         LET v = VEC 30
+         LET len = wordv%0
+         FOR j=1 TO 6 DO v%j := "SYS:G." % j
+         FOR j=1 TO len DO v%(j+6) := wordv%j
+         v%0 := len+6
+         s := findinput(v)
+      $)
+   $)
+   IF s=0 THEN $( error("Bad GET directive"); RETURN $)
+
+   writef("File %N is *"%S*"*N", nextfile+1, wordv)
+   getv!getp := sourcestream
+   getv!(getp+1) := (linecount<<3)+fileno
+   getv!(getp+2) := ch
+   getp := getp + 3
+   linecount := 1
+   sourcestream := s
+   selectinput(sourcestream)
+   nextfile := nextfile + 1
+   fileno:=nextfile
+   rch()   $)
+
+
+
+AND readnumber(radix) BE UNTIL value(ch)>=radix DO rch()
+
+AND value(ch) = '0'<=ch<='9' -> ch-'0',
+                'a'<=ch<='f' -> ch-'a'+10,
+                'A'<=ch<='F' -> ch-'A'+10,
+                100
+
+AND rdstrch() = VALOF
+$(1 LET k = ch
+
+    rch()
+
+    IF k='*N' DO error("Bad string")
+
+    IF k='**' DO
+       $( IF ch='*N' | ch='*S' | ch='*T' DO
+          $( $( IF ch='*N' DO linecount := linecount+1
+                rch()
+             $) REPEATWHILE ch='*N' | ch='*S' | ch='*T'
+             rch()
+             RESULTIS rdstrch()
+          $)
+
+          rch()  $)
+
+    RESULTIS k
+$)1
+
+LET newvec(n) = VALOF
+    $( treep := treep - n - 1
+       IF VALOF $(  LET s1=(treep>=0)
+                    LET s2=(treevec>=0)
+//                  writef("treep = %X4  treevec = %X4  ovf = %C*N",treep,
+//                         treevec, ((s1=s2 -> (treep<=treevec),s1)->'T','F') )
+                    RESULTIS (s1=s2 -> (treep<=treevec), s1)
+                $) // 16 bit address comparason 'treep' <= 'treevec'
+       THEN
+       $( error("Program too large")
+          quit(10)
+       $)
+       RESULTIS treep
+    $)
+
+
+
+AND list2(x, y) = VALOF
+    $( LET p = newvec(1)
+       p!0, p!1 := x, y
+       RESULTIS p   $)
+
+
+AND addref(type, name) BE
+$(1 LET p = name+3
+    UNTIL !p=0 DO p := !p
+    !p := list2(0, (((linecount<<3)+fileno)<<3)+type)
+$)1
+
+AND xref(v,size) BE
+$(1 LET type = s.null
+
+    treevec, treep := v, v+size
+
+    nametree := 0
+    nlpending:=FALSE
+    matchall:= FALSE
+    fileno:=0
+    nextfile:=0
+    linecount := 1
+    declsyswords()
+    rch()
+    nextsymb()
+
+    UNTIL symb=s.end SWITCHON symb INTO
+    $(2 CASE s.global:
+        CASE s.static:
+        CASE s.manifest: type := symb
+                          oldtype := symb
+        DEFAULT:         nextsymb()
+                         LOOP
+
+        CASE s.and: symb := s.let
+        CASE s.case:
+        CASE s.for:
+        CASE s.let: type := symb
+                    nextsymb()
+                    LOOP
+
+        CASE s.rsect:
+                      type, oldtype := s.null, s.null
+                      nextsymb()
+                      LOOP
+
+        CASE s.semicol: type:=oldtype
+                        nextsymb()
+                        LOOP
+
+        CASE s.colon:
+        CASE s.be:
+        CASE s.eq: type := s.null
+                   nextsymb()
+                   LOOP
+
+        CASE s.name:
+        $( LET t = type
+           LET name = wordnode
+           nextsymb()
+           IF symb=s.colon THEN t:= type=s.null -> s.lab,
+                                    type=s.case -> s.null, type
+           IF type=s.let THEN t:= symb=s.lparen -> s.proc, s.let
+           word := name+4
+           IF matchall | match(1,1) DO addref(t, name)
+           LOOP  $)
+    $)2
+
+    newline()
+    prtree(nametree)
+
+    writes("*N** - never used*N")
+    writes("*NKey to references in <lineno><type><fileno>:*N")
+    writes(" V - variable*N P - procedure*N L - label*N G - global*N")
+    writes(" M - manifest*N S - static*N F - FOR loop variable*N")
+    writef("*NSpace used %N*N", v+size-treep)
+$)1
+
+AND prtree(t) BE UNLESS t=0 DO
+$( prtree(t!1)
+   wrnameinfo(t)
+   prtree(t!2)  $)
+
+AND wrnameinfo(t) BE IF !t=s.name DO
+$(1 LET n = t+4
+    LET l = t!3
+    LET chp = n%0 + 3
+    LET declared, used = FALSE, FALSE
+
+    IF testflags(1) THEN quit(0)
+
+    UNTIL l=0 DO
+    $(
+       IF ((L!1)&#7)=0 THEN DECLARED := TRUE
+       IF ((l!1)&#70)=0 THEN used:=TRUE
+       l := !l
+    $)
+    UNLESS used /*in main file*/ RETURN
+    writef("%C %S ", (declared->'*S','**'), n)
+    UNTIL chp REM 7 = 5 & chp>=12 DO $( wrch('*S')
+                                        chp := chp+1  $)
+    l := t!3
+    UNTIL l=0 DO
+    $( LET a = l!1
+       LET ln, f, t = a>>6, (a>>3)&7, a&7
+       IF chp>=70 DO $( writes("*N            ")
+                        chp := 12  $)
+       writed(ln, 5)
+       TEST t=0 THEN wrch( f=0 -> '*S', ':' )
+       ELSE wrch( "VPLGMSF"%t )
+       TEST f=0 THEN wrch('*S') ELSE writed(f,1)
+       chp:=chp+7
+       l := !l
+    $)
+
+    newline()
+$)1
+
+AND error(mess) BE writef("Line %N %S*N", linecount, mess)
+
+AND match(p,s) =
+    s>word%0 -> (p>pattern%0 -> TRUE,
+                 pattern%p='**' -> match(p+1,s),
+                          FALSE),
+    p>pattern%0 -> FALSE,
+    pattern%p='**' ->
+       (match(p+1,s) -> TRUE,
+        match(p,s+1)),
+    ('a'<=word%s<='z' & pattern%p=word%s-'a'+'A') |
+                (pattern%p=word%s)  -> match(p+1,s+1),
+    FALSE
+
+AND start() BE
+$(1 LET v3 = VEC 20
+    LET argv = VEC 40
+    LET parm = ?
+
+    IF rdargs("from/a,to,opt/k",argv,40) = 0
+    THEN
+        $(
+        writes("Invalid args to XREF*N")
+        stop(20)
+        $)
+
+    parm := (argv!2 = 0 -> "", argv!2)
+
+    getv, getp, gett := v3, 0, 20
+
+    pattern := "**"
+    IF parm%0>0 THEN pattern := parm
+    IF parm%(parm%0)='*N' THEN parm%0:=parm%0-1
+    FOR i=1 TO pattern%0 DO
+     IF 'a'<=pattern%i<='z' THEN pattern%i:=pattern%i-'a'+'A'
+    writes("BCPL cross referencer")
+    TEST pattern%0=1 & pattern%1='**'
+    THEN matchall:=TRUE
+    ELSE writef(". Pattern=%S", pattern)
+    writes("*N*N")
+
+    sourcestream := findinput(argv!0)
+    IF sourcestream=0 THEN
+        $(
+        writef("Can't open %S*N", argv!0)
+        quit(20)
+        $)
+    selectinput(sourcestream)
+
+    tostream := 0
+    UNLESS argv!1 = 0
+    THEN
+        $(
+        tostream := findoutput(argv!1)
+        IF tostream = 0
+        THEN
+            $(
+            writef("Can't open %S*N", argv!1)
+            quit(20)
+            $)
+        selectoutput(tostream)
+        $)
+
+    charv := getvec(256)     // used to hold strings 1 char/word
+    wordv := getvec(256/bytesperword)   // used for strings
+    workspace := getvec(wspacesize - 1)
+    IF workspace = 0 | charv=0 | wordv=0
+    THEN
+        $(
+        writes("Insufficient store*N")
+        quit(20)
+        $)
+
+    xref(workspace, wspacesize)
+    quit(0)
+
+$)1
+
+
+AND quit(code) BE
+    $(
+    || Tidies up and stops
+    UNLESS workspace = 0 freevec(workspace)
+    UNLESS sourcestream = 0 endread()
+    UNLESS tostream = 0 endwrite()
+    stop(code)
+    $)
+
+

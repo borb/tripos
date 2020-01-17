@@ -1,0 +1,334 @@
+SECTION "DISMOUNT"
+
+GET     "LIBHDR"
+GET     "IOHDR"
+GET     "MANHDR"
+
+GLOBAL
+$(
+   info       : ug +  0      // info vector
+   dev.res    : ug +  1      // resident devices
+   dev1       : ug +  2      // device one number
+   dev2       : ug +  3      // device two number
+   hand.res   : ug +  6      // resident handler
+   hand       : ug +  7      // handler task number
+   file       : ug + 14      // mount info file
+   stream     : ug + 15      // mount info file stream
+   name       : ug + 16      // moune info file name
+   word       : ug + 17      // result of rdword
+   num.dev    : ug + 19      // number of devices
+   task       : ug + 24      // new handler task
+$)
+
+MANIFEST
+$(
+
+   devinfo.dev     = 0
+   devinfo.cnt     = 2
+
+   handinfo.seg    = 1
+   handinfo.cnt    = 2
+$)
+
+LET start () BE
+$(
+   LET v1    = VEC 30 / bytesperword
+   LET v2    = VEC 50
+   LET argv  = VEC 20
+   LET size  = 0
+
+   info       := rootnode ! rtn.info
+   file       := "SYS:INFO.MOUNT"
+   stream     := 0
+   name       := v1
+   word       := v2
+   dev1       := 0
+   dev2       := 0
+   hand       := 0
+
+   IF rdargs ( "DEV/A,FROM/K", argv, 20 ) = 0 THEN
+      error("Bad args*N")
+
+   UNLESS splitname ( name, ':', argv ! 0, 1 ) = argv ! 0 % 0 + 1 DO
+          error ( "Invalid device name %S*N", argv ! 0 )
+
+   UNLESS devicetask ( argv ! 0 ) \= 0 DO
+          error ( "Device is not mounted*N" )
+
+   IF argv ! 1 \= 0 THEN file := argv ! 1
+
+   stream := findinput ( file )
+
+   IF stream = 0 THEN error ( "Failed to open %S*N", file )
+
+   // first the mount information file is searched for the requested
+   // and the device and handler numbers extracted
+
+
+   selectinput ( stream )
+
+   $(
+      LET ch  = 0
+      LET res = rdword ()
+
+      IF res < 0 THEN
+         error ( "Device %S: not recognised*N", name )
+
+      IF res > 0 THEN
+         IF compstring ( word, argv ! 0 ) = 0 THEN BREAK
+
+      ch := rdch () REPEATUNTIL ch = ';' | ch = endstreamch
+
+   $) REPEAT
+
+   rdword ()
+
+   TEST compstring ( "driver", word ) = 0
+   THEN
+     $(
+        rdword ()
+
+        TEST compstring ( "nonres", word ) = 0
+        THEN
+          $( // non-resident devices
+
+             checkword ( "devs" )
+
+             num.dev := rdnumb ()
+
+             SWITCHON num.dev INTO
+             $(
+                DEFAULT : error ( "Invalid number of devices*N" )
+
+                CASE 1  : dev1 := rdnumb ()
+
+                          ENDCASE
+
+                CASE 2  : dev1 := rdnumb ()
+                          dev2 := rdnumb ()
+
+                          ENDCASE
+             $)
+
+             checkword ( "file" ) ; rdword ()
+
+             IF num.dev = 2 THEN rdword ()
+             dev.res := FALSE
+          $)
+        ELSE
+          $( // resident devices
+
+             checkword ( "devs" )
+
+             num.dev := rdnumb ()
+
+             UNLESS 1 <= num.dev <= 2 DO
+                    error ( "Invalid number of devices*N" )
+
+             dev1    := rdnumb ()
+
+             IF num.dev = 2 THEN dev2 := rdnumb ()
+
+             dev.res := TRUE
+        $)
+
+        rdword ()
+     $)
+   ELSE num.dev := 0
+
+   UNLESS compstring ( "handler", word ) = 0 DO
+               error ( "word *"handler*" expected but %S found*N", word )
+
+   rdword ()
+
+   hand.res := TRUE
+
+   IF compstring ( "nonres", word ) = 0 THEN
+   $(
+      checkword ( "file" ) ; rdword ()
+
+      hand.res := FALSE
+   $)
+
+   checkword ( "hand" ) ; hand := rdnumb ()
+
+   endread ()
+
+   stream := 0
+
+   // at this stage
+   // dev.res      -> resident, non-resident
+   // dev1         -> device one offset into device info vector
+   // dev2         -> device two .....
+   // hand.res     -> resident, non-resident
+   // hand         -> handler offset into handler info vector
+
+   task := devicetask ( argv ! 0 )
+
+   IF sendpkt ( notinuse, task, action.die, ?, ? ) = 0 THEN
+      error ( "Dismount failed*N" )
+
+   $(
+      LET lv.alist = info + info.assignments
+
+      UNTIL ! lv.alist = 0 |
+              compstring ( name, ! lv.alist + ass.name ) = 0
+         DO
+            lv.alist := ! lv.alist
+
+      TEST ! lv.alist = 0
+      THEN
+           error ( "Bungle - assignment not found !!*N" )
+      ELSE
+        $(
+           LET avec = ! lv.alist
+
+           ! lv.alist := !! lv.alist
+
+           freevec ( avec )
+        $)
+   $)
+
+   UNLESS num.dev = 0 DO
+   $(
+      unloaddev ( dev1 )
+
+      IF num.dev = 2 THEN unloaddev ( dev2 )
+   $)
+
+   unloadhand ( hand )
+
+   stop ( 0 )
+$)
+
+
+AND rdword () = VALOF
+$(
+   MANIFEST $( max = 51 * bytesperword - 1 $)
+
+   LET ch, len = 0, 0
+
+   $(
+      ch := rdch ()
+
+      IF ch = endstreamch RESULTIS -1
+
+      IF ch = '|' DO
+         ch := rdch () REPEATUNTIL
+                       ch = '*E' | ch = '*N' | ch = ';' | ch = endstreamch
+
+   $) REPEATWHILE ch = '*E' | ch = '*N' | ch = '*S'
+
+   $(
+      IF ch = endstreamch THEN RESULTIS -1
+
+      IF ch = ';' THEN BREAK
+
+      len := len + 1
+
+      IF len > max THEN
+         formerror ( "word too long", file )
+
+      word % len := ch
+      word % 0   := len
+      ch         := rdch ()
+
+   $) REPEATUNTIL ch = '*E' | ch = '*N' | ch = '*S' | ch = ';'
+
+   unrdch ()
+
+   RESULTIS len
+$)
+
+
+AND rdnumb () = VALOF
+$(
+   LET res = rdword ()
+   LET num = 0
+   LET neg = FALSE
+
+   UNLESS res > 0 DO
+          formerror ( "number expected", file )
+
+   FOR pos = 1 TO word % 0 DO
+   $(
+      LET ch = word % pos
+
+      IF ch = '-' & pos = 1 THEN
+      $(
+         neg := TRUE
+
+         LOOP
+      $)
+
+       UNLESS '0' <= ch <= '9' DO
+              formerror ( "invalid number", file )
+
+      num := num * 10 + ch - '0'
+   $)
+
+   IF neg THEN num := - num
+
+   RESULTIS num
+$)
+
+
+AND error ( f, a, b ) BE
+$(
+   writef ( f, a, b )
+
+   UNLESS stream = 0 DO
+   $(
+      selectinput ( stream )
+      endread     ()
+   $)
+
+   stop ( 20 )
+$)
+
+
+AND unloaddev ( num ) BE
+$(
+   LET lvslot = info ! info.devices + num
+   LET infov  = ! lvslot
+
+   infov ! devinfo.cnt := infov ! devinfo.cnt - 1
+
+   IF NOT dev.res & infov ! devinfo.cnt = 0 THEN
+   $(
+      unloadseg ( deletedev ( infov ! devinfo.dev ) )
+      freevec   ( infov )
+      ! lvslot := 0
+   $)
+$)
+
+
+AND unloadhand ( num ) BE
+$(
+   LET lvslot = info ! info.handlers + num
+   LET infov  = ! lvslot
+
+   infov ! handinfo.cnt := infov ! handinfo.cnt - 1
+
+   IF NOT hand.res & infov ! handinfo.cnt = 0 THEN
+   $(
+      unloadseg ( infov ! handinfo.seg )
+      freevec   ( infov )
+      ! lvslot := 0
+   $)
+$)
+
+
+AND formerror ( s ) BE
+    error ( "Error in %S - %S*N", file, s )
+
+
+AND checkword ( string ) BE
+$(
+   rdword ()
+
+   UNLESS compstring ( word, string ) = 0 DO
+          error ( "*"%S*" expected but not found*N", string )
+$)
+
+

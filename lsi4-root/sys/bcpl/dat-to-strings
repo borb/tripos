@@ -1,0 +1,121 @@
+// (C) Copyright 1979 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "DATSTR"
+
+GET "LIBHDR"
+
+LET start(datv, v) = VALOF
+    $(
+    // Returns v containing 3 strings representing the
+    // time and date given in datv, where
+    // datv!0 = days, datv!1 = mins, datv!2 = ticks.
+    // On return, v contains a the date in the form
+    // DD-MMM-YY, v+5 contains the time in the format
+    // HH:MM:SS, and V+10 contains the day of the week.
+    // Vector v should have an upperbound of 14
+    // If the date is unset (days = 0) then the strings
+    // are all set to "<unset>"
+
+    LET days,  mins,  ticks = datv!0, datv!1, datv!2
+    LET datestr, timestr, dowstr = v, v+5, v+10
+    LET dayofweek = days REM 7
+    LET unset.string = "<unset>"
+    LET invalid.string = "<invalid>"
+    LET dowtemp = ?
+    LET year = 78 // Base year
+    LET month = 1
+    LET hours, secs = ?, ?
+    LET monthtab = TABLE 0,31,59,90,120,151,181,
+                         212,243,273,304,334,365
+    LET leapmonthtab = TABLE 0,31,60,91,121,152,182,
+                             213,244,274,305,335,366
+    LET mchars = "JanFebMarAprMayJunJulAugSepOctNovDec"
+    LET mcharbase = ?
+    LET mtable = ?
+
+    // Deal with case of unset or invalid date
+
+    UNLESS (days > 0) & (0 <= mins < 1440) & (0 <= ticks < tickspersecond*60)
+    THEN
+      $(
+      LET err.string = days=0 -> unset.string, invalid.string
+
+      FOR z=0 TO err.string%0
+      DO $(
+         LET c = err.string%z
+         datestr%z := c
+         timestr%z := c
+         dowstr%z  := c
+         $)
+      RESULTIS v
+      $)
+
+
+
+    days := days + 1
+    FOR j=0 TO 9 DO datestr%j := "DD-MMM-YY"%j
+    FOR j=0 TO 8 DO timestr%j := "HH:MM:SS"%j
+
+    // Construct date
+
+    $( // Loop to get year
+    LET yearlen = (year REM 4)=0 -> 366, 365
+    IF (days > 0) & (days <= yearlen) THEN BREAK
+    days, year := days - yearlen, year + 1
+    $) REPEAT
+
+    IF year > 99 THEN year := year - 100
+    datestr%8 := year/10 + '0'
+    datestr%9 := year REM 10 + '0'
+
+    // Find month
+    mtable := (year REM 4)=0 -> leapmonthtab, monthtab
+
+    $(
+    IF days <= mtable ! month THEN BREAK
+    month := month + 1
+    $) REPEAT
+
+    mcharbase := month*3 - 2
+    FOR j=0 TO 2
+    DO datestr%(4+j) := mchars % (mcharbase + j)
+    days := days - mtable ! (month - 1)
+    datestr%1 := days/10 + '0'
+    datestr%2 := days REM 10 + '0'
+
+    // Construct time
+
+    hours := mins/60
+    mins := mins REM 60
+    secs := ticks / tickspersecond
+
+    timestr%1 := hours/10 + '0'
+    timestr%2 := hours REM 10 + '0'
+    timestr%4 := mins/10 + '0'
+    timestr%5 := mins REM 10 + '0'
+    timestr%7 := secs/10 + '0'
+    timestr%8 := secs REM 10 + '0'
+
+    // Get day of week
+
+    dowtemp := VALOF
+    SWITCHON dayofweek
+    INTO
+        $(
+        CASE 0: RESULTIS "Sunday"
+        CASE 1: RESULTIS "Monday"
+        CASE 2: RESULTIS "Tuesday"
+        CASE 3: RESULTIS "Wednesday"
+        CASE 4: RESULTIS "Thursday"
+        CASE 5: RESULTIS "Friday"
+        CASE 6: RESULTIS "Saturday"
+        $)
+
+    FOR j=0 TO dowtemp%0 DO dowstr%j := dowtemp%j
+
+    RESULTIS v
+    $)
+
+

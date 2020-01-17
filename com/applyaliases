@@ -1,0 +1,89 @@
+AND applyaliases( listptr )  BE
+$(
+//  Go through the currently selected stream, applying aliases for the
+//  list of recipients pointed to by "listptr".
+
+    LET args    =  "BEFORE/A,AFTER/A"
+    LET argv    =  VEC 50
+
+    LET ptr     =  0
+    LET pptr    =  0
+    LET before  =  0
+    LET after   =  0
+
+    LET ch      =  rdch()
+
+    //  Read the first character of the line, looking for blank lines or
+    //  comments.
+
+    WHILE  ch = '*S'  |  ch = '*T'  DO  ch  :=  rdch()
+
+    IF  ch = endstreamch  THEN  RETURN
+    IF  ch = '*N'         THEN  BREAK
+    
+    IF  ch = '**'  THEN
+    $(
+        //  Comment line, so skip the rest of it.
+
+        UNTIL  ch = '*N'  |  ch = endstreamch  DO  ch  :=  rdch()
+        
+        LOOP
+    $)
+
+    //  Otherwise, we should attempt to do the alias mapping.
+
+    unrdch()
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        //  Failed to parse the line, so put out a message, and go on to the
+        //  next line in the file.
+        
+        message( "ALIAS file  -  bad syntax for *"%S*"", args )
+        
+        LOOP
+    $)
+
+    //  If we drop through here, then we have managed to pare the line of the
+    //  file, and so we should scan the list of recipients, looking to see if
+    //  any one matches.
+
+    before  :=  argv!0
+    after   :=  argv!1
+    
+    pptr    :=  listptr
+    ptr     :=  !pptr
+    
+    UNTIL  ptr = NIL  DO
+    $(
+        //  Compare the "before" string with the item in the list, and if we
+        //  match properly, then replace the string with the "after" string.
+        
+        IF  compstring( before, ptr+r.buffer ) = 0  THEN
+        $(
+            //  Allocate a new recipient buffer, and chain it into the list.
+            
+            recipient         :=  getstore( r.size )
+            rbuffer           :=  recipient + r.buffer
+            rlength           :=  0
+            
+            FOR  i = 1  TO  after % 0  DO  addtobuffer( after % i )
+            
+            recipient!r.link  :=  ptr!r.link
+            pptr!r.link       :=  recipient
+            ptr               :=  recipient
+        $)
+        
+        //  Whatever else, chain down to the next item, and look to see if we 
+        //  can apply the alias there.
+        
+        pptr  :=  ptr
+        ptr   :=  ptr!r.link
+    $)
+$)
+REPEAT
+
+
+
+
+

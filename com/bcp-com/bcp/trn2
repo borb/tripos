@@ -1,0 +1,278 @@
+SECTION "TRN2"
+
+GET "TRNHDR"
+
+LET trans(x) BE UNTIL x=0 DO
+$(t //                          LET sw = FALSE
+    comcount := comcount+1
+    currentbranch := x
+
+$<OPB
+    IF ((h1!x) & becomesbit) NE 0 THEN
+    $( set.line(h4, x)
+        //linecount := h4!x
+        //IF linecount<0 THEN linecount, Source.name := -linecount, x!h5
+       assign(h2!x, h3!x, (h1!x)&\becomesbit)
+       RETURN
+    $)
+$>OPB
+
+    SWITCHON h1!x INTO
+$(  DEFAULT:                                            transreport(98, x)
+        ENDCASE
+
+    CASE s.info:
+//      set.line(h1, x)
+        linecount       := h1!x
+        Source.name     := h2!x
+        ENDCASE
+
+    CASE s.let:
+     $( LET a, s, v = dvece, ssp, vecssp
+        declnames(h2!x)
+        checkdistinct(a, dvece)
+        vecssp := ssp
+        $(  LET s1 = ssp
+            ssp := s
+            transdef(h2!x)
+            indent.do(1)
+            listnames(a)
+            UNLESS ssp=s1 DO                            transreport(110, x)
+        $)
+        UNLESS ssp=vecssp DO $( ssp := vecssp; out2(s.stack, ssp) $)
+        out1(s.store)
+        decllabels(h3!x)
+        trans(h3!x)
+        indent.do(-1)
+        vecssp := v
+        UNLESS ssp=s DO out2(s.stack, s)
+        dvece, ssp := a, s
+        ENDCASE   $)
+
+    CASE s.static:
+    CASE s.global:
+    CASE s.manifest:
+     $( LET a, s = dvece, ssp
+        $(  LET op = h1!x
+            LET list = h2!x
+            LET p = list + 2
+            IF op=s.manifest DO op := s.number
+            FOR i = 0 TO h2!list-1 BY 2 DO
+            $(  LET name = p!i
+                LET k = evalconst(p!(i+1), TRUE)
+
+                TEST op=s.static
+                $(  LET m = nextparam()
+                    addname(name, s.label, m)
+                    compdatalab(m)
+                    out2(s.itemn, k)
+                $)
+                ELSE addname(name, op, k)
+            $)
+        $)
+
+        decllabels(h3!x)
+        listnames(a)
+        trans(h3!x)
+        dvece, ssp := a, s
+        ENDCASE
+     $)
+
+
+    CASE s.ass:
+        set.line(h4, x)
+        //linecount:=h4!x
+        //IF linecount < 0 THEN Linecount, Source.name := -Linecount, x!h5
+        assign(h2!x, h3!x, s.stind)
+        ENDCASE
+
+    CASE s.rtap:
+     $( LET s = ssp
+        ssp := ssp+savespacesize
+        out2(s.stack, ssp)
+        loadlist(h3!x)
+        load(h2!x, TRUE)                                                //WELL??
+        out2(s.rtap, s)
+        ssp := s
+        ENDCASE  $)
+
+    CASE s.goto:
+        set.line(h3, x)
+        //linecount:=h3!x
+        //IF linecount < 0 THEN Linecount, Source.name := -Linecount, x!h4
+        load(h2!x, TRUE)                                                //WELL??
+        out1(s.goto)
+        ssp := ssp-1
+        ENDCASE
+
+    CASE s.colon:
+        complab(h4!x)
+        comcount := comcount-1
+        x := h3!x;      LOOP
+//        trans(h3!x)
+//        ENDCASE
+
+    CASE s.unless:
+//        sw := TRUE
+    CASE s.if:
+     $( LET l = nextparam()
+        set.line(h4, x)
+        //linecount:=h4!x
+        //IF linecount < 0 THEN Linecount, Source.name := -Linecount, x!h5
+        jumpcond(h2!x, h1!x=s.unless, l)
+        trans(h3!x)
+        complab(l)
+        ENDCASE   $)
+
+    CASE s.test:
+        set.line(h5, x)
+        //linecount:=h5!x
+        //IF linecount < 0 THEN Linecount, Source.name := -Linecount, x!h6
+        $(  LET m = nextparam()
+            $(  LET l = nextparam()
+                jumpcond(h2!x, FALSE, l)
+                trans(h3!x)
+                compjump(m)
+                complab(l)
+            $)
+            trans(h4!x)
+            complab(m)
+            ENDCASE
+        $)
+
+    CASE s.loop:
+        IF looplabel<0 DO                       transreport(102, x)
+        IF looplabel=0 DO looplabel := nextparam()
+        compjump(looplabel)
+        ENDCASE
+
+    CASE s.break:
+        IF breaklabel<0 DO                      transreport(103, x)
+        IF breaklabel=0 DO breaklabel := nextparam()
+        compjump(breaklabel)
+        ENDCASE
+
+    CASE s.return:
+        UNLESS resultlabel<0 | (STFLAGS & stf.nowarn) ~= 0
+                        DO                      transreport(89, x)
+        out1(s.rtrn)
+        ENDCASE
+
+    CASE s.finish:
+        out1(s.finish)
+        ENDCASE
+
+    CASE s.resultis:
+        set.line(h3, x)
+        //linecount:=h3!x
+        //IF linecount < 0 THEN Linecount, Source.name := -Linecount, x!h4
+        IF resultlabel<0 DO                     transreport(104, x)
+        load(h2!x, TRUE)                                                //WELL??
+        out2(s.res, resultlabel)
+        ssp := ssp - 1
+        ENDCASE
+
+    CASE s.while:
+//        sw := TRUE
+    CASE s.until:
+        set.line(h4, x)
+     $( LET l, m = nextparam(), nextparam()
+        LET bl, ll = breaklabel, looplabel
+        //linecount:=h4!x
+        //IF linecount < 0 THEN Linecount, Source.name := -Linecount, x!h5
+        breaklabel, looplabel := 0, m
+
+        compjump(m)
+        complab(l)
+        trans(h3!x)
+        complab(m)
+        jumpcond(h2!x, h1!x=s.while, l)
+        UNLESS breaklabel=0 DO complab(breaklabel)
+        breaklabel, looplabel := bl, ll
+     $)
+     ENDCASE
+
+    CASE s.repeatwhile:
+//        sw := TRUE
+    CASE s.repeatuntil:
+    CASE s.repeat:
+     $( LET l,bl,ll = nextparam(),breaklabel,looplabel
+        breaklabel, looplabel := 0, 0
+        complab(l)
+        TEST h1!x=s.repeat
+        THEN $( looplabel := l; trans(h2!x); compjump(l) $)
+        ELSE
+        $( trans(h2!x);
+           UNLESS looplabel=0 DO complab(looplabel);
+           jumpcond(h3!x, h1!x=s.repeatwhile, l)
+        $)
+        UNLESS breaklabel=0 DO complab(breaklabel)
+        breaklabel, looplabel := bl, ll
+        ENDCASE
+     $)
+
+    CASE s.case:
+     $( LET l, k = nextparam(), evalconst(h2!x, FALSE)
+        IF casep>=caset DO                      transreport(-141, TRN.SW.SPACE)
+        IF caseb<0 DO                           transreport( 99, x)
+        FOR i = caseb TO casep-1 DO IF casek!i=k DO transreport(106, k)
+        casek!casep := k
+        casel!casep := l
+        casep := casep + 1
+        complab(l)
+        x := h3!x;      LOOP
+//        trans(h3!x)
+//        ENDCASE
+     $)
+
+    CASE s.default:
+        IF caseb<0 DO                           transreport(100, x)
+        UNLESS defaultlabel=0 DO                transreport(101, x)
+        defaultlabel := nextparam()
+        complab(defaultlabel)
+        x := h2!x;              LOOP
+//        trans(h2!x)
+//        ENDCASE
+
+    CASE s.endcase:
+        IF caseb<0 DO                           transreport(105, x)
+        compjump(endcaselabel)
+        ENDCASE
+
+    CASE s.switchon:
+        set.line(h4, x)
+        //linecount:=h4!x
+        //IF linecount < 0 THEN Linecount, Source.name := -Linecount, x!h5
+        transswitch(x)
+        ENDCASE
+
+    CASE s.for:
+        transfor(x)
+        ENDCASE
+
+    CASE s.semicolon:
+        comcount := comcount-1
+        trans(h2!x)
+        x := h3!x;      LOOP
+        //trans(h3!x)
+        //ENDCASE
+
+    CASE s.semicolonlist:
+        comcount := comcount - 1
+        FOR h = 2 TO h2!x+1 DO trans(h!x)
+        ENDCASE
+$)
+        RETURN
+$)t
+
+AND set.line(h1, x) BE IF line.info     // ALSO rtdef AND fndef IN trn3
+$( linecount:=h1!x
+   UNLESS (stflags & stf.debug) = 0
+   $(   LET o = output()
+        SELECTOUTPUT(LISTOUT); WRITEF("<l%N>", linecount); selectoutput(o)
+   $)
+   IF linecount < 0 THEN Linecount, Source.name := -Linecount, x!(h1+1)
+$)
+.
+
+

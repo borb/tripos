@@ -1,0 +1,828 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                           DEBUG68                           DEBUG68
+
+
+   An Interactive Debugger for the MC68000 Microprocessor   An Interactive Debugger for the MC68000 Microprocessor
+
+
+
+
+              Specification (9th November 1982)              Specification (9th November 1982)
+
+
+                        Version 5.70                        Version 5.70
+
+
+
+
+
+
+
+
+
+
+
+
+I. D. Wilson
+Computer Laboratory
+Corn Exchange Street
+Cambridge  CB2 3QG
+
+Telephone:  (0223) 352435  Ext. 265
+
+
+
+
+
+
+
+
+IntroductionIntroduction
+
+   DEBUG68 is an interactive teaching debugger for the
+Motorola MC68000 microprocessor. It was developed in
+conjunction with M68KASM, the MC68000 assembler, and
+facilities have been provided to aid the passing of source
+information to the program being debugged. DEBUG68 runs under
+the TRIPOS operating system, and hence is not protected from
+the runaway assembler program. Because of this, it is
+advisable to trace the execution of the program initially, to
+aid in the early detection of errors.
+
+   DEBUG68 is a run time monitor as well as a program
+debugger, providing privileged I/O and timing facilities for
+the novice programmer. Because single character I/O is
+supported, DEBUG68 must by-pass the standard TRIPOS console
+handler, so the user may experience changes in response time
+to the typing of characters, and in the handling of certain
+escape sequences. Any reports of bugs, or general comments on
+DEBUG68 should be sent to the author at the Computer
+Laboratory, Room 205 (ext 265).
+
+
+Running the DebuggerRunning the Debugger
+
+   To run DEBUG68, the command and arguments string is:
+
+          DEBUG68  "FILE/A,LOG/K,RUN/S"
+
+   where "FILE" is the file name of the object module of the
+program to be debugged, "LOG" is the name of a file to which a
+carbon copy log of the debug session is sent, is and "RUN" is
+a switch which, if set, runs DEBUG68 as a monitor only. The
+file must be a TRIPOS binary object module, as produced by
+M68KASM, the MC68000 Assembler, and must be absolute code,
+ORGed at address $2000.
+
+
+Input to the DebuggerInput to the Debugger
+
+   When DEBUG68 is used as a debugger rather then a monitor,
+it will sign on with a logon message and then the prompt
+character "-", indicating that it is ready to accept input.
+This prompt is used throughout the debugging session to
+indicate that user input is required, and will be given
+whenever an error is detected in the running program, in which
+case it is preceded by a register dump. Input to the debugger
+takes one of two forms, depending on the first item on the
+input line, and a description of each is found in the
+following sections.
+
+
+Expression EvaluationExpression Evaluation
+
+   The debugger can be used as an expression evaluator, in
+that general expressions involving numbers (including ASCII
+literals), variables, registers, operators and parentheses,
+can be entered, and the result will be displayed.
+
+                            - 1 -   NUMBERS take the same syntax as for the Assembler, and have   _______
+the following formats:
+
+     Decimal   (a string of decimal digits)     _______
+          Example:  1234
+
+     Hexadecimal   ("$" followed by a string of hex digits)     ___________
+          Example:  $89AB
+
+     ASCII Literal   (Up to 4 ASCII characters within quotes)     _____________
+          Examples:  'ABCD'   '*'   'I''ll'
+
+
+   VARIABLES are the names of user defined symbols which can   _________
+be used to store intermediate values during the debugging
+process. Variables must start with an alphabetic character
+("A"-"Z" or "@"), but the rest can be alphabetic (as before),
+numeric ("0"-"9"), or the underline character ("_"). The lower
+case characters ("a"-"z") are treated as synonymous with their
+upper case equivalents. The command names and register names
+are reserved words, and hence cannot be used as variable
+names.
+
+     Examples:    FRED   artichoke_123   @gorilla
+
+
+   The OPERATORS available are the same as in the Assembler.       _________
+In DEBUG68 though, all operators have the same precedence, and
+expressions are evaluated in a left-to-right order.
+Parentheses can be used to override the order of evaluation,
+but since the majority of calculations are simple in nature,
+they should not often be needed. Operators available are:
+
+          + -       Monadic and Diadic Plus/Minus
+          *         Multiply
+          /         Divide
+          &         Logical And
+          !         Logical Or
+          <<        Left Shift
+          >>        Right Shift
+
+     Examples:  D0&$FF    (1*2)+(3*4)
+
+   As well as the symbols described above, there are two other
+SPECIAL symbols, which can be used in the evaluation process.
+The star symbol "*" is synonymous with PC, and is value of the
+current program counter. The period symbol "." contains the
+value of the CURRENT LOCATION, which is initially set to the
+value of the program counter, but can be altered by certain
+commands (see later).
+
+
+
+
+
+
+
+
+
+                            - 2 -DEBUG68 as a CalculatorDEBUG68 as a Calculator
+
+   As described in the previous section, DEBUG68 can be used
+to evaluate expressions while the debugging is in progress.
+DEBUG68 parses the command line by inspecting the first item
+on it, and if this is a recognised command, executing it. If
+the item is not a command, then it is treated as the first
+part of a general expression, which is then read, evaluated,
+and the result printed. An optional equals sign "=" can be
+used to terminate the expression, and cause the printing of
+the result.
+
+   The result is printed in one of three styles: Decimal,
+Hexadecimal or Character. At any time during the debugging
+process, there is the concept of a CURRENT STYLE, which is, on
+entry to DEBUG68, hexadecimal. The commands provided to change
+the current printing style are:
+
+          SH     Set current style to Hexadecimal
+          SD     Set current style to Decimal
+          SC     Set current style to Character
+
+   For example, if the instruction
+
+          MOVE.L   24(A0,D1.L),D2
+
+   is about to be executed, the effective address to be used
+for the first operand can be calculated easily by typing:
+
+          24+A0+D0=
+
+   which will cause the registers A0 and D0, and the decimal
+number 24 to be summed, and the result printed out in the
+current style.
+
+
+User VariablesUser Variables
+
+   Using the expression evaluation facility of the debugger is
+fine for simple applications, like the summing of two
+registers, or the converting of numbers between different
+styles. The values calculated in this manner are transitory,
+and are lost as soon as the result is printed. User variables
+are provided to allow the user to assign names to the values
+calculated, causing the results to be retained for later use.
+
+   The SET command is provided for this purpose, and the
+syntax of the command is as follows:
+
+          SET  variable         =         expression
+
+   which causes the expression to be evaluated, and its value
+to be assigned to the user variable.
+
+     Example:    SET EA = 24+A0+D1
+
+   To obtain the value of a user variable, the obvious command
+"<variable>=" can be used, but to obtain the values of all
+
+                            - 3 -user variables, the command VL is provided. The variables are
+listed in no particular order, with their values being printed
+in the current style.
+
+   If the "S" option of the assembler were used, the user
+symbols of the source code will appear as user variables in
+the debugging stage. This means that assembly time equates can
+be interrogated, and labels can be used instead of addresses
+when manipulating break points, or testing portions of the
+program in isolation.
+
+
+Commands to Display and UpdateCommands to Display and Update
+
+   DEBUG68 provides full facilities for the user to examine
+and update both store locations and registers. It also
+provides a dis-assembly facility to enable store locations to
+be displayed in intruction format. Because the MC68000 can
+handle Byte, Word and Long Word sized data, the commands to
+display and update store locations reflect this. The basic
+commands are: "L" to List, "D" to Display, and "W" to Write.
+The W and D commands can be qualified, to give more
+flexibility. The qualifiers are:
+
+          B       Byte sized data
+          W       Word sized data
+          L       Long Word sized data
+          R       Register
+
+
+   The format of the LIST command is:
+
+          L             addr1           ,addr2  
+
+   The address "addr1" is the first address to be listed, and
+if omitted, the default of the current location is used. The
+address "addr2" is the last address to be listed. (If "addr2"
+is omitted, then as many locations as will fit onto the VDU
+page are listed). After listing, the value of the current
+location is set to the address of the last instruction listed,
+so that if "L" is typed again, listing starts where it left
+off.
+
+     Examples:    L
+                  L    $2000
+                  L    fred,fred+20
+                  L    ,.+100
+
+
+   The format of the DISPLAY commands is:
+
+          D     q               addr1           ,       addr2           
+          DR            reg     
+
+   The qualifier "q" can be one of "B", "W" or "L", and if
+omitted, the default of "W" is used. The address "addr1" is
+the first address to be displayed, and if omitted, the default
+of the current location is used. The address "addr2" is the
+
+                            - 4 -last address to be displayed, and if omitted, the default of
+"addr1" is used. (If addr2 is omitted, but the comma is
+present, then as many locations as will fit onto the VDU page
+are displayed). After displaying, the value of the current
+location is set to the address of the last location displayed.
+
+    Examples:    D
+                 DL    $2000,
+                 DB    *,*+10
+                 DW    ,$2100
+                 DL    fred
+
+   With the DR (display register) form of the instruction, if
+the register "reg" is given, then that register is displayed,
+otherwise the entire register map is printed.
+
+     Examples:    DR
+                  DR    D0
+                  DR    CCR
+
+
+   The commands to update store locations and registers are
+analagous to their "display" counterparts, in that the whole
+command is made up of the basic command "W", and optionally
+one of the qualifiers mentioned above.
+
+   The format of the WRITE command is:
+
+          W     q               addr            data            data            data     ...
+          WR      reg           data    
+
+   There are two modes of operation for the write command,
+depending on whether the data to be written is given on the
+command line or not.
+
+   For the "write to memory" command, if the replacement data
+is given, then it is assumed to be of the size given by the
+qualifier "q" (word by default), and the words of data are
+written to consecutive store locations, starting at address
+"addr", with the current location being updated with the
+address of the last location written to. If the replacement
+data is not given, then the location given by "addr" (or the
+current location, if "addr" is omitted) is opened, and the
+contents are printed out in the current style. The contents of
+this location can now be changed by typing a replacement value
+in response to the prompt. Typing <RETURN> causes the location
+to be closed unchanged, and the next one to be opened. This
+allows the user to step though memory, updating selected
+locations interactively. Typing <ESC> causes the location to
+be closed, and the write command to be terminated.
+
+   Similarly for the "write to register" command, if the
+replacement data is given, then it is written to the register
+given by "reg". If not, then the register is opened, and the
+contents are printed out in the current style. The contents of
+the register can be changed by typing a new value here. Typing
+<RETURN> causes the register to remain unchanged.
+
+
+                            - 5 -   Registers are always assumed to be long word sized, and
+hence the replacement value always fills the whole register.
+The exception to this is the condition code register "CCR",
+which is only byte sized. Even when writing to the word sized
+status register, only the bottom 8 bits (the CCR) are updated.
+
+   When writing to memory with byte sized data, the user may
+specify a replacement value in the form of a string. The
+syntax of the string is identical to that of the ASCII
+Literal, except that it can be of arbitrary length.
+
+     Examples:    W
+                  WB    .       100
+                  WW    $2000
+                  WL    fred    1 2 3 4 5 6
+                  WB    *+20    'This is a string'
+
+                  WR    D0
+                  WR    A7      $2000+400
+
+
+Running a ProgramRunning a Program
+
+   Before running a user program, DEBUG68 initialises the
+stack pointer and program counter to their default values.
+These are $2800 (end of the user area) for the stack pointer,
+and $2000 (beginning of the user area) for the program
+counter. If the keyword "RUN" is specified when invoking
+DEBUG68 therefore, the program will start execution at this
+default entry point.
+
+   To run a program, the "GO" command must be used. The syntax
+of the GO command is:
+
+          GO            addr1           ,addr2  
+
+   The address "addr1" gives the address at which execution is
+to start, and if omitted, the default of the current PC value
+is taken. The address "addr2" is an optional termination
+address, and has the effect of placing a break point at this
+location. The break point remains until it has been hit, and
+then disappears. This means that a portion of the code can be
+executed by specifying the entry and exit addresses.
+
+    Examples:     GO
+                  GO        $2400
+                  GO        ,label
+                  GO        $2000,$2030
+
+   The GO command is designed to run portions of code which
+are known to work. Since TRIPOS is totally unprotected, it is
+not advisable to run untested pieces of code in this manner,
+but instead to single step through the program using the "T"
+(trace) instruction.
+
+
+
+
+
+                            - 6 -   The syntax of the T instruction is:
+
+          T             addr    
+
+   The address "addr" is the address of the location to be
+traced, and if omitted, the default of the current PC value is
+taken. The effect is to print out the instruction to be
+executed, execute it, and then return control to the debugger.
+DEBUG68 then enters "tracing" state, and the prompt changes to
+"*" to reflect this. When in tracing state, if <RETURN> is
+typed, DEBUG68 continues tracing, printing out and then
+executing a single instruction on every kek stroke. The user
+may exit from tracing state by typing anything other than
+<RETURN>, for example a DEBUG68 command, or <ESC>.
+
+   Should a program enter a loop, from which there is no
+normal return, typing "<BREAK> B", and responding "B" to the
+"***-" prompt, will cause the loop to be broken out of, just
+as if a break point were hit.
+
+
+Break PointsBreak Points
+
+   Break Points are used to halt program execution at
+specified locations, thus enabling machine state to be
+interrogated and changed. To set a break point, the command
+"BS" is used. The syntax of the BS command is:
+
+          BS      addr
+
+   The address "addr" is the location at which execution will
+stop. DEBUG68 responds to the BS command, with a break point
+NUMBER. From now on, this break point can be referred to,
+either by its number, or by the address "addr".
+
+     Examples:    BS       $2010
+                  BS       label
+
+   Up to 16 break points can be set within the program. When a
+break point is taken, control returns to the debugger, with
+the break point number and address printed out. At this point,
+DEBUG68 also searches the user symbol table for a name whose
+value is the address of the break point, and if it finds one,
+prints that out as well. (Note that nine times out of ten this
+name will be correct, but there is always the chance that it
+may be misleading). To continue after a break point, the GO or
+T commands can be used. The following group of commands are
+provided for manipulating break points:
+
+        BL                     List all break points
+        BD       bp            Disable break point
+        BE       bp            Enable break point
+        BC       bp            Clear break point
+        BDA                    Disable all break points
+        BEA                    Enable all break points
+        BCA                    Clear all break points
+
+
+
+                            - 7 -   In the commands above, the break point specifier "bp" can
+be either the break point address, or the hash "#" character,
+followed by the break point number.
+
+     Examples:    BL
+                  BD       label
+                  BE       #3
+                  BCA
+
+
+Saving a Memory ImageSaving a Memory Image
+
+   DEBUG68 provides a facility to save, and subsequently
+restore a debug session. All information is saved, including a
+memory dump of the user area, the values of the registers, the
+break points, and the state of the user clock. The syntax of
+the SAVE command is:
+
+          SAVE    file
+
+   The filename "file" is the name of a file in the TRIPOS
+filing system, to which the user has write access. To restore
+a debug session, just quote this filename as the input file
+when DEBUG68 is invoked.
+
+
+DEBUG68 Monitor FunctionsDEBUG68 Monitor Functions
+
+   DEBUG68, apart from being an interactive debugger, is also
+a simple monitor for small assembly code programs. Calls to
+the monitor are made via the TRAP instruction, with suitable
+arguments in registers D0 and D1. A header file containing the
+equates necessary for using the monitor functions can be
+obtained by inserting the line:
+
+              GET      "SLIB"
+
+   in the source program. The normal calling sequence is:
+
+              MOVE.L   argument,D0       User argument
+              MOVE.L   opcode,D1         Operation code
+              TRAP     #SYSTEM           Call the monitor
+              MOVE.L   D0,...            Result from call
+
+   The possible operation codes, and their effects are as
+follows:
+
+PCHAR    Print a single character to the console.
+
+             Argument:  Character
+             Result:    None
+
+
+
+
+
+
+
+
+                            - 8 -GCHAR    Get a single character from the console.  If
+         a character is available, then it is returned
+         immediately.  Otherwise GCHAR waits until a
+         character is typed. The character, when read,
+         is not reflected.
+
+             Argument:  None
+             Result:    Character
+
+
+ICHAR    Get a single character from the console, if one
+         is available.  If a character is available, then
+         it is returned.  If one is not available, then
+         the error code -1 is returned instead.
+
+             Argument:  None
+             Result:    Character (if present)
+                        -1        (otherwise)
+
+
+PREC     Print a buffered record.  The record pointed to by
+         the argument is printed out.  The record can be of
+         arbitrary length, and can contain any ASCII character
+         except NUL, which is used to terminate the record.
+         The record is printed out with no terminating CR/LF.
+
+             Argument:  Pointer to record
+             Result:    None
+
+
+GREC     Get a buffered record. The prompt ":" is printed out,
+         and a record is read from the console.  GREC performs
+         line-editing functions on the record as it is read,
+         reflecting all characters as they are typed. The
+         buffer must be at least 80 bytes long, and on return
+         will contain the characters read in, terminated by
+         the NUL character.
+
+             Argument:  Pointer to buffer
+             Result:    None
+
+
+SETCLOCK Set the address of the clock interrupt handler.
+         The address given as the argument is taken as the
+         entry point of the clock interrupt handling routine.
+         SETCLOCK will fail if the clock is currently on.
+
+             Argument:  Address of interrupt handler
+             Result:    None
+
+
+
+
+
+
+
+
+
+
+                            - 9 -CLOCKON  Enable clock interrupts. The argument is taken as
+         the interval between clock interrupts, in multiples
+         of half a second. CLOCKON will fail if the clock is
+         currently on, or there is no interrupt handler.
+
+             Argument:  Interrupt interval
+             Result:    None
+
+
+CLOCKOFF Disable clock interrupts.  CLOCKOFF will fail if the
+         is not currently on.
+
+             Argument:  None
+             Result:    None
+
+
+RETURN   Return to DEBUG68. If the "RUN" option were used,
+         then this will cause a return to the TRIPOS command
+         line interpreter.  Otherwise, a message is printed
+         out, and DEBUG68 is re-entered.
+
+             Argument:  None
+             Result:    Never returns
+
+
+ERETURN  Return to DEBUG68, flagging an error. The argument
+         is taken as an error code, and is printed out in
+         decimal and hexadecimal. DEBUG68 is then re-entered.
+
+             Argument:  Error code
+             Result:    None
+
+
+   Soft clock interrupts appear to the programmer exactly the
+same as real interrupts would, i.e. on interrupt, the program
+counter and status register are stacked, and control is passed
+to the interrupt handler. There is however one major
+difference: the entire user program is run in USER state,
+including the interrupt handler. This means that, since the
+RTE instruction is privileged, it cannot be used for returning
+from the interrupt handler, and so the unprivileged RTR
+instruction must be used instead.
+
+   Note that, as with real interrupts, only PC and SR are
+saved by the system, and it is the responsibility of the user
+to save and restore any other registers which may be changed
+in the interrupt handler.
+
+
+
+
+
+
+
+
+
+
+
+
+                            - 10 -Example SessionExample Session
+
+
+BLACK-1> input to program         input to program
+        TTL     ****  Example program for DEBUG68  ****
+
+        GET     "SLIB"
+        ORG     $2000
+
+CR      EQU     $0D                     ASCII Carriage return
+LF      EQU     $0A                     ASCII Line Feed
+NUL     EQU     $00                     ASCII NUL character
+
+START   MOVE.L  #MSG1,D0                Address of record
+        MOVE.L  #PREC,D1                Opcode
+        TRAP    #SYSTEM                 Write out the message
+
+        MOVE.L  #10,D7                  Loop count
+
+LOOP    MOVE.L  #'*',D0                 Char to be printed
+        MOVE.L  #PCHAR,D1               Opcode
+        TRAP    #SYSTEM                 Write the character
+        SUBQ.L  #1,D7                   Decrement loop count
+        BNE     LOOP                    Loop until finished
+
+        MOVE.L  #RETURN,D1              Opcode
+        TRAP    #SYSTEM                 Return
+
+MSG1    DC.B    'DEBUG68 test starting',CR,LF,NUL
+
+        END
+/*
+BLACK-1>
+BLACK-1> asm program to object opt=s         asm program to object opt=s
+MC68000 Macro Assembler  Version 8.146
+
+No errors found in this Assembly
+
+Assembly Statistics  (Words)
+
+           Absolute   Relocatable
+Code           18           0
+Reloc   16            0           0
+        32            0           0
+
+Workspace Used 1603  (Total 10000)
+BLACK-1>
+
+
+
+
+
+
+
+
+
+
+
+
+                            - 11 -BLACK-1> debug68 object         debug68 object
+*** 1 RESET
+DEBUG68  Version 5.70
+-
+-l l
+$002000: MOVE.L  #$00002030,D0       ' <.. 0'  203C 0000 2030
+$002006: MOVE.L  #$00000005,D1       '"<....'  223C 0000 0005
+$00200C: TRAP    #12                 'NL'      4E4C
+$00200E: MOVE.L  #$0000000A,D7       '.<....'  2E3C 0000 000A
+$002014: MOVE.L  #$0000002A,D0       ' <...*'  203C 0000 002A
+$00201A: MOVE.L  #$00000002,D1       '"<....'  223C 0000 0002
+$002020: TRAP    #12                 'NL'      4E4C
+$002022: SUBQ.L  #1,D7               'S.'      5387
+$002024: BNE     *-16            $2014   'f..n'    6600 FFEE
+$002028: MOVE.L  #$00000006,D1       '"<....'  223C 0000 0006
+$00202E: TRAP    #12                 'NL'      4E4C
+$002030: NEG.W   D5                  'DE'      4445
+$002032: CLR.W   (A5)                'BU'      4255
+$002034: DC.W    $4736               'G6'      4736
+$002036: MOVE.W  -(A0),D4            '8 '      3820
+$002038: MOVEQ   #101,D2             'te'      7465
+$00203A: MOVEQ   #116,D1             'st'      7374
+$00203C: MOVE.L  97(A3,D7.W),A0      ' sta'    2073 7461
+$002040: MOVEQ   #116,D1             'rt'      7274
+$002042: BVS.S   *+112           $20B2   'in'      696E
+-
+-bs loop bs loop
+Break Point #1 set at $002014
+-
+-go start go start
+DEBUG68 test starting
+
+
+-----------------------------------------------------------
+Break Point #1 at $002014       loop    
+
+Current Instruction
+
+$002014:  MOVE.L  #$0000002A,D0       ' <...*'  203C 0000 002A
+
+Register Dump
+
+D0  00002030    D1  00000005    D2  00000000    D3  00000000
+D4  00000000    D5  00000000    D6  00000000    D7  0000000A
+A0  00000000    A1  00000000    A2  00000000    A3  00000000
+A4  00000000    A5  00000000    A6  00000000    A7  00002800
+
+PC  $002014  SR  $0000
+-
+
+
+
+
+
+
+
+
+
+
+                            - 12 --t t
+$002014:  MOVE.L  #$0000002A,D0       ' <...*'  203C 0000 002A
+*
+$00201A:  MOVE.L  #$00000002,D1       '"<....'  223C 0000 0002
+*
+$002020:  TRAP    #12                 'NL'      4E4C
+**
+$002022:  SUBQ.L  #1,D7               'S.'      5387
+*bl
+   B #1:  $002014       loop    
+-
+-bd #1 bd #1
+Break Point #1 disabled
+-
+-bl bl
+  *B #1:  $002014       loop    
+-
+-go ,$202e go ,$202e
+*********
+
+----------------------------------------------------------
+End of GO section at $00202E
+
+Current Instruction
+
+$00202E:  TRAP    #12                 'NL'      4E4C
+
+Register Dump
+
+D0  0000002A    D1  00000006    D2  00000000    D3  00000000
+D4  00000000    D5  00000000    D6  00000000    D7  00000000
+A0  00000000    A1  00000000    A2  00000000    A3  00000000
+A4  00000000    A5  00000000    A6  00000000    A7  00002800
+
+PC  $00202E  SR  $0000
+-
+-go go
+
+
+Normal return at $002030
+
+-q q
+
+*** 1 RESET
+BLACK-1>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            - 13 -
+
+

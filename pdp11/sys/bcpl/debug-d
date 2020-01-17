@@ -1,0 +1,690 @@
+SECTION "DEBUG-D"
+
+GET "LIBHDR"
+
+GLOBAL
+$(
+ENVTRACE:150
+WRITEARG:151
+ISFUN:152
+DELETEBPT:153
+LEXP:154
+RBEXP:155
+BEXP:156
+EXP:157
+ADR:158
+VAL:159
+FUN:160
+PRINTADD:161
+PRINT:162
+CHECKDIG:163
+CHECKADDR:164
+CONT:165
+SELECTASK:166
+ERROR:167
+TESTBREAK:168
+RCH:169
+WCH:170
+
+REC:171
+WWRCH:172
+
+ADD:175
+TCH:176
+STYLE:177
+SALEV:178
+LEV:179
+CURRTCB:180
+GLOBV:181
+REGS:182
+VARS:183
+SPTR:184
+SBASE:185
+STANDALONE:186
+BPT:187
+BPT.COUNT:188
+BPT.ADDR:189
+BPT.INSTR:190
+WRFLAG:191
+LCH:192
+CH:193
+RDFLAG:194
+
+CURRTASK:199
+$)
+
+
+MANIFEST
+$(
+G.SBASE=12
+CO.LINK = 0
+CO.CALLER = 1
+CO.STACKEND = 2
+CO.RESUMEPTR = 3
+CO.FUNCTION = 4
+TCB.P=11
+LIBWORD=23456
+INSTR.BPT=#000003
+INSTR.ENTRY=#067605
+$)
+
+
+LET START(PKT) = VALOF
+ $( LET MODE = PKT!0
+    AND TASK = PKT!1
+    AND CODE = PKT!2
+    AND ARG  = PKT!3
+
+    LET OPENED = FALSE
+    AND VERIFIED = FALSE
+
+    TEST MODE=-1 THEN    // startup
+    $( LEV := LEVEL()
+       STANDALONE := FALSE
+       WWRCH := WRCH
+       WRCH := WCH
+       WRITES("DEBUG loaded*N")
+       ADD := 0
+       TCH := 0
+       STYLE := 0
+       VARS      := TABLE 0,0,0,0,0,0,0,0,0,0
+       BPT.COUNT := TABLE 0,0,0,0,0,0,0,0,0,0
+       BPT.ADDR  := TABLE 0,0,0,0,0,0,0,0,0,0
+       BPT.INSTR := TABLE 0,0,0,0,0,0,0,0,0,0
+    $)
+    ELSE                 // standalone entry
+    $( IF MODE=2 DO      // breakpoint
+       $( BPT := 0
+          FOR I=1 TO 9 DO
+             IF BPT.ADDR!I=ARG DO
+             $( LET C = BPT.COUNT!I-1
+                PKT!2 := BPT.INSTR!I
+                IF TASK=TASKID RESULTIS 0
+                IF C>0 DO
+                $( BPT.COUNT!I := C
+                   RESULTIS 0
+                $)
+                BPT := I
+             $)
+       $)
+       FOR I=1 TO 9 DO   // unset all breakpoints
+       $( LET BA = BPT.ADDR!I
+          UNLESS BA=0 DO !BA := BPT.INSTR!I
+       $)
+       STANDALONE := TRUE
+       SALEV := LEVEL()
+
+       IF MODE=0 DO      // standalone restart
+       $( WRITES("*NDEBUG*N")
+          PKT!1 := 0 $)
+
+       IF MODE=1 DO      // abort
+       $( WRITEF("*N!!T%N ABORT %N: ",TASK,CODE)
+          WRITEF(VALOF SWITCHON CODE INTO
+           $( CASE   0: TASK := ARG
+                        RESULTIS "BREAK T%N "
+              CASE  99: RESULTIS "trap @ %U5 "
+              CASE  98: RESULTIS "G%N unassigned "
+              CASE  97: RESULTIS "stack overflow "
+              CASE  96: RESULTIS "restart at 000044 "
+              CASE  95: RESULTIS "SP corrupt @ %U5 "
+              CASE 199: RESULTIS "illegal FREEVEC "
+              CASE 198: RESULTIS "illegal QPKT "
+              CASE 197: RESULTIS "store chain fault "
+              CASE 196: RESULTIS "can*'t activate "
+              CASE 195: RESULTIS "coroutine fault "
+              DEFAULT: RESULTIS "%N "
+           $), ARG)
+       $)
+
+       IF MODE=2 DO      // breakpoint
+          WRITEF("*N!!T%N BPT %N ",TASK,BPT)
+
+       WRITES("** ")
+       REGS := PKT+4
+    $)
+
+    UNLESS TASK=0 DO SELECTASK(TASK)
+    RCH()
+
+    // REPEAT loop to get commands
+    $( LET V = 0
+       LET OLDSTYLE = STYLE
+
+       RDFLAG := FALSE
+       SWITCHON CH INTO
+
+       $( CASE 'A': CASE 'G': CASE 'L':
+          CASE 'R': CASE 'V': CASE 'W':
+          CASE 'Y':
+             ADD := LEXP()
+             ENDCASE
+
+          CASE '0': CASE '1': CASE '2':
+          CASE '3': CASE '4': CASE '5':
+          CASE '6': CASE '7': CASE '8':
+          CASE '9': CASE '#': CASE '*'':
+          CASE '(': CASE '@':
+             TCH := 0
+             ADD := BEXP()
+             ENDCASE
+
+          CASE '+': CASE '-': CASE '**':
+          CASE '%': CASE '<': CASE '>':
+          CASE '?': CASE '|': CASE '&':
+          CASE '!':
+             ADD := EXP(VAL(ADD))
+             TCH := 0
+             ENDCASE
+
+          CASE 'J':
+             ADD := VAL(ADD)>>1
+             GOTO IND
+
+          CASE 'I':
+             ADD := VAL(ADD)
+       IND:  TCH := 'A'
+             GOTO PRA
+
+          CASE 'N':
+             IF TCH=0 DO ERROR()
+             ADD := ADD+1
+       PRA:  PRINTADD()
+          CASE '/':
+             IF TCH=0 DO ERROR()
+             OPENED := TRUE
+          CASE '=':
+       VER:  PRINT(VAL(ADD))
+             VERIFIED := TRUE
+             STYLE := OLDSTYLE
+          CASE '*E': CASE '*S':
+             RCH()
+             LOOP
+
+          CASE '$':
+             RCH()
+             STYLE := VALOF SWITCHON CH INTO
+                $( CASE 'C': RESULTIS " %C%C "
+                   CASE 'D': RESULTIS " %I6 "
+                   CASE 'F': RESULTIS 0
+                   CASE 'O': RESULTIS " %O6 "
+                   CASE 'U': RESULTIS " %U5 "
+                   CASE 'X': RESULTIS " %X4 "
+                   DEFAULT:  ERROR()
+                $)
+             IF VERIFIED GOTO VER
+             GOTO NXT
+
+          CASE 'T':
+             IF TCH=0 DO ERROR()
+             FOR I=0 TO RBEXP()-1 DO
+             $( IF I REM 5 = 0 DO PRINTADD()
+                PRINT(VAL(ADD))
+                ADD := ADD+1
+                TESTBREAK()
+             $)
+             NEWLINE()
+             ENDCASE
+
+          CASE 'U':
+             UNLESS OPENED DO ERROR()
+             !ADR(ADD) := EXP(RBEXP())
+             LOOP
+
+          CASE 'P':
+             RCH()
+             V := VAL(ADD)
+             ADD := LEXP()
+             !ADR(ADD) := V
+             ENDCASE
+
+          CASE 'X':
+             V := FUN(ADD)
+             ADD := V(RBEXP(),BEXP(),BEXP(),BEXP())
+             TCH := 0
+             ENDCASE
+
+          CASE 'C':
+             IF STANDALONE DO
+             $( IF MODE=2 DO
+                $( LET C = RBEXP()
+                   BPT.COUNT!BPT := C
+                   PKT!3 := 0
+                   FOR I=1 TO 9 DO
+                      IF BPT.ADDR!I=ARG DO
+                         PKT!2,PKT!3:=BPT.INSTR!I,ARG
+                $)
+                TASK := 0
+                GOTO CNT
+             $)
+             RELEASE(CURRTASK)
+             GOTO NXT
+
+          CASE 'H':
+             IF STANDALONE GOTO CNT
+             HOLD(CURRTASK)
+             GOTO NXT
+
+          CASE 'S':
+             SELECTASK(RBEXP())
+             ENDCASE
+
+          CASE 'Z':
+             #173104(?,#177406)
+
+          CASE 'B':
+          $( LET N = CHECKDIG(RBEXP())
+             TEST N=0 THEN
+             $( FOR I=1 TO 9 DO
+                $( LET BA=BPT.ADDR!I
+                   UNLESS BA=0 DO
+                   $( WRITEF("*N%N %U5 ",I,BA)
+                      IF ISFUN(BA<<1) DO WRITEARG(BA<<1)
+                   $)
+                $)
+                NEWLINE()
+             $)
+             ELSE
+             $( V := FUN(ADD)>>1
+                DELETEBPT(N)
+                IF V=0 ENDCASE
+                FOR I=1 TO 9 DO
+                   IF BPT.ADDR!I=V DO DELETEBPT(I)
+                BPT.ADDR!N := V
+                BPT.INSTR!N := !V
+                BPT.COUNT!N := 1
+                UNLESS STANDALONE DO !V := INSTR.BPT
+             $)
+             ENDCASE $)
+
+          CASE 'Q':
+             UNLESS STANDALONE DO
+             $( WRITES("DEBUG unloaded*N")
+                WRCH := WWRCH
+                RESULTIS -1 $)
+          DEFAULT:
+             ERROR()
+
+          CASE 'E':
+             ENVTRACE(STANDALONE & PKT!1=CURRTASK ->
+                         REGS!5,CURRTCB!TCB.P)
+          CASE '*N':
+             IF CH='*N' DO WRITES("** ")
+NXT:         RCH()
+       $)
+REC:   OPENED := FALSE
+       VERIFIED := FALSE
+
+    $) REPEAT
+
+CNT:NEWLINE()            // continue
+    STANDALONE := FALSE
+    FOR I=1 TO 9 DO      // set all breakpoints
+    $( LET BA=BPT.ADDR!I
+       UNLESS BA=0 DO !BA := INSTR.BPT $)
+    RESULTIS TASK        // non-zero => HOLD
+ $)
+
+.
+
+SECTION "DEBUG-D"
+
+GET "LIBHDR"
+
+GLOBAL
+$(
+ENVTRACE:150
+WRITEARG:151
+ISFUN:152
+DELETEBPT:153
+LEXP:154
+RBEXP:155
+BEXP:156
+EXP:157
+ADR:158
+VAL:159
+FUN:160
+PRINTADD:161
+PRINT:162
+CHECKDIG:163
+CHECKADDR:164
+CONT:165
+SELECTASK:166
+ERROR:167
+TESTBREAK:168
+RCH:169
+WCH:170
+
+REC:171
+WWRCH:172
+
+ADD:175
+TCH:176
+STYLE:177
+SALEV:178
+LEV:179
+CURRTCB:180
+GLOBV:181
+REGS:182
+VARS:183
+SPTR:184
+SBASE:185
+STANDALONE:186
+BPT:187
+BPT.COUNT:188
+BPT.ADDR:189
+BPT.INSTR:190
+WRFLAG:191
+LCH:192
+CH:193
+RDFLAG:194
+
+CURRTASK:199
+$)
+
+
+MANIFEST
+$(
+CO.LINK=0
+CO.CALLER=1
+CO.STACKEND=2
+CO.RESUMEPTR=3
+CO.FUNCTION=4
+G.SBASE=12
+TCB.P=11
+LIBWORD=23456
+INSTR.BPT=#000003
+INSTR.ENTRY=#067605
+$)
+
+LET ENVTRACE(P) BE
+ $( LET NBASE = 0
+    LET FSIZE = 5
+    RCH()
+    SWITCHON CH INTO
+    $( DEFAULT:
+          ERROR()
+
+       CASE '*N':
+          RETURN
+
+       CASE '*E':CASE '*S':
+          LOOP
+
+       CASE 'S':
+          NBASE := VAL(ADD)
+          GOTO NEWB
+
+       CASE 'L':
+          SPTR := VAL(ADD)
+          GOTO NEWP
+
+       CASE 'N':
+ NXTB:    NBASE := CONT(SBASE+CO.CALLER)
+          UNLESS NBASE=0 \/ NBASE=-1 DO
+          $( WRITES("*N*NCalled from")
+             GOTO NEWB $)
+          NBASE := SBASE
+          NBASE := CONT(NBASE) REPEATUNTIL
+             NBASE=0 \/ CONT(NBASE+CO.CALLER)=0
+          GOTO NEWB
+
+       CASE 'T': CASE 'B':
+          NBASE := CONT(GLOBV+G.SBASE)
+ NEWB:    IF NBASE=0 DO
+          $( WRITES("*N*NEnd of backtrace*N*N")
+             RETURN $)
+          SBASE := NBASE
+       CASE 'U':
+          NEWLINE(); NEWLINE()
+          NBASE := CONT(SBASE+CO.CALLER)
+          TEST NBASE=-1 THEN
+             WRITES("Root stack")
+          ELSE
+          $( UNLESS NBASE=0 DO WRITES("Active ")
+             WRITES("Coroutine")
+             WRITEARG(CONT(SBASE+CO.FUNCTION))
+          $)
+          SPTR :=
+           ( SBASE=CONT(GLOBV+G.SBASE) ->
+                P, CONT(SBASE+CO.RESUMEPTR) ) >> 1
+          GOTO NEWP
+
+ NXTP: CASE 'D':
+          IF SPTR=SBASE GOTO NXTB
+          FSIZE := CONT(CONT(SPTR-1)>>1)>>1
+          SPTR := SPTR-FSIZE-1
+       CASE 'V':
+ NEWP:    IF FSIZE>5 DO FSIZE := 5
+          NEWLINE()
+          TEST SPTR=SBASE THEN
+          $( LET SEND = CONT(SBASE+CO.STACKEND)+50
+             LET SHWM = SEND
+             WHILE CONT(SHWM)=0 DO SHWM:=SHWM-1
+             WRITEF("Stack base %U5 end %U5 *
+                    *hwm %U5 ",SBASE,SEND,SHWM)
+          $)
+          ELSE
+          $( LET F = CONT(SPTR-2)-8
+             WRITEARG(F)
+        L:   WRITEF("%U2",SPTR)
+             FOR I=0 TO FSIZE-2 DO
+                PRINT(CONT(SPTR+I))
+          $)
+          IF FSIZE<1 DO ERROR()
+          TESTBREAK()
+          IF CH='B' GOTO NXTP
+    $)
+    WRCH('E')
+ $) REPEAT
+
+
+AND WRITEARG(N) BE
+    TEST ISFUN(N)
+      THEN WRITEF(" %S ",(N-8)>>1)
+      ELSE WRITEF("  %I6 ",N)
+
+
+AND ISFUN(F) = VALOF
+ $( LET A = F>>1
+    IF (A>>10)>=ROOTNODE!RTN.MEMSIZE \/ A-5<0 RESULTIS FALSE
+    RESULTIS (CONT(A)=INSTR.ENTRY \/
+                   CONT(A-5)=LIBWORD) & (A-4)%0=7
+ $)
+
+
+AND DELETEBPT(N) BE
+ $( LET BA = BPT.ADDR!N
+    UNLESS BA=0 DO
+    $( !BA := BPT.INSTR!N
+       BPT.ADDR!N := 0
+    $)
+ $)
+
+
+AND LEXP() = VALOF
+    SWITCHON CH INTO
+    $( CASE 'A': CASE 'G': CASE 'L':
+       CASE 'R': CASE 'V': CASE 'W':
+       CASE 'Y':
+          TCH := CH
+          RESULTIS RBEXP()
+
+       DEFAULT:
+          ERROR()
+    $)
+
+
+AND RBEXP() = VALOF
+ $( RCH()
+    RESULTIS BEXP() $)
+
+
+AND BEXP() = VALOF
+ $( LET T = TCH
+    LET N = 0
+    LET R = 10
+ L: WHILE CH='*S' DO RCH()
+    SWITCHON CH INTO
+    $( CASE '+': CASE '*S':
+          RCH()
+          GOTO L
+
+       CASE '-':
+          RESULTIS -RBEXP()
+
+       CASE '(':
+          N := EXP(RBEXP())
+          UNLESS CH=')' DO ERROR()
+          RCH()
+          ENDCASE
+
+       CASE '!':
+          RESULTIS CONT(RBEXP())
+
+       CASE '@':
+          RCH()
+          N := ADR(LEXP())
+          ENDCASE
+
+       CASE 'A': CASE 'G': CASE 'L':
+       CASE 'R': CASE 'V': CASE 'W':
+       CASE 'Y':
+          N := VAL(LEXP())
+          ENDCASE
+
+       CASE '*'':
+          RCH()
+          N := LCH
+          RCH()
+          ENDCASE
+
+       CASE '#':
+          R := 8
+          RCH()
+          IF CH='X' DO
+          $( R := 16
+             RCH() $)
+       DEFAULT:
+          $( LET D = '0'<=CH<='9' -> CH-'0',
+              R=16 & 'A'<=CH<='F' -> CH-'A'+#XA,
+                                     VALOF BREAK
+             N := N*R+D
+             RCH()
+          $) REPEAT
+    $)
+    TCH := T
+    RESULTIS N
+ $)
+
+AND EXP(A) = VALOF
+    SWITCHON CH INTO
+    $( CASE '+': A := A  +  RBEXP(); LOOP
+       CASE '-': A := A  -  RBEXP(); LOOP
+       CASE '**':A := A  *  RBEXP(); LOOP
+       CASE '%': A := A  /  RBEXP(); LOOP
+       CASE '?': A := A REM RBEXP(); LOOP
+       CASE '>': A := A  >> RBEXP(); LOOP
+       CASE '<': A := A  << RBEXP(); LOOP
+       CASE '&': A := A  &  RBEXP(); LOOP
+       CASE '|': A := A  \/ RBEXP(); LOOP
+       CASE '!': A := CONT(A+RBEXP());LOOP
+       CASE '*S':RCH(); LOOP
+       DEFAULT:  RESULTIS A
+    $) REPEAT
+
+
+AND ADR(A) = TCH='Y' -> A, CHECKADDR(A+VALOF
+       SWITCHON TCH INTO
+       $( CASE 'A': RESULTIS 0
+          CASE 'G': RESULTIS GLOBV
+          CASE 'L': RESULTIS SPTR
+          CASE 'R': RESULTIS REGS
+          CASE 'V': CHECKDIG(A)
+                    RESULTIS VARS
+          CASE 'W': RESULTIS CURRTCB
+       $) )
+
+
+AND VAL(A) = TCH=0  -> A, !ADR(A)
+
+
+AND FUN(A) = TCH=0 -> A<<1,
+    ISFUN(VAL(A)) -> VAL(A), ERROR()
+
+
+AND PRINTADD() BE
+    WRITEF("*N%C%U2/ ",TCH,ADD)
+
+
+AND PRINT(N) BE
+    TEST STYLE=0
+      THEN WRITEARG(N)
+      ELSE WRITEF(STYLE,N,N>>8)
+
+
+AND CHECKDIG(N) = VALOF
+ $( UNLESS 0<=N<=9 DO ERROR()
+    RESULTIS N $)
+
+
+AND CHECKADDR(A) = VALOF
+ $( IF (A>>10)>=ROOTNODE!RTN.MEMSIZE DO ERROR()
+    UNLESS A=0 FOR I=1 TO 9 DO
+       IF A=BPT.ADDR!I RESULTIS BPT.INSTR+I
+    RESULTIS A $)
+
+
+AND CONT(A) = !CHECKADDR(A)
+
+
+AND SELECTASK(N) BE
+ $( LET T = ROOTNODE!RTN.TASKTAB
+    UNLESS 0<N<=T!0 DO ERROR()
+    T := T!N
+    IF T=0 DO ERROR()
+    CURRTASK := N
+    CURRTCB := T
+    GLOBV := T!TCB.GBASE
+ $)
+
+
+AND ERROR() BE
+ $( WRITES("??*N")
+    UNLESS RDFLAG DO RCH()
+    LONGJUMP(STANDALONE->SALEV,LEV, REC)
+ $)
+
+
+AND TESTBREAK() BE UNLESS STANDALONE DO
+    IF TESTFLAGS(1) DO ERROR()
+
+
+AND RCH() BE
+ $( TEST STANDALONE THEN
+    $( LCH := SARDCH()
+       IF LCH=#177 DO ERROR()
+     $)
+    ELSE
+    $( IF WRFLAG DO WRCH('*E')
+       WRFLAG := FALSE
+       TESTBREAK()
+       LCH := RDCH()
+       TESTFLAGS(1)
+    $)
+    CH := CAPITALCH(LCH)
+    RDFLAG := TRUE
+ $)
+
+
+AND WCH(C) BE
+ $( C := C&#377
+    TEST STANDALONE THEN
+       SAWRCH(C)
+    ELSE
+    $( WRFLAG := TRUE
+       WWRCH(C)
+    $)
+ $)
+
+

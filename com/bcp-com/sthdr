@@ -1,0 +1,23 @@
+$<STRHDR'
+GLOBAL
+$(
+//these globals must persist across the SYN and TRN phases
+//      condvec         :SYNTRN+ 0
+//      prsource        :SYNTRN+ 1
+//      sourcestream    :SYNTRN +2
+        free.trnspace   :SYNTRN +2
+        pagecount       :SYNTRN+ 3
+        pagesize        :SYNTRN+ 4
+        line.info       :SYNTRN+ 5
+//      linecount       :SYNTRN +5
+        transchars      :SYNTRN+ 6
+        charcode        :SYNTRN+ 7
+        Source.name     :SYNTRN+ 8
+$)
+
+MANIFEST $( TRNCG=SYNTRN+ 9 $)
+$$STRHDR := TRUE
+$>STRHDR'
+
+
+

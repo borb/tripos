@@ -1,0 +1,171 @@
+/***********************************************************************
+**             (C) Copyright 1984  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+*                                                                      *
+*           ########   ######   #######   #######     #####            *
+*           ########  ########  ########  ########   #######           *
+*              ##     ##    ##  ##    ##  ##    ##  ##                 *
+*              ##     ##    ##  #######   #######   ##                 *
+*              ##     ##    ##  ##    ##  ##    ##  ##                 *
+*              ##     ##    ##  ##    ##  ##    ##  ##                 *
+*              ##     ########  ########  ########   #######           *
+*              ##      ######   #######   #######     #####            *
+*                                                                      *
+************************************************************************
+**    Author:  Brian Knight                          February 1984    **
+***********************************************************************/
+
+
+
+// This program allows transfer of a file to a BBC micro running the
+// 'PHX' terminal emulator. The switch HEX allows a binary transfer as
+// hex characters rather than an ordinary character transfer.
+// Trailing spaces are stripped and tabs are expanded (every 8 columns).
+
+SECTION "TOBBC"
+
+GET "LIBHDR"
+
+GLOBAL
+    $(
+    oldin               : ug
+    buff                : ug + 1
+    sumofsums           : ug + 2
+    hexmode             : ug + 3
+    buffptr             : ug + 4
+    $)
+
+MANIFEST
+    $(
+    maxchars            = 255
+    $)
+
+
+LET start() BE
+    $(
+    LET argv            = VEC 50
+    LET stream          = 0
+    LET rdargs.string   = "FROM/A,HEX/S"
+    LET dummybuff       = VEC maxchars/bytesperword
+
+    oldin               := input()
+    sumofsums           := 0
+    buff                := dummybuff
+
+    IF rdargs(rdargs.string, argv, 50)=0
+    THEN
+      $(
+      message("Bad args for key string *"%S*"*N", rdargs.string)
+      stop(20)
+      $)
+
+    hexmode     := argv!1 \= 0
+
+    stream := findinput(argv!0)
+    IF stream=0
+    THEN
+      $(
+      message("Can't open %S*N", argv!0)
+      stop(20)
+      $)
+
+    // All is well: issue a bell to start the transfer.
+
+    wrch(7); wrch('*E')
+
+    selectinput(stream)
+
+      // Main loop
+      $(
+      LET count         = readrec()
+      LET checksum      = calccs(count)
+      IF count=-1 THEN BREAK        // End of input file
+
+      IF testflags(1) THEN fatal.error("BREAK*N")
+      sumofsums         := sumofsums + checksum
+      writef("%X2", checksum)
+      writerec(count)
+      $) REPEAT
+
+    writef("%X2%C*N",-sumofsums,7)       // Final checksum and bell
+    endread()
+    selectinput(oldin)
+    $)
+
+
+AND message(f,a,b,c) BE
+    $(
+    writes("*N******TOBBC: ")
+    writef(f,a,b,c)
+    $)
+
+
+AND fatal.error(f,a,b,c) BE
+    $(
+    endread()
+    message(f,a,b,c)
+    stop(20)
+    $)
+
+
+AND readrec() = VALOF
+    $(
+    // Result is number of characters placed in buffer
+    // (-1 if none and end-of-stream).
+    // Trailing spaces are stripped so the checksum will be right if
+    // something else tries to strip them!
+    LET max     = hexmode -> 72, maxchars  // Max number of chars in buffer
+    LET ch      = ?
+    buffptr     := 0
+
+      $(
+      ch        := rdch()
+      IF ch=endstreamch | (ch='*N' & NOT hexmode) THEN BREAK
+
+      TEST hexmode
+      THEN
+        $(
+        putch( hexch(ch>>4) )
+        putch( hexch(ch) )
+        $)
+      ELSE TEST ch='*T'
+           THEN putch(' ') REPEATUNTIL (buffptr REM 8)=0
+           ELSE putch(ch)
+      $) REPEATWHILE buffptr < max
+
+    // Strip trailing spaces
+
+    WHILE buffptr>0 & buff%(buffptr-1)=' ' DO buffptr := buffptr-1
+
+    IF ch=endstreamch & buffptr=0 THEN buffptr := -1 // No more records
+    RESULTIS buffptr
+    $)
+
+
+
+AND hexch(h) = "0123456789ABCDEF" % ([h&15] + 1)
+
+
+AND writerec(count) BE
+    $(
+    FOR i=0 TO count-1 DO wrch(buff%i)
+    newline()
+    $)
+
+
+AND calccs(count) = VALOF
+    $(
+    LET sum     = 0
+    FOR i=0 TO count-1 DO sum := sum + buff%i
+    RESULTIS -sum
+    $)
+
+
+AND putch(ch) BE
+    $(
+    buff%buffptr := ch
+    buffptr      := buffptr+1
+    $)
+
+

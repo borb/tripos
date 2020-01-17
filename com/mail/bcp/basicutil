@@ -1,0 +1,293 @@
+// This code should be "got" after header
+
+GET "CLIHDR"
+GET "TERMHDR"           // read term vec
+GET "bcpl.ssplib"
+GET "bcpl.validpointer"
+GET "bcpl.validroutine"
+GET "bcpl.uidset"
+GET "bcpl.addrtasksglobals"
+//      GET "bcpl.readtermvec"  // got in cur-init in MAIN
+
+//=============================================================================
+
+LET Zap.file(file) BE
+$(  For I = 0 TO file.desc.size
+    DO file!I                   :=  0
+    file!start.of.block         := -1
+$)
+
+LET Perm.file() = VALOF
+$(  LET file = get.perm.vec(file.desc.size)
+    zap.file(file)
+    RESULTIS FILE
+$)
+
+//=============================================================================
+
+LET address.offset(file, offset, length) = VALOF
+$(  LET base, size = file!start.of.block, file!cache.size
+    IF (base+size >= offset+length) & (base <= offset) & (Base>= 0)
+    THEN RESULTIS offset-base
+    read.cache(file, offset)
+    RESULTIS 0
+$)
+
+//=============================================================================
+
+LET break.test() BE
+$(
+    // Routine to act on user break in.
+    IF testflags(1) & breaks.allowed THEN
+                               LONGJUMP(ms.user.break.level,ms.user.break.link)
+$)
+
+//=============================================================================
+
+LET get.chain.vec(size,chain.base) =
+VALOF $(
+    // Try and get a vector of the given size +1.  If successful then the first
+    // word of the vector is added to a chain and the result is the address of
+    // the vector's second word
+    LET va = ?        // Vector address
+    LET chain = ?
+    va := getvec(size+1)
+    IF va = 0
+    $(  LET o = output()
+        selectoutput(cli.standardoutput)
+        writef("*C*LUnable to get vector of %N words*C*L", size)
+        delay(tickspersecond*10)
+        UNTIL (!chain.base) = 0
+                free.chain.vec(!chain.base+1, chain.base)
+        little.tidyup()
+//      UNLESS dynamic abort(1234,0)
+        selectoutput(o)
+        IF (ms.user.break.level = 0) tidyup(20)
+        LONGJUMP(ms.user.break.level,ms.user.break.link)
+    $)
+    chain := chain.base
+    UNTIL !chain = 0 DO chain := !chain
+    !va := 0
+    !chain := va
+    RESULTIS va+1
+$)
+
+//=============================================================================
+
+LET free.chain.vec(addr, chain.lv) BE
+$(  // Try and free a vector on the given chain
+    addr -:= 1
+
+    UNTIL  !chain.lv=0 |   !chain.lv=addr DO chain.lv := !chain.lv
+    UNLESS !chain.lv=0 $(  !chain.lv := !!chain.lv; FREEVEC(addr) $)
+$)
+
+//=============================================================================
+
+LET get.perm.vec(size) = get.chain.vec(size,@ms.perm.vec.chain)
+
+//=============================================================================
+
+LET get.temp.vec(size) = get.chain.vec(size,@ms.temp.vec.chain)
+
+//=============================================================================
+
+LET little.tidyup() BE
+$(
+    // This tidies up all resources obtained on a per command basis but leaves
+    // the general purpose mail server vectors (e.g. the um cache) untouched.
+    LET x = ?
+    LET x2 = ?
+
+    // Release any file interlock:
+    IF ms.interlocked.file ~= 0 THEN close.file(ms.interlocked.file)
+
+    // Free all the vectors obtained by "get.temp.vec"
+    x := ms.temp.vec.chain
+    ms.temp.vec.chain := 0
+    UNTIL x=0 DO $(
+        x2 := !x
+        freevec(x)
+        x := x2
+    $)
+$)
+//=============================================================================
+
+LET queue.ring.receive (rx.pkt,rx.buff,rx.len,rx.port,rx.station) BE
+$(
+    // Queue the packet rx.pkt as a receive request on the ring handler,
+    // if it is not already queued.
+
+    IF (rx.pkt!pkt.link = notinuse) & (rx.pkt!pkt.id~=taskid)
+    $(
+        rx.pkt!rhpkt.buff := rx.buff
+        rx.pkt!rhpkt.size := rx.len
+        rx.pkt!rhpkt.port := rx.port
+        rx.pkt!rhpkt.station := rx.station
+        rx.pkt!pkt.id := rhtaskid
+        qpkt(rx.pkt)
+    $)
+$)
+
+//=============================================================================
+
+LET wto.log(message, a,b,c,d) = wto.mc("log", message, a,b,c,d, 0, 0)
+
+LET wto.mc(mc, message., a,b,c,d,e,f) = VALOF
+$(  MANIFEST $( max.bytes = 100 $)
+    GET "BCPL.findstringoutput"
+    // Send a message to the ring log.
+    // Result is TRUE iff it works.
+
+    LET service = VEC 20/BYTESPERWORD
+    LET txbuff  = VEC (max.bytes + bb.ssp.args * bytesperringword)/BYTESPERWORD
+    LET rxbuff  = VEC 2
+    LET nsvec   = VEC 3
+    LET len     = ?
+
+    $(Save.stack
+        LET base        = "wto-"
+        LET message     = message.
+        LET out = (e=-99 & f=-99) -> 0, findstringoutput(txbuff, max.bytes)
+
+//  UNLESS compstring("log", mc)=0 THEN mc := "ALPHA"
+        FOR i = 1 TO base%0     DO service%i := base%i
+        FOR i = 1 TO mc%0       DO service%(base%0+i) := mc%i
+        service%0       := base%0 + mc%0
+
+        UNLESS out=0
+        $(      LET o = output()
+                LET w = WRCH
+                IF validpointer(@old.wrch) THEN wrch := old.wrch
+                SELECTOUTPUT(out)
+                WRITEF(message, a,b,c,d,e,f)
+                ENDWRITE()
+                wrch := w
+                selectoutput(o)
+                message := txbuff
+        $)
+
+        len := message%0
+
+$<TRACE
+        IF trace WRITEF("Message %N'%s'. *E", len, message)
+$>TRACE
+        FOR i=len TO 0 BY -1            // RIGHT WAY !!!!!!!!!!!!!
+        DO byteput(txbuff, bb.ssp.args*bytesperringword + i, message%i)
+    $)Save.stack
+$<TRACE
+        IF trace WRITEF("Now do WTO %N*N", bb.ssp.args+1+len/bytesperringword)
+$>TRACE
+    $( LET res = ssp(service, txbuff, bb.ssp.args+1+len/bytesperringword,
+                 rxbuff, 3, nsvec)
+$<TRACE
+        IF trace WRITEF("RC = %N, RESULT2*N", res, RESULT2)
+$>TRACE
+        RESULTIS RES
+    $)
+$)
+
+//=============================================================================
+
+LET myfault(rc, force) = VALOF
+$(      SWITCHON rc INTO
+        $(  DEFAULT:    UNLESS force RESULTIS FALSE
+
+                        TEST dynamic THEN WRITEF("fault %X8 %N*N", rc, rc)
+                        ELSE FAULT(rc);                                 ENDCASE
+
+            CASE #XDFF1:WRITES("unknown service*N");                    ENDCASE
+            CASE 422:   WRITES("invalid service*N");                    ENDCASE
+            CASE 409:   WRITES("service didn't reply*N");               ENDCASE
+        $)
+        RESULTIS TRUE
+$)
+
+/*
+ * //=============================================================================
+ *
+ * LET kick.mail(hard) = VALOF
+ * $(  LET txbuff       = VEC bb.ssp.args
+ *     LET rxbuff       = VEC 3/rwpw
+ *     LET nsvec        = VEC 3
+ *
+ *     RESULTIS ssp("MAIL", txbuff, bb.ssp.args, rxbuff, 3,
+ *                                      nsvec, (hard=TRUE) -> ssp.demon.end,
+ *                                                            ssp.kick.request)
+ * $)
+ */
+
+//=============================================================================
+
+LET type.mail.file(file, lines, done, expand) = VALOF
+$(
+    // Type a mail server message file.  The file should be in Tripos format
+    // with a 50 word "magic header".
+    LET cache   = get.temp.VEC(300/rwpw)
+    LET left    = 0 <= done <= lines -> lines-done, 0   //lines
+    LET POS     = 0
+    LET char    = ?
+    LET size    = ?
+
+$<TRACE    IF trace THEN ptrace("Typing file",file,-1,-1) $>TRACE
+
+
+    IF lines < 0 THEN lines := 0
+    file!cache.address  := cache
+    file!cache.size     := 300
+    file!next.write     := 0
+    file!next.read      := 50
+    read.cache(file,0)
+    size                := cache%%2             // May be negative ????
+
+    UNLESS size=0 FOR Half = 1 TO (size=1) -> 1, 2
+    FOR i=0 TO (size-Half) >> 1
+    $(  LET ch = read.byte.from.file(file)
+        TEST ch < ' '
+        THEN SWITCHON ch INTO
+            $(  CASE '*N':
+                CASE '*P':
+                        pos := -1               // Get's incremented!!
+                        IF lines <= 0 THEN goto DEFALT
+                        left := left-1
+                        TEST left<=0 | ch='*P'
+                        $(  WRCH('*C')
+$<SC                        readline(FALSE)
+                            TEST SC
+                            $(  input()!4 := input()!5
+                                 NEWLINE()
+                            $)
+                            ELSE
+$>SC                        $(  LET ch = RDCH()
+                                UNTIL CH = '*N' | ch=ENDSTREAMCH
+                                DO CH := RDCH()
+                                IF CH='*E' NEWLINE()
+                                IF CH=ENDSTREAMCH THEN lines := -1
+                            $)
+                            left := lines
+                        $)
+                        ELSE NEWLINE();                                 ENDCASE
+                DEFALT:
+                DEFAULT:
+                        WRCH(ch);                                       ENDCASE
+                CASE '*B':
+                        IF pos > 0 $( pos := pos-1; WRCH(ch) $)         ENDCASE
+
+                CASE '*T':
+                        UNLESS expand                           GOTO DEFALT
+                        $( WRCH(' '); pos := pos+1 $) REPEATUNTIL (pos&7) = 0
+                        pos := pos-1
+                                                                        ENDCASE
+            $)
+        ELSE WRCH(ch)
+        break.test()
+        pos := pos+1
+    $)
+    UNLESS pos=0 $( NEWLINE(); left := left - 1 $)
+    free.chain.vec(cache, @ms.temp.vec.chain)
+    RESULTIS lines - left
+$)
+
+//=============================================================================
+
+

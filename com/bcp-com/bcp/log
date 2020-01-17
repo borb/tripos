@@ -1,0 +1,57 @@
+$<COMHDR'
+SECTION "BCPLOG"
+
+$$cgcomhdr := TRUE              // Pickup OVERWEDGE
+GET "ERRHDR"
+$>COMHDR'
+$<TRIPOS GET "TCGHDR" $>TRIPOS
+
+LET BCPLOG() BE
+$(1
+   TEST REPORTCOUNT>0 THEN
+   $( SELECTOUTPUT(SYSOUT)
+      MESSAGE()       // INFORM TERMINAL
+      IF PRSOURCE & LISTOUT ~= 0 DO
+      $( SELECTOUTPUT(LISTOUT)
+         $<PDPRSX UNLESS ISTERMINAL(LISTOUT) $>PDPRSX
+         $( NEWLINE(); MESSAGE() $)
+      $)
+   $)
+   ELSE UNLESS QUIET
+        $( $<TRIPOS IF LISTOUT=0 THEN SELECTOUTPUT(SYSOUT)      $>TRIPOS
+           IF PRSOURCE NEWLINE()
+           MESSAGE()
+        $)
+   SELECTOUTPUT(LISTOUT)
+   $<PDPRSX UNLESS LISTOUT=SYSOUT CLOSELIST(); SELECTOUTPUT(SYSOUT) $>PDPRSX
+$)1
+
+AND MESSAGE() BE
+$(1
+    LET Format  = "Compilation of %TG %S"
+    LET ch      = 'G' - cli.commandname%0 + 3
+
+    IF ch < 'A' THEN ch := ch-'A' + '0' + 10
+
+    format%(format%0 - 3) := ch
+
+    TASKWRITEF( format,
+                VALID.POINTER(@SOURCEFILE) -> SOURCEFILE, "<unknown>",
+                REPORTCOUNT>=REPORTMAX -> "****** ABORTED *******N",
+                REPORTCOUNT>0 ->          "****** FAILED *******N",
+                                          "successful" )
+   UNLESS REPORTCOUNT>0
+   TEST ((CGFLAGS & cgf.Codegen) = 0)
+   THEN NEWLINE()
+   ELSE
+   $(
+      $<PDPRSX
+                WRITEF(" : code size %I4 ", PROGSIZE)
+                IF OVERWEDGE>0 WRITEF("(%I4) ", PROGSIZE-OVERWEDGE)
+                WRITES("words*n")
+      $>PDPRSX
+      $<TRIPOS WRITEF(" :%I5 words of code,%I5 store*N", PROGSIZE, maxused) $>TRIPOS
+   $)
+$)1
+
+

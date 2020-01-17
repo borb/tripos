@@ -1,0 +1,461 @@
+// Source file "screen" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+SECTION "SCREEN"
+get "libhdr"
+get "wrshdr"
+
+// This section keeps a map of what the screen looks like
+// It accepts requests for updates to the screen, on a line by line basis.
+// The screen is not updated, however, until 'dolineupdates' is called,
+// which only updates the screen if and while there are no keys to
+// be processed.
+// Note that 'lines' are all the same length (xmax) at the moment,
+// and that they do not overlap.
+
+// Hardware scrolling should ideally be generated in this section alone,
+// based on what would get the screen to its desired state quickest.
+// However this turns out to be rather hard, so 'hints' must be given
+// by upper command levels. These are passes blindly on to the 'sysdep'
+// section, which asks the terminal if it is capable of helping.
+
+// Also ideally, insert char, delete char and delete to end of line
+// would speed up screen updating considerably. However that would also be
+// quite tricky, and so far has not been implemented.
+
+// It is in this section that horizontal scroll is noticed.
+// It can't be noticed in 'text', because it is when the number of screen
+// places (not textual characters) exceeds xmax that scrolling must occur.
+// It causes screen updating to abort, and 'text.update.info' to be set to 15.
+
+// V 1.7.4, an attempt is now made to speed up screen checking etc
+// by remembering how much of the end of the line is just spaces.
+// variables with 'xtop' in them are concerned with this.
+
+// V 2.0 now has some more esoteric markers - marker 15 is " ... "
+// and represents a folded block, it's strange because there's one in each
+// window.
+// Marker 12 is a bracket flash, if its set then we wait a while and unset it.
+
+GLOBAL $( // linmap : ug + 40       // made public for mode changes
+          // line.updated : ug + 45 // ditto
+          scrmap : ug + 41
+          word.ad : ug + 46
+          byte.ad : ug + 47 ; type : ug + 48
+          line.xtop: ug + 50  // spaces beyond this _screen_ coord
+          lbuf.xtop: ug + 51  // same, for the linebuf.
+          lastmark: ug + 52
+          highlighted: ug + 53 // 1 -> yes, 0 -> no, 2 -> ?
+          screen.x.of.query.cur  : ug + 54
+          screen.y.of.query.cur  : ug + 55
+          invblock : ug + 56
+          alt : ug + 57 // set to yes if the line being updated at the moment
+                        // is in the alternate text window.
+          // may use up to 57
+       $)
+// linmap is where the image of a line is built
+// scrmap keeps a picture of the whole physical screen
+// Then there are arrays with one member for each screen line
+// The screen can only be updated by whole lines at a time
+
+LET scr.init(charvec, vecvec) BE $(
+  // sys.init was called by 'start' already
+  LET blankline = "*N"
+  linmap := charvec
+  save.scroll := getvec(2) // saves calls to scr.hardscroll.hint
+  save.scroll!0, save.scroll!1, save.scroll!2 := 0, 0, 0
+  scrmap := getvec(ymax)
+  FOR i = 0 TO ymax DO scrmap!i := getvec(xmax / bytesperword)
+  line.updated := vecvec
+  word.ad      := line.updated   + ymax + 1
+  byte.ad      := word.ad        + ymax + 1
+  type         := byte.ad        + ymax + 1
+  line.xtop    := type           + ymax + 1
+  scr.jumbled()
+  FOR i = 0 TO ymax DO $(
+    line.updated!i := no
+    line.xtop!i := xmax
+    word.ad!i := blankline
+    byte.ad!i := 1
+    type!i    := cmdline  $)
+  screen.y.of.query.cur := -1  // ie none
+  screen.x.of.file.cur, screen.y.of.file.cur := 0, 0 $)
+
+LET scr.finish() BE $(
+  FOR i = 0 TO ymax DO freevec(scrmap!i)
+  freevec(scrmap)
+  freevec(save.scroll)
+  sys.flushbuf() $)
+
+LET scr.updateline(n, wad, bad, ty) BE $(
+//  if wad%bad = ch.eof & ty ~= fileline & (word.ad!n)%(byte.ad!n) = ch.eof then
+//    return // useless end of file line - can safely ignore.
+//  above super slick timesaver doesn't work if cursor was on line !
+  line.updated!n, word.ad!n, byte.ad!n, type!n := yes, wad, bad, ty $)
+
+LET scr.jumbled() BE $(
+  LET fillch = ' '
+  sys.videoinit() // reset terminal options
+  // videoinit promises to leave the screen blank
+  FOR i = 0 TO ymax DO
+    FOR j = 0 TO xmax DO
+      scrmap!i%j := fillch
+//  for i = 0 to (xmax+1)*(ymax+1)-1 do scrmap%i := fillch
+  FOR i = 0 TO ymax DO line.xtop!i := xmax
+  FOR i = 0 TO ymax DO line.updated!i := yes $)
+
+LET scr.redraw() BE FOR i = 0 TO ymax DO line.updated!i := yes
+
+// the format of this save is assumed by everyone.
+// byte ad is assumed to be positive (ie > 16 bit dep?), see 'status'
+LET scr.saveline(n, v) BE v!0, v!1, v!2 := word.ad!n, byte.ad!n, type!n
+
+// private
+LET do.scr.hardscroll.hint(dirn, top, bot) BE IF bot > top THEN $(
+  // this is a hint that hard scroll could reduce screen updating
+  // The message is passed on to 'sys', which
+  // updates scrmap accordingly if the terminal can help
+
+  // new version - instead of move we provide SWAP.
+  // thus there is no way for 'scoll' to duplicate data on the screen.
+  // this means that less copying is necessary
+  LET fn.clr(n) BE IF n >= 0 & n <= ymax THEN $(
+    LET thislinemap = scrmap!n // new scrmap
+//    let l = (xmax + 1) * n
+    line.updated!n := yes
+    line.xtop!n := 0
+    FOR i = 0 TO xmax DO thislinemap%i := ' ' $)
+  LET fn.jumble(n) BE IF n >= 0 & n <= ymax THEN $(
+    LET thislinemap = scrmap!n // new scrmap
+    line.updated!n := yes
+    line.xtop!n := xmax
+    FOR i = 0 TO xmax DO thislinemap%i := 255 $)
+  LET fn.move(src, dst) BE IF dst >= 0 & dst <= ymax THEN
+    TEST src < 0 | src > ymax THEN fn.jumble(dst) ELSE $(
+      LET srclinemap = scrmap!src
+      LET dstlinemap = scrmap!dst
+      LET srctop = line.xtop!src
+      LET dsttop = line.xtop!dst
+      line.updated!dst := yes
+      line.updated!src := yes // new
+      scrmap!src       := dstlinemap  // new
+      scrmap!dst       := srclinemap  // new
+      line.xtop!src := dsttop // new
+      line.xtop!dst := srctop $)
+  sys.hardscroll(dirn, top, bot, fn.clr, fn.move, fn.jumble) $)
+
+LET scr.hardscroll.hint(dirn, top, bot) BE IF save.scroll!1 >= 0 THEN $(
+  // these hints are saved up between screen updates.
+  // if more than one area scrolls we assume confusion and do nothing
+  // otherwise we try to add things up.
+  // this helps some hardware and prevents a mess in some cases.
+  // save.scroll holds the three args, or
+  //   !1 <0 -> terrible mess
+  //   !0 =0 -> nothing yet
+  TEST save.scroll!0 = 0 THEN
+    save.scroll!0, save.scroll!1, save.scroll!2 := dirn, top, bot
+  ELSE TEST save.scroll!1 = top & save.scroll!2 = bot THEN
+    save.scroll!0 := save.scroll!0 + dirn
+  ELSE save.scroll!1 := -1 $)
+
+LET scr.dolineupdates() BE $(
+  // an attempt is made to update near the cursor first.
+  // The text cursor, the query cursor and the content of a block
+  // are all shown highlighted, if the terminal is capable of it.
+  // This turns out to be a lot of work,
+  // especially the block which could be a column block.
+
+  // There is also the worry of horizontal scroll - if this is
+  // necessary the the whole process starts again.
+
+  // V 1.7, If there has been a page fault since the last 'text.update',
+  // then text lines are not updated.
+  // This is to fix an obscure and rare screen garbage bug.
+  // V1.7.1, this fix taken out.
+
+  LET sy = screen.y.of.file.cur // (filecol, fileline) could be miles away...
+                                // eg message during block/find op.
+  LET a = ? ; LET again = no
+  LET bx, b.y, kx, ky = marker.x!10, marker.y!10, marker.x!11, marker.y!11
+  invblock := o.highlightblock & ky >= b.y & b.y >= 0 &
+    ((~t.split) | marker.alternate!10 = marker.alternate!11) &
+    (t.column | b.y = ky -> kx > bx, TRUE) & (~marker.hidden!10) & (~marker.hidden!11)
+  screen.y.of.query.cur := -1 // if it exists, updating will replace it.
+start.again:
+  // If a horiz scroll occurs, the whole text area should be updated.
+  // this only does it on the following 'text.update' -
+  // but that might be OK, I'm not sure.
+  IF again THEN $(
+    // someone (probably 'main' will notice that t.u.i ~= 0
+    // and call us again
+    text.update.info := text.update.info | 15; GOTO exiting $)
+  again := yes
+  IF sys.keywaiting() THEN GOTO exiting
+  IF save.scroll!1 >= 0 & save.scroll!0 ~= 0 THEN $(
+    do.scr.hardscroll.hint(save.scroll!0, save.scroll!1, save.scroll!2)
+    save.scroll!0, save.scroll!1, save.scroll!2 := 0, 0, 0 $)
+  IF line.updated!sy THEN $(
+    a := scr.doline(sy); IF a = 2 THEN GOTO exiting
+                         IF a = 3 THEN GOTO start.again $)
+  FOR i = 1 TO ymax DO $(
+    IF sy + i <= ymax & line.updated!(sy+i) THEN $(
+      a := scr.doline(sy + i); IF a = 2 THEN GOTO exiting
+                               IF a = 3 THEN GOTO start.again $)
+    IF sy - i >= 0 & line.updated!(sy-i) THEN $(
+      a := scr.doline(sy - i); IF a = 2 THEN GOTO exiting
+                               IF a = 3 THEN GOTO start.again $) $)
+  scr.curpos()
+  IF highlighted ~= 0 THEN $( highlighted := 0; sys.nonhighlight() $)
+  sys.flushbuf()
+  IF marker.y!12 >= 0 & (~sys.keywait(200)) THEN $( // cancel bracket flash
+    FOR i = 0 TO ymax DO
+      IF type!i = marker.y!12 THEN line.updated!i := yes
+    marker.y!12 := -1
+    again := no
+    GOTO start.again $)
+
+ exiting:
+  IF marker.y!12 >= 0 THEN
+    FOR i = 0 TO ymax DO
+      IF type!i = marker.y!12 THEN line.updated!i := yes
+  save.scroll!0, save.scroll!1, save.scroll!2 := 0, 0, 0
+  RETURN $)
+
+// bit 7 is used to remember highlighting.
+AND scr.wrch(c) BE $(  // internal
+  TEST c <= 127 THEN
+    IF highlighted ~= 0 THEN $( highlighted := 0; sys.nonhighlight() $)
+  ELSE IF highlighted ~= 1 THEN $( highlighted := 1; sys.highlight() $)
+  sys.wrch(c) $)
+
+AND scr.doline(n) = VALOF $(
+  // possible results - 1 -> fine
+  //                    2 -> key waiting
+  //                    3 -> horiz jolt - start again!
+  LET skip = -(xmax+5)
+  LET thislinemap = scrmap!n
+  LET xchk = screen.x.of.file.cur + 4
+  LET maxtop = ?
+  alt := type!n >= 0 & (n < text.top.scr.line | n > text.bot.scr.line)
+    // shouldn't have to know this here.. oh well
+  IF xchk > xmax THEN xchk := xmax
+  IF formline(n) THEN RESULTIS 3
+  maxtop := line.xtop!n > lbuf.xtop -> line.xtop!n, lbuf.xtop
+  IF maxtop > xmax - 4 THEN maxtop := xmax
+  IF maxtop = xmax & n = ymax THEN
+    maxtop := xmax - screencornerallowed // bot r.h. char place
+  FOR i = 0 TO maxtop DO $(
+    IF thislinemap%i = linmap%i THEN $( skip := skip + 1; LOOP $) // new
+    IF i = xchk THEN $( sys.flushbuf(); IF sys.keywaiting() THEN RESULTIS 2 $)
+    thislinemap%i := linmap%i
+    IF skip = 0 THEN $( scr.wrch(linmap%i); LOOP $)
+    TEST 0 < skip < 4 THEN $(
+      LET j = i - skip
+      FOR k = j TO i DO scr.wrch(linmap%k) $)
+    ELSE $( sys.curpos(i, n); scr.wrch(linmap%i) $)
+    skip := 0 $)
+  IF maxtop  ~= xmax & thislinemap%xmax ~= linmap%xmax &
+    (n ~= ymax | screencornerallowed = 0) THEN $(
+    LET c = linmap%xmax
+    sys.curpos(xmax, n)
+    thislinemap%xmax := c
+    scr.wrch(c) $)
+  line.xtop!n := lbuf.xtop
+  line.updated!n := no
+  RESULTIS 1 $)
+
+// If we suspect modifications on any line,
+// a complete map of what the line should look like is built
+// here, and then compared with what we believe to be on the screen
+// and the screen modified accordingly, in scr.doline above.
+
+// Horizontal scroll and markers both cause dreadful problems.
+// Horizontal scroll can only be detected in this routine.
+// If the current version of displaycol will not allow the cursor to
+// appear on the screen, we return 'true' - this filters back to
+// scr.dolineupdates, who starts all calculations again.
+//  All of this is make much worse by the split screen.
+// When updating lines in the alternate screen window,
+// a different displaycol is used and the cursor ignored. Yech!
+
+// Block markers in either mode must be noticed, and the block inverted.
+// Marker 12 appears as an inverse video square - it is hoped that this
+// will eventually show bracket matchings.
+
+AND formline(n) = VALOF $( // yes -> horiz scroll
+  LET invmask = ?
+  LET usualinvmask = ? // needed for marker 12
+  LET ad, bad, src, dst, ty = word.ad!n, byte.ad!n, 0, 0, type!n
+  LET c, fill, flag = ?, ' ', ' '
+  LET marker, mid, cm = ?, ?, ?
+  LET dcol = alt          -> otherbuf!6,    // other displaycol - very naughty indeed!!
+             ty >= 0 | ty = rulerline -> displaycol,             // normal text
+                                         narrow.screen.offset
+                                         // menus only scrolled for narrow screen
+  LET original.dcol = dcol // needed for offset of abs tab char,
+                           // which went wrong when scrolled horizontally.
+  LET highlightfill = highlight.split & (ty = splitline | ty = rulerline) -> yes, no
+  IF ty = fileline THEN screen.x.of.file.cur := xmax // will be reset in loop
+  lastmark := 0
+  invmask := (invblock & (~t.column) & ty > marker.y!10 &
+              ty <= marker.y!11 &
+             ((~t.split) | alt = marker.alternate!10)) |
+    highlightfill -> 128, 0
+  // if ruler line is turned off statusline is in inv vid
+  IF ad = statusbuf & ~t.ruler & helplevel ~= 3 & highlight.split THEN $(
+    invmask := 128; highlightfill := yes $)
+  usualinvmask := invmask
+  marker := checkmarks(ty, 0); mid := result2
+  WHILE TRUE DO $(
+    invmask := usualinvmask
+    c := ad%(bad+src)
+    IF dst > xmax THEN $( // make best use of right hand screen column
+      src := src - 1
+      flag := c ~= ch.line -> '+', linmap%(dst - 1); BREAK $)
+    IF src = marker THEN $( // display block or place marker
+      more:
+        TEST invblock & mid = 10 THEN $(
+          invmask := 128; usualinvmask := invmask $) ELSE $(
+        TEST invblock & mid = 11 THEN $(
+          invmask := 0  ; usualinvmask := invmask $) ELSE
+        TEST mid = 12 THEN invmask := 128 ELSE // 1 - char blip for ()()
+        FOR i = 1 TO (marker.name!mid)%0 DO $(
+          dcol := dcol - 1
+          IF dcol = 0 & ty = fileline & src > filecol & (~alt) THEN $(
+            displaycol := displaycol - o.colinc
+            IF displaycol < 0 THEN displaycol := 0; RESULTIS yes $)
+          IF dcol <= 0 THEN $( linmap%dst := (marker.name!mid)%i; dst := dst+1 $) $) $)
+      $( // endless fun re >1 marker in the same spot
+         // ghastly bodge re marker 15, the folded block
+         // An afterthought visible marker...
+         // another ghastly bodge re marker 15 in other window...
+        IF dst > xmax THEN BREAK
+        mid := mid + 1; IF mid > 15 THEN BREAK
+        TEST mid = 12 THEN $(
+          mid := 15
+          IF (alt -> otherbuf!36, marker.y!15) ~= ty THEN BREAK
+          IF (alt -> otherbuf!35, marker.x!15)  = src THEN GOTO more $)
+        ELSE $(
+          IF marker.alternate!mid ~= alt THEN LOOP
+          IF marker.hidden!mid THEN LOOP
+          IF marker.y!mid ~= ty THEN LOOP
+          IF marker.x!mid = src THEN GOTO more $) $) REPEAT
+      marker := checkmarks(ty, src + 1); mid := result2 $)
+    IF src = filecol & ty = fileline & (~alt) THEN
+      screen.x.of.file.cur, screen.y.of.file.cur := dst, n
+    src := src + 1
+    cm := c | invmask  // set highlight if necessary
+//dud?    marker := checkmarks(ty, src + displaycol); mid := result2
+printit:
+    IF 31 < c <= #X7E THEN $(
+      dcol := dcol - 1
+      IF dcol = 0 & ty = fileline & src > filecol & (~alt) THEN $(
+        displaycol := displaycol - o.colinc; RESULTIS yes $)
+      IF dcol <= 0 THEN $( linmap%dst := cm; dst := dst+1 $); LOOP $)
+    IF c = ch.line THEN $( flag := ty < 0 -> ' ',  '<'; BREAK $)
+    IF c = ch.softline THEN BREAK
+
+// for trying out tab characters in horizontal scroll:
+//*********************************************************************hello there I am a normal line
+//                                                                     I have one tab
+//                                                                     I have two
+//      hello                                                          I have two too
+
+// 28 Feb 85 - still tab bugs!
+
+    IF c = (ctl&'I') THEN $(
+      // STILL CAN'T FIGURE OUT THIS SILLY BUG!!
+      // still errors in horizontal scroll and literal tab characters.
+      // for i = 0 to 7 - (((original.dcol - (dcol < 0 -> 0, dcol)) + dst + 1) & 7) do
+      // stick to old version that almost works, and think harder!
+      FOR i = 0 TO 7 - (((original.dcol - (dcol < 0 -> 0, dcol)) + dst) & 7) DO
+      $(
+        dcol := dcol - 1
+        IF dcol = 0 & ty = fileline & src > filecol & (~alt) THEN $(
+          displaycol := displaycol - o.colinc; RESULTIS yes $)
+        IF dcol <= 0 THEN $( linmap%dst := ' ' | invmask; dst := dst+1 $) $); LOOP $)
+//    if c = ch.bof then  $( flag := ':'; break $)
+    IF c = ch.eof THEN  $( flag := '.'; BREAK $)
+    IF c = ch.invishyphen THEN BREAK
+    IF c = ch.softhyphen THEN $( c := '-'; cm := '-' | 128; GOTO printit $)
+    IF c = ch.softspace THEN $(  c := ' '; cm := ' ' | 128; GOTO printit $)
+    IF c = ch.pagebrk THEN $( fill := '-'; flag := 'P'; BREAK $)
+    IF c = #X7F | c = #XFF THEN $( c := '~'; cm := '~'|128; GOTO printit $)
+    IF c >= 128 THEN $( c := c & 127; invmask := 128 $)
+    IF c <= 31 THEN  $(
+      dcol := dcol - 1
+      IF dcol = 0 & ty = fileline & src > filecol & (~alt) THEN $(
+        displaycol := displaycol - o.colinc; RESULTIS yes $)
+      IF dcol <= 0 THEN $( linmap%dst := '^'|invmask; dst := dst+1 $)
+      c := c + 'A' - 1; cm := cm + 'A' - 1; GOTO printit $)
+    // Utterly unknown, illegal character
+    GOTO printit $)
+  IF ty = fileline & src < filecol & (~alt) THEN $(
+    // cursor is off the right hand side of the screen
+    displaycol := displaycol + o.colinc; RESULTIS yes $) // horiz scroll
+  IF ty = fileline & dcol > 0 & (~alt) THEN $(
+    // line is too short to even begin to show
+    displaycol := displaycol - o.colinc
+    IF displaycol < 0 THEN displaycol := 0; RESULTIS yes $) // horiz scroll
+  IF ty = splitline THEN $( fill := '-'; flag := 'S' | usualinvmask $)
+  IF highlightfill THEN fill := fill | usualinvmask
+  IF ty = queryline & dst > 0 THEN $(
+    screen.x.of.query.cur := dst
+    screen.y.of.query.cur := n
+    IF o.highlightcur THEN $(
+      linmap%dst := fill | 128; dst := dst + 1 $) $)
+  lbuf.xtop := dst < xmax & fill = ' ' -> dst, xmax
+  WHILE dst < xmax DO $(
+    linmap%dst := fill; dst := dst + 1 $)
+  linmap%xmax := flag | usualinvmask
+  IF o.highlightcur & ty = fileline & ~alt THEN $(
+    LET c = linmap%screen.x.of.file.cur
+    // by popular request, the cursor IS visible when moving around inside blocks.
+    linmap%screen.x.of.file.cur := c NEQV 128 $)
+  IF screen.x.of.file.cur > lbuf.xtop THEN lbuf.xtop := screen.x.of.file.cur
+  RESULTIS no
+$)
+
+AND hexch(c) = "0123456789ABCDEF"%((c&15) + 1)
+
+AND checkmarks(n, src) = VALOF $(
+  LET savei = 9999
+  IF n >= 0 & showmarkers THEN $(
+    FOR i = 0 TO 12 DO $(           // there are 13 visible markers
+                                    // 0..9, b, k, and bracket flash
+      IF marker.hidden!i THEN LOOP
+      IF marker.alternate!i ~= alt THEN LOOP
+      IF n = marker.y!i & src <= marker.x!i &
+        (savei = 9999 | marker.x!i < marker.x!savei) THEN savei := i $)
+
+    // Extra kludges for marker 15, the folded block
+    $( LET y15, x15 = ?, ?
+       y15 := alt -> otherbuf!36, marker.y!15
+       x15 := alt -> otherbuf!35, marker.x!15
+       IF n = y15 & src <= x15 &
+         (savei = 9999 | x15 < marker.x!savei) THEN savei := 15 $)
+
+    // endless fun with column block markers.
+    IF t.column & (~ marker.hidden!10) & (~ marker.hidden!11) &
+       marker.x!10 < marker.x!11 & marker.y!10 < marker.y!11 &
+       n >= marker.y!10 & n <= marker.y!11 &
+       marker.y!10 >= 0 &
+       ((~t.split) |
+         marker.alternate!10 = alt &
+         marker.alternate!11 = alt )
+    THEN $(
+      IF src <= marker.x!10 & (savei = 9999 | marker.x!savei > marker.x!10) THEN savei := 10
+      IF src <= marker.x!11 & (savei = 9999 | marker.x!savei > marker.x!11) THEN savei := 11 $)
+    IF savei = 9999 THEN RESULTIS -1
+    result2 := savei; lastmark := savei + 1
+    RESULTIS (savei = 15 & alt -> otherbuf!35, marker.x!savei) $)
+  RESULTIS -1
+$)
+
+AND scr.curpos() BE TEST screen.y.of.query.cur >= 0 THEN
+  sys.curpos(screen.x.of.query.cur, screen.y.of.query.cur)
+  ELSE
+    sys.curpos(screen.x.of.file.cur, screen.y.of.file.cur)
+
+

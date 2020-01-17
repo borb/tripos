@@ -1,0 +1,746 @@
+SECTION "Start"
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.ringhdr-noglobs"
+GET "BCPL.ring"
+GET "BCPL.ringssp"
+GET "BCPL.synfind"
+GET "BCPL.gethex"
+GET "BCPL.useruidset"
+GET "BCPL.enteruidset"
+GET "BCPL.finduidset"
+GET "clihdr"
+GET "iohdr"                   // for act.non.reflect.mode
+
+// Author     C.G. Girling
+
+// Modifications
+//
+// ??-???-?? ???  Several!
+// 13-sep-85 NJO  Mod record started.  Switches RMVThand to non-reflect
+//                mode when prompting for password.
+
+
+
+MANIFEST
+$(  hopeless         = 411      // dr.result2 for service not working properly!
+    act.disconnect   = 801      // console handler disconnect action
+    aot.writing      = #XA004   // USERAUTH & PRIVMAN rc for AOT writing to disc
+    userauth.baduser = #XDFDB   // USERAUTH rc for bad <user,pw> pair
+    privman.badpriv  = #XA00E   // PRIVMAN rc for bad <user,priv> pair
+    // Possible privilege requests - bitmask offsets
+    priv.labpriv     = #X0001   // For non-student users
+    priv.trippriv    = #X0002   // For FULL access normally
+$)
+
+
+GLOBAL
+$(  user.find.and.set.up: ug    // This global is used in CLI-INIT
+$)
+
+
+
+STATIC                          // mustn't use any globals - callseg'd
+$(  sys.rdch = 0                // saved rdch - for unending terminal stream
+$)
+
+
+
+
+
+
+
+
+
+
+
+
+
+//
+//                       Ring  Entry  Procedures
+//
+
+
+
+
+
+LET writeerror(entry, rc, service) BE dr.result2 := hopeless
+
+
+GET "BCPL.refresh"
+GET "BCPL.delete"
+GET "BCPL.verify"
+GET "BCPL.authenticate"
+GET "BCPL.bestow"
+GET "BCPL.killfridge"
+
+
+
+
+
+
+//
+//                       Main  Body  Of  Code
+//
+
+
+
+
+
+LET start(caller, necessary.privileges) =
+    user.find.and.set.up(caller, necessary.privileges)
+
+
+
+
+AND user.find.and.set.up(caller, necessary.privileges) = VALOF
+$(  // called as a command if 'caller'=0 and callseged otherwise
+    LET username = VEC 20
+    LET userpuid = TABLE #X0000, #X0000, #X0000, #X0000   // default user
+    LET init = TRUE
+    LET no.auth = FALSE
+    LET privs.needed = 0    // no privileges needed by default
+    TEST VALOF
+    $(  LET arg = VEC 20
+        LET ans = TRUE
+        IF VALOF
+        $(  TEST caller=0 THEN
+                IF 0=rdargs("User=Initials,Init/s,Noauth/s,Labuser/s",
+                    arg, 20) THEN
+                $(  writes("Syntax error on command line*N")
+                    ans := FALSE
+                $)
+            ELSE
+            $(  // CALLSEG'ed
+                privs.needed := necessary.privileges
+                arg!0 := 0
+                arg!1 := 0
+                arg!2 := 0
+                arg!3 := 0
+            $)
+            RESULTIS ans
+        $) THEN
+        $(  init := (arg!1~=0)
+            no.auth := (arg!2~=0)
+            IF arg!3\=0 THEN privs.needed := priv.labpriv
+            TEST arg!0 = 0 THEN username%0 := 0 ELSE
+            FOR i=0 TO arg!0%0 DO username%i := arg!0%i
+        $)
+        RESULTIS ans
+    $) THEN start.command(username, userpuid, init, no.auth,
+                          @privs.needed, caller=0)
+    ELSE synfind(0)
+    // clear incore lookup buffers
+    // Exit without calling STOP, as may have been CALLSEGed
+    IF caller=0 THEN stop(0)
+    RESULTIS privs.needed
+$)
+
+
+
+
+AND start.command(username, userpuid,
+                  init, no.auth, lv.privs.needed, as.command) BE
+$(  // Sets directory to root;  deletes UIDsets in root node;
+    // Types start of day message;  Logs user on and sets his directory;
+    // Executes user's init sequence; and Checks for user's messages
+//  writes("About to set directory *":*"*N")
+    set.dir(":")
+//  writes("Deleting UID sets in the fridge in START command*N")
+    IF as.command THEN killfridge(consoletask)
+//  writes("Checking for start of day message*N")
+    type("SYS:Info.INIT-MESSAGE")
+//  writes("Logging user on and setting his directory*N")
+    TEST set.dir(get.user(username, userpuid, ~no.auth, lv.privs.needed)) THEN
+    $(  LET init.sequence = (init -> findinput("INIT-SEQUENCE"), 0)
+//      writes("Executing user's INIT-SEQUENCE if he has one*N")
+        UNLESS init.sequence=0 THEN
+        $(  UNLESS cli.currentinput=cli.standardinput THEN
+            $(  selectinput(cli.currentinput)
+                endread()
+            $)
+            cli.currentinput := init.sequence
+        $)
+    $) ELSE set.dir("T:")     // don't leave user in ":" !
+    IF (!lv.privs.needed & priv.trippriv)=priv.trippriv THEN
+    writes("*C****** Full access granted*N")
+
+    //  Change on 25/01/85 by IDW:
+    //       Removed test for Tripos message, since the old message system 
+    //       is no longer available.
+
+    //find.message(userpuid)
+
+    //  Change on 02/01/85 by IDW:
+    //       Added new routine "find.mail" to check for new tripos mail.
+
+    find.mail( synfind( userpuid, to.name.domain, "" ) )
+
+//  find.ring.message()
+
+    synfind(0)
+$)
+
+
+
+
+AND type(file.name) BE
+$(  LET message.file = findinput(file.name)
+    UNLESS message.file=0 THEN
+    $(  LET savein = input()
+        LET ch = ?
+        LET column = 0
+        selectinput(message.file)
+        ch := rdch()
+        WHILE ch~=endstreamch DO
+        $(  TEST ch='*T' THEN
+            $(  LET spaces = (7 - column REM 8) + 1
+                FOR i=1 TO spaces DO wrch('*S')
+                column := column+spaces
+            $) ELSE
+            $(  wrch(ch)
+                TEST ch='*N' | ch='*C' THEN column:=0 ELSE column:=column+1
+            $)
+            ch := rdch()
+        $)
+        endread()
+        selectinput(savein)
+    $)
+$)
+
+
+
+
+AND set.dir(dirname) = VALOF
+$(  result2 := 210   // invalid stream name component
+    UNLESS dirname%0=0 THEN
+    $(  LET dir=?
+        dir := locatedir(dirname)
+        TEST dir=0 THEN
+        $(  LET r2=result2
+            writef("Can't locate directory '%S': ",dirname)
+            fault(r2)
+            result2:=r2
+        $) ELSE
+        $(  result2:=0
+            UNLESS currentdir=dir THEN
+            $(  freeobj(currentdir)
+                currentdir:=dir
+            $)
+        $)
+    $)
+    RESULTIS result2=0
+$)
+
+
+
+
+||  AND find.message(user) BE
+||  $(  LET messagefile = "SYS:USERS.Message-0123456789ABCDEF"
+||      MANIFEST $(  mf.start = 19  $)
+||      LET message.text = ?
+||      FOR i=0 TO uidsize-1 DO
+||      FOR j=0 TO 2*bytesperword-1 DO
+||      $(  LET hex = (user!i >> (((2*bytesperword-1)-j)*4)) & #XF
+||          messagefile%(mf.start+2*bytesperword*i+j) :=
+||          (hex<#XA -> '0'+hex, 'A'+hex-#XA)
+||      $)
+||      message.text := findinput(messagefile)
+||      UNLESS 0 = message.text THEN
+||      $(  LET savein=input()
+||          selectinput(message.text)
+||          endread()
+||          selectinput(savein)
+||          writes("*C****** Message for you*N")
+||      $)
+||  $)
+
+
+
+AND find.mail( user )  BE
+$(
+//  Check to see whether new mail has arrived for this user.  If so the
+//  file "New-Mail" will exist in his mailbox.
+
+    LET maildir  =  locateobj( "SYS:Users.Mail" )
+
+    UNLESS  maildir = 0  DO
+    $(
+        LET olddir   =  currentdir
+        LET userdir  =  0
+        
+        currentdir  :=  maildir
+        userdir     :=  locateobj( user )
+
+        TEST  userdir = 0  THEN  writes( "*C****** You do not have a Mail Box*N" )
+        ELSE
+        $(
+            //  The user has a mailbox, but is there new mail waiting for him?
+            //  If there is, then the file "New-Mail" will exist ...
+            
+            LET lock  =  0
+            
+            currentdir  :=  userdir
+            lock        :=  locateobj( "New-Mail" )
+            
+            UNLESS  lock = 0  DO  writes( "*C****** New mail for you*N" )
+            
+            freeobj( userdir )
+            freeobj( lock )
+        $)
+
+        currentdir  :=  olddir
+
+        freeobj( maildir )
+    $)
+$)
+        
+
+
+//  AND find.ring.message() BE
+//  $(  // Ring software assumed to be initialized with DR.INITIALISE
+//      LET user = useruidset(consoletask)
+//  //  GET "BCPL.writeerror"
+//      UNLESS user=0 THEN
+//      $(  LET mail = VEC sv.upb
+//          IF 0=dr.rctype(dr.lookup("MAIL", mail)) THEN
+//  //      writeerror("nameserver", dr.result2, 0) ELSE
+//          $(  LET data = VEC 12
+//              // data.tag at offset 4 is irrelevent
+//              LET data.tuid = data+5
+//              LET data.puid = data+9
+//              LET reply = VEC 4
+//              data!0 := 12
+//              reply!0 := 4
+//              mail!sv.func := 1    // TEST to see if there is mail
+//              FOR i=0 TO 3 DO
+//              $(  data.puid!i := get2bytes(user+cap.puid, i)
+//                  data.tuid!i := get2bytes(user+cap.tuid, i)
+//              $)
+//              IF 0=dr.rctype(dr.ssp(mail, data, reply, 1, 1)) THEN
+//              IF reply!(bb.ssp.args+1)=0 THEN
+//              writes("*C****** New Ring mail for you*N")
+//  //          ELSE writef("REPLY arg = #X%X4*N", reply!(bb.ssp.args+1))
+//  //          ELSE writeerror("mail/test", dr.result2, mail)
+//          $)
+//      $)
+//  $)
+
+
+
+AND get.user(default.user, user.puid, auth, lv.privs.needed) = VALOF
+$(  LET rc = 0
+    LET user = VEC 20
+    LET savein = input()
+    LET eof = FALSE
+    LET error.count = 0
+    LET default.directory = "T:"
+    LET ans = default.directory
+    LET break.made = FALSE
+    LET privs.requested = 0
+    sys.rdch := rdch
+    rdch := terminal.rdch
+    selectinput(findinput("**"))
+    TEST 0~=dr.rctype(dr.initialise()) THEN
+    $(  writes("Ring handler not loaded*N")
+        user.prompt(user, default.user, 20, (TABLE 0), 1, @privs.requested)
+    $) ELSE
+    TEST default.user%0=0 & find.usable.user(consoletask) THEN
+    $(  LET user = useruidset(consoletask)
+        LET name = synfind(user+cap.puid, to.name.domain, 0)
+        FOR i=0 TO uidsize-1 DO user.puid!i := (user+cap.puid)!i
+        IF name\=0 THEN writef("****** Welcome %S*N", name)
+    $) ELSE
+    $(rpt
+        LET pw = VEC 10
+        pw%0 := 0
+        break.made :=
+            user.prompt(user, default.user, 20, pw, 10, @privs.requested)
+        UNLESS break.made THEN
+        $(  default.user%0 := 0        // forget first name given
+            IF pw%0=0 THEN
+            $( set.reflection(FALSE)
+
+               eof := ~ask("*CPassword:", pw, 10)
+
+               set.reflection(TRUE)
+            $)
+            break.made := testflags(1)
+            UNLESS break.made THEN
+            $(  rc := check.pw(user!0, pw, user.puid, auth)
+                IF rc~=hopeless & rc~=0 THEN
+                $(  error.count := error.count + 1
+                    writes("Unknown user or wrong password*N")
+                $)
+            $)
+        $)
+    $)rpt REPEATUNTIL rc=0 | rc=hopeless | error.count>=3 | break.made | eof
+    rdch := sys.rdch
+    endread()
+    selectinput(savein)
+    TEST error.count>=3 | break.made THEN
+    $(  writef("*C****** %S*N", (break.made -> "BREAK", "Too many retries"))
+        IF auth THEN log.user.off()
+    $) ELSE
+    TEST rc~=hopeless THEN
+    $(  LET new.privs = !lv.privs.needed | privs.requested
+        LET user.uidset = useruidset(consoletask)
+        TEST user.uidset\=0 &
+             user.has.privilege.for.machine(user.uidset, new.privs) THEN
+        $(  !lv.privs.needed := new.privs
+            ans := find.dir(user.puid, default.directory)
+        $) ELSE
+        $(  writes("*C****** Insufficient privilege*N")
+            IF auth THEN log.user.off()
+        $)
+    $) ELSE
+    $(  If rc=hopeless THEN
+        TEST (privs.requested & priv.trippriv) \= 0 THEN
+        writes("*C****** Situation hopeless - log on anyway*N") ELSE
+        $(  writes("*C****** Situation hopeless - giving up*N")
+            IF auth THEN log.user.off()
+        $)
+        ans := find.dir(user.puid, default.directory)
+    $)
+    RESULTIS ans
+$)
+
+
+
+
+AND user.prompt(user, default.user, user.size, pw, pw.size,
+               lv.privs.requested) = VALOF
+$(  LET break.made = FALSE
+    LET rdargs.string = "Initials,Status,PW/k"
+    LET prompt = "*CUser: *E"
+    !lv.privs.requested := 0     // initialise to NO privilege requested
+    TEST default.user%0=0 THEN
+        WHILE ~break.made & VALOF
+        $(  LET error = ?
+            writes(prompt)
+            TEST 0=rdargs(rdargs.string, user, user.size) THEN
+            $(  error := TRUE
+                writes("Syntax error*N")
+            $) ELSE
+            $(  error := (user!0 = 0)
+                IF ~error & user!1~=0 THEN
+                $(  IF 0=compstring(user!1, "FULL") THEN
+                    !lv.privs.requested := priv.trippriv
+                    IF !lv.privs.requested=0 THEN
+                    $(  writes("Requested status unknown (*"PW*" missing?)*N")
+                        // do not write out status requested - it might be
+                        // the users password!
+                        error := TRUE
+                    $)
+                $)
+            $)
+            RESULTIS error
+        $) DO break.made := testflags(1)
+    ELSE
+    $(  LET size = (default.user%0 > user.size*bytesperword-1 ->
+                    user.size*bytesperword-1, default.user%0)
+        LET u = user+3
+        user!0 := u         // Users initials
+        user!1 := 0         // no access status requested
+        user!2 := 0         // No password given
+        FOR i=1 TO size DO u%i := default.user%i
+        u%0 := size
+    $)
+    UNLESS user!2=0 THEN
+    $(  LET size = (user!2%0 > pw.size*bytesperword-1 ->
+                    pw.size*bytesperword-1, user!2%0)
+        FOR i=1 TO size DO pw%i := user!2%i
+        pw%0 := size
+    $)
+    RESULTIS break.made
+$)
+
+
+
+
+AND ask(question, ansvec, anssize) = VALOF
+$(  LET i=?
+    LET ch=?
+    $(rpt
+        i:=1
+        writes(question)
+        writes(" *E")
+        ch:=rdch()
+        WHILE ch~='*N' & ch~='*E' & ch~=endstreamch DO
+        $(  UNLESS ch='*S' THEN
+            $(  IF i<2*anssize THEN ansvec%i := ch
+                i:=i+1
+            $)
+            ch:=rdch()
+        $)
+        IF i>=2*anssize THEN writes("Answer too long!*N")
+    $)rpt REPEATUNTIL i<2*anssize | ch=endstreamch
+    ansvec%0 := i-1
+    RESULTIS ch~=endstreamch
+$)
+
+
+
+
+AND set.reflection(reflect.on) BE
+$( sendpkt(notinuse, task.consolehandler, act.non.reflect.mode, ?, ?,
+                                                                NOT reflect.on)
+$)
+
+
+
+
+AND terminal.rdch() = VALOF
+$(  LET ch=sys.rdch()
+    IF ch=endstreamch THEN
+    $(  endread()
+        selectinput(findinput("**"))
+        ch := '*N'
+        setflags(taskid, 1)
+    $)
+    RESULTIS ch
+$)
+
+
+
+AND log.user.off() BE
+    sendpkt(notinuse, consoletask, act.disconnect, ?, ?, TRUE)
+
+
+
+AND find.dir(puid, default.dir) =
+    (puid=0 -> default.dir, synfind(puid, to.dir.domain, default.dir))
+
+
+
+
+AND check.pw(name, pw, user.puid, auth) = VALOF
+$(  // Returns RC=0 if user loggs on successfully
+    // Fills 'user.puid' with user's PUID if successfull
+    LET puid = user.puid
+    LET rc = 0
+    IF \get.puid(name, user.puid) THEN
+    puid := synfind(name, from.name.domain, 0)
+    UNLESS puid=0 THEN
+    $(  // If PUID=0 no PUID for the name could be found
+//      writef("Checking user %X4%X4%X4%X4*N",
+//              get2bytes(puid,0), get2bytes(puid,1),
+//              get2bytes(puid,3), get2bytes(puid,3))
+        rc := userauth.logon(puid, pw, auth)
+        FOR i=0 TO uidsize-1 DO user.puid!i := puid!i
+    $)
+    RESULTIS (puid=0 -> 1,rc)
+$)
+
+
+
+
+AND get.puid(string, uid) = VALOF
+$(  LET ans = gethex(string, uid, uidsize) & string%0=16
+//  writef("PUID '%S' turned to %X4%X4%X4%X4 conversion %S*N",
+//         string,
+//         get2bytes(uid,0), get2bytes(uid,1),
+//         get2bytes(uid,2), get2bytes(uid,3), (ans->"OK","bad"))
+    RESULTIS ans
+$)
+
+
+
+
+AND user.has.privilege.for.machine(uidset, necessary.privs) = VALOF
+$(  LET ans = TRUE
+    UNLESS necessary.privs=0 THEN   // i.e.  IF some privileges are required
+    $(  LET user     = VEC uidsize-1
+        LET labpriv  = VEC uidsize-1
+        LET trippriv = VEC uidsize-1
+        LET privilege= VEC uidsize-1
+        LET privman = VEC sv.upb
+        LET aot = VEC sv.upb
+        LET rc = 0
+        gethex("FF02DFBBEBF7B5D8", privilege, uidsize)
+        gethex("FF02C1B7F755370F", labpriv, uidsize)
+        gethex("FF02F742FD8AAEC5", trippriv, uidsize)
+        IF 0=dr.rctype(dr.lookup("PRIVMAN", privman)) THEN
+        IF 0=dr.rctype(dr.lookup("AOT-1", aot)) THEN
+        $(  IF (necessary.privs & priv.labpriv)=priv.labpriv THEN
+            rc := check.priv(aot, privman, uidset, privilege, labpriv)
+            IF rc=0 & (necessary.privs & priv.trippriv)=priv.trippriv THEN
+            rc := check.priv(aot, privman, uidset, privilege, trippriv)
+        $)
+        ans := (rc=0)
+    $)
+    RESULTIS ans
+$)
+
+
+
+
+AND check.priv(aot, privman, user.uidset, auty, priv) = VALOF
+TEST find.and.check(aot, auty, priv, consoletask) THEN RESULTIS 0 ELSE
+$(  LET retries = 0
+    LET priv.uidset = VEC capsize
+    LET rc = hopeless
+    $(rpt
+        rc := bestow(privman, user.uidset, priv, priv.uidset, 100)
+        IF rc = aot.writing THEN
+        $(  delay(2*tickspersecond)  // AOTMANAGER writing to disc
+            retries := retries + 1
+        $)
+        IF (rc & #XE000)=#XE000 THEN rc:=hopeless
+    $)rpt REPEATUNTIL rc~=aot.writing | retries>6
+    IF rc=0 THEN enteruidset(priv.uidset, consoletask)
+//  dr.writeringerror(dr.result2)
+//  writes("START: privilege bestowed was: ")
+//  FOR i=0 TO 3 DO writef("%X4", get2bytes(priv, i))
+//  writes("*NSTART: supporting UIDset was:*N")
+//  FOR i=0 TO 4*4-1 DO writef("%X4 ", get2bytes(user.uidset, i))
+//  newline()
+    UNLESS rc=0 | rc=privman.badpriv THEN
+    TEST rc=aot.writing THEN
+    writes("PRIVMAN: AOTMANAGER writing to disc for too long*N") ELSE
+    $(  LET r2=result2
+        writes("PRIVMAN: ")
+        result2 := r2
+        dr.writeringerror(rc)
+    $)
+    RESULTIS rc
+$)
+
+
+
+
+
+
+AND find.usable.user(tag) = VALOF   
+$(  LET success = FALSE
+    LET user = useruidset(tag)
+    LET aot = VEC sv.upb
+    LET user.puid = VEC uidsize-1
+    gethex("FF02FBF78FB014C3", user.puid, uidsize)
+    IF 0=dr.rctype(dr.lookup("AOT-1", aot)) THEN
+    $(  IF user\=0 & check.auty(user, user.puid) THEN
+        IF 0=dr.rctype(verify(aot, user)) THEN success := TRUE
+        IF NOT success THEN
+        $(  LET cap = VEC capsize
+            IF cap=get.load.uidset(cap) THEN
+            IF check.auty(cap, user.puid) THEN
+            IF 0=dr.rctype(verify(aot, cap)) THEN
+            $(  killfridge(tag)
+                enteruidset(cap, tag)
+                success := TRUE
+            $)
+//          ELSE
+//          $(  dr.writeringerror(dr.result2)
+//              writes("STAR: UIDset found in load data does not verify*N")
+//              writes("Uidset: ")
+//              FOR i=0 TO 4*4-1 DO writef("%X4 ", get2bytes(cap, i))
+//              newline()
+//          $)
+        $)
+    $)
+    RESULTIS success
+$)
+
+
+
+
+AND find.and.check(aot, auty, puid, tag) = VALOF
+$(  LET success = FALSE
+    LET cap = finduidset(puid, auty, tag)
+    IF cap\=0 THEN IF 0=dr.rctype(verify(aot, cap)) THEN success := TRUE
+    IF NOT success THEN
+    $(  LET user = useruidset(tag)
+        LET cap = VEC capsize        
+        TEST user=0 THEN
+            writes("START: warning - User not set when checking UID set*N") ELSE
+        $(  FOR i=0 TO uidsize-1 DO
+            $(  (cap+cap.tuid)!i := (user+cap.tuid)!i
+                (cap+cap.puid)!i := puid!i
+                (cap+cap.auty)!i := auty!i
+            $)
+            IF 0=dr.rctype(verify(aot, cap)) THEN
+            $(  success := TRUE
+                enteruidset(cap, tag)
+            $)
+//          writes("START: searching for UIDSET:*N")
+//          FOR i=0 TO 4*4-1 DO writef("%X4 ", get2bytes(cap, i))
+//          newline()
+        $)
+    $)
+    RESULTIS success
+$)
+            
+
+
+
+AND get.load.uidset(cap) = VALOF  
+$(  LET ans = 0
+    LET info = rootnode ! rtn.info ! rtninfo.ring
+    LET load.data = info ! ri.load.data
+    IF get2bytes(load.data, 0) >= 12 THEN
+    $(  FOR i=0 TO capsize DO cap!i := 0
+        FOR i=0 TO 3 DO
+        $(  put2bytes(cap+cap.tuid, i, get2bytes(load.data, 1+i))
+            put2bytes(cap+cap.puid, i, get2bytes(load.data, 5+i))
+            put2bytes(cap+cap.auty, i, get2bytes(load.data, 9+i))
+        $)
+        ans := cap
+    $)
+    RESULTIS ans
+$)
+
+
+
+
+AND check.auty(cap, auty) = VALOF
+$(  LET i=0
+    WHILE i<uidsize & (cap+cap.auty)!i=auty!i DO i := i+1
+    RESULTIS i=uidsize
+$)
+
+
+
+
+
+AND userauth.logon(puid, pw, auth) = VALOF
+$(  LET rc = hopeless
+    LET userauth = VEC sv.upb
+    LET uidsetlist = rootnode ! rtn.info ! rtninfo.ring + ri.uidset
+    LET newcap = VEC capsize-1
+    TEST 0\=dr.rctype(dr.lookup("USERAUTH",userauth)) THEN
+    writef("*C****** START: can't find *"USERAUTH*"! (rc = %X4 sysrc=%N)*N",
+           dr.result2, result2) ELSE
+    TEST useruidset(consoletask) ~= 0 THEN
+    writes("*C****** START: someone already logged on!*N") ELSE
+    $(  LET retries = 0
+        FOR i=0 TO capsize-1 DO newcap!i := 0
+//      writef("Checking user %X4%X4%X4%X4's password '%S'*N",
+//             get2bytes(puid,0), get2bytes(puid,1),
+//             get2bytes(puid,2), get2bytes(puid,3), pw)
+        $(rpt
+            rc := authenticate(userauth, puid, pw, 5*60 /* seconds */, newcap)
+            IF rc=aot.writing THEN
+            $(  delay(2*tickspersecond)   // AOTMANAGER writing to disc
+                retries := retries+1
+            $)
+            IF (rc & #XE000) = #XE000 THEN rc:=hopeless
+        $)rpt REPEATUNTIL rc~=aot.writing | retries>6
+        IF rc~=0 & rc~=userauth.baduser  /* bad PUID (logon failed) */  THEN
+        TEST rc=aot.writing THEN
+        writes("USERAUTH: AOTMANAGER writing to disc too long*N")
+        ELSE
+        $(  LET r2=result2
+            writes("USERAUTH: ")
+            result2 := r2
+            dr.writeringerror(rc)
+        $)
+//      writef("rc=0: %C  rc=hopeless: %C  auth: %C  newcap=%X8*N",
+//              (rc=0 -> 'T','F'), (rc=hopeless -> 'T', 'F'),
+//              (auth -> 'T','F'), newcap)
+        IF (rc=0 | rc=hopeless) & auth THEN enteruidset(newcap, consoletask)
+    $)
+    RESULTIS rc
+$)
+                    
+

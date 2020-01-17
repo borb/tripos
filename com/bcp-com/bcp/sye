@@ -1,0 +1,103 @@
+SECTION "SYE"
+
+GET "ERRHDR"
+GET "SYNHDR"
+
+LET WRCHBUF() BE
+$( LET at.start = 0 <= CHCOUNT <= 63
+   WRITEF("*N%S", at.start-> "", "...")
+   FOR P=at.start -> 1, CHCOUNT-63 TO CHCOUNT
+   $( LET K = CHBUF!(P&63); TEST K>0 WRCH(K) ELSE WRITEF("<%N>", k) $)
+$)
+
+AND OVSYNREPORT(N,A,B) BE
+$( IF N < 0 $( N := ABS N; REPORTCOUNT := REPORTMAX $)
+   REPORTCOUNT := REPORTCOUNT + 1
+   IF PRSOURCE THEN NEWLINE()
+   TASKWRITEF("Syn err. Line %N", LINECOUNT)
+   $<TRIPOS UNLESS GETP REM 4 =0 deb("<<GETP=%N-Tell PB>>*N", GETP) $>TRIPOS
+   UNLESS Getp=0 WRITEF(" in '%S'", Source.name)
+   writes(" : ")
+   SYNMESSAGE(N,A,B)
+   IF (N >= 3) DO WRCHBUF()
+   // ELSE deb("<n=%N>", n)
+   NEWLINE()
+   IF REPORTCOUNT >= REPORTMAX DO       // close all open streams
+   $(   SELECTINPUT(SOURCESTREAM)
+        ENDREAD()
+        WHILE GETP>0 DO
+        $(  GETP := GETP-get.inc
+            SELECTINPUT(GETV!(GETP+get.stream))
+            ENDREAD()
+        $)
+        $<TRIPOS SOURCESTREAM := 0 $>TRIPOS
+$<PDPRSX
+      SELECTOUTPUT(OCODE)
+      ENDWRITE()                                //DELETEOUTPUT()
+$>PDPRSX
+        FATAL.ERROR()
+   $)
+   NLPENDING := FALSE
+$)
+
+AND synmessage(n, a, b) BE writef( VALOF
+$(1
+   IF n<=0 DO $( REPORTCOUNT:=REPORTMAX; N:=-N $)
+
+   SWITCHON n INTO
+   $( DEFAULT: a := n
+               RESULTIS "Compiler error %N"
+      CASE  0:
+$<PDPRSX       b := wordv
+               RESULTIS ioerror(a)                              $>PDPRSX
+$<TRIPOS      RESULTIS "File error %N"                          $>TRIPOS
+$<TRIPOS
+      CASE  1: RESULTIS "****** BREAK"
+$>TRIPOS
+      CASE  2: RESULTIS "Non supported Condtional tag '%S'"
+      CASE  6: RESULTIS "'$(' expected"
+      CASE  7: RESULTIS "'$)' expected after '$(' on line %N of '%S'"
+      CASE  8: RESULTIS "Name expected in declaration"
+      CASE  9: RESULTIS "Untagged '$)' - '%S' mismatches '%S'"
+      CASE 10: RESULTIS "Tagged '$)' - WARNING - '%S' mismatches '%S'"
+      CASE 15: RESULTIS "')' missing from expression"
+      CASE 19: RESULTIS "')' missing from parameter list"
+      CASE 30: RESULTIS "Bad conditional expression"
+      CASE 32: RESULTIS "Invalid expression"
+      CASE 31: RESULTIS "Boolean expected in conditinal tag expression"
+      CASE 33: RESULTIS "Bad radix number"
+      CASE 34: RESULTIS "Bad string or character constant"
+      CASE 35: RESULTIS "Illegal escape combination '**%C'"
+//      CASE 40: RESULTIS "Name expected (40)********"
+      CASE 41: RESULTIS "')' missing from actual argument list"
+      CASE 42: RESULTIS "Bad procedure heading"
+//      CASE 43: RESULTIS "Name expected for a declaration (43) ********"
+      CASE 44: RESULTIS "'=' or '(' expected in declaration"
+      CASE 45: RESULTIS "':' or '=' expected in declaration"
+      CASE 50: RESULTIS "Unexpected ':'"
+      CASE 51: RESULTIS "Invalid command %N %N"
+      CASE 52: RESULTIS "<RSECT or END expected in SYN5>"
+      CASE 53: RESULTIS "Statement expected, but %n found"
+      CASE 55: RESULTIS "Statement expected <%N in SYN7>"
+      CASE 56: RESULTIS "Null expression (extra ';'?)"
+      CASE 59: RESULTIS "Null expression (extra ';'?)(2)"
+      CASE 54: RESULTIS "'ELSE' expected"
+      CASE 57: RESULTIS "'=' expected"
+      CASE 58: RESULTIS "'TO' expected"
+      CASE 60: RESULTIS "'INTO' expected"
+      CASE 61: RESULTIS "':' expected after CASE"
+      CASE 62: RESULTIS "':' expected after DAFAULT"
+      CASE 63: RESULTIS "'**/' missing"
+      CASE 68: RESULTIS "':=' expected in after conditional tag"
+      CASE 69: RESULTIS "Unmatched conditional compilation tag"
+      CASE 91: RESULTIS "'$'  out of context"
+      CASE 94: RESULTIS "Illegal character #%O5"
+      CASE 95: RESULTIS "String expected after SECTION or NEEDS"
+      CASE 96: RESULTIS "GETs nested too deep"
+      CASE 97: RESULTIS "Bad GET directive"
+      CASE 98: RESULTIS "Program too large"
+      CASE 99: RESULTIS "Incorrect termination"
+    $)
+   $)1 , a, b)
+
+

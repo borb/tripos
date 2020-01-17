@@ -1,0 +1,70 @@
+// Command to load the ring receiver and transmitter devices
+// and the DEQNA device.
+//
+// It expects the following files to contain object modules:
+//
+// :D.RINGRX-DEV          Receiver DCB and driver
+// :D.RINGTX-DEV          Transmitter DCB and driver
+// :D.DEQNA-DEV           DEQNA DCB and driver
+
+// The devices must get loaded with fixed device numbers
+
+SECTION "LoadDevs"
+GET "LIBHDR"
+GET "RINGHDR"
+
+
+GLOBAL
+    $(
+    rx.dcb          : ug
+    tx.dcb          : ug + 1
+    e.dcb           : ug + 2
+    rx.id           : ug + 3
+    tx.id           : ug + 4
+    e.id            : ug + 5
+    $)
+
+MANIFEST
+    $(
+    exp.rx.id       = -7
+    exp.tx.id       = -8
+    exp.e.id        = -9
+    $)
+
+
+LET start() BE
+    $(
+    LET rxfilename       = "sys:D.ringrx-dev"
+    LET txfilename       = "sys:D.ringtx-dev"
+    LET efilename        = "sys:D.deqna-dev"
+
+    rx.dcb       := loadseg(rxfilename)
+    tx.dcb       := loadseg(txfilename)
+    e.dcb        := loadseg(efilename)
+    rx.id        := 0
+    tx.id        := 0
+    e.id         := 0
+
+    IF rx.dcb = 0 THEN error("failed to load ring rx device*N")
+    IF tx.dcb = 0 THEN error("failed to load ring tx device*N")
+    IF e.dcb = 0 THEN error("failed to load ethernet device*N")
+
+    rx.id := createdev(rx.dcb)
+    tx.id := createdev(tx.dcb)
+    e.id := createdev(e.dcb)
+
+    IF (rx.id ~= exp.rx.id) | (tx.id ~= exp.tx.id) | (e.id ~= exp.e.id) THEN
+        error("device numbers wrong*N")
+
+    $)
+
+AND error(f,a,b,c) BE
+    $(
+    writef(f,a,b,c)
+    deletedev(rx.id); unloadseg(rx.dcb)
+    deletedev(tx.id); unloadseg(tx.dcb)
+    deletedev(e.id); unloadseg(e.dcb)
+    stop(20)
+    $)
+
+

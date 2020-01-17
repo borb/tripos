@@ -1,0 +1,180 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "DEBUG-E"
+
+GET "LIBHDR"
+
+GLOBAL
+$(
+writearg:151
+isfun:152
+print:162
+cont:165
+error:167
+testbreak:168
+rch:169
+
+rec:171
+
+lev:179
+currtcb:180
+globv:181
+sptr:184
+sbase:185
+ch:193
+
+currtask:199
+$)
+
+MANIFEST
+$(
+g.sbase=12
+
+co.link=0
+co.caller=1
+co.stackend=2
+co.resumeptr=3
+co.function=4
+
+tcb.x=12
+
+libword=23456
+
+instr.bpt=#X1A01
+instr.entry=#XE27E
+$)
+
+
+LET start(pkt, sadebug) = VALOF
+ $( LET task = pkt!1
+    LET t = rootnode!rtn.tasktab
+    LET p = 0
+    lev := level()
+    start := sadebug
+    UNLESS 0<task<=t!0 DO error()
+    currtcb := t!task
+    IF currtcb=0 DO error()
+    currtask := task
+    globv := currtcb!tcb.gbase
+    p := currtcb!tcb.x
+
+    // REPEAT loop to get commands
+    $( LET nbase = 0
+       LET fsize = 6
+       rch()
+       SWITCHON ch INTO
+       $( DEFAULT:
+             error()
+
+          CASE '*N': CASE endstreamch:
+             newline()
+             unrdch()
+             BREAK
+
+          CASE '*E':CASE '*S':
+             LOOP
+
+          CASE 'N':
+    nxtb:    nbase := cont(sbase+co.caller)
+             UNLESS nbase=0 | nbase=-1 DO
+             $( writes("*N*NCalled from")
+                GOTO newb $)
+             nbase := sbase
+             nbase := cont(nbase) REPEATUNTIL
+                nbase=0 | cont(nbase+co.caller)=0
+             GOTO newb
+
+          CASE 'T': CASE 'B':
+             nbase := cont(globv+g.sbase)
+    newb:    IF nbase=0 DO
+             $( writes("*N*NEnd of backtrace*N*N")
+                BREAK $)
+             sbase := nbase
+          CASE 'U':
+             newline(); newline()
+             nbase := cont(sbase+co.caller)
+             TEST nbase=-1 THEN
+                writes("Root stack")
+             ELSE
+             $( UNLESS nbase=0 DO writes("Active ")
+                writes("Coroutine")
+                writearg(cont(sbase+co.function))
+             $)
+             sptr :=
+                sbase=cont(globv+g.sbase) ->
+                   p, cont(sbase+co.resumeptr)
+             GOTO newp
+
+    nxtp: CASE 'D':
+             IF sptr=sbase GOTO nxtb
+             fsize := cont(cont(sptr))
+             sptr := sptr-fsize
+    newp:    IF fsize>6 DO fsize := 6
+             newline()
+             TEST sptr=sbase THEN
+             $( LET send = cont(sbase+co.stackend)+50
+                LET shwm = send
+                WHILE cont(shwm)=0 DO shwm:=shwm-1
+                writef("Stack base %U5 end %U5 *
+                       *hwm %U5 ",sbase,send,shwm)
+             $)
+             ELSE
+             $( writearg(cont(sptr+1)-5)
+                writef("%U2",sptr)
+                FOR i=2 TO fsize-1 DO
+                   print(cont(sptr+i))
+             $)
+             IF fsize<1 DO error()
+             testbreak()
+             IF ch='B' GOTO nxtp
+       $)
+       writes("E*E")
+    $) REPEAT
+
+    RESULTIS -1
+
+rec:
+    RESULTIS 0
+ $)
+
+
+AND writearg(n) BE
+    TEST isfun(n)
+      THEN writef(" %S ",n-4)
+      ELSE writef("  %I6 ",n)
+
+
+AND isfun(f) =
+    (f>>10)>=rootnode!rtn.memsize | (f-5>>10)>=rootnode!rtn.memsize -> FALSE,
+    cont(f+1)=instr.entry | cont(f-5)=libword -> (f-4)%0=7, FALSE
+
+
+AND print(n) BE
+    TEST isfun(n)
+      THEN writearg(n)
+      ELSE writef("  %I6 ",n)
+
+
+AND cont(a) = VALOF
+ $( IF (a>>10)>=rootnode!rtn.memsize DO error()
+    RESULTIS !a $)
+
+
+AND error() BE
+ $( writes("??*N")
+    longjump(lev, rec)
+ $)
+
+
+AND testbreak() BE
+    IF testflags(1) DO error()
+
+
+AND rch() BE
+ $( testbreak()
+    ch := capitalch(rdch())
+ $)
+
+

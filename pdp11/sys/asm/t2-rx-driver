@@ -1,0 +1,574 @@
+;*********************************************************
+;                                                        *
+;             Driver for the Data Ring Receiver          *
+;             using the 'type 2' interface               *
+;                                                        *
+;             PDP11 version                              *
+;                                                        *
+; Author: Martyn Johnson, September 1884, based on       *
+;         the LSI4 driver written by:                    *
+;                                                        *
+;         Brian Knight  October 1980                     *
+;                                                        *
+; Modifications:                                         *
+;  February 1981 by BJK: modified for revised 'type 2'   *
+;    interface which includes data chaining.             *
+;                                                        *
+;                                                        *
+; The transmitter and receiver are separate TRIPOS       *
+; devices.                                               *
+;                                                        *
+; It is important to note that the Type2 works entirely  *
+; in 16-bit quantities, and that the interface is wired  *
+; up such that Type2 DMA uses word addresses.  Thus all  *
+; codeword and buffer addresses sent to the Type2 must   *
+; be BCPL addresses, i.e. machine address/2              *
+;                                                        *
+; Receiver Packets                                       *
+; ----------------                                       *
+;     There are three functions:-                        *
+;      (1) Requesting reception of a basic block on a    *
+;          particular port from a given (or any) station *
+;                                                        *
+;      (2) Requesting reception of a given amount of     *
+;          data, which may arrive in one or more basic   *
+;          blocks, on a particular port from a given     *
+;          (or any) station.                             *
+;                                                        *
+;      (3) Cancelling a previously issued reception      *
+;          request.                                      *
+;                                                        *
+;                                                        *
+; Function 2: "Receive Basic Block"                      *
+; ---------------------------------                      *
+;                                                        *
+;  TYPE = 2  ("receive basic block")                     *
+;  ARG1 = Source station (255 = "any source")            *
+;  ARG2 = Reception port number                          *
+;  ARG3 = Number of words in supplied buffer             *
+;  ARG4 = BCPL address of buffer                         *
+;  ARG5 ) must exist                                     *
+;  ARG6 ) (used as workspace and corrupted)              *
+;                                                        *
+; On return:                                             *
+;                                                        *
+;  RES1   MS byte: zero iff checksum OK                  *
+;                  128: Bad checksum                     *
+;                  129: Transmission stopped             *
+;         LS byte: source station (useful only if ARG1   *
+;                  was 255)                              *
+;  RES2 = Number of data words in received block         *
+;                                                        *
+;  The data part of the received basic block is placed   *
+;  in the buffer.                                        *
+;                                                        *
+;                                                        *
+; Function 3: "Receive Chain of Basic Blocks"            *
+; -------------------------------------------            *
+;                                                        *
+;  TYPE = 3  ("receive chain")                           *
+;  ARG1 = Source station (255 = "any source")            *
+;  ARG2 = Reception port number                          *
+;  ARG3 = Number of words in supplied buffer             *
+;  ARG4 = BCPL address of buffer                         *
+;  ARG5 ) must exist                                     *
+;  ARG6 ) (used as workspace and corrupted)              *
+;                                                        *
+; On return:                                             *
+;                                                        *
+;  RES1   MS byte: zero iff checksum OK                  *
+;                  128: Bad checksum                     *
+;                  129: Transmission stopped             *
+;         LS byte: source station (useful only if ARG1   *
+;                  was 255)                              *
+;  RES2 = Number of data words in last block received    *
+;                                                        *
+;  The data parts of the received basic blocks are placed*
+;  end-to-end in the buffer.                             *
+;                                                        *
+;                                                        *
+;                                                        *
+; Function 4: "Cancel reception request"                 *
+; --------------------------------------                 *
+;                                                        *
+;  TYPE = 4  ("cancel")                                  *
+;  ARG1 = BCPL address of request packet which is to be  *
+;         cancelled.                                     *
+;                                                        *
+; On return:                                             *
+;                                                        *
+;  RES1 = TRUE if the request was cancelled              *
+;         FALSE if not (i.e. reception request not found)*
+;                                                        *
+; The packet which made the cancelled reception request  *
+; is released from the internal queue, and its link set  *
+; to NOTINUSE.  It is not sent back, but merely 'dropped'*
+;                                                        *
+;*********************************************************
+
+
+
+; DCB symbols
+
+D.ID    =       2                ; Device ID
+D.WKQ   =       4                ; Work queue
+D.STRT  =       6                ; Start routine
+D.STOP  =       8.               ; Stop routine
+D.JSR   =       10.              ; subroutine jump to
+D.INT   =       12.              ; interrupt routine
+D.I     =  D.JSR+4               ; offset for interrupt rtn
+D.VEC   =       14.              ; interrupt vector
+D.CSR   =       16.              ; CSR address
+D.PKTQ  =       18.              ; head of q of reception
+;                                ; and cancellation requests
+
+;*********************************************************
+;                                                        *
+;                Packet Symbols                          *
+;                                                        *
+;     The 'codewords' supplied to the type 2 are         *
+; constructed within the TRIPOS packets for the          *
+; corresponding requests.                                *
+;                                                        *
+;     For reception requests, the codeword extends from  *
+; the RES2 to the ARG5 fields, and has the following     *
+; layout:-                                               *
+;                                                        *
+;   +---------------+                                    *
+;   |   LINK (=0)   |  PKT.RES2                          *
+;   |---------------|                                    *
+;   | FLAGS |STATION|  PKT.ARG1                          *
+;   |---------------|                                    *
+;   |      PORT     |  PKT.ARG2                          *
+;   |---------------|                                    *
+;   |   DATA SIZE   |  PKT.ARG3                          *
+;   |---------------|                                    *
+;   |    BUFFER     |  PKT.ARG4                          *
+;   |---------------|                                    *
+;   |  RC   | SOURCE|  PKT.ARG5                          *
+;   |---------------|                                    *
+;   | RECEIVED SIZE |  PKT.ARG6                          *
+;   +---------------+                                    *
+;                                                        *
+;     The first 5 words of the codeword are used to      *
+; supply arguments; the last 2 are used by the type 2 to *
+; return results.  When a reception is completed, these  *
+; two result words are copied to the packet result       *
+; fields.                                                *
+;                                                        *
+;     The flags in the FLAGS byte have the following     *
+; meanings:-                                             *
+;                                                        *
+;   Bit 00000001: must be zero for reception codewords   *
+;   Bit 00000010: interrupt at end of basic block        *
+;   Bit 00000100: interrupt when buffer full             *
+;   Bit 00001000: this codeword is the last in the chain *
+;                 (always set in this driver, as codeword*
+;                 chaining is not used).                 *
+;   Bits 11110000: must be zero.                         *
+;                                                        *
+;     The return codes given in the RC byte are:-        *
+;                                                        *
+;     0: OK                                              *
+;   128: Bad checksum received                           *
+;   129: Transmission stopped during block               *
+;                                                        *
+;                                                        *
+;     For cancellation requests, the codeword is only 4  *
+; words long, and is assembled in the ID, TYPE, RES1 and *
+; RES2 fields of the packet:-                            *
+;                                                        *
+;   +---------------+                                    *
+;   |   (unused)    |  PKT.ID                            *
+;   |---------------|                                    *
+;   | #X01   |unused|  PKT.TYPE                          *
+;   |---------------|                                    *
+;   | CODEWORD ADDR |  PKT.RES1                          *
+;   |---------------|                                    *
+;   |    RESULT     |  PKT.RES2                          *
+;   +---------------+                                    *
+;                                                        *
+; Note that this relies on the first word of the         *
+; codeword being completely unused by the Type 2.        *
+;                                                        *
+; Possible values of RESULT are as follows:-             *
+;                                                        *
+;   0: Cancellation done                                 *
+;  -1: Codeword unknown                                  *
+;                                                        *
+; This is converted to a TRUE/FALSE success code which   *
+; is placed in the packet result field.                  *
+;                                                        *
+;*********************************************************
+
+P.LINK  =      0                 ; Packet link field
+P.ID    =      2                 ; Device or task ID
+P.TYPE  =      4                 ; Packet type
+P.RES1  =      6                 ; First result
+P.RES2  =      8.                ; Second result
+P.A1    =      10.               ; First argument
+P.A2    =      12.
+P.A3    =      14.
+P.A4    =      16.
+P.A5    =      18.
+P.A6    =      20.
+P.CACW  =      P.ID              ; 'Cancel' codeword
+P.RXCW  =      P.RES2            ; 'Receive' codeword
+P.RXSA  =      P.A1              ; Source address & flags
+                                 ; word in reception CW
+
+; Root Node
+
+CRNTSK  =      456               ; Current TCB
+DEVMVP  =      502               ; pointer to MOVPKT routine
+DEVINT  =      504               ; pointer to INTENT
+DEVRET  =      506               ; pointer to INTRET
+
+RECBB   =      2                 ; function code "receive basic block"
+RECCHN  =      3                 ; function code for "receive chain"
+CANREC  =      4                 ; function code "cancel reception"
+INVFN   =      209.              ; "invalid packet type"
+INVARG  =      407.              ; "invalid arguments to rx driver"
+
+
+;*********************************************************
+;                                                        *
+;                   How it works                         *
+;                                                        *
+;    This device does not follow the usual convention of *
+; doing one I/O operation at once, and leaving the       *
+; packet which does it on the head of the work queue.    *
+;                                                        *
+;    Instead, all packets received are immediately       *
+; removed from the work queue, and either sent back (if  *
+; an error is detected), or moved to an internal packet  *
+; queue which starts from the DCB.  Thus, the work queue *
+; is always empty whenever interrupts are enabled, so    *
+; DQPKT cannot be used.                                  *
+;                                                        *
+;    Both reception and cancellation requests cause a    *
+; codeword to be sent to the type2; this codeword is     *
+; constructed within the supplied packet (see above).    *
+; When the type2 causes an interrupt, it means either    *
+; a wanted basic block has been received, or that the    *
+; processing of a 'cancel' request is complete.  The     *
+; address of the codeword associated with the interrupt  *
+; is read in, and from the function code the address of  *
+; the TRIPOS packet can be deduced.  The results from    *
+; the codeword are used in setting the result fields of  *
+; the TRIPOS packet, which is then removed from the      *
+; internal queue and sent back.                          *
+;                                                        *
+;*********************************************************
+
+
+        .WORD  INIT              ; Initialisation routine
+        .WORD  UNIN              ; Uninitialisation routine
+
+
+
+;********************************************************
+;                                                       *
+; Initialisation routine                                *
+;                                                       *
+; On entry:  R0 holds the device ID                     *
+;            R2 holds the DCB address                   *
+;                                                       *
+;********************************************************
+
+INIT:   MOV    #START,D.STRT(R2) ; Start routine
+        MOV    #STOP,D.STOP(R2)  ; Stop routine
+        MOV    #INTRTN,D.INT(R2) ; Interrupt routine
+        MOV    D.VEC(R2),R1      ; Get interrupt vector address
+        MOV    R2,(R1)           ; Plug it with address
+        ADD    #D.JSR,(R1)       ;  of interrupt JSR
+        MOVB   #100,@D.CSR(R2)   ; Enable device interrupts
+        CLR    D.PKTQ(R2)        ; Set go q to empty
+        RTS    PC
+
+
+;********************************************************
+;                                                       *
+; Uninitialisation routine                              *
+;                                                       *
+; On entry:  R2 holds DCB address                       *
+;                                                       *
+;********************************************************
+
+UNIN:   CLRB   @D.CSR(R2)        ; Disable device interrupts
+        RTS    PC
+
+
+;********************************************************
+;                                                       *
+; Device start routine                                  *
+;                                                       *
+; On entry:  R2 holds the DCB address                   *
+;            R0 holds BCPL address of packet            *
+;                                                       *
+; R0 must be non-zero on exit.                          *
+;                                                       *
+;********************************************************
+
+START:  ASL    R0                 ; m/c address of packet
+        MOV    P.LINK(R0),D.WKQ(R2) ; dequeue packet
+
+; Check for bad packet contents.
+
+        CMP    P.TYPE(R0),#RECBB  ; is it RECBB?
+        BEQ    RECVE              ; yes
+        CMP    P.TYPE(R0),#RECCHN ; is it "receive chain"?
+        BEQ    RCHAIN             ; yes
+        CMP    P.TYPE(R0),#CANREC ; is it a cancel request?
+        BEQ    CANCEL             ; yes
+        MOV    #INVFN,P.RES1(R0)  ; invalid function result
+        JMP    ERROR              ; error return
+
+;  Entry point to cancel a basic block reception request
+
+CANCEL: MOV    P.A1(R0),P.CACW+4(R0) ; Packet to be cancelled to codeword
+        ADD    #P.RXCW/2,P.CACW+4(R0) ; Adjust to make it codeword address
+        MOV    #CANFLG,P.CACW+2(R0) ; Mark this as a 'cancel' codeword
+        MOV    R0,R1              ; Packet address
+        ADD    #P.CACW,R1         ; Codeword address to R1
+        JMP    T2RET              ; Activate type 2 and return
+
+;  Entry point to request a new basic block reception
+
+RECVE:  CLR    P.RXCW(R0)         ; Set codeword link to zero
+        BIS    #IEOBLK,P.RXSA(R0) ; Set flag for "interrupt at end of block"
+        MOV    R0,R1              ; Packet address
+        ADD    #P.RXCW,R1         ; Codeword address to R1
+        JMP    T2RET              ; Activate type 2 and return
+
+; Entry point to request reception of a chain of basic blocks
+
+RCHAIN: CLR    P.RXCW(R0)         ; Set codeword link to zero
+        BIS    #IEOBUF,P.RXSA(R0) ; Set flag for "interrupt at end of block"
+        MOV    R0,R1              ; Packet address
+        ADD    #P.RXCW,R1         ; Codeword address to R1
+
+; Common exit for starting reception or cancel requests
+;
+; Packet in R0: put it on the internal queue.
+; Codeword address in R1: tell type2 to act on it.
+; Return with R0 non-zero.
+
+T2RET:  MOV    D.PKTQ(R2),P.LINK(R0) ; Link existing queue into packet
+        MOV    R0,D.PKTQ(R2)      ; Point queue at new packet
+        JSR    PC,TYPE2           ; CW still in R1
+        MOV    #-1,R0             ; Make R0 non-zero
+        RTS    PC                 ; Return
+
+
+; A bad TRIPOS packet has been detected: send it back to caller
+
+ERROR:  MOV    @#CRNTSK,R1        ; BCPL address of current TCB
+        ASL    R1                 ; machine address
+        JSR    PC,SNDPKT          ; Return TRIPOS packet to caller
+        MOV    #-1,R0             ; Make R0 non-zero
+        RTS    PC                 ; Return
+
+
+; Flag bit values
+
+IEOBUF  =      6000              ; Interrupt at end of
+;                                ; buffer; last CW in chain
+IEOBLK  =      5000              ; Interrupt at end of
+;                                ; block; last CW in chain
+CANFLG  =      400               ; Flag marking 'cancel' CW
+
+
+
+;********************************************************
+;                                                       *
+; Device Stop Routine                                   *
+;                                                       *
+; This routine can never be called because packets      *
+; arriving on the work q are either sent back or are    *
+; moved to the internal go q as soon as they arrive     *
+;                                                       *
+;********************************************************
+
+STOP:   RTS    PC
+
+
+;********************************************************
+;                                                       *
+; Interrupt routine                                     *
+;                                                       *
+;    Entered when the type2 completes the last          *
+; requested action.  The data word returned by the      *
+; type 2 is the codeword address.                       *
+;                                                       *
+; On entry: R2 points after the JSR in the DCB,         *
+; previous R2 is saved on the stack.                    *
+;                                                       *
+;********************************************************
+
+INTRTN: MOV    R1,-(SP)          ; save regs on stack
+        MOV    R0,-(SP)
+        MOV    R3,-(SP)
+        SUB    #D.I,R2           ; Adjust DCB pointer
+        BITB   #2,@D.CSR(R2)     ; Test whether data available
+        BEQ    NODATA            ; Bad news
+        MOV    D.CSR(R2),R0      ; CSR address
+        MOV    2(R0),R0          ; Get data (= BCPL address of codeword)
+        ASL    R0                ; Machine address of codeword
+
+; Look at function code bits at offset 1 in codeword to determine what
+; sort of operation just finished.
+; Bit #X0100 is set for a 'cancel' codeword, unset for reception.
+
+        BIT    #CANFLG,2(R0)     ; Test 'cancel' bit in func from codeword
+        BNE    CANFIN            ; Jump if yes
+
+; End of basic block or chain reception.
+; Copy the two result words from the codeword into the
+; packet result fields, and send the packet back.
+; Codeword address in R0.
+
+RECFIN: SUB    #P.RXCW,R0        ; Get packet address
+        JSR    PC,DELPKTQ        ; Remove from internal q
+        BNE    PFOUND            ; Jump if deleted OK
+        TRAP   2                 ; Unknown Codeword
+        BR     INTEXIT
+
+PFOUND: MOV    P.A5(R0),P.RES1(R0) ; RC/SOURCE result to first result field
+        MOV    P.A6(R0),P.RES2(R0) ; SIZE result to second result field
+        CLRB   P.RXSA+1(R0)      ; Clear flags
+        BR     SPRET             ; Send pkt and exit
+
+; End of 'cancel'.
+; Drop the original reception request packet from the
+; internal queue, and send back the cancel request packet.
+; Codeword address in R0.
+
+CANFIN: SUB    #P.CACW,R0        ; Packet address
+        MOV    #CANREC,P.TYPE(R0) ; Restore pkt type field
+        JSR    PC,DELPKTQ        ; Remove from internal q
+        BNE    PF1               ; J if deleted OK
+        TRAP   3                 ; Pkt not found - never happens
+        BR     INTEXIT           ; In case it does
+
+PF1:    TST    P.RES2(R0)        ; Test result
+        BEQ    CANOK             ; J if cancel worked
+
+; Cancel didn't work - don't attempt to drop rx request pkt
+
+BADCAN: CLR    P.RES1(R0)        ; Result is FALSE
+        BR     SPRET             ; Send pkt and return
+
+; Cancel did work - drop request packet
+
+CANOK:  MOV    R0,-(SP)          ; Save request packet
+        MOV    P.A1(R0),R0       ; Pkt to be cancelled
+        ASL    R0                ; Machine address
+        JSR    PC,DELPKTQ        ; Remove from private q
+        BEQ    RPNFND            ; Skip if not found
+
+; Cancellation completed
+
+        MOV    D.ID(R2),P.ID(R0) ; Store device id in dropped rx packet
+        MOV    (SP)+,R0          ; Get cancel pkt back
+        MOV    #-1,P.RES1(R0)    ; Result is TRUE
+        BR     SPRET             ; Send pkt and return
+
+; Nasty: we haven't got the packet that was cancelled
+
+RPNFND: MOV    (SP)+,R0          ; get packet address off stack
+        TRAP   4
+        BR     BADCAN
+
+; Normal exit: send packet back (in R0) and return
+
+SPRET:  MOV    @#CRNTSK,R1
+        ASL    R1
+        JSR    PC,SNDPKT
+        MOV    @#DEVINT,PC     ; exit via INTENT
+
+
+NODATA: TRAP   5               ; spurious interrupt
+
+INTEXIT:MOV    @#DEVRET,PC     ; exit via INTRET
+
+
+
+;*********************************************************
+;                                                        *
+;    This routine initiates a type 2 request and waits   *
+; for it to be accepted.                                 *
+;                                                        *
+; On entry:  R2 contains the DCB address                 *
+;            R1 contains the codeword address            *
+;                                                        *
+;*********************************************************
+
+TYPE2:  BITB   #1,@D.CSR(R2)     ; Test whether OK to write
+        BEQ    TYPE2             ; Wait until it is
+        MOV    D.CSR(R2),R0      ;
+        ASR    R1                ; BCPL address of codeword
+        MOV    R1,2(R0)          ; Write codeword address
+        RTS    PC
+
+
+;*********************************************************
+;                                                        *
+;    This routine sends back the packet in R0            *
+;                                                        *
+; On entry:  R2 contains the DCB address                 *
+;            R0 contains the packet address              *
+;            R1 points to the TCB of the highest pri task*
+;              to which a packet has been returned       *
+;                                                        *
+; R1 is updated, R2 is preserved.                        *
+;                                                        *
+;*********************************************************
+
+SNDPKT: MOV    D.ID(R2),R3       ; Device ID for MOVPKT
+        MOV    R2,-(SP)          ; Save DCB pointer
+        MOV    R0,R2             ; For MOVPKT
+        MOV    @#DEVMVP,R0       ; Get MOVPKT routine
+        JSR    PC,(R0)           ; Send packet back
+        MOV    (SP)+,R2          ; Restore DCB pointer
+        SEZ
+        RTS    PC                ; Return with Z set
+
+
+
+;*************************************************************
+;                                                            *
+; Delete from internal packet queue Routine                  *
+;                                                            *
+; This routine searches the q for the packet whose address   *
+; is in R0. If it is found, Z is cleared and                 *
+; the packet is unlinked from the packet queue. If it is     *
+; not found on the packet queue, Z is set.                   *
+;                                                            *
+;   On entry: R2 holds the DCB address                       *
+;             R0 holds the packet address                    *
+;   On exit:  Z clear means packet not found on go q         *
+;             Z set means packet found and unlinked          *
+;                                                            *
+;*************************************************************
+
+DELPKTQ:MOV     R2,R1             ; DCB address
+        ADD     #D.PKTQ,R1        ; R1 -> Q head
+
+NEXTP:  CMP     R0,P.LINK(R1)     ; Does it point to packet sought?
+        BEQ     FOUNDP            ; Yes, found it
+        TST     P.LINK(R1)        ; Is it end of list?
+        BEQ     NFOUND            ; Yes, packet is not there
+        MOV     P.LINK(R1),R1     ; Step on to next packet
+        BR      NEXTP             ; and loop
+
+FOUNDP: MOV     P.LINK(R0),P.LINK(R1) ; Unlink packet
+        MOV     #-1,P.LINK(R0)    ; Set link to notinuse and unset Z
+        RTS     PC
+
+NFOUND: SEZ                       ; Set Z to mean not found
+        RTS     PC
+
+        .END
+
+

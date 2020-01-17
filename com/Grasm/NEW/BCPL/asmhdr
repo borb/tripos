@@ -1,0 +1,386 @@
+/*<IBM:
+MANIFEST $( ug=fg $)
+/*IBM>*/
+
+
+
+
+GLOBAL $(
+// dictionary
+   dicposn          : ug+0
+   getlab           : ug+1
+   putlab           : ug+2
+   printlabs        : ug+3
+   deletelab        : ug+4
+   deletelabs       : ug+5
+   valtype          : ug+6
+   freetype         : ug+7
+   printtype        : ug+8
+   checktype        : ug+9
+   gettype          : ug+10
+   looktype         : ug+11
+   iden.valid       : ug+12
+   badlabs          : ug+13
+   gen.defs         : ug+14
+// hex output
+   binbuf           : ug+15
+   putword          : ug+16
+   putaddress       : ug+17
+   putlabelspec     : ug+18
+   movebinword      : ug+19
+   hexoutwidth      : ug+20
+   outhex           : ug+21
+   code.gen         : ug+22
+   entrypoint       : ug+23
+// input & listing files
+   ch               : ug+24
+   linbufsize       : ug+25
+   linbuf           : ug+26
+   linbuf.out       : ug+27
+   linbuf.top       : ug+28
+   print.expansions : ug+29
+   rch              : ug+30
+   putch            : ug+31
+   mywrch           : ug+32
+   syswrch          : ug+33
+   deleteline       : ug+34
+   restartpage      : ug+35
+   list             : ug+36
+   outline          : ug+37
+   newlyne          : ug+38
+   position.ch      : ug+39
+   outpos           : ug+40
+   lineno           : ug+41
+   neads            : ug+42
+// text expansion
+   macro.stack      : ug+43
+   filling.macro    : ug+44
+   expand.text      : ug+45
+   macro.rdch       : ug+46
+   macro.var        : ug+47
+   call.macro       : ug+48
+   end.macro.var    : ug+49
+   add.local.text   : ug+50
+   stacktext        : ug+51
+   endline          : ug+52
+// macros
+   macro.wrch       : ug+53
+   strexp           : ug+54
+   is.strexp        : ug+55
+   find.mnem        : ug+170
+   callmacroproc    : ug+56
+   macroproc        : ug+57
+   endmacroproc     : ug+58
+   rptmacroproc     : ug+59
+   breakmacroproc   : ug+60
+   ifproc           : ug+61
+   elseproc         : ug+62
+   fiproc           : ug+63
+   optproc          : ug+64
+   localproc        : ug+65
+   printproc        : ug+66
+// error processing
+   errormess        : ug+67
+   geterror         : ug+68
+   error            : ug+69
+   warn             : ug+70
+   errorlabel       : ug+71
+   errorlevel       : ug+72
+   fatal            : ug+73
+   warning          : ug+74
+   warnvec          : ug+75
+   errcount         : ug+76
+// parsing
+   item.type        : ug+77
+   item.info        : ug+78
+   item.start       : ug+79
+   getitem          : ug+80
+   scan             : ug+81
+   checkandskip     : ug+82
+   bracketed        : ug+83
+   dontknow         : ug+84
+   expression       : ug+85
+   label.expression : ug+86
+   pcrel.expression : ug+87
+   get.and.declare  : ug+88
+   is.type          : ug+89
+   is.expression    : ug+90
+   finishpass       : ug+91
+   nextpass         : ug+92
+   read.to.mnem     : ug+93
+   parseline        : ug+94
+   parse            : ug+95
+// predeclared parsing functions
+   dataproc         : ug+96
+   titlproc         : ug+97
+   equproc          : ug+98
+   setproc          : ug+99
+   defproc          : ug+100
+   refproc          : ug+101
+   wrefproc         : ug+102
+   needsproc        : ug+103
+   pragproc         : ug+104
+   textproc         : ug+105
+   getproc          : ug+106
+   endproc          : ug+107
+   absproc          : ug+108
+   relproc          : ug+109
+   orgproc          : ug+110
+   storeproc        : ug+111
+   spaceproc        : ug+112
+   ejectproc        : ug+113
+   listproc         : ug+114
+// file list
+   file.id          : ug+115
+   max.files        : ug+116
+   files            : ug+117
+   line.of.file     : ug+118
+   newfile          : ug+119
+   endfile          : ug+120
+   printfiles       : ug+121
+   resetfiles       : ug+122
+   file.number      : ug+123
+// miscelaneous procedures for table building &c
+   compstring       : ug+124
+   getstr           : ug+125
+   capitalch        : ug+126
+   codes            : ug+127
+   code.put         : ug+128
+   getcode          : ug+129
+   compcode         : ug+130
+   reg.put          : ug+131
+   getreg           : ug+132
+   newf             : ug+133
+   getf             : ug+134
+   putf             : ug+135
+   putwordf         : ug+136
+   trim             : ug+137
+   fitsmask         : ug+138
+// memory allocation
+   lex.space        : ug+139
+   lab.space        : ug+140
+   memory           : ug+141
+   max.temp.used    : ug+142
+   simplegetvec     : ug+143
+   tempgetvec       : ug+144
+// assembler state
+   state            : ug+145
+   pagetitle        : ug+146
+   modulename       : ug+147
+   mode             : ug+148
+   pass             : ug+149
+   sectno           : ug+150
+   pc               : ug+151
+   startpc          : ug+152
+   def.count        : ug+153
+// calls to main assembler
+   initsyms         : ug+154
+   initcodes        : ug+155
+   startasm         : ug+156
+   startparse       : ug+157
+   newsection       : ug+158
+   endsection       : ug+159
+   endparse         : ug+160
+   endasm           : ug+161
+   useropt          : ug+162
+// main assembler options
+   name             : ug+163
+   i.here           : ug+164
+   i.elbkt          : ug+165
+   i.erbkt          : ug+166
+   i.strlbkt        : ug+167
+   i.strrbkt        : ug+168
+   i.endlab         : ug+169
+   comntch          : ug+171
+   comntcheck       : ug+172
+   sepch            : ug+173
+   binbufwidth      : ug+174
+   mscharfirst      : ug+175
+   msbytefirst      : ug+176
+   bytesperasmword  : ug+177
+   wordsperaddress  : ug+178
+   cvtchar          : ug+179
+// users options
+   fromfile         : ug+180
+   binfile          : ug+181
+   out              : ug+182
+   memsize          : ug+183
+   pw               : ug+184
+   throws           : ug+185
+   allsyms          : ug+186
+   short            : ug+187
+// machine dependant procedures:
+   get.time         : ug+188
+   findasmin        : ug+189
+   findgetin        : ug+190
+$)
+
+
+
+
+
+MANIFEST $(
+    null = 0
+    byte1 = #X00FF
+    byte2 = #XFF00
+    bit0 = #X0001
+    bit1 = #X0002
+    bit2 = #X0004
+    bit3 = #X0008
+    bit4 = #X0010
+    bit5 = #X0020
+    bit6 = #X0040
+    bit7 = #X0080
+    bit8 = #X0100
+    bit9 = #X0200
+    bit10= #X0400
+    bit11= #X0800
+    bit12= #X1000
+    bit13= #X2000
+    bit14= #X4000
+    bit15= #X8000
+    first = TRUE
+    second = FALSE
+
+
+    pl         = 55             // page length
+    binbufsize = 128            // words in binary output buffer
+    b.top      = 0
+    b.nextmod  = 1
+    c.str      = 0
+    c.fn       = 1
+    c.opstr    = 2
+    in.lineno  = 0
+    in.errcount = 1
+    in.fileno  = 2
+    in.filenogen = 3
+    in.first   = 4
+    in.second  = 5
+    in.list    = 6
+    in.memlevel = 7
+    insize     = 8
+    absolute   = 1
+    relative   = -1
+    e.memfull      =  -1
+    e.nocodes      =  -2
+    e.nospace      =  -3
+    e.fullstring   =  4
+    e.badsym       =  5
+    e.nolab        =  6
+    e.badcode      =  7
+    e.badnum       =  8
+    e.badbyte      =  9
+    e.doublelab    =  10
+    e.interror     =  -11
+    e.badfile      =  -12
+    e.badbase      =  13
+    e.badlab       =  14
+    e.titledone    =  15
+    e.mtbuf        =  -16
+    e.expected     =  17
+    e.ftoosmall    =  19
+    e.divzero      =  20
+    e.notlab       =  21
+    e.badform      =  22
+    e.nostr        =  23
+    e.filexs       =  24
+    e.posnum       =  25
+    e.noname       =  27
+    e.badtype      =  28
+    e.nobkt        =  29
+    e.nocomnt      =  30
+    e.badtext      =  31
+    e.forward      =  32
+    e.binfull      =  33
+    e.badrel       =  34
+    e.badext       =  35
+    e.relsection   =  36
+    e.baddef       =  37
+    e.modeset      =  38
+    e.newentry     =  39
+    e.badloaddir   =  40
+    e.overflow     =  -41
+    e.macstack     =  42
+    e.nomacterm    =  43
+    e.bigmacro     =  -44
+    e.noif         =  45
+    e.nomacro      =  46
+    e.e            =  48
+    s.size  = 0
+    s.str   = 0
+    s.info  = 1
+    type.none  = 0
+    type.const = 1
+    type.var   = 2
+    type.lab   = 3
+    type.ref   = 4
+    type.text  = 5
+    type.macro = 6
+    type.      = type.macro+1
+    type.mask  = byte1
+    flag.double= bit8
+    flag.rel   = bit9
+    flag.def   = bit10
+    flag.fwd   = bit11
+    flag.needs = bit12
+    flag.weak  = bit13
+    flag.temp  = bit14
+    type.def   = type.none | flag.def
+    type.wref  = type.ref | flag.weak
+    type.rellab= type.lab | flag.rel
+    type.relvar= type.var | flag.rel
+    type.relconst = type.const | flag.rel
+    i.bad    = 0
+    i.number = 1
+    i.string = 2
+    i.iden   = 3
+    i.comma  = 4
+    i.lsqb   = 5
+    i.rsqb   = 6
+    i.lbkt   = 7
+    i.rbkt   = 8
+    i.plus   = 9
+    i.minus  = 10
+    i.mult   = 11
+    i.div    = 12
+    i.immed  = 13
+    i.space  = 14
+    i.stop   = 15
+    i.equals = 16
+    i.semi   = 17
+    i.and    = 18
+    i.or     = 19
+    i.shr    = 20
+    i.shl    = 21
+    i.end    = 22
+    i.colon  = 23
+    i.dollar = 24
+    i.sstring= 25
+    i.comnt  = 26
+    i.gt     = 27
+    i.lt     = 28
+    i.percent= 29
+    i.not    = 30
+    i.cap    = 31
+    i.ul     = 32
+    i.pling  = 33
+    cd.undef =-3
+    cd.clear =-2
+    cd.newpc =-1
+    cd.data  = #X00
+    cd.eof   = #X01
+    cd.int   = #X02
+    cd.ext   = #X03
+    cd.rel   = #X04
+    cd.module= #X05
+    cd.code  = #X10
+    cd.opt   = #X11
+    cd.absint= #X12
+    cd.wext  = #X13
+    cd.prag  = #X15
+    spec.size= 2
+    ag       =  ug+191
+$)
+
+
+

@@ -1,0 +1,263 @@
+SECTION "DEBUG-M"
+
+GET "LIBHDR"
+
+GLOBAL
+$(
+RBEXP:155
+ADR:158
+VAL:159
+PRINTADD:161
+PRINTVAL:162
+SELECTASK:166
+ERROR:167
+TESTBREAK:168
+RCH:169
+WCH:170
+
+REC:171
+WWRCH:172
+
+ADD:175
+TCH:176
+SALEV:178
+LEV:179
+CURRTCB:180
+GLOBV:181
+REGS:182
+STANDALONE:186
+WRFLAG:191
+CH:193
+RDFLAG:194
+
+CURRTASK:199
+$)
+
+
+MANIFEST
+$(
+CO.LINK=0
+CO.CALLER=1
+CO.STACKEND=2
+CO.RESUMEPTR=3
+CO.FUNCTION=4
+LIBWORD=23456
+
+INSTR.ENTRY=#067605
+$)
+
+
+LET START(PKT) = VALOF
+ $( LET MODE = PKT!0
+    AND TASK = PKT!1
+    AND CODE = PKT!2
+    AND ARG  = PKT!3
+
+    LET OPENED = FALSE
+
+    TEST MODE=-1 THEN    // startup
+    $( LEV := LEVEL()
+       STANDALONE := FALSE
+       WWRCH := WRCH
+       WRCH := WCH
+       ADD := 0
+       TCH := 0
+    $)
+    ELSE                 // standalone entry
+    $( STANDALONE := TRUE
+       SALEV := LEVEL()
+
+       IF MODE=0 DO      // standalone restart
+          PKT!1 := 0
+
+       IF MODE=1 DO      // abort
+       $( WRITEF("*N!!T%N ABORT %N: ",TASK,CODE)
+          IF CODE=0 DO
+          $( TASK := ARG
+             WRITEF("BREAK T") $)
+          WRITEF("%N M", ARG)
+       $)
+
+       REGS := PKT+4
+    $)
+
+    UNLESS TASK=0 DO SELECTASK(TASK)
+    RCH()
+
+    // REPEAT loop to get commands
+    $( LET V = 0
+
+       RDFLAG := FALSE
+       SWITCHON CH INTO
+
+       $( CASE 'A': CASE 'G': CASE 'R':
+          CASE 'W':
+             TCH := CH
+             ADD := RBEXP()
+             ENDCASE
+
+          CASE 'N':
+             IF TCH=0 DO ERROR()
+             ADD := ADD+1
+             PRINTADD()
+          CASE '/':
+             IF TCH=0 DO ERROR()
+             OPENED := TRUE
+             PRINTVAL()
+          CASE '*E': CASE '*S':
+             RCH()
+             LOOP
+
+          CASE 'T':
+             IF TCH=0 DO ERROR()
+             FOR I=0 TO RBEXP()-1 DO
+             $( IF I REM 5 = 0 DO PRINTADD()
+                PRINTVAL()
+                ADD := ADD+1
+                TESTBREAK()
+             $)
+             NEWLINE()
+             ENDCASE
+
+          CASE 'U':
+             UNLESS OPENED DO ERROR()
+             !ADR(ADD) := RBEXP()
+             LOOP
+
+          CASE 'C':
+             IF STANDALONE DO
+             $( TASK := 0
+                GOTO CNT
+             $)
+             RELEASE(CURRTASK)
+             GOTO NXT
+
+          CASE 'H':
+             IF STANDALONE GOTO CNT
+             HOLD(CURRTASK)
+             GOTO NXT
+
+          CASE 'S':
+             SELECTASK(RBEXP())
+             ENDCASE
+
+          CASE 'Z':
+             #173104(?,#177406)
+
+          DEFAULT:
+             ERROR()
+
+          CASE '*N':
+             UNLESS STANDALONE DO
+             $( UNRDCH()
+                WRCH := WWRCH
+                RESULTIS -1 $)
+NXT:         RCH()
+       $)
+REC:   OPENED := FALSE
+
+    $) REPEAT
+
+CNT:NEWLINE()            // continue
+    STANDALONE := FALSE
+    RESULTIS TASK        // non-zero => HOLD
+ $)
+
+
+AND RBEXP() = VALOF
+ $( LET N = 0
+ L: RCH()
+    SWITCHON CH INTO
+    $( CASE '*S':
+          GOTO L
+
+       CASE '-':
+          RESULTIS -RBEXP()
+
+       DEFAULT:
+          $( LET D = '0'<=CH<='9' -> CH-'0', VALOF BREAK
+             N := N*10+D
+             RCH()
+          $) REPEAT
+          RESULTIS N
+    $)
+ $)
+
+
+AND ADR(A) = VALOF
+ $( A := A + VALOF SWITCHON TCH INTO
+       $( CASE 'A': RESULTIS 0
+          CASE 'G': RESULTIS GLOBV
+          CASE 'R': RESULTIS REGS
+          CASE 'W': RESULTIS CURRTCB $)
+    IF (A>>10)>=ROOTNODE!RTN.MEMSIZE DO ERROR()
+    RESULTIS A
+ $)
+
+
+AND PRINTADD() BE
+    WRITEF("*N%C%U2/ ",TCH,ADD)
+
+
+AND PRINTVAL() BE
+ $( LET V = !ADR(ADD)
+    LET F = V>>1
+    TEST (F>>10)<ROOTNODE!RTN.MEMSIZE & F-4>0 & (F-4)%0=7 &
+         (F!0=INSTR.ENTRY \/ F!-5=LIBWORD)
+    THEN
+       WRITEF(" %S ",F-4)
+    ELSE
+       WRITEF("  %I6 ",V)
+ $)
+
+
+AND SELECTASK(N) BE
+ $( LET T = ROOTNODE!RTN.TASKTAB
+    UNLESS 0<N<=T!0 DO ERROR()
+    T := T!N
+    IF T=0 DO ERROR()
+    CURRTASK := N
+    CURRTCB := T
+    GLOBV := T!TCB.GBASE
+ $)
+
+
+AND ERROR() BE
+ $( WRITES("??*N")
+    UNLESS RDFLAG DO RCH()
+    LONGJUMP(STANDALONE->SALEV,LEV, REC)
+ $)
+
+
+AND TESTBREAK() BE UNLESS STANDALONE DO
+    IF TESTFLAGS(1) DO ERROR()
+
+
+AND RCH() BE
+ $( TEST STANDALONE THEN
+    $( CH := SARDCH()
+       IF CH=#177 DO ERROR()
+     $)
+    ELSE
+    $( IF WRFLAG DO WRCH('*E')
+       WRFLAG := FALSE
+       TESTBREAK()
+       CH := RDCH()
+       TESTFLAGS(1)
+    $)
+    CH := CAPITALCH(CH)
+    RDFLAG := TRUE
+ $)
+
+
+AND WCH(C) BE
+ $( C := C&#377
+    TEST STANDALONE THEN
+       SAWRCH(C)
+    ELSE
+    $( WRFLAG := TRUE
+       WWRCH(C)
+    $)
+ $)
+
+

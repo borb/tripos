@@ -1,0 +1,54 @@
+GET "LIBHDR"
+GET "IOHDR"
+
+GLOBAL   $( replenish : 1
+            close     : 2
+         $)
+MANIFEST $( scb.arg3  = scb.arg2 + 1 $)
+
+LET replenish (scb) = VALOF
+$(  LET buf     = scb ! scb.buf
+    LET end     = scb ! scb.end
+    LET in      = input ()
+    LET cs      = scb ! scb.arg3
+    LET pos     = 0
+    LET eof     = FALSE
+
+    IF scb![scb.arg3+cs]=0 THEN $( result2 := 0
+                                   RESULTIS FALSE
+                                $)
+
+    selectinput (scb![scb.arg3+cs])
+
+    UNTIL pos = end DO $( LET ch = rdch ()
+                          buf%pos  := ch
+                          pos     +:= 1
+                          IF ch = endstreamch THEN
+                          $( endread()
+                             scb![scb.arg3+cs] := 0
+                             cs  +:= 1
+                             pos -:= 1
+                             IF cs>scb!scb.arg2 THEN BREAK
+                             scb!scb.arg3 := cs
+                             selectinput(scb![scb.arg3+cs])
+                             scb!scb.type := input()!scb.type<0 -> -1,0
+                          $)
+                          IF input()!scb.type<0 &
+                             [ch='*N' | ch='*E' | ch='*L' | ch='*C'] THEN BREAK
+                       $)
+
+    IF pos=0 THEN $( result2 := 0 ; RESULTIS FALSE $)
+
+    scb!scb.pos := 0
+    scb!scb.end := pos
+    selectinput(in)
+    RESULTIS TRUE
+$)
+
+LET close (scb) = VALOF
+$(  FOR s = 1 TO scb ! scb.arg2 DO endstream(scb![scb.arg3+s])
+    unloadseg(scb!scb.arg1)
+    RESULTIS TRUE
+$)
+
+

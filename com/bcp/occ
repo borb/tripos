@@ -1,0 +1,627 @@
+$$TRIPOS := $$68000TRIPOS | $$LSI4TRIPOS
+$$VALID := $$TRIPOS | $$PDPRSX  ;
+
+$<VALID'        INVALID MACHINE $>VALID'
+$<PDPRSX        NEEDS "ioerror"
+                NEEDS "title"
+                NEEDS "findsg"
+$>PDPRSX
+                GET "libhdr"
+$<PDPRSX        GET "MIPMANHDR"         $>PDPRSX
+$<TRIPOS        GET "AEOCHDR"
+                GET "OCODEHDR"          $>TRIPOS
+
+GLOBAL
+$(
+   ocodeinput   : UG+1
+   ocodeoutput  : UG+2
+   rdn          : UG+3
+   op           : UG+4
+   labelch      : UG+5
+   rdop         : UG+6
+   line.length  : UG+7
+   sys.wrch     : UG+8
+   syswrch      : UG+8
+   ws           : UG+9
+   wp           : UG+10
+   strsize      : UG+11
+   wordv        : UG+12
+   pos          : UG+13
+   WRCH.buff    : UG+14
+   wbp          : UG+15
+   op.count     : UG+16
+   brk          : UG+17
+   wrn          : UG+18
+   wrln         : UG+19
+$<TRIPOS
+   SYSOUT       : UG+20
+   BINRDCH      :   54
+   BINWRCH      :   56
+$>TRIPOS
+$)
+
+MANIFEST
+$( numeric=0
+   literal=1
+   binary=2
+   s.startblock=105
+
+   s.endblock=106
+   s.linecount=107
+   cap.s.startblock=254
+   cap.s.endblock=255
+   s.error=256
+
+   def.line.length      = 80
+   wbs          = 128
+
+   sw.nu = ('N'<<8) + 'U'
+   sw.nl = ('N'<<8) + 'L'
+   sw.bi = ('B'<<8) + 'I'
+   sw.li = ('L'<<8) + 'I'
+   sw.ll = ('L'<<8) + 'L'
+$)
+
+LET DEB(s, a,b,c,d,e,f) BE
+$( LET o,w = OUTPUT(), wrch
+   wrch := SYS.wrch;    SELECTOUTPUT(SYSOUT)
+   writef(s, a,b,c,d,e,f)
+   $<TRIPOS WRCH('*E') $>TRIPOS
+   wrch := w;           SELECTOUTPUT(O)
+$)
+
+//LET syswrch(ch) BE $( STATIC $( p=0 $); p:=p+1; IF ch='*N' p:=0; sys.wrch(ch) $)
+
+LET start() BE
+$(1 LET args = VEC 80
+    LET wv=VEC 10
+$<PDPRSX
+    LET infile=VEC unp.siz/2 AND outfile=VEC unp.siz/2
+$>PDPRSX
+$<TRIPOS
+    LET rdargs.string="From/a,to/a,opt,w/k"
+    LET infile, outfile = ?, ?
+$>TRIPOS
+    LET instream, outstream = ?,?
+    LET ftr, ch = ?,?
+    LET wrch.buff. = VEC wbs
+
+    wordv       := wv
+    wrch.buff   := wrch.buff.
+    sys.wrch    := wrch
+    line.length := def.line.length
+
+    labelch := TRUE
+    ocodeinput, ocodeoutput := binary, literal
+
+$<PDPRSX
+   endread()
+   sysin := findcml("OCC")
+   $(r
+     selectinput(sysin); selectoutput(sysout)
+     ftr := findtitles(1, args, "")
+     IF ftr<0 DO
+     $( IF ftr=endstreamch FINISH
+        taskwritef("command syntax error")
+        LOOP
+     $)
+
+    IF (args!0)%0=0 LOOP
+
+    ws:=0
+    findswitches(args!3, @ocodeinput)
+    ws := 1
+    findswitches(args!1, @ocodeoutput)
+
+   force.ext(args!2, infile, ocodeinput)
+   force.ext(args!0, outfile, ocodeoutput)
+
+
+$>PDPRSX
+$<TRIPOS
+   SYSOUT := OUTPUT()
+
+   IF RDARGS(rdargs.string, Args, 80) = 0
+   $( taskwritef("Bad string for '%S'*N", rdargs.string); FINISH $)
+
+   Infile, outfile := args!0, args!1
+
+   UNLESS args!2=0
+   $( LET opts = args!2
+      LET first, second = -1, -1
+      IF opts%0 > 0
+      $( LET VAL(ch) = VALOF SWITCHON capitalch(ch) INTO
+         $( DEFAULT:    RESULTIS -1
+            CASE 'D':   RESULTIS -2
+            CASE 'B':   RESULTIS binary
+            CASE 'L':   RESULTIS literal
+            CASE 'N':   RESULTIS numeric
+         $)
+         LET Bad.opt() BE
+         $( TASKWRITEF("OPT takes two letters, each may be one of BDLN*N")
+            FINISH
+         $)
+
+         IF opts%0 > 2  THEN bad.opt()
+         first := val(opts%1)
+         IF opts%0 > 1 THEN second := val(opts%2)
+         IF first=-1 & second=-1 THEN bad.opt()
+         UNLESS first   < 0 DO ocodeinput  := first
+         UNLESS second  < 0 DO ocodeoutput := second
+      $)
+   $)
+   UNLESS args!3=0
+   $( LET w = args!3
+      LET n = 0
+      FOR I = 1 TO w%0 TEST '0' <= w%i <= '9' THEN n := n*10 + w%i - '0'
+                   ELSE $( TASKWRITEF("W specifies the line width*N"); FINISH $)
+      TEST 20 <= n <= 256
+      THEN Line.length := n
+      ELSE taskwritef("Silly length - Ignored*N")
+   $)
+
+   $(r
+$>TRIPOS
+
+   instream := findinput(infile)
+   IF instream $<PDPRSX < $>PDPRSX $<TRIPOS = $>TRIPOS 0
+   $( tskioerror(instream, infile); LOOP $)
+   selectinput(instream)
+
+   outstream := findoutput(outfile)
+   IF outstream $<PDPRSX < $>PDPRSX $<TRIPOS = $>TRIPOS 0
+   $( endread(); tskioerror(outstream, outfile); LOOP $)
+   selectoutput(outstream)
+
+   rdop := ocodeinput=numeric -> rdnum,
+           ocodeinput=literal -> readop, getbytes
+   rdn  := ocodeinput=binary  -> getbytes, rdnum
+
+   TEST ocodeoutput= binary
+   THEN brk, wrn, wrln := dummy, putbytes, putbytes
+   ELSE brk, wrn, wrln, wrch := brk., wrn., wrln., mywrch
+
+   op.count, pos, wbp := 0,0,0
+
+   printocode()
+
+   tidyup()
+$<PDPRSX  $)r REPEAT            $>PDPRSX
+$<TRIPOS $)r REPEATWHILE FALSE  $>TRIPOS
+$)1
+
+AND tidyup() BE
+$( UNLESS wrch=sys.wrch $( FOR I = 2 TO wbs DO wrch(' '); wrch := sys.wrch $)
+   endread()
+   endwrite()
+   $<TRIPOS FINISH $>TRIPOS
+$)
+
+AND mywrch(ch) BE
+$( LET p = ?
+   LET best = -1
+   LET write = TRUE
+   pos  := pos+1
+   IF ch='*N'
+   $( pos := 0; IF WRCH.BUFF!(wbp REM wbs) = ' ' write, wbp := FALSE, wbp-1 $)
+   wbp  := wbp+1
+   p    := wbp REM wbs
+
+   $<TRIPOS IF TESTFLAGS(1) THEN tidyup() $>TRIPOS
+
+   IF pos > line.length & ( (ch~=' ') | (pos >line.length+1) )
+   $( FOR I = wbp-1 TO wbp-wbs BY -1 UNLESS I<0 TEST wrch.buff!(I REM wbs) = ' '
+      $( IF best < 0 THEN best := I     // Well, we've found A space!
+         UNLESS ocodeoutput = literal BREAK
+         UNLESS '0' <= ( (I=wbp-1) -> ch, wrch.buff!((I+1) REM wbs) ) <= '9'
+         $( best := I; BREAK $)
+      $)
+                        ELSE IF wrch.buff!(I REM wbs) = '*N' BREAK
+
+      TEST best<0
+      THEN TASKWRITEF("Buffer overflow at op number %N*N", OP.count)
+      ELSE wrch.buff!(best REM wbs) := '*N'; pos := wbp-best
+   $)
+   IF write & wbp>wbs THEN syswrch(wrch.buff!p)
+                //               <> DEB("<%N%C>", p, wrch.buff!p)
+   wrch.buff!p := ch
+$)
+
+$<PDPRSX
+AND force.ext(infile, outfile, mode) BE
+$(1 LET v=VEC unp.siz
+    LET ext = mode=numeric -> "NOC", mode=literal -> "LOC", "BOC"
+
+    unpacktitle(infile, v)
+    IF v!unp.ext=' ' $( v!unp.dot:='.'; FOR i=1 TO 3 v!(unp.ext+i-1) := ext%i $)
+    packtitle(v, outfile)
+$)1
+$>PDPRSX
+
+AND taskwritef(s, a, b,c,d,e) BE
+$(1 LET w=WRCH;
+    LET o=output()
+    selectoutput(sysout); wrch := sys.wrch;
+    writes("OCC -- "); writef(s, a,b,c,d,e);
+    selectoutput(o);    wrch := w
+$)1
+
+AND tskioerror(code, file) BE
+$<PDPRSX     taskwritef(ioerror(code), code, file) $>PDPRSX
+$<TRIPOS $( taskwritef("Failed to open ", file); Fault(RESULT2) $) $>TRIPOS
+
+AND printocode() BE
+$(1 op := rdop()
+
+    IF testflags(1) THEN tidyup()
+
+    SWITCHON op INTO
+
+ $( DEFAULT: taskwritef("Unknown OCODE op %N at %N*n", op, op.count);
+        out1("<<INVALIDOP>>");                  ENDCASE
+
+    CASE s.error:       out1("Error");          ENDCASE
+    CASE 0: brk(); out1("END*N"); RETURN  // end of file reached ?????????????????
+
+    CASE s.needs:   outstr("NEEDS");            ENDCASE
+    CASE s.section: brk(); outstr("SECTION");   ENDCASE
+    CASE s.lp:      out2("LP");                 ENDCASE
+    CASE s.lg:      out2("LG");                 ENDCASE
+    CASE s.ll:      out2p("LL");                ENDCASE
+    CASE s.ln:      out2("LN");                 ENDCASE
+    CASE s.lstr:    outstr("LSTR");             ENDCASE
+    CASE s.true:    out1("TRUE");               ENDCASE
+    CASE s.false:   out1("FALSE");              ENDCASE
+    CASE s.llp:     out2("LLP");                ENDCASE
+    CASE s.llg:     out2("LLG");                ENDCASE
+    CASE s.lll:     out2p("LLL");               ENDCASE
+    CASE s.sp:      out2("SP");                 ENDCASE
+    CASE s.sg:      out2("SG");                 ENDCASE
+    CASE s.sl:      out2p("SL");                ENDCASE
+    CASE s.stind:   out1("STIND");              ENDCASE
+    CASE s.putbyte: out1("PUTBYTE");            ENDCASE
+    CASE s.getbyte: out1("GETBYTE");            ENDCASE
+    CASE s.gethalfword: out1("GETHALFWORD");    ENDCASE
+    CASE s.puthalfword: out1("PUTHALFWORD");    ENDCASE
+    CASE s.slctap:  out4("SLCTAP");             ENDCASE
+    CASE s.slctst:  out4("SLCTST");             ENDCASE
+    CASE s.modslct:  out4("MODSLCT");           ENDCASE
+    CASE s.linecount: out3("LINECOUNT");        ENDCASE
+    CASE s.rv:      out1("RV");                 ENDCASE
+    CASE s.mult:    out1("MULT");               ENDCASE
+    CASE s.div:     out1("DIV");                ENDCASE
+    CASE s.rem:     out1("REM");                ENDCASE
+    CASE s.plus:    out1("PLUS");               ENDCASE
+    CASE s.minus:   out1("MINUS");              ENDCASE
+    CASE s.neg:     out1("NEG");                ENDCASE
+    CASE s.eq:      out1("EQ");                 ENDCASE
+    CASE s.ne:      out1("NE");                 ENDCASE
+    CASE s.ls:      out1("LS");                 ENDCASE
+    CASE s.gr:      out1("GR");                 ENDCASE
+    CASE s.le:      out1("LE");                 ENDCASE
+    CASE s.ge:      out1("GE");                 ENDCASE
+    CASE s.lshift:  out1("LSHIFT");             ENDCASE
+    CASE s.rshift:  out1("RSHIFT");             ENDCASE
+    CASE s.abs:     out1("ABS");                ENDCASE
+    CASE s.logand:  out1("LOGAND");             ENDCASE
+    CASE s.logor:   out1("LOGOR");              ENDCASE
+    CASE s.eqv:     out1("EQV");                ENDCASE
+    CASE s.mod:     out1("MOD");                ENDCASE
+    CASE s.neqv:    out1("NEQV");               ENDCASE
+    CASE s.not:     out1("NOT");                ENDCASE
+    CASE s.jump:    out2p("JUMP");              ENDCASE
+    CASE s.endfor:  out2p("ENDFOR");            ENDCASE
+    CASE s.jt:      out2p("JT");                ENDCASE
+    CASE s.jf:      out2p("JF");                ENDCASE
+    CASE s.goto:    out1("GOTO");               ENDCASE
+    CASE s.query:   out1("QUERY");              ENDCASE
+    CASE s.lab:     brk(); out2p("LAB");        ENDCASE
+    CASE s.stack:   out2("STACK");              ENDCASE
+    CASE s.store:   out1("STORE");              ENDCASE
+    CASE s.entry:   brk(); outentry("ENTRY");   ENDCASE
+    CASE s.save:    out2("SAVE");               ENDCASE
+    CASE s.fnap:    out2("FNAP");               ENDCASE
+    CASE s.rtap:    out2("RTAP");               ENDCASE
+    CASE s.fnrn:    out1("FNRN");               ENDCASE
+    CASE s.rtrn:    out1("RTRN");               ENDCASE
+    CASE s.res:     out2p("RES");               ENDCASE
+    CASE s.rstack:  out2("RSTACK");             ENDCASE
+    CASE s.finish:  out1("FINISH");             ENDCASE
+    CASE s.switchon:outswitch("SWITCHON");      ENDCASE
+    CASE s.global:  brk(); outglobal("GLOBAL"); brk();  ENDCASE
+    CASE s.datalab: brk(); out2p("DATALAB");    ENDCASE
+    CASE s.itemn:   out2("ITEMN");              ENDCASE
+    CASE s.iteml:   out2p("ITEML");             ENDCASE
+    CASE cap.s.startblock:
+    CASE s.startblock: out1("STARTBLOCK");      ENDCASE
+    CASE s.endproc: out1("ENDPROC"); GOTO rname
+    CASE cap.s.endblock:
+    CASE s.endblock: out1("ENDBLOCK")
+    rname:
+    $(   LET n = rdn(); wrn(n)
+         FOR i=1 TO n
+         $( LET k=rdn(); wrn(k)
+            FOR j=1 TO k DO $( k:=rdn(); wrn(k) $)
+            k:=rdn(); wrn(k)
+            k:=rdn(); wrn(k)
+         $)
+    $)
+         ENDCASE
+ $)
+$)1 REPEAT
+
+$<PDPRSX
+AND nextsw() = VALOF
+$( LET ch=?
+   LET s1, s2 = ?,?
+
+   ch := rdch() REPEATUNTIL ch='/' \/ ch=endstreamch
+   IF ch=endstreamch RESULTIS ch
+
+   s1 := rdch()
+   s2 := rdch()
+
+   RESULTIS (s1<<8) \/ s2
+$)
+
+AND switcherror(ch) BE
+    taskwritef("Illegal switch *'%C%C*' - ignored*N", ch>>8, ch&255)
+
+AND findswitches(s, ocodemode) BE
+$(1 LET ch=?
+    selectinput(findstringinput(s))
+
+    $(r1
+        ch := nextsw()
+        SWITCHON ch INTO
+        $( CASE sw.nu: UNLESS ws=0 DO labelch := FALSE
+           CASE sw.nl:  !ocodemode := numeric;                  ENDCASE
+           CASE sw.li:  !ocodemode := literal;                  ENDCASE
+           CASE sw.bi:  !ocodemode := binary;                   ENDCASE
+
+           CASE endstreamch:    endread();                      BREAK
+
+           CASE sw.ll:
+                ch := READN()
+                TEST 20 <= ch <= 256
+                THEN Line.length := ch
+                ELSE taskwritef("%N is a silly linelength - Ignored*N", ch)
+                UNRDCH()
+                ENDCASE
+
+           DEFAULT: switcherror(ch)
+                    ENDCASE
+        $)
+    $)r1 REPEAT
+$)1
+$>PDPRSX
+
+AND out1(s) BE writeop(s)
+
+AND out2(s) BE $( out1(s); wrn(rdn()) $)
+
+AND out3(s) BE $( out2(s); wrn(rdn()) $)
+
+AND out4(s) BE $( out3(s); wrn(rdn()) $)
+
+AND out2p(s) BE $( Out1(s); wrln(rdn()) $)
+
+AND outstr(s) BE
+$( LET n = rdn(); Out1(s); wrn(n); FOR i = 1 TO n DO wrn(rdn()) $)
+
+AND outswitch(s) BE
+$( LET n = rdn()
+   LET d = rdn()
+   writeop(s)
+   wrn(n); wrn(d)
+   FOR i = 1 TO n $( d := rdn(); wrn(d); d := rdn(); wrln(d) $)
+$)
+
+AND outglobal(s) BE
+$( LET n = rdn()
+   writeop(s)
+   wrn(n)
+   FOR i = 1 TO n DO
+   $( LET g = rdn()
+      LET l = rdn()
+      wrn(g); wrln(l)
+   $)
+$)
+
+AND outentry(s) BE
+$( LET n = rdn()
+   LET l = rdn()
+   Out1(s)
+   wrn(n); wrln(l)
+   FOR i = 1 TO n  wrn(rdn())
+$)
+
+AND dummy() BE RETURN
+
+AND brk.() BE UNLESS pos=0 wrch('*N')
+
+AND writeop(s) BE
+TEST ocodeoutput=binary THEN putbytes(op)
+ELSE
+$(1 TEST ocodeoutput=literal
+    THEN writes(s) <> wrch(' ')
+    ELSE wrn(op)
+$)1
+
+AND wrn.(n) BE writef("%N ", n)
+
+AND wrln.(n) BE $( IF labelch DO wrch('L'); writen(n); wrch(' ') $)
+
+AND rdnum() = VALOF
+$( LET a, neg, ch = 0, FALSE, 0
+
+   op.count := op.count+1
+   ch := rdch() REPEATWHILE ch='*n' | ch=' '
+   IF ch='L' DO ch := rdch()
+   IF ch='-' DO ch, neg := rdch(), TRUE
+   WHILE '0'<=ch<='9' DO
+   $( a := 10*a + ch - '0'
+      ch := rdch()
+   $)
+   IF neg DO a := -a
+   RESULTIS a
+$)
+
+AND getbytes() = VALOF $(
+   LET b = binrdch()
+   IF b=endstreamch RESULTIS 0
+   op.count := op.count+1
+   TEST b < 128 THEN RESULTIS b
+   OR RESULTIS (getbytes()<<7) + b - 128
+$)
+
+
+AND putbytes(n) BE $(
+   LET k = n >> 7
+   TEST k = 0 THEN binwrch(n)
+   ELSE binwrch((n & 127) + 128) <> putbytes(k)
+$)
+
+AND t(s) = VALOF
+$( FOR i = 0 TO strsize DO UNLESS s!i=wordv!i RESULTIS FALSE; RESULTIS TRUE  $)
+
+AND readop() = VALOF
+    $(1 LET s = VEC 20
+        LET ch=?
+        LET res=?
+
+        op.count := op.count+1
+        ch := rdch() REPEATWHILE ch='*N' \/ ch=' '
+        wp := 0
+
+        WHILE 'A'<=ch<='Z' DO
+           $( wp := wp + 1
+              s!wp := ch
+              ch := rdch()  $)
+
+        s!0 := wp
+        strsize := packstring(s, wordv)
+
+        res := VALOF
+        SWITCHON s!1 INTO
+
+     $( DEFAULT: IF ch=endstreamch  RESULTIS 0
+                  RESULTIS s.error
+
+        CASE 'D':
+         RESULTIS t("DATALAB")          -> s.datalab,
+                 t("DIV")               -> s.div,
+                               s.error
+
+        CASE 'E':
+         RESULTIS t("END")              -> 0,
+                 t("EQ")                -> s.eq,
+                 t("ENTRY")             -> s.entry,
+                 t("EQV")               -> s.eqv,
+                 t("ENDPROC")           -> s.endproc,
+                 t("ENDFOR")            -> s.endfor,
+                 t("ENDBLOCK")          -> s.endblock,
+                             s.error
+
+        CASE 'F':
+         RESULTIS t("FNAP")             -> s.fnap,
+                 t("FNRN")              -> s.fnrn,
+                 t("FALSE")             -> s.false,
+                 t("FINISH")            -> s.finish, s.error
+
+
+        CASE 'G':
+         RESULTIS t("GOTO")             -> s.goto,
+                 t("GE")                -> s.ge,
+                 t("GETBYTE")           -> s.getbyte,
+                 t("GETHALFWORD")       -> s.gethalfword,
+                 t("GR")                -> s.gr,
+                 t("GLOBAL")            -> s.global, s.error
+
+        CASE 'I':
+         RESULTIS t("ITEMN")            -> s.itemn,
+                 t("ITEML")             -> s.iteml,  s.error
+
+        CASE 'J':
+         RESULTIS t("JUMP")             -> s.jump,
+                 t("JF")                -> s.jf,
+                 t("JT")                -> s.jt,  s.error
+
+       CASE 'L':
+        IF wp=2 DO
+             SWITCHON s!2 INTO
+             $( DEFAULT:  RESULTIS s.error
+                CASE 'E':  RESULTIS s.le
+                CASE 'N':  RESULTIS s.ln
+                CASE 'G':  RESULTIS s.lg
+                CASE 'P':  RESULTIS s.lp
+                CASE 'L':  RESULTIS s.ll
+                CASE 'S':  RESULTIS s.ls  $)
+
+         RESULTIS t("LAB")              -> s.lab,
+                 t("LLG")               -> s.llg,
+                 t("LLL")               -> s.lll,
+                 t("LLP")               -> s.llp,
+                 t("LOGAND")            -> s.logand,
+                 t("LOGOR")             -> s.logor,
+                 t("LSHIFT")            -> s.lshift,
+                 t("LSTR")              -> s.lstr, s.error
+
+        CASE 'M':
+         RESULTIS t("MINUS")            -> s.minus,
+                 t("MOD")               -> s.mod,
+                 t("MODSLCT")           -> s.modslct,
+                 t("MULT")              -> s.mult, s.error
+
+        CASE 'N':
+         RESULTIS  t("NE")              -> s.ne,
+                  t("NEG")              -> s.neg,
+                  t("NEQV")             -> s.neqv,
+                  t("NOT")              -> s.not,
+                  t("NEEDS")            -> s.needs, s.error
+
+        CASE 'P':
+         RESULTIS t("PUTBYTE")          -> s.putbyte,
+                 t("PUTHALFWORD")       -> s.puthalfword,
+                 t("PLUS")              -> s.plus, s.error
+
+        CASE 'Q':
+         RESULTIS t("QUERY")            -> s.query, s.error
+
+        CASE 'R':
+         RESULTIS t("RES")              -> s.res,
+                 t("REM")               -> s.rem,
+                 t("RTAP")              -> s.rtap,
+                 t("RTRN")              -> s.rtrn,
+                 t("RSHIFT")            -> s.rshift,
+                 t("RSTACK")            -> s.rstack,
+                 t("RV")                -> s.rv, s.error
+
+        CASE 'S':
+         RESULTIS t("SG")               -> s.sg,
+                 t("SP")                -> s.sp,
+                 t("SLCTAP")            -> s.slctap,
+                 t("SLCTST")            -> s.slctst,
+                 t("SL")                -> s.sl,
+                 t("STIND")             -> s.stind,
+                 t("STACK")             -> s.stack,
+                 t("SAVE")              -> s.save,
+                 t("SWITCHON")          -> s.switchon,
+                 t("STORE")             -> s.store,
+                 t("SECTION")           -> s.section,
+                 t("STARTBLOCK")        -> s.startblock, s.error
+
+        CASE 'T':
+         RESULTIS t("TRUE")             -> s.true, s.error
+     $)
+
+     IF res=s.error
+     $( LET o=output()
+        selectoutput(sysout)
+        taskwritef("Unrecognised mnemonic length %N, '%S'*N", wordv%0, wordv)
+        selectoutput(o)
+     $)
+     RESULTIS  res
+$)1
+
+

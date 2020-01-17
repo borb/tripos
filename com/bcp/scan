@@ -1,0 +1,275 @@
+Section "ScanFile"
+
+GET "libhdr"
+GET "TERMHDR"                                   // Lets do it properly!!
+GET "iohdr"
+GET "CLIHDR"
+GET "manhdr"
+GET "bcpl.readtermvec"
+GET "bcpl.Inputwaiting"                         //input
+GET "bcpl.validpointer"
+
+LET note(stream, vector) = note.point(stream, vector, action.note)
+
+AND point(stream, vector) = note.point(stream, vector, action.point)
+
+AND note.point(stream, vector, action) = VALOF
+$( LET stream.id = stream!scb.id
+   IF stream!scb.type=0 RESULTIS -1
+   UNLESS stream.id=id.inscb | stream.id=id.outscb
+   $( result2 := 123; RESULTIS 0 $)
+   RESULTIS sendpkt(-1, ABS stream!scb.type, action, ?, ?,
+                    stream!scb.arg1,     || file control block
+                    vector)              || note/point control block
+$)
+
+MANIFEST $( defscrlines = 22; maxscrlines = 24; deflinelen=80 $)
+
+STATIC
+$( ch = '*N';file = 0; ofile = 0; scrlines = defscrlines; comm = 0; machine = 0;
+   baselevel = 0; Exit.Addr = 0
+   vdu.type     = 0; NEXTCH=-1
+$)
+
+/* GLOBAL $( ch : ug; file :ug+1; .ofile :ug+2
+  scrlines :ug+3; comm :ug+4; machine :ug+5; baselevel:ug+6; Exit.Addr:ug+7 $)
+*/
+
+MANIFEST
+$( k.file   = 0; k.stop   = 1; k.ignore = 2; k.start  = 3; k.to     = 4
+   k.Noln   = 5; k.l      = 6; k.s      = 7; k.ln     = 8; k.byte   = 9
+   k.max    = k.ln
+$)
+
+LET START(filename, input.stream) BE
+$( LET oinput = input()
+   LET ooutput = output()
+   LET linelen = deflinelen
+
+   LET tidymessage(st,a,b) BE
+   $( UNLESS st = 0 $( WRITEF(st,a,b); WRITEF(" in %S*N", cli.commandname) $)
+      LONGJUMP(BaseLevel, Exit.Addr)
+   $)
+
+   LET rdn(v) = VALOF
+   $( LET res = 0
+      FOR i = 1 TO v%0 TEST '0'<= v%i <= '9' THEN res := res*10 + v%i - '0'
+                        ELSE tidymessage("Range must be Integers")
+      RESULTIS res
+   $)
+
+   LET rdch2() = VALOF
+   $( ch := RDCH()
+      IF ch = ENDSTREAMCH tidymessage(0)
+      ch := ch & #X7F
+      RESULTIS ch
+   $)
+
+   LET gobble(str) = VALOF
+   $( LET oin = INPUT()
+     LET res = -1
+     LET ch = ?
+      IF VDU.TYPE = TERM.2632 THEN WRITEF("%C^4", '*E' | #X80)
+      WRCH('*E')
+      UNLESS str = 0 SELECTINPUT(str)
+      ch := capitalch(RDCH())
+      IF (ch='Q') | (ch='W') | (ch=endstreamch)
+      $( ch := RDCH(); IF (ch='*N') | (ch=ENDSTREAMCH) THEN tidymessage(0)
+      $) REPEAT
+      IF ch = 'L' THEN scrlines := maxint
+      WHILE '0' <= ch <= '9' $( res := (res+1) * 10 + ch -'1'; ch := rdch() $)
+      $( IF ch='*N' | ch='*E' | ch=ENDSTREAMCH BREAK; ch := RDCH() $) REPEAT
+      IF ch='*E' WRCH('*N')
+      SELECTINPUT(oin)
+      IF VDU.TYPE = TERM.2632 THEN WRITEF("%C^5*E", '*E' | #X80)
+      RESULTIS res
+   $)
+
+   LET line     = 1
+   LET from     = 1
+   LET upto     = maxint
+   LET ln       = TRUE
+   LET chpos    = ?
+   LET screen   = ?
+   LET argstring= "File/a,Stop,)/s,From=Start=(,To/k,Noln/s,*
+                  *W=Width/k,P=Pagelength/k,Ln/s,byte/k"
+   LET mcstring = "ignore/s,Stop,)/s,From=start=(,To/k,NoLn/s,*
+                  *W=Width/k,P=Pagelength/k,Ln/s,byte/k"
+   LET spvec    = VEC 15
+   LET v        = VEC (80/bytesperword) + k.max
+   LET type     = readtermvec()
+   LET pos      = 0
+   LET mult     = 1024
+
+   machine   := (filename \= 0)
+   baselevel := level()
+   Exit.addr := Exit.addr.
+   ch    := '*N'
+   file  := 0
+   ofile := 0
+/*
+   scrlines := defscrlines      // Lets do it better than that!!
+*/
+   IF validpointer(@type)       // Set ?
+   $( IF type!TERM.WIDTH ~= 0 THEN linelen := type!TERM.WIDTH
+      IF type!TERM.DEPTH ~= 0 THEN scrlines:= type!TERM.DEPTH
+      vdu.type := type!TERM.NUMBER
+   $)
+
+   comm := machine -> input.stream, findinput("**")
+   IF RDARGS(machine -> mcstring, argstring,v,linelen/BYTESPERWORD + k.max)=0
+   THEN tidymessage("Bad args for '%S'", machine -> mcstring, argstring)
+   UNLESS machine
+   $( filename := v!k.file
+      FOR i = 0 TO 15 DO spvec!i := filename!i
+      filename := spvec
+   $)
+   IF (v!k.stop ~= 0) & ((v!k.stop)%1 = '(')
+   $( LET start  = v!k.stop
+      v!k.stop  := v!k.start
+      v!k.start := start
+      start%1   := '0'
+   $)
+   IF    (v!k.stop ~= 0) & ((v!k.stop)%((v!k.stop)%0) = ')')
+   THEN  (v!k.stop)%0 := (v!k.stop)%0 - 1
+   UNLESS v!k.stop  = 0 upto := rdn(v!k.stop)
+   UNLESS v!k.start = 0 from := rdn(v!k.start)
+   IF from > upto tidymessage("Range negative")
+   ln := V!K.ln |       ((~(v!k.noln)) & (~machine) &
+                         (compstring(":C.scan",CLI.commandname)=0))
+   UNLESS v!k.l  = 0 linelen  := rdn(v!k.l)
+   UNLESS v!k.s  = 0 scrlines := rdn(v!k.s)
+   UNLESS v!k.to = 0
+   $( LET terminal = compstring(v!k.to, "**")=0
+      ofile := FINDOUTPUT(v!k.to)
+      UNLESS terminal scrlines, vdu.type, linelen := maxint, 0, maxint
+      IF ofile = 0 tidymessage("%S not found",v!k.to)
+      SELECTOUTPUT(ofile)
+   $)
+   UNLESS v!k.byte=0
+   $(   LET s = v!k.byte
+
+        FOR I = 1 TO s%0
+        DO  TEST '0' <= s%i <= '9'
+            THEN pos := pos*10 + s%i - '0'
+            ELSE TEST i=s%0 & capitalch(s%i)='K'
+                 THEN mult := 1
+                 ELSE
+                 Tidymessage("Bad char '%C' in start byte", s%i)
+   $)
+
+   IF ln linelen := linelen - 6
+   screen       := scrlines - 1
+   chpos        := linelen
+   nextch       := -1
+   file         := FINDINPUT(filename)
+   IF file = 0 tidymessage("%S not found",filename)
+   SELECTINPUT(file)
+    UNLESS pos=0
+    $(  LET V = VEC 2
+
+        V!0 := pos  /  (64*mult)
+        v!1 := (pos REM (64*mult) * (1024/mult)) & (~1)
+        V!2 := 0
+        point(file, v)
+        UNLESS mult=1 | ((pos & 1) = 0) DO RDCH()
+   $)
+
+   IF Ln THEN WRITEF("%S******************** File %S *********************N",
+         ln->"      ","",filename)
+
+   IF vdu.type = TERM.2632
+   $( MANIFEST $( force.bit = #X80; ESC = '*E' | force.bit $)
+      LET msg           = "Type (return) to continue, q to stop, l to list all"
+      LET T             = TABLE ESC, '^', ';', 10 | force.bit
+      LET spaces        = linelen - msg%0
+
+      FOR I = 0 TO 2 DO WRCH(T!I)
+      WRCH(force.bit)                   // Boring mode
+      WRCH(force.bit)                   // At zero
+      WRCH(spaces | force.bit)          // This many chars
+      FOR I = 1 TO spaces DO WRCH(' ')
+
+      FOR I = 0 TO 3 DO WRCH(T!I)
+      WRCH(spaces | force.bit)
+      WRCH(msg%0  | force.bit)
+      WRITES(msg)
+   $)
+
+   UNTIL from = line IF RDCH() = '*N' line := line+1
+
+   UNTIL line > upto
+   $( LET och = ch
+      LET Dec(Addr) BE
+      $( Let Screen = (!Addr) -1
+         Let Newscreen = ?
+         LET ready = Inputwaiting(comm)                                 //input
+         !Addr := Screen
+         IF (Comm = 0) | ( (Screen > 0) & NOT ready)                    //input
+         DO $( WRCH('*N'); RETURN $)
+         IF ready                                                       //input
+         $( LET i=input(); SELECTINPUT(comm);                           //input
+            UNLESS RDCH()='*E' UNRDCH()                                 //input
+            SELECTINPUT(i)                                              //input
+         $)                                                             //input
+         newscreen := Gobble(Comm)
+         !Addr := (newscreen < 0) -> Scrlines, newscreen+1
+      $)
+      IF testflags(1) BREAK;
+      TEST NEXTCH >= 0
+      $(  ch    := NEXTCH;
+          NEXTCH:= -1
+      $)
+      ELSE rdch2();
+      IF (chpos <= 0) & (ch ~= '*N')
+      $( dec(@screen);
+         WRITES(ln->"+++++++ ","||"); chpos:=linelen-(ln->6,2) $)
+      IF (och = '*N') & ln THEN WRITEF("%i6 ",line)
+      IF ch = '*N' THEN dec(@screen)
+      chpos := chpos-1;
+      SWITCHON ch INTO
+      $(
+        CASE '^':
+                WRCH('^');
+                NEXTCH := '^'|128;
+                ENDCASE
+        CASE '^'|128:
+                WRCH('^')
+                ENDCASE
+        CASE '*N':
+                chpos := linelen
+                line := line + 1
+                ENDCASE;
+        CASE '*T':
+                wrch(' ')
+                UNLESS ((linelen-chpos)&7) =0 DO NEXTCH := ch
+                ENDCASE
+        DEFAULT:
+                TEST (' ' <= ch)
+                THEN WRCH(ch)
+                ELSE
+                $(      WRCH('^')
+//WRITEF("[%N->", ch)
+                        NEXTCH := ch+'A'-1
+//WRITEF("%N/%C]", NEXTCH, NEXTCH)
+                $)
+      $)
+   $)
+
+// Not Needed now!   tidymessage(0)
+ Exit.Addr.:
+      IF VDU.TYPE = TERM.2632
+      $( LET T          = TABLE '*E' | #X80, '^', ';', #X80, #X80
+         WRITEF("%C^5", '*E' | #X80)
+         FOR I = 0 TO 4 DO WRCH(T!I)
+         WRCH(linelen | #X80)
+         FOR I = 1 TO linelen DO WRCH(' ')
+      $)
+      UNLESS file  = 0                  DO ENDSTREAM(file)
+      UNLESS ofile = 0                  DO ENDSTREAM(ofile)
+      UNLESS (comm = 0) | machine       DO ENDSTREAM(comm)
+      SELECTINPUT(oinput)
+      SELECTOUTPUT(ooutput)
+$)
+
+

@@ -1,0 +1,145 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+       #######    ######   ########  ##    ##  ########   ######
+       ########  ########  ########  ###   ##  ########  ########
+       ##    ##  ##           ##     ####  ##  ##        ##    ##
+       #######   #######      ##     ## ## ##  ######    ##    ##
+       ##    ##        ##     ##     ##  ####  ##        ##    ##
+       ##    ##        ##     ##     ##  ####  ##        ##    ##
+       ########  ########  ########  ##   ###  ##        ########
+       #######    ######   ########  ##    ##  ##         ######
+
+************************************************************************
+**    Author:   Brian Knight                            May 1979      **
+***********************************************************************/
+
+
+// Program to inspect active byte streams.
+//
+// BSINFO KILL causes the BSP handler to die when it next has no streams
+//
+// BSINFO TRACE inverts the tracing switch in the BSP handler
+// (This only has an effect if the tracing code is compiled in!)
+
+// Modifications:
+// 17 Aug 83 by BJK: Reverse trace added
+
+
+SECTION "BSINFO"
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+GET "BCPL.REVTRACE"
+
+
+MANIFEST
+    $(
+    bscb.link             =  0
+    bscb.in.state         =  1
+    bscb.in.seq.num       =  2
+    bscb.out.state        =  3
+    bscb.out.seq.num      =  4
+    bscb.machine.id       =  5
+    bscb.tx.port          =  6
+    bscb.rx.port          =  7
+    bscb.in.buff          =  8
+    bscb.in.buff.bytes    =  9
+    bscb.rx.block         = 10
+    bscb.tx.block         = 11
+    bscb.rx.pkt           = 12
+    bscb.tx.pkt           = 13
+    bscb.read.pkt         = 14
+    bscb.write.pkt        = 15
+    bscb.max.tx.blocksize = 16
+    bscb.max.rx.blocksize = 17
+    bscb.in.scb           = 18
+    bscb.out.scb          = 19
+    bscb.close.requested  = 20
+    bscb.pending.in.event = 21
+    bscb.pending.out.event= 22
+    bscb.problem.level    = 23
+    bscb.serial.number    = 24
+
+    bscb.upb              = 24
+    $)
+
+LET start() BE
+    $(
+    LET rhtaskid = rootnode!rtn.info ! rtninfo.ring ! ri.rhtaskid
+    LET bsph.task, bsph.tcb, bsph.gv = ?, ?, ?
+    LET argv = VEC 20
+    LET bscb = 0
+
+    IF rdargs("trace/s,kill/s", argv, 20) = 0
+    THEN $( writes("Bad args*N"); stop(20) $)
+
+    IF rhtaskid = 0
+    THEN $( writes("Ring handler not loaded*N"); stop(20) $)
+
+    // Now to find the BSP handler task
+    bsph.task := rhtaskid < 0 -> devicetask("BSPTASK:"),
+                  rootnode ! rtn.tasktab ! rhtaskid ! tcb.gbase ! gn.bsp.handler
+
+    IF bsph.task = 0
+    THEN $( writes("BSP handler not loaded*N"); stop(20) $)
+
+    IF argv!0 \= 0 THEN $( setflags(bsph.task, 8); RETURN $) // Trace
+    IF argv!1 \= 0 THEN $( setflags(bsph.task, 4); RETURN $) // Kill
+
+    bsph.tcb := rootnode ! rtn.tasktab ! bsph.task
+    bsph.gv  := bsph.tcb ! tcb.gbase
+
+    writef("BSP handler is task %N*N", bsph.task)
+    IF rhtaskid < 0 THEN RETURN // Supermace
+
+    bscb := bsph.gv ! 150
+    IF bscb = 0 THEN writes("No byte streams open*n")
+
+    UNTIL bscb = 0
+    DO $(
+       LET machine.id   = bscb ! bscb.machine.id
+       LET tx.port      = bscb ! bscb.tx.port
+       LET rx.port      = bscb ! bscb.rx.port
+
+       writef("*nStream %n (@ %u3) to %S*N",
+                bscb.serial.number ! bscb, bscb, revtrace[machine.id, tx.port] )
+       writes("First hop: ")
+       write.machine.name(bscb.machine.id ! bscb)
+       writef(" tx port %n rx port %n*n", tx.port, rx.port)
+       writes("Input:  state ");       state(bscb.in.state ! bscb)
+       writef("  seq num %i2*n",     bscb.in.seq.num ! bscb)
+       writef("Output: state "); state(bscb.out.state ! bscb)
+       writef("  seq num %i2*n", bscb.out.seq.num ! bscb)
+//       writef("tx block @ %u5*N", bscb.tx.block ! bscb)
+       writef("Max blocksizes: rx %N words, tx %N words*N",
+              bscb.max.rx.blocksize ! bscb,
+              bscb.max.tx.blocksize ! bscb)
+       IF bscb.problem.level ! bscb \= 0
+       THEN writef("Problem level %N*N", bscb.problem.level ! bscb)
+
+       bscb := bscb.link ! bscb
+       $)
+    $)
+
+
+AND state(code) BE
+    $(
+    SWITCHON code
+    INTO
+      $(
+      CASE #00: writes("I"); ENDCASE
+      CASE #01: writes("E"); ENDCASE
+      CASE #02: writes("N"); ENDCASE
+      CASE #03: writes("awaiting CLOSE"); ENDCASE
+      CASE #04: writes("final CLOSE sent"); ENDCASE
+      CASE #05: writes("awaiting RESET"); ENDCASE
+
+      DEFAULT: writef("#%O6", code)
+      $)
+    $)
+
+

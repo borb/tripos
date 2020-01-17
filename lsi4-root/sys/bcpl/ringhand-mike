@@ -1,0 +1,689 @@
+
+// Modified 10-jun-82 by GCA to use type 3 blocks if arg4 of
+// start up packet is TRUE, type 0 otherwise.
+
+// Modified 10-jun-82 by GCA extra commands included if TEST is asserted
+// when preprocessed to enable testing of strange UNIVERSE options in
+// the VMI-1 firmware.
+
+
+SECTION "RINGHAND"
+
+GET "86:g.libhdr"
+GET "86:g.ringhdr"
+GET "86:g.ringhanhdr"
+
+
+
+LET START(PARM.PKT) BE
+    $(
+    // PARM.PKT contains the device id of the VMI-1 interface.
+    // THE PARM PACKET CONTAINS: VMI-1 DEVICE ID,
+    //                           TRUE IF TRACE REQUIRED,
+    //                           'BREAKABLE' FLAG: TRUE IFF THIS TASK
+    //                               SHOULD RESPOND TO CTRL/D
+    //                           TRUE if to use type 3 blocks
+
+   // VAPKT is sent from the VMI-1 driver to indicate a VMI-1
+   // interrupt.
+   // VTPKT is used to interrupt the VMI-1.
+   vapkt := TABLE -1, 0, act.vmi1.aha, 0, 0, 0, 0
+   vtpkt := TABLE -1, 0, act.vmi1.tell, 0, 0, 0, 0
+   timpkt := TABLE -1, -1, act.timer, 0, 0, tickspersecond, 0
+
+    unloadseg( INITIALISE(PARM.PKT) ) // INITIALISE GLOBALS ETC.
+
+    qpkt(timpkt)   // start timer pkt bouncing
+
+
+    trace("Before main loop.") /*******/
+    $( // MAIN LOOP
+    LET PORT, SA = ?, ?
+    LET P        = pktwait(0)
+
+
+    trace("packet received, type=%N", pkt.type!p) /*******/
+    SWITCHON PKT.TYPE ! P
+    INTO
+      $(
+      CASE act.timer:   // bouncing pkt so break gets through
+         IF testflags(8) DO tracing := ~tracing
+         qpkt(p)
+         ENDCASE
+
+      CASE ACT.FINDFREEPORT:
+           // FIND AN UNUSED PORT NUMBER FOR RECEPTION,
+           // RESERVE IT, AND SAY WHAT IT WAS.
+           trace("Findfreeport") /*******/
+           RETURNPKT(P, FIND.FREE.PORT())
+           LOOP
+
+
+      CASE ACT.RESERVEPORT:
+           // RESERVE THE PORT NUMBER GIVEN IN
+           // THE ARG1 FIELD. RETURN TRUE IF OK,
+           // FALSE IF IT WAS ALREADY ALLOCATED.
+
+           trace("Reserveport") /*******/
+           RETURNPKT(P, RESERVEPORT(PKT.ARG1 ! P))
+           LOOP
+
+
+      CASE ACT.RELEASEPORT:
+           // RELEASE A PREVIOUSLY ALLOCATED PORT NUMBER.
+           $(
+           LET QADDR = @PORT.LIST
+           trace("Releaseport") /*******/
+           PORT := PKT.ARG1 ! P
+
+           UNTIL !QADDR = NIL
+           DO $(
+              IF (!QADDR)!1 = PORT
+              THEN
+                $(
+                LET ELEM = !QADDR
+                !QADDR := !ELEM
+                FREEVEC(ELEM)
+                BREAK
+                $)
+
+              QADDR := !QADDR
+              $)
+
+           // ALSO CANCEL ALL RECEPTION REQUESTS ON
+           // THIS PORT (FROM ANYWHERE)
+           SA := 255
+           GOTO CANCEL.RECEIVE
+           $)
+
+
+      CASE act.vmi1.aha:
+         // reclaim IORBs
+         trace("VMI-1 aha!") /*******/
+         reclaim()
+         qpkt(p)
+         ENDCASE
+
+
+
+
+      CASE ACT.RX.CHAIN:
+           // RECEIVE THE SPECIFIED AMOUNT OF DATA, BUT ALLOW IT
+           // TO COME IN MORE THAN ONE BASIC BLOCK.
+           // USE RES1 FIELD OF PACKET TO INDICATE HOW MANY WORDS
+           // OF DATA RECEIVED SO FAR.
+
+           trace("Rx chain") /*******/
+           P ! PKT.RES1 := 0
+
+
+      CASE ACT.RX.BB:
+           // RECEIVE ONE BASIC BLOCK, PUTTING DATA IN SUPPLIED BUFFER.
+
+           // MAKE A WORKING COPY OF THE LIFETIME, AND THEN PUT THE
+           // REQUEST ON THE RECEPTION QUEUE.
+
+           P ! PKT.RES2 := P ! RHPKT.LIFETIME
+           trace("Rx ") /*******/
+           add.receive.request(p)
+           ENDCASE
+
+
+      CASE ACT.CANCEL.RX:
+           // CANCEL ALL RECEPTION REQUESTS FOR THIS SOURCE AND PORT.
+           // THE REQUEST PACKETS ARE SIMPLY DEQUEUED - NOT SENT BACK.
+           // STATION=255 MEANS "CANCEL ALL REQUESTS ON THIS PORT".
+           // MFR: the task field in the packet is set to the ring handler
+           // taskid so that they can be directly reused by the client
+
+           PORT := P ! RHPKT.PORT
+           SA   := P ! RHPKT.STATION
+
+    CANCEL.RECEIVE:
+         // check receive.queue
+         $(
+         LET r = extract(@receive.queue, port, sa)
+         UNTIL r=nil DO $( r!pkt.id := taskid
+                           r        := extract (@receive.queue, port, sa )
+                        $)
+         $)
+
+         p!pkt.arg1 := port
+         p!pkt.res2 := sa
+         trace("Cancel receive, port = %N, station = %N", port, sa) /*******/
+         cancel.receive.requests(p)
+           ENDCASE
+
+
+
+      CASE ACT.TX:
+           // TRANSMIT THE SUPPLIED DATA, IN SEVERAL BASIC BLOCKS
+           // IF IT IS TOO BIG FOR ONE.
+
+           P ! PKT.RES1 := 0 // DATA TRANSFERRED SO FAR
+           P ! PKT.RES2 := 0 // RETRY COUNT ON UNSELECTED
+
+           trace("Tx ") /*******/
+           add.transmit.request(p)
+           ENDCASE
+
+
+
+      DEFAULT: qpkt(p)
+
+
+      $) // END OF SWITCHON
+
+    $) REPEATUNTIL TESTFLAGS(4) & BREAKABLE
+
+    // TIDY UP AND STOP
+    // REMOVE TASK ID FROM ROOTNODE INFO VECTOR
+    ROOTNODE!RTN.INFO!RTNINFO.RING!RI.RHTASKID := 0
+
+   trace("Stopping") /*******/
+    // GIVE BACK GOT STORE
+
+    freevec(shared.memory)
+
+    // GET ALL PACKETS BACK
+    dqpkt(-1, timpkt)
+    dqpkt(vmi1.devid, vapkt)
+    dqpkt(vmi1.devid, vtpkt)
+
+   endwrite() /*******/
+    // KILL DEVICES
+    UNLOADSEG(DELETEDEV(vmi1.DEVID))
+
+    // FREE VECTORS USED IN PORT LIST
+    UNTIL PORT.LIST=0
+    DO $(
+       LET T = PORT.LIST
+       PORT.LIST := !T
+       FREEVEC(T)
+       $)
+    ENDTASK(TCB ! TCB.SEGLIST ! 3)
+    $) // END OF START()
+
+
+AND FIND.FREE.PORT() = VALOF
+    $(
+    // FIND AND RESERVE AN UNUSED PORT NUMBER
+    // FOR RECEPTION.
+    LAST.PORT.ALLOC :=
+         (LAST.PORT.ALLOC = MAX.PORT.NUMBER) ->
+                            MIN.PORT.NUMBER,
+                            LAST.PORT.ALLOC+1
+    IF RESERVEPORT(LAST.PORT.ALLOC)
+    THEN RESULTIS LAST.PORT.ALLOC
+    $) REPEAT
+
+
+AND RESERVEPORT(N) = VALOF
+    $(
+    // MARKS PORT NUMBER N AS ALLOCATED.
+    // RETURNS TRUE IF IT WAS NOT PREVIOUSLY
+    // ALLOCATED, OTHERWISE FALSE.
+    LET ELEM = ?
+    LET QADDR = @PORT.LIST
+
+    UNTIL !QADDR = NIL
+    DO $(
+       IF (!QADDR)!1 = N
+       THEN RESULTIS FALSE // ALREADY RESERVED
+       QADDR := !QADDR
+       $)
+
+    // N IS UNUSED, SO ALLOCATE IT
+    ELEM := GETVEC(1) // ASSUME THIS WON'T FAIL!
+    ELEM!1 := N
+    APPEND(@PORT.LIST, ELEM)
+    RESULTIS TRUE
+    $)
+
+
+AND reclaim() BE
+$( // reclaim iorbs after a controller interrupt
+   // loop through action buffer till null pointer found
+
+   $( LET iorb = action.buffer!host.act.ix
+
+      IF 0 <= (iorb-#XFF00) <= #XFF DO // null pointer
+      $( trace("In Reclaim: null pointer")
+         BREAK
+      $)
+
+      iorb := action.buffer!host.act.ix
+      iorb := iorb >> 1 // -> BCPL
+      action.buffer!host.act.ix := null
+      host.act.ix := (host.act.ix+1) REM (no.of.iorbs+2)
+      iorb!io.owner := host.owned
+
+      // process IORB
+
+      $( LET hcode = chead!ch.errcode  // code & station
+         LET icode = iorb!io.result
+         LET com = iorb!io.command & #XFF
+         LET p = iorb!io.p
+
+
+     trace("In reclaim, hcode=%X4,icode=%X4,com=%N,p=%X4",hcode,icode,com,p)
+                                               /*******/
+         TEST (icode&1)~=0  DO  // no IORB error
+         $( // tx or rx returned
+            TEST com=com.txstream  DO
+              p!pkt.res1 := txst.accepted
+
+            OR
+            $( LET buf = p!rhpkt.buff
+               LET count = (iorb!io.count)>>1    //*** word count
+
+               p!pkt.res1 := count
+               p!pkt.res2 := iorb!io.source
+
+            $)
+            !p := -1
+            qpkt(p)    // return user's pkt
+         $)
+         OR
+         $(
+            // there is an IOPB error (also possibly a header code)
+            TEST com=com.nop DO   // not an error actually
+              // the cancelling nop has returned, see if more to cancel
+              process.more.cancels()
+            OR
+            $(err
+            TEST com~=com.txstream  DO  // if receive
+             $(
+
+               TEST icode=evmi.timeout DO
+               $( p!pkt.res1 := 0
+                  qpkt(p)
+               $)
+               OR UNLESS icode=evmi.aborted DO // (ok if was cancelled)
+                    abort(#X800,icode)  //*** everything else serious for rx
+            $)
+            OR  // tx
+            $( p!pkt.res1 := VALOF SWITCHON icode INTO
+               $( CASE evmi.tooslow:
+                  CASE evmi.busy:
+                     RESULTIS txst.busy
+
+                  CASE evmi.notdn:
+                  CASE evmi.netoff:
+                  CASE evmi.error:
+                     RESULTIS txst.ring.error
+
+                  CASE evmi.unsel:
+                     RESULTIS txst.unsel.hdr   //***
+
+                  CASE evmi.ignored:
+                     RESULTIS txst.ignored
+
+                  DEFAULT:
+                     abort(#X801,icode)
+                     RESULTIS txst.ring.error
+               $)
+               qpkt(p)
+            $)
+
+            IF (hcode&1)=0 DO      // header code
+            $( IF (hcode&#XFF)<=evmi.notmyiorb DO abort(#X802,hcode)
+               chead!ch.errcode := #XFF
+            $)
+            $)err
+
+         $) // end of error processing
+      $)
+      sendpkt(-1, vmi1.devid, act.vmi1.clear, ?, ?, ?, ?)
+
+      // try to start any waiting transmits and receives
+      UNLESS transmit.queue=0 DO
+      $( LET p = transmit.queue
+         transmit.queue := !p
+         !p := -1
+         add.transmit.request(p)
+      $)
+      UNLESS receive.queue=0 DO
+      $( LET p = receive.queue
+         receive.queue := !p
+         !p := -1
+         add.receive.request(p)
+      $)
+   $) REPEAT
+$)
+
+
+AND add.receive.request(p) BE
+$( // inform VMI-1 of a new receive request
+   LET iorb = get.free.iorb()
+
+   IF iorb=0 DO    // all IORBs are in use
+   $( append(@receive.queue,p)
+      RETURN
+   $)
+
+ trace("In add rec req, iorb=%X4, com=%N, station=%N, port=%N",
+           iorb, p!pkt.type, p!rhpkt.station, p!rhpkt.port) /*******/
+   iorb!io.p := p
+   iorb!io.command := p!pkt.type=act.rx.chain -> com.rxstream, com.rxbb
+   iorb!io.station := p!rhpkt.station
+   iorb!io.port := p!rhpkt.port
+   iorb!io.port.mask := #XFFFF
+   iorb!io.fragsize := 0    //***
+   iorb!io.timelimit := p!rhpkt.lifetime
+   iorb!io.buff.descs := (p!rhpkt.size)<<1       // buffer size
+   iorb!(io.buff.descs+1) := (p!rhpkt.buff)<<1   // buffer offset
+   iorb!(io.buff.descs+2) := 0
+   iorb!(io.buff.descs+3) := 0
+
+
+   send.iorb(iorb)
+$)
+
+AND add.transmit.request(p) BE
+$( LET iorb = get.free.iorb()
+
+   IF iorb=0 DO    // all iorbs are in use
+   $( append(@transmit.queue,p)
+      RETURN
+   $)
+
+   UNLESS 0<p!rhpkt.station<255 DO // illegal address
+   $( p!pkt.res1 := txst.bad.dest
+      qpkt(p)
+      RETURN
+   $)
+
+   iorb!io.p := p
+   iorb!io.command :=  com.txstream
+   iorb!io.station := p!rhpkt.station
+   trace("In add tx req, iorb=%X4, com=%N, station=%N, port=%N",
+            iorb, p!pkt.type, p!rhpkt.station, p!rhpkt.port) /*******/
+   iorb!io.port := p!rhpkt.port
+   iorb!io.fragsize := 2048    //***
+
+
+
+   iorb!io.buff.descs := (p!rhpkt.size)<<1
+   iorb!(io.buff.descs+1) := (p!rhpkt.buff)<<1
+   iorb!(io.buff.descs+2) := 0
+   iorb!(io.buff.descs+3) := 0
+
+   send.iorb(iorb)
+
+$)
+
+
+
+AND cancel.receive.requests(p) BE
+$( LET port, sa = p!pkt.arg1, p!pkt.res2
+   LET iorb = findiorb(port, sa)
+
+   TEST iorb=0 DO qpkt(p)
+   OR
+   TEST cancel.receive.queue=0 DO
+   $( // no cancel command active so start this one
+      cancel.receive.queue := p
+      !p := 0
+      nop.iorb!io.depend := iorb<<1 // make the one we want to remove
+                                    // dependent on a nop
+      send.iorb(nop.iorb)
+   $)
+   OR append(@cancel.receive.queue,p)
+$)
+
+AND get.free.iorb() = VALOF
+$( // finds a host owned iorb (except the nop one) or returns 0
+
+   FOR i = 1 TO no.of.iorbs-1 DO
+   $( LET iorb = nop.iorb + iorb.size*i
+      IF iorb!io.owner = host.owned RESULTIS iorb
+   $)
+   RESULTIS 0
+$)
+
+AND send.iorb(iorb) BE
+$( iorb!io.owner := ctrl.action
+   action.buffer!ctrl.act.ix := iorb<<1
+   ctrl.act.ix := (ctrl.act.ix+1) REM (no.of.iorbs+2)
+   sendpkt(-1,vmi1.devid,act.vmi1.tell,?,?,?,?)
+$)
+
+
+AND process.more.cancels() BE
+$( // looks for another iorb for current cancel request or
+   // looks for another cancel request
+
+   LET p = cancel.receive.queue
+
+   IF p=0 DO $( abort(#X803); RETURN $) // inconsistent state
+
+   $( LET iorb = findiorb(p!pkt.arg1, p!pkt.res2)  // (port,sa)
+
+      TEST iorb=0 DO
+      $( cancel.receive.queue := !p
+         !p := -1
+         qpkt(p)  // return cancel request to user
+         UNLESS cancel.receive.queue=0 DO process.more.cancels()
+      $)
+      OR
+      $( nop.iorb!io.depend := iorb<<1
+         send.iorb(nop.iorb)
+      $)
+   $)
+$)
+
+
+AND findiorb(port, sa) = VALOF
+$( // returns address of iorb with ctrl.action or ctrl.owned which
+   // is a receive request on a given port and station, if none found
+   // returns 0. Also zaps host.action receive iorbs to indicate aborted.
+   FOR i = 1 TO no.of.iorbs-1 DO
+   $( LET iorb = nop.iorb + iorb.size*i
+      LET com = iorb!io.command & #XFF
+
+      IF com=com.rxbb | com=com.rxstream DO
+        IF iorb!io.port=port &
+           (sa=255 | iorb!io.station=255 | iorb!io.station=sa) DO
+        $( LET owner = iorb!io.owner
+           IF owner=ctrl.action | owner=ctrl.owned DO RESULTIS iorb
+           UNLESS owner=host.owned DO iorb!io.result := evmi.aborted
+        $)
+   $)
+   RESULTIS 0
+$)
+
+
+
+
+AND APPEND(QADDR, PKT) BE
+    $(
+    // PUT PKT ON THE END OF THE QUEUE
+    UNTIL !QADDR = NIL DO QADDR := !QADDR
+
+    !QADDR := PKT
+    !PKT   := NIL
+    $)
+
+
+AND EXTRACT(QADDR, PORT, SOURCE) = VALOF
+    $(
+    // DEQUEUE THE FIRST PACKET FOR THE GIVEN PORT NUMBER AND SOURCE.
+    LET R = NIL
+    UNTIL !QADDR = NIL
+    DO $(
+       LET PKT = !QADDR
+       LET PKTSA        = PKT ! RHPKT.STATION
+       LET PKTPORT      = PKT ! RHPKT.PORT
+
+
+       IF ((PKTPORT & PORTMASK) = PORT) &
+          ((PKTSA = 255) | (SOURCE = 255) | (PKTSA = SOURCE))
+       THEN
+         $(
+         R      := !QADDR
+         !QADDR := !R // DEQUEUE PACKET
+         R!0    := NOTINUSE
+         BREAK
+         $)
+      QADDR := !QADDR
+      $)
+
+    RESULTIS R // NIL IF NONE FOUND
+    $)
+
+
+AND HEADPKT(LV.QUEUE) = VALOF
+    $(
+    // DEQUEUES AND RETURNS THE HEAD PACKET OF THE QUEUE
+    LET P = !LV.QUEUE
+    IF P = NIL THEN RESULTIS P
+
+    !LV.QUEUE := !P
+    PKT.LINK!P := NOTINUSE
+    RESULTIS P
+    $)
+
+
+AND PKTWAIT(DEST, PKT) = VALOF
+    $(
+    // WAIT FOR SPECIFIED PACKET.
+    // IF DEST=0 THEN WAIT FOR ANY PACKET.
+    // PACKETS WHICH ARE UNWANTED AT THE MOMENT ARE
+    // KEPT ON PACKET.QUEUE
+
+    IF DEST = 0
+    THEN TEST PACKET.QUEUE=NIL
+         THEN RESULTIS TASKWAIT() // ANY PACKET
+         ELSE
+           $(
+           LET P = PACKET.QUEUE
+           PACKET.QUEUE := !P
+           !P := NOTINUSE
+           RESULTIS P // HEAD PACKET
+           $)
+
+    // SPECIFIC PACKET WANTED
+    $(
+    LET QADDR = @PACKET.QUEUE
+
+    UNTIL !QADDR = NIL
+    DO $(
+       LET P = !QADDR
+       IF P = PKT THEN $( !QADDR := !P; !P := NOTINUSE; RESULTIS P $)
+       QADDR := !QADDR
+       $)
+
+    // DIDN'T FIND IT - WAIT FOR ANOTHER TO ARRIVE
+    APPEND(@PACKET.QUEUE, TASKWAIT() )
+    $) REPEAT
+
+    $)
+
+
+AND trace(s, a, b, c, d, e, f, g) BE IF tracing DO
+$( writef(s, a, b, c, d, e, f, g)
+   newline()
+$)
+
+
+
+
+
+
+
+
+.
+SECTION "RH-INIT"
+
+GET "86:g.libhdr"
+GET "86:g.ringhdr"
+GET "86:g.ringhanhdr"
+
+LET INITIALISE(PARM.PKT) = VALOF
+    $(
+    LET MAIN.SECTION    = TCB ! TCB.SEGLIST ! 3
+    LET THIS.SECTION    = !MAIN.SECTION
+    LET type3 = pkt.arg4!parm.pkt  // need to change LOADRINGHAND
+    vmi1.devid  := PKT.ARG1 ! PARM.PKT
+    BREAKABLE := PKT.ARG3 ! PARM.PKT
+    tracing := pkt.arg2!parm.pkt
+    QPKT(PARM.PKT)
+
+    RECEIVE.QUEUE      := NIL
+    TRANSMIT.QUEUE     := NIL
+    cancel.receive.queue := 0
+    BSP.HANDLER.TASK   := 0
+    LAST.PORT.ALLOC    := ROOTNODE!RTN.TICKS REM NUM.OF.PORTS + MIN.PORT.NUMBER
+    OVERLONG.BLOCKS       := 0
+    BAD.HEADERS           := 0
+    BAD.CHECKSUMS         := 0
+    UNWANTED.BLOCKS       := 0
+    UNSEL.TRIES           := 0
+    PORT.LIST             := NIL
+    packet.queue          := 0
+    // Get space for controller header, iorbs and circular action
+    // buffer.
+
+    shared.memory := getvec(chead.size+no.of.iorbs+2+no.of.iorbs*iorb.size-1)
+    IF shared.memory=0 DO $( abort(405); FINISH $)    // !
+
+    chead := shared.memory; action.buffer := chead + chead.size
+    nop.iorb := action.buffer + no.of.iorbs + 2
+ initio()
+
+ IF tracing DO $(
+   selectoutput(findoutput("**"))
+   writef("*N RING TASK: packet q=%X4, chead=%X4, action buffer=%X4,*
+           * nop.iorb=%X4,*N device=%N*N",
+          packet.queue, chead, action.buffer, nop.iorb, vmi1.devid)
+      $)
+    // initialise controller header
+
+    chead!ch.flag := #X1234
+    chead!ch.errcode := #XFF
+    chead!ch.actbuffoff := action.buffer << 1
+    chead!ch.lenactbuff := no.of.iorbs + 2
+    chead!ch.options := 1    // logging enabled
+    IF type3 DO chead!ch.options := chead!ch.options + 4  // set bit 2
+
+    // initialise action buffer
+
+    FOR i = 0 TO no.of.iorbs+1 DO action.buffer!i := null
+
+    // initialise iorbs
+
+    FOR i = 0 TO no.of.iorbs-1 DO
+    $( LET iorb = nop.iorb + iorb.size*i
+       iorb!io.flag := #X5678
+       iorb!io.owner := host.owned
+       iorb!io.command := com.nop | #X8000  // chained bit
+    $)
+
+    // set up buffer pointers (indices)
+
+    host.act.ix := 0
+    ctrl.act.ix := 1
+
+    vapkt!pkt.id := vmi1.devid
+    vtpkt!pkt.id := vmi1.devid
+    // tell driver to initialise VMI-1
+
+    UNLESS sendpkt(-1,vmi1.devid,act.vmi1.init,0,0,shared.memory<<1,0)=0 DO
+       $( abort(#X406); FINISH $)
+
+
+    // RECORD TASK ID IN ROOT NODE
+    ROOTNODE!RTN.INFO!RTNINFO.RING!RI.RHTASKID := TASKID
+    qpkt(vapkt)     // so VMI-1 can send us messages
+    delay ( tickspersecond/2 ) // wait for VMI-1 to get it together
+    rootnode!rtn.info!rtninfo.ring!ri.myaddr := chead!ch.station
+
+    // UNLINK THIS SECTION AND RETURN ITS ADDRESS SO IT CAN BE FREED.
+
+    IF tracing DO writef("*N RING TASK STARTED*N") /*******/
+    !MAIN.SECTION       := !THIS.SECTION
+    RESULTIS THIS.SECTION
+    $)
+
+

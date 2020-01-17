@@ -1,0 +1,400 @@
+SECTION "COMPRES"
+
+GET "header"
+GET "clihdr"
+
+//=============================================================================
+$<QUIET
+LET wto.mc(mc, s, a,b,c,d,e,f,g) BE
+WRITEF("TO '%S': ", mc) <> WRITEF(s, a,b,c,d,e,f,g) <> NEWLINE()
+$>QUIET
+
+LET ms.compress() BE
+$(  // Remove Message Directory items marked as deleted.
+    // Each message directory is examined and compressed in situ.
+
+    // N.B. local tags have format "xxx.um" or "zzz.md" to distinguish
+    // them from similar global tags,  which have format "um.xxx" or "md.yyy".
+    LET ea.um           = um!cache.address - um.element.size    // In store address of
+                                                        // current UM element
+    LET number.um       = -1            //  UM entry number of current message directory
+    LET hash.um         = 0             //  UM hash chain currently being compressed
+    LET chain.um        = 0             // Pointer to next elemnt on current UM hash cha=in
+    LET recovered.md    = ?     // Amount of space (so far) recovered in current MD
+    LET last.chain.md   = ?     //  Address of last undeleted chain word in MD
+    LET next.free.md    = ?     // New address in file for next item on MD chain
+    LET current.md      = ?             // Address within MD of item currently being chehcked
+    LET chain.md        = ?             // Current address in file for next item on MD c
+hain
+    LET number.md       = ?             // Current slot no of item being checked
+    LET new.number.md   = ?             // New slot no. for item being checked
+MANIFEST $( cache.md.words = 600 $)
+    LET cache.md        = VEC cache.md.words    // Cache for current MD element
+    LET index           = VEC file.desc.size            // Index corresponding to currenst MD
+    LET file            = VEC file.desc.size    // Scratch file for index shuffling
+    LET delete.count    = 0                     // Index items deleted
+    LET wto.file(string, a,b,c,d) BE
+    $(  MANIFEST $( full.bytes=80 $)
+        LET base        = "compress "
+        LET full        = VEC full.bytes/BYTESPERWORD
+        LET p           = base%0
+        LET s.len       = ?
+        FOR i = 1 TO p          DO full%i       := base  %i
+        s.len := string%0 > (full.bytes - p) -> full.bytes-p, string%0
+        FOR i = 1 TO s.len      DO full%(p+i)   := string%i
+        full%0  := p + s.len
+        wto.mc("file", full,a,b,c,d,0,0)
+    $)
+
+    Zap.file(file)
+    Zap.file(index)
+    read.cache(um, 0)
+
+    writes("*nMAIL SYSTEM DATABASE COMPRESSION REPORT*N*
+             *=======================================*n*N")
+
+    ms.fs.fail.level := level()
+    ms.fs.fail.link := ms.compress.fail
+
+    wto.file("compress starting")
+    post.report(#X7FFF)
+ms.compress.loop:
+    $(  // Loop for each element in User Map
+
+        // If the end of the current hash chain has been reached,  find the next
+        // one with anything on it.
+        IF chain.um = 0
+        $(  $(
+                hash.um := hash.um+1
+                IF hash.um > Hash.um.mask THEN BREAK
+            $) REPEATUNTIL um!cache.address!hash.um ~= 0
+            IF hash.um=128 THEN BREAK
+            chain.um := um!cache.address!hash.um
+            IF trace    wto.file("Hash chain %I2", hash.um)
+            writes("*NHASH CHAIN #")
+            writehex(hash.um, 4)
+            writes("*N*N")
+        $)
+        ea.um := chain.um + um!cache.address
+        number.um := (chain.um - User.um.base)/um.element.size
+        chain.um := ea.um!um.chain
+
+        writes("User=")
+        write.uid(ea.um + um.user.puid)
+        $(  LET name    = VEC 20
+            IF ea.um %% um.user.puid = 0 THEN name := "<unused>"
+            convert..puid.to.name(ea.um, um.user.puid, name)
+            WRITEF("=%TA", name)
+        $)
+        writes(" MD=")
+        write.uid(ea.um + um.md.puid)
+        WRITEF("  %% %I4/%X4, id%I3*N", chain.um, chain.um, number.um) 
+
+        IF ea.um %% um.user.puid = 0                                    LOOP
+        retrieve.entry(master.index, (number.um*master.index.slot.size)+
+                                                master.index.user.index, index)
+        retrieve.entry(master.index, (number.um*master.index.slot.size)+
+                                                master.index.md, md)
+
+        number.md               := 0
+        new.number.md           := 0
+        recovered.md            := 0
+        md!cache.address        := cache.md
+        current.md              := 0
+        next.free.md            := 0
+        last.chain.md           := -1
+
+        open.file(md)
+
+        $(each.element
+            //---------------------------------------------
+            // Loop for each element in a message info file
+            //---------------------------------------------
+            LET remote  = FALSE
+            LET error   = FALSE
+            LET flags   = ?
+
+            md!cache.size       := cache.md.words // THIS IS ZAPPED BELOW ......
+            read.cache(md, current.md)
+            chain.md            := cache.md %% md.chain
+            IF chain.md = #XFFFF THEN BREAK
+
+WRITEF(" ->%X4 ", chain.md)
+            flags := cache.md!md.flags
+            remote := (flags & md.remote.flag) ~= 0
+            error  := (flags & md.error.flag) ~= 0
+WRITEF("F=%X4 ", flags)
+
+            IF (chain.md <= current.md) | (chain.md > current.md+1000)
+            $(  writes("*NMESSAGE DIRECTORY CHAIN CORRUPT*N")
+                writef("Hash %n, curr=%N, chain=%N*N",
+                                        hash.um, current.md, chain.md)
+                wto.file("MD corrupt at Hash %n", hash.um)
+                wto.log("MD corrupt at Hash %N: %n -> %N",
+                                        hash.um, current.md, chain.md)
+                report.subject := "DEMON: MD chain corrupt"
+                writes("    UMID=")
+                write.uid(cache.md + md.umid)
+                writes(" F=")
+                write.uid(cache.md + md.message.puid)
+
+                writes(" H=")
+                write.uid(cache.md + md.header.puid)
+                writes(" Flags=")
+                writehex(flags, 4)
+                newline()
+                BREAK
+            $)
+
+            IF chain.md<0 THEN BREAK
+
+            writes("ID")
+            write.uid(cache.md + md.umid)
+            writes(" F")
+            write.uid(cache.md + md.message.puid)
+
+            writes(" H")
+            write.uid(cache.md + md.header.puid)
+            NEWLINE()
+            IF remote
+            $(  WRITES("Remote ")
+                write.uid(cache.md + md.remote.list)
+                NEWLINE()
+            $)
+            IF remote
+            $(  WRITES("Error ")
+                write.uid(cache.md + md.error.header)
+                NEWLINE()
+            $)
+
+            // Check if the current item is to be deleted.
+            TEST (flags & md.deleted.flag) ~= 0 & (flags & md.notmail.flag) = 0
+            $(This.item.deleted
+                // This item is not to be retained.
+                recovered.md := recovered.md + (chain.md - current.md)
+                delete.count +:= 2
+                IF remote THEN delete.count +:= 1
+                IF error  THEN delete.count +:= 1
+            $)This.item.deleted
+            ELSE
+            $(This.item.not.deleted
+                // This entry is to be retained.  If necessary shuffle its files
+                // up the message index to match its changed entry number and
+                // write the element to its new position in the file
+
+                UNLESS recovered.md = 0
+                $(previous.items.deleted
+                    IF trace wto.file("Shuffle by %N for %N*N",
+                                                        recovered.md, number.um)
+                    // Some space has been recovered previously so update
+                    // the chain,  shuffle the index entries and move the item.
+
+                    // Update the chain word of any previous valid item
+                    IF last.chain.md >= 0
+                    THEN write.little.block(md, @next.free.md, last.chain.md, 1)
+                    retrieve.entry(index, number.md, file)
+                    UNLESS file!uid = 0
+                    DO retain.in.index(index, new.number.md, file)
+
+                    retrieve.entry(index, number.md+1, file)
+                    UNLESS file!uid = 0
+                    DO retain.in.index(index, new.number.md+1, file)
+
+                    IF remote
+                    $(  retrieve.entry(index, number.md+2, file)
+                        UNLESS file!uid = 0
+                        DO retain.in.index(index, new.number.md+2, file)
+                    $)
+
+                    IF error
+                    $(  LET offset = (remote) -> 3, 2
+                        retrieve.entry(index, number.md+offset, file)
+                        UNLESS file!uid = 0
+                        DO retain.in.index(index, new.number.md+offset, file)
+                    $)
+
+
+                    // Mess around with the file descriptor to ensure that only
+                    // as much data as necessary is written to the file:
+                    md!cache.size       := chain.md - current.md        // NASTY .......
+                    md!start.of.block   := next.free.md
+            IF trace THEN wto.file("Flush From %N, size %N",
+                                                next.free.md, md!cache.size)
+                    flush.cache(md)
+                $)previous.items.deleted
+
+                // Note the position of this entry's chainword for later update
+                last.chain.md   := next.free.md
+                next.free.md    := next.free.md + (chain.md - current.md)
+
+                new.number.md   +:= remote -> 3, 2
+                IF error        THEN new.number.md +:= 1
+            $)This.item.not.deleted
+
+            number.md           +:= remote -> 3, 2
+            IF error    THEN number.md +:= 1
+
+            UNLESS new.number.md = number.md
+            $(  // Delete old index entries of files; they are shuffled/obsolete
+                delete(index, number.md-1)
+                delete(index, number.md-2)
+                IF (remote | error) & ((new.number.md-number.md) > 2)
+                THEN delete(index, number.md-3)
+                IF (remote & error) & ((new.number.md-number.md) > 3)
+                THEN delete(index, number.md-4)
+            $)
+
+            current.md := chain.md
+
+        $)each.element REPEAT        // End of message directory items loop
+
+        // If any shuffling has been done set the chainword of the (new) item
+        // after the valid items to minus one.
+        UNLESS recovered.md = 0
+        $(
+            IF trace    wto.file("%N deleted for %N", recovered.md, number.um)
+            IF last.chain.md >= 0
+            THEN write.little.block(md, @next.free.md, last.chain.md, 1)
+            chain.md := -1
+            write.little.block(md, @chain.md, next.free.md, 1)
+
+            // Shrink the file size down to the real size and back up again to
+            // free disc blocks.
+            change.file.size(md, next.free.md+1)
+            change.file.size(md, 30000)
+        $)
+
+newline()
+
+        close.file(md)
+
+        // Check if RM allocation time is nearly expired:
+        IF stop.time <= rootnode!rtn.mins
+        $(
+            wto.file("RM TIME NEARLY UP (%I2 out of %I2)",
+                                                rootnode!rtn.mins, stop.time)
+            writef("*NRM TIME NEARLY UP (%I2 out of %I2)",
+                                                rootnode!rtn.mins, stop.time)
+            writes("*N==================================")
+            report.subject := "DEMON:  Ran out of time."
+            GOTO ms.compress.end
+        $)
+
+    $) REPEAT     // End of user loop
+
+    GOTO ms.compress.end
+
+ms.compress.fail:
+wto.file("FS failed %X4 @%I2, %N user %N, entry %n",
+                        fs.rc, hash.um, chain.um, number.um, number.md)
+    writes("*N FAILED - ")
+    fs.explain(fs.rc)
+    report.subject := "DEMON: File server failure."
+    GOTO ms.compress.loop
+
+ms.compress.end:
+    writef("*N%n slot%S deleted*N", delete.count, delete.count=1 -> "", "s")
+    writes("*NEND OF COMPRESSION")
+    writes("*N==================*n")
+
+    TEST report.subject=0
+    $(
+        // If no other subject has been set,  set the number of items deleted.
+        report.subject          := "DEMON:     items deleted."
+        IF delete.count=1       THEN report.subject%16:= ' '
+        IF delete.count>99      THEN report.subject%8 := delete.count/100 + '0'
+        IF delete.count>9       THEN report.subject%9 :=
+                                (delete.count - (delete.count/100)*100)/10 + '0'
+        report.subject%10 := (delete.count - (delete.count/10)*10) + '0'
+        wto.file("%N item%S deleted after %N of %N",
+                                        delete.count, delete.count=1 -> "", "s",
+                                        rootnode!rtn.mins, stop.time)
+    $)
+    ELSE wto.file("%n item%S deleted", delete.count, delete.count=1 -> "", "s")
+    post.report(0)
+$)
+
+//==============================================================================
+
+LET cdemon () BE
+$(
+    LET nsvec           = VEC 3
+
+    ms.interlocked.file := 0
+    ms.perm.vec.chain   := 0
+    ms.temp.vec.chain   := 0
+    root                := perm.file()          // INDEX
+    root!(uid+0)        := #X800d
+    root!(uid+1)        := #x2a6e
+    root!(uid+2)        := #xd59f
+    root!(uid+3)        := #x79b9
+
+    workfile.base       := 0                    // In case of accident
+    full.trace          := FALSE
+    timing              := FALSE
+    breaks.allowed      := TRUE
+    trusted             := FALSE
+
+    client.puid         := get.perm.vec(4)
+    client.name         := get.perm.vec(15)
+
+    // If LSI4 initialisation code is linked in then use it!!
+    IF validroutine(@ms.checker) THEN ms.checker()
+
+    rhtaskid := rootnode!rtn.info!rtninfo.ring!ri.rhtaskid
+//  lookup.name("FILESERVE", nsvec)
+//  fs.station          := nsvec!0
+//  fs.port             := nsvec!2
+    UNLESS fs.find(-1)
+//      wto.file("Fs.find failed")
+        wto.mc("FILE", "COMPRESS Fs.find failed")
+    lookup.name("PS.MAP", nsvec)
+    map.station         := nsvec!0
+    map.port            := nsvec!2
+    map.func            := nsvec!3
+
+    master.index        := perm.file()          // INDEX
+    client.index        := perm.file()          // INDEX
+    header.file         := perm.file()          // TEMP
+    send.file           := perm.file()          // TEMP
+    expanded.groups.file:= perm.file()          // TEMP, CREATED
+    recipients.puids.file:= perm.file()         // TEMP, CREATED
+    client.md           := perm.file()          // Not used ????
+    md                  := perm.file()          // Dealt with ..
+    um                  := perm.file()          // Here ........
+
+    um!cache.address    := get.perm.vec(4000/rwpw)
+    um!cache.size       := 4000
+
+    new.umid            := get.perm.vec(umid.size)
+
+    ms.fs.fail.level    := level()
+    ms.fs.fail.link     := ms.fs.fail.compres.link
+    ms.user.break.level := level()
+
+    // Write any tracing + report information to a file.
+    route.output.to.file()
+
+    retrieve.entry(root, root.user.map, um)
+    retrieve.entry(root, root.master.index, master.index)
+    read.cache(um, 0)
+    get.temp.files()
+    ms.compress()
+    GOTO end
+
+ms.user.break.link:
+    writes("*nBreak in - compress abandoned*n")
+    little.tidyup()
+    goto end
+
+ms.fs.fail.compres.link:
+    writes("abandoned - ")
+    fs.explain(fs.rc)
+    GOTO end
+
+end:
+    tidyup()
+    wrch := old.wrch
+$)
+
+

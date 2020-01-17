@@ -1,0 +1,22 @@
+SECTION "NSW"
+
+GET "ERRHDR"
+
+LET NEXTSW() = VALOF
+$( LET CH=?
+   LET S1, S2 = ?,?
+
+   CH := RDCH() REPEATUNTIL CH='/' \/ CH=ENDSTREAMCH
+   IF CH=ENDSTREAMCH RESULTIS CH
+   SETTING := TRUE
+
+   S1 := RDCH()
+   TEST S1='-' THEN $( S1 := RDCH(); SETTING := FALSE $)
+   ELSE IF S1='N' THEN TEST RDCH()= 'O' $( S1 := RDCH(); SETTING := FALSE $)
+                       ELSE UNRDCH()
+   S2 := RDCH()
+
+   RESULTIS (S1<<8) \/ S2
+$)
+
+

@@ -1,0 +1,75 @@
+
+SECTION "squash"
+
+GET     "libhdr"
+
+MANIFEST $( flag.ch = 128 $)
+
+LET start () BE
+$(
+   LET arg.vec = VEC 50
+   AND l.ch, n.ch, rpt.cnt = ?, ?, ?
+   AND old.in, old.out = input (), output ()
+   AND source, squash  = ?, ?
+
+   IF rdargs ( "FROM/A,TO/A", arg.vec, 50 ) = 0
+      DO
+         $( writes ( "Bad arguments*N" )
+            FINISH
+         $)
+
+   source := findinput ( arg.vec ! 0 )
+
+   IF source = 0
+      THEN
+           $( writes ( "Unable to open input*N" )
+              FINISH
+           $)
+
+   selectinput ( source )
+
+   squash := findoutput ( arg.vec ! 1 )
+
+   IF squash = 0
+      THEN
+           $( writes ( "Unable to open output*N" )
+              endread ()
+              selectinput ( old.in )
+              FINISH
+           $)
+
+   selectoutput ( squash )
+
+   l.ch := rdch () ; n.ch := rdch ()
+
+   $(
+      WHILE l.ch \= n.ch
+         DO
+            $( wrch ( l.ch )
+               l.ch := n.ch
+               n.ch := rdch ()
+            $)
+
+      IF n.ch = endstreamch THEN BREAK
+
+      rpt.cnt := 1
+
+      WHILE ( n.ch = l.ch ) & ( rpt.cnt < 127 )
+        DO
+            $( rpt.cnt := rpt.cnt + 1
+               n.ch   := rdch ()
+            $)
+
+      wrch ( flag.ch + rpt.cnt ) ; wrch ( l.ch )
+
+      l.ch    := n.ch
+      n.ch    := rdch ()
+
+   $) REPEATUNTIL testflags ( 1 )
+
+   endread () ; endwrite ()
+   selectinput ( old.in ) ; selectoutput ( old.out )
+$)
+
+
+

@@ -1,0 +1,121 @@
+$$TRACE := ~$$COMMAND
+
+LET map.lookup() BE
+$(      LET nsvec = VEC 3
+        IF LOOKUP.name("PS.MAP", nsvec)
+        $( map.station, map.port, map.func := nsvec!0, nsvec!2, nsvec!3
+           RETURN
+        $)
+        WRITEF("Failed to lookup MAP - Use BREAK B to abandon*N")
+        delay(tickspersecond * 10)
+        IF testflags(1) THEN LONGJUMP(ms.user.break.level, ms.user.break.link)
+$)
+
+LET convert..puid.to.name (puid, offset, name) = VALOF
+$(  MANIFEST
+    $(  bb.ssp.bytes    = bb.ssp.args*bytesperringword
+        map.domain1     = bb.ssp.bytes
+        map.domain2     = map.domain1   + 5
+        map.name        = map.domain2   + 6
+        map.upb         = map.name      +17
+    $)
+    // Routine to find the initials of a PUIDs owner.
+
+    LET txbuff  = VEC 16/rwpw
+    LET rxbuff  = VEC 25/rwpw
+    LET puids   = VEC 17/BYTESPERWORD
+    LET from    = "PUID"
+    puids%0 := 16
+
+    UNLESS 0 < map.station <= #XFF map.lookup()
+
+    FOR k=0 TO 7
+    $(  LET t = (puid%(offset*bprw+k) >> 4) + '0'
+        IF t>'9' THEN t := t - '0' - 10 + 'A'
+        puids%(2*k + 1) := t
+        t := (puid%(offset*bprw+k) & 15) + '0'
+        IF t>'9' THEN t := t - '0' - 10 + 'A'
+        puids%(2*k + 2) := t
+    $)
+
+    FOR domain = 1 TO 2
+    $(  LET to. = VALOF SWITCHON domain INTO
+        $(      CASE 1: RESULTIS        "PNAME"
+                CASE 2: RESULTIS        "WORLD"
+        $)
+
+        FOR k=0 TO from%0       DO txbuff%(map.domain1 + k) := from%k
+        FOR k=0 TO to.%0        DO txbuff%(map.domain2 + k) := to. %k
+        FOR k=0 TO puids%0      DO txbuff%(map.name     +k) := puids%k
+
+        UNLESS 0 < map.station < #X100 map.lookup()
+
+        FOR i=20 TO 0 BY -1
+        $(  IF ssp(0, txbuff, map.upb/bprw+1, rxbuff, 25, 0,
+                                                map.func, map.station, map.port)
+            THEN GOTO convert.success
+            IF (result2&#Xdf00) = #xdf00 THEN BREAK     // RESULTIS convert.bad.name
+            IF testflags(1) THEN LONGJUMP(ms.user.break.level,ms.user.break.link)
+            map.lookup()
+            IF i=0
+            $(
+$<TRACE         IF trace WRITEF("Continual MAp failure %X4*N", Result2) $>TRACE
+//              RESULTIS convert.no.map
+                BREAK
+            $)
+            delay(tickspersecond/2)
+        $)
+    $)
+
+    // Many failures
+    FOR i=0 TO puids%0 DO name%i := puids%i
+    GOTO convert.alright
+
+convert.success:
+    // Convert and save result
+    FOR i=0 TO rxbuff%bb.ssp.bytes DO name%i := rxbuff%(i+bb.ssp.bytes)
+convert.alright:
+$<TRACE
+    IF trace
+    $(  writef("Converted to name '%S' from PUID ", name)
+        write..uid(puid, offset)
+        newline()
+    $)
+$>TRACE
+    RESULTIS convert.ok
+$)
+
+//=============================================================================
+$<COMMAND'
+LET hex(n) = VALOF $( n := n & 15; RESULTIS (n<10) -> n+'0', n+'A'-10 $)
+
+LET reverse.lookup(machine.id,name) = VALOF
+$(  // Uses the name server to look up the given station number,
+    // and put its name in "name".
+    // The result is a "convert.puid" equivalent value.
+    LET nsvec   = VEC 3
+    LET Unknown = "Station ??"
+    LET tx.block= VEC (bb.ssp.arg1/rwpw + 1)
+    LET rx.buff = VEC 63/bytesperringword
+
+    // Construct request block
+
+    tx.block %% bb.ssp.args := machine.id << 8
+
+    TEST ssp("revlookup", tx.block, bb.ssp.args+1, rx.buff, 64, nsvec)
+    THEN FOR i = 0 TO rx.buff%(bb.ssp.args*bprw)   name%i := rx.buff%(bb.ssp.args*bprw + i)
+    ELSE
+    $(  FOR i = 0 TO UNKNOWN%0                  DO name%i := unknown%i
+        name%(unknown%0)        := hex(machine.id)
+        name%(unknown%0-1)      := hex(machine.id >> 4)
+    $)
+      // Failed to use name server, or it doesn't know the name.
+      // Improvise locally.
+
+    RESULTIS convert.ok
+$)
+
+//=============================================================================
+$>COMMAND'
+
+

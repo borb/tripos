@@ -1,0 +1,1842 @@
+//******************************************************************************
+//*                                                                            *
+//*    ##    ##   ######    ######   ##    ##    ####     ######   ##    ##    *
+//*    ###  ###  ########  ########  ##   ##    ######   ########  ###  ###    *
+//*    ########  ##        ##    ##  ##  ##    ##    ##  ##        ########    *
+//*    ## ## ##  #######    ######   ####      ########  #######   ## ## ##    *
+//*    ##    ##  ##    ##  ##    ##  ## ##     ##    ##        ##  ##    ##    *
+//*    ##    ##  ##    ##  ##    ##  ##  ##    ##    ##        ##  ##    ##    *
+//*    ##    ##   ######   ########  ##   ##   ##    ##  ########  ##    ##    *
+//*    ##    ##    ####     ######   ##    ##  ##    ##   ######   ##    ##    *
+//*                                                                            *
+//*    ====================================================================    *
+//*          Macro Assembler for the Motorola MC68000 Microprocessor           *
+//*    ====================================================================    *
+//*                                                                            *
+//******************************************************************************
+
+
+
+//******************************************************************************
+//*                                                                            *
+//*  There are certain portions of the code which are dependent to particular  *
+//*  machines and operating systems, and these are surrounded by conditional   *
+//*  compilation tags of the form "$<xxx  $>xxx", where "xxx" is the name of   *
+//*  the dependency.                                                           *
+//*  These portions of code are also flagged by the special comment symbol     *
+//*  "/* xxx */" in the right hand margin.                                     *
+//*                                                                            *
+//*                                                                            *
+//*          TAG        Computer                                  O/S          *
+//*          ---        --------                                  ---          *
+//*                                                                            *
+//*          370        IBM 370  (3081)                           (OS/MVT)     *
+//*          CAP        Cambridge CAP computer                    (CHAOS)      *
+//*          68K        Cambridge processor bank MC68000 computer (TRIPOS)     *
+//*                                                                            *
+//*                                                                            *
+//*    N.B.  This assembler ASSUMES a 32-bit implementation of BCPL, but will  *
+//*          run on a 16 bit machine, provided that only 16 bit arithmetic is  *
+//*          required.                                                         *
+//*                                                                            *
+//*                                                                            *
+//******************************************************************************
+//*    I. D. Wilson              Last Modified:      IDW     24/07/85          *
+//******************************************************************************
+
+
+
+
+
+SECTION "M68KASM1"
+
+
+
+$<370
+NEEDS "M68KASM2"                                                       /* 370 */
+NEEDS "M68KASM3"                                                       /* 370 */
+NEEDS "M68KASM4"                                                       /* 370 */
+NEEDS "M68KASM5"                                                       /* 370 */
+NEEDS "M68KASM6"                                                       /* 370 */
+$>370
+
+
+
+GET "LIBHDR"
+
+GET "M68KHDR"
+
+
+
+LET start( parm )  BE
+$(
+$<68K
+    LET av  =  VEC  50                                                 /* 68K */
+    LET sv  =  VEC  15                                                 /* 68K */
+    LET as  =  "FROM/A,TO/K,VER/K,LIST/K,HDR/K,EQU/K,SYMBOLS/K,OPT/K"  /* 68K */
+$>68K
+
+    LET name.sourcestream  =  0
+    LET name.liststream    =  0
+    LET name.codestream    =  0
+    LET name.verstream     =  0
+    LET name.equstream     =  0
+    LET name.symbolstream  =  0
+
+    fatalerrorp     :=  level()
+
+$<370
+    datestring      :=  date()                                         /* 370 */
+    timestring      :=  timeofday()                                    /* 370 */
+$>370
+
+$<CAP
+    datestring      :=  date()                                         /* CAP */
+    timestring      :=  time()                                         /* CAP */
+$>CAP
+
+$<68K
+    sv              :=  datstring( sv )                                /* 68K */
+    datestring      :=  sv + 0                                         /* 68K */
+    timestring      :=  sv + 5                                         /* 68K */
+$>68K
+
+    version         :=  9
+    release         :=  170
+
+    initstore( storesize )
+
+    tagv            :=  getchunk( tagsize, TRUE )
+    macroname       :=  getchunk( tagsize, TRUE )
+    labelvec        :=  getchunk( tagsize, TRUE )
+    expvec          :=  getchunk( expsize, TRUE )
+    expvecp         :=  expvec + expsize
+
+    inputbuff       :=  getchunk( maxllen/bytesperword,       TRUE )
+    titlevec        :=  getchunk( titlecharsmax/bytesperword, TRUE )
+    outbuff         :=  getchunk( maxllen/bytesperword,       TRUE )
+    codebuff        :=  getchunk( codesize*cb.size,           TRUE )
+    errorvec        :=  getchunk( errorsize*eb.size,          TRUE )
+
+    extrnsymbols    :=  0
+    entrysymbols    :=  0
+    sourcestream    :=  0
+    liststream      :=  0
+    codestream      :=  0
+    verstream       :=  0
+    sysout          :=  output()
+
+    linenumber      :=  0
+    maxextlength    :=  7
+
+    failed          :=  no
+    in.movem        :=  no
+    errormessages   :=  no
+    crossreference  :=  no
+    paging          :=  yes
+    parmlisting     :=  no
+    xref            :=  no
+    externalref     :=  no
+    pass1           :=  no
+    pass2           :=  no
+
+    objectmodule    :=  o.none
+    ts.default      :=  ts.word
+
+    addressmask     :=  mask.68000
+
+$<370
+    IF  sysout = 0  THEN                                               /* 370 */
+    $(                                                                 /* 370 */
+        // No output stream - "SYSPRINT" was not given.                /* 370 */
+        // Write a panic message and give up.  On the IBM/370 this     /* 370 */
+        // is done by writing to the HASP log.  Most other systems     /* 370 */
+        // will have some safety valve which can be used.              /* 370 */
+                                                                       /* 370 */
+        writetolog( "****** M68KASM:  DD for *"SYSPRINT*" missing" )   /* 370 */
+        stop( 16 )                                                     /* 370 */
+    $)                                                                 /* 370 */
+                                                                       /* 370 */
+    sourcestream  :=  findinput( "SYSIN" )                             /* 370 */
+    checkopen( sourcestream, "SYSIN" )                                 /* 370 */
+                                                                       /* 370 */
+    liststream    :=  findoutput( "LISTING" )                          /* 370 */
+    checkopen( liststream, "LISTING" )                                 /* 370 */
+                                                                       /* 370 */
+    codestream    :=  findoutput( "CODE" )                             /* 370 */
+    checkopen( codestream, "CODE" )                                    /* 370 */
+                                                                       /* 370 */
+    currentfile   :=  makefile( "SYSIN" )                              /* 370 */
+$>370
+
+
+$<CAP
+    $(  //  Do the parameter decoding for CAP.  We have to extract the /* CAP */
+        //  parameter string, and then add on any options which were   /* CAP */
+        //  implied by the files given.                                /* CAP */
+                                                                       /* CAP */
+        LET userparm     =  VEC 256/bytesperword                       /* CAP */
+        LET defaultparm  =  "  "                                       /* CAP */
+        LET lparm        =  defaultparm % 0                            /* CAP */
+        LET rc           =  keyarg( "OPT", parms.string )              /* CAP */
+                                                                       /* CAP */
+        sourcestream  :=  findinput( "PROGRAM|1" )                     /* CAP */
+                                                                       /* CAP */
+        IF  sourcestream = 0  THEN                                     /* CAP */
+        $(                                                             /* CAP */
+            writes( "****** Cannot open PROGRAM source file*N" )       /* CAP */
+                                                                       /* CAP */
+            failed  :=  yes                                            /* CAP */
+        $)                                                             /* CAP */
+                                                                       /* CAP */
+        liststream   :=  findoutput( "LIST" )                          /* CAP */
+        codestream   :=  findoutput( "TO" )                            /* CAP */
+                                                                       /* CAP */
+        currentfile  :=  makefile( "PROGRAM" )                         /* CAP */
+                                                                       /* CAP */
+        //  Having attempted to open the listing and output files, we  /* CAP */
+        //  should construct the parameter string to be decoded later. /* CAP */
+                                                                       /* CAP */
+        parm  :=  getstore( 256/bytesperword )                         /* CAP */
+                                                                       /* CAP */
+        TEST  rc = parms.ok                                            /* CAP */
+            THEN  movestring( k.n0, userparm )                         /* CAP */
+            ELSE  userparm % 0  :=  0                                  /* CAP */
+                                                                       /* CAP */
+        FOR  i = 0  TO  lparm  DO  parm % i  :=  defaultparm % i       /* CAP */
+                                                                       /* CAP */
+        TEST  liststream = 0  THEN  liststream  :=  findoutput( "/A" ) /* CAP */
+                              ELSE  parm % 1    :=  'L'                /* CAP */
+                                                                       /* CAP */
+        TEST  codestream = 0  THEN  codestream  :=  findoutput( "/A" ) /* CAP */
+                              ELSE  parm % 2    :=  'T'                /* CAP */
+                                                                       /* CAP */
+        FOR  i = 1  TO  userparm % 0  DO                               /* CAP */
+        $(                                                             /* CAP */
+            lparm         :=  lparm + 1                                /* CAP */
+            parm % lparm  :=  userparm % i                             /* CAP */
+        $)                                                             /* CAP */
+                                                                       /* CAP */
+        parm % 0  :=  lparm                                            /* CAP */
+                                                                       /* CAP */
+        IF  liststream = 0  THEN  failed  :=  yes                      /* CAP */
+        IF  codestream = 0  THEN  failed  :=  yes                      /* CAP */
+    $)                                                                 /* CAP */
+$>CAP                                                                  /* CAP */
+
+
+$<68K
+    //  Tripos form of the argument decoding.  Like Cap, we must make  /* 68K */
+    //  the final options string out of the one given, and the one     /* 68K */
+    //  implied by the extra arguments.                                /* 68K */
+                                                                       /* 68K */
+    TEST  rdargs( as, av, 50 ) = 0  THEN                               /* 68K */
+    $(                                                                 /* 68K */
+        writes( "******  Bad arguments for string:*N" )                /* 68K */
+        writef( "******  *"%S*"*N", as )                               /* 68K */
+                                                                       /* 68K */
+        failed  :=  yes                                                /* 68K */
+    $)                                                                 /* 68K */
+    ELSE                                                               /* 68K */
+    $(                                                                 /* 68K */
+        LET ns           =  av!a.from                                  /* 68K */
+        LET nc           =  av!a.to                                    /* 68K */
+        LET nv           =  av!a.ver                                   /* 68K */
+        LET nl           =  av!a.list                                  /* 68K */
+        LET nh           =  av!a.hdr                                   /* 68K */
+        LET neq          =  av!a.equ                                   /* 68K */
+        LET nsymb        =  av!a.symbols                               /* 68K */
+        LET opt          =  av!a.opt                                   /* 68K */
+                                                                       /* 68K */
+        LET defaultparm  =  "  "                                       /* 68K */
+        LET parmlength   =  defaultparm % 0                            /* 68K */
+        LET uparm        =  opt = 0  ->  "", opt                       /* 68K */
+        LET uparmlength  =  uparm % 0                                  /* 68K */
+        LET plength      =  parmlength + uparmlength                   /* 68K */
+                                                                       /* 68K */
+        parm  :=  getstore( 256/bytesperword )                         /* 68K */
+                                                                       /* 68K */
+        FOR  i = 1  TO  parmlength  DO  parm % i  :=  defaultparm % i  /* 68K */
+                                                                       /* 68K */
+        FOR  i = 1  TO  uparmlength  DO                                /* 68K */
+             parm % (parmlength + i)  :=  uppercase( uparm % i )       /* 68K */
+                                                                       /* 68K */
+        parm % 0           :=  plength                                 /* 68K */
+                                                                       /* 68K */
+        name.sourcestream  :=  ns                                      /* 68K */
+        name.codestream    :=  nc = 0  ->  "nil:", nc                  /* 68K */
+        name.verstream     :=  nv = 0  ->  "**",   nv                  /* 68K */
+        name.liststream    :=  nl = 0  ->  "nil:", nl                  /* 68K */
+        name.equstream     :=  neq                                     /* 68K */
+        name.symbolstream  :=  nsymb                                   /* 68K */
+        name.hdrfile       :=  nh                                      /* 68K */
+                                                                       /* 68K */
+        sourcestream       :=  findinput( name.sourcestream )          /* 68K */
+        checkopen( sourcestream, result2, name.sourcestream, "input" ) /* 68K */
+                                                                       /* 68K */
+        liststream         :=  findoutput( name.liststream )           /* 68K */
+        checkopen( liststream, result2, name.liststream, "output" )    /* 68K */
+                                                                       /* 68K */
+        UNLESS  nl = 0  DO  parm % 1  :=  'L'                          /* 68K */
+                                                                       /* 68K */
+        codestream   :=  findoutput( name.codestream )                 /* 68K */
+        checkopen( codestream, result2, name.codestream, "output" )    /* 68K */
+                                                                       /* 68K */
+        UNLESS  nc = 0  DO  parm % 2  :=  'T'                          /* 68K */
+                                                                       /* 68K */
+        verstream    :=  findoutput( name.verstream )                  /* 68K */
+        checkopen( verstream, result2, name.verstream, "output" )      /* 68K */
+                                                                       /* 68K */
+        currentfile  :=  makefile( name.sourcestream )                 /* 68K */
+    $)                                                                 /* 68K */
+$>68K
+
+
+    IF  failed  THEN  abortassembly()
+
+
+    //  Decode the parm string.  Parameters have the following meaning:
+    //
+    //  X          -    Produce an Alphabetic Cross Reference
+    //  L          -    Produce an Assembler Listing
+    //  T          -    Produce a  TRIPOS     object module
+    //  M          -    Produce a  MOTOROLA   object module
+    //  H          -    Produce an INTEL HEX  object module
+    //  E          -    Allow long external symbol names
+    //  A          -    Allow extended (28 bit) addressing
+
+    FOR  i = 1  TO  parm % 0  DO
+    $(
+        SWITCHON  uppercase( parm % i )   INTO
+        $(
+            CASE  'X'  :  xref          :=  yes            ;  LOOP
+            CASE  'L'  :  parmlisting   :=  yes            ;  LOOP
+            CASE  'T'  :  objectmodule  :=  o.tripos       ;  LOOP
+            CASE  'M'  :  objectmodule  :=  o.motorola     ;  LOOP
+            CASE  'H'  :  objectmodule  :=  o.intelhex     ;  LOOP
+            CASE  'E'  :  maxextlength  :=  15             ;  LOOP
+            CASE  'A'  :  addressmask   :=  mask.68010     ;  LOOP
+
+
+            CASE  '*S' :
+            CASE  '*T' :
+            CASE  ','  :  //  Ignorable characters
+                          LOOP
+
+
+            DEFAULT    :  writef( "******  Option *"%C*" ignored*N", parm % i )
+                          LOOP
+        $)
+    $)
+
+    //  Now, set up the tag tables.  There are two, one for each class of
+    //  symbol.
+
+    tagtable1  :=  getchunk( tagtablesize, TRUE )
+    tagtable2  :=  getchunk( tagtablesize, TRUE )
+
+    FOR  i = 0  TO  tagtablesize-1  DO
+    $(
+        tagtable1!i  :=  0
+        tagtable2!i  :=  0
+    $)
+
+$<68K
+    sysout  :=  verstream                                              /* 68K */
+$>68K
+
+    selectoutput( sysout )
+
+    writef( "MC68000 Macro Assembler  Version %N.%N", version, release )
+
+$<370
+    UNLESS  parm % 0  =  0  DO  writef( "  Opt = *"%S*"", parm )       /* 370 */
+$>370
+
+    newline()
+
+    systemwords  :=  yes
+    declsyswords()
+    systemwords  :=  no
+
+    selectoutput( liststream )
+    selectinput( sourcestream )
+
+    firstpass()
+
+    selectoutput( sysout )
+    newline()                             // Mark end of first pass
+    selectoutput( liststream )
+
+    secondpass( name.sourcestream )
+
+    UNLESS  noobj  DO
+            TEST  objectmodule = o.tripos      THEN  triposmodule()       ELSE
+            TEST  objectmodule = o.motorola    THEN  motorolamodule()     ELSE
+            TEST  objectmodule = o.intelhex    THEN  intelhexmodule()     ELSE
+
+                  UNLESS  objectmodule = o.none  DO  complain( 0 )
+
+    //  We now terminate the run by printing out all the relevant information
+    //  about the run.  For this, we should set "listing" to be TRUE, and then
+    //  rely on "parmlisting" to tell us whether to produce output.
+
+    listing  :=  TRUE
+
+    //  Write out the errors (which have been stacked up in Errorvec)
+
+    IF  parmlisting  THEN
+    $(
+        clearbuffer()
+
+        TEST  errors = 0  THEN
+        $(
+            spacelines( 3 )
+
+            listed   :=  no
+            linepos  :=  0
+
+            writestring( "No errors found in this assembly" )
+            printbuffer()
+        $)
+        ELSE
+        $(
+            IF  aborted  THEN
+            $(
+                spacelines( 3 )
+
+                listed   :=  no
+                linepos  :=  0
+
+                writestring( "Fatal error  -  assembly aborted" )
+                printbuffer()
+            $)
+
+            settitle( "ERROR-DIAGNOSTICS" )
+
+            errormessages  :=  yes
+            onpage         :=  0
+
+            FOR  i = 0  TO  errors-1  DO
+            $(
+                LET offset  =  i*eb.size
+                LET line    =  errorvec!(offset + eb.line)
+                LET code    =  errorvec!(offset + eb.code)
+                LET file    =  errorvec!(offset + eb.file)
+
+                clearbuffer()
+
+                linepos  :=  0
+                writestring( file )
+
+                linepos  :=  34
+                writenumber( line, 5 )
+
+                linepos  :=  43
+                writestring( message( code ) )
+
+                printbuffer()
+            $)
+
+            clearbuffer()
+            spacelines( 3 )
+
+            listed   :=  no
+            linepos  :=  0
+
+            writenumber( errors, 4 )
+            writestring( " error" )
+
+            UNLESS  errors = 1  DO  writechar( 's' )
+
+            writestring( " found in this assembly" )
+
+            printbuffer()
+        $)
+    $)
+
+    IF  xref  &  parmlisting  THEN  // Print a cross reference table
+    $(
+        errormessages   :=  no
+        crossreference  :=  yes
+        xreftable       :=  0
+
+        FOR  i = 0  TO  tagtablesize-1  DO
+        $(
+            LET t  =  tagtable2!i
+
+            UNTIL  t = 0  DO
+            $(
+                UNLESS  t!st.definition = 0  DO  putinxreftable( t, @xreftable )
+
+                t  :=  t!st.link
+            $)
+        $)
+
+        printxreftable()
+    $)
+
+    selectoutput( sysout )
+
+    //  Now print the equates file if we have been asked to do so.  We look
+    //  to see if the DDname or keyword EQU has been given, and if so, we
+    //  print out the equates file.
+
+$<370
+    printequates( findoutput( "EQU" ), "EQU" )                         /* 370 */
+$>370
+
+
+$<CAP
+    printequates( findoutput( "EQU" ), "EQU" )                         /* CAP */
+$>CAP
+
+
+$<68K
+    UNLESS  name.equstream = 0  DO                                     /* 68K */
+    $(                                                                 /* 68K */
+        LET stream  =  findoutput( name.equstream )                    /* 68K */
+                                                                       /* 68K */
+        //  First, check that the file has actually been opened        /* 68K */
+        //  properly, then then do the symbol table dumping.           /* 68K */
+                                                                       /* 68K */
+        checkopen( stream, result2, name.equstream, "output" )         /* 68K */
+                                                                       /* 68K */
+        IF  failed  THEN  abortassembly()                              /* 68K */
+                                                                       /* 68K */
+        printequates( stream, name.sourcestream )                      /* 68K */
+    $)                                                                 /* 68K */
+$>68K
+
+    //  Having dumped the absolute symbols in an "equate" manner, we should
+    //  look to see if we have been asked to dump the symbols for the debugger.
+
+$<370
+    dumpsymbols( findoutput( "SYMBOLS" ), "SYMBOLS" )                  /* 370 */
+$>370
+
+
+$<CAP
+    dumpsymbols( findoutput( "SYMBOLS" ), "SYMBOLS" )                  /* CAP */
+$>CAP
+
+
+$<68K
+    UNLESS  name.symbolstream = 0  DO                                  /* 68K */
+    $(                                                                 /* 68K */
+        LET stream  =  findoutput( name.symbolstream )                 /* 68K */
+                                                                       /* 68K */
+        //  First, check that the file has actually been opened        /* 68K */
+        //  properly, then then do the symbol table dumping.           /* 68K */
+                                                                       /* 68K */
+        checkopen( stream, result2, name.symbolstream, "output" )      /* 68K */
+                                                                       /* 68K */
+        IF  failed  THEN  abortassembly()                              /* 68K */
+                                                                       /* 68K */
+        dumpsymbols( stream, name.sourcestream )                       /* 68K */
+    $)                                                                 /* 68K */
+$>68K
+
+    //  Now, print out the statistics associated with the assembly.
+    //  This is the last thing we have to do before we can push off home!
+
+    TEST  errors = 0  THEN  writes( "No " )
+                      ELSE  writef( "%N ", errors )
+
+    writef( "error%S found in this assembly*N", errors = 1  ->  "", "s" )
+
+    writes( "*NAssembly statistics (32 bit words)*N*N*
+             *           Absolute   Relocatable*N" )
+
+    writef( "Code        %I5         %I5*N", (absmax-absmin)/bytesper68000word,
+                                                      relmax/bytesper68000word )
+
+    writef( "Reloc [16]  %I5         %I5*N", absrp16, relrp16  )
+    writef( "      [32]  %I5         %I5*N", absrp32, relrp32 )
+
+fatalerror:
+    IF  aborted  THEN  writes( "*N*N******  Assembly Aborted*N" )
+
+    uninitstore()
+
+    writef( "*N%N out of %N words of workspace used*N",
+             storage.wordsused, storage.totalwords )
+
+    selectoutput( liststream )    ;   endwrite()
+    selectoutput( codestream )    ;   endwrite()
+    selectoutput( sysout )        ;   endwrite()
+
+    selectinput( sourcestream )   ;   endread()
+
+    stop( aborted  ->  rc.aborted, errors > 0  ->  rc.errors, 0 )
+$)
+
+
+
+$<370
+AND checkopen( stream, DDname )  BE                                    /* 370 */
+$(                                                                     /* 370 */
+    IF  stream = 0  THEN                                               /* 370 */
+    $(                                                                 /* 370 */
+        writef( "****** Cannot Open DDname *"%S*"*N",                  /* 370 */
+                 DDname )                                              /* 370 */
+        failed  :=  yes                                                /* 370 */
+    $)                                                                 /* 370 */
+$)                                                                     /* 370 */
+$>370
+
+
+
+$<68K
+AND checkopen( stream, r2, name, type )  BE                            /* 68K */
+$(                                                                     /* 68K */
+    //  Called after a findinput or findoutput, we must check to       /* 68K */
+    //  see that the stream specified has been opened properly.        /* 68K */
+                                                                       /* 68K */
+    IF  stream = 0  THEN                                               /* 68K */
+    $(                                                                 /* 68K */
+        writef( "****** Cannot open %S for %S:  ", name, type )        /* 68K */
+        fault( r2 )                                                    /* 68K */
+                                                                       /* 68K */
+        failed  :=  yes                                                /* 68K */
+    $)                                                                 /* 68K */
+$)                                                                     /* 68K */
+$>68K
+
+
+
+$<370
+AND abort( code, address, oldstack, data )  BE                         /* 370 */
+$(                                                                     /* 370 */
+    LET scc  =  (code >> 12) & #XFFF                                   /* 370 */
+    LET ucc  =  (code)       & #XFFF                                   /* 370 */
+    LET ssp  =  findoutput( "SYSPRINT" )                               /* 370 */
+                                                                       /* 370 */
+    IF  ssp = 0  THEN                                                  /* 370 */
+    $(                                                                 /* 370 */
+        LET log  =  findlog()                                          /* 370 */
+                                                                       /* 370 */
+        IF  log = 0  THEN                                              /* 370 */
+        $(                                                             /* 370 */
+            writetolog( "****** M68KASM:  Cannot open SYSPRINT" )      /* 370 */
+            stop( rc.catastrophic )                                    /* 370 */
+        $)                                                             /* 370 */
+                                                                       /* 370 */
+        selectoutput( log )                                            /* 370 */
+                                                                       /* 370 */
+        writef( "****** M68KASM Abend at :%X6 SCC=%X3 UCC=%X3*N",      /* 370 */
+                 address, scc, ucc )                                   /* 370 */
+                                                                       /* 370 */
+        stop( 100 )                                                    /* 370 */
+    $)                                                                 /* 370 */
+                                                                       /* 370 */
+    selectoutput( ssp )                                                /* 370 */
+                                                                       /* 370 */
+    //  Post mortem dump for M68KASM on the IBM370.  Print out the     /* 370 */
+    //  values of certain variables, and if the error code looked      /* 370 */
+    //  important, ask the users to see IDW.                           /* 370 */
+                                                                       /* 370 */
+    writef( "*N*NM68KASM Error at address :%X6 on %S at %S*N*N",       /* 370 */
+             address, date(), timeofday() )                            /* 370 */
+                                                                       /* 370 */
+    //  Look to see if the abend is something like 083, E37, 013,      /* 370 */
+    //  084, 0D1, 80A and if so, explain it.                           /* 370 */
+                                                                       /* 370 */
+    TEST  scc = #X083  |  scc = #XE37  |  scc = #X013  |               /* 370 */
+          scc = #X084  |  scc = #X0D1  |  scc = #X80A  THEN            /* 370 */
+    $(                                                                 /* 370 */
+        writef( "System completion code %X3:  ", scc )                 /* 370 */
+        writes( scc = #X083  ->  "CPU time limit exceeded",            /* 370 */
+                scc = #X0D1  ->  "CPU time limit exceeded",            /* 370 */
+                scc = #XE37  ->  "Cannot extend output file",          /* 370 */
+                scc = #X013  ->  "Cannot open PDS member",             /* 370 */
+                scc = #X80A  ->  "Insufficient IOSPACE",               /* 370 */
+                scc = #X084  ->  "Printer limit exceeded", "" )        /* 370 */
+                                                                       /* 370 */
+        writes( "*N*N" )                                               /* 370 */
+        stop( rc.catastrophic )                                        /* 370 */
+    $)                                                                 /* 370 */
+                                                                       /* 370 */
+    ELSE                                                               /* 370 */
+    $(                                                                 /* 370 */
+        //  The result is more serious, and we must continue with      /* 370 */
+        //  the entire mapstore.  Print out a message, so that the     /* 370 */
+        //  output will be send to someone who understands it.         /* 370 */
+                                                                       /* 370 */
+        writef( "Fatal Abend:   SCC = %X3   UCC = %N*N*N",             /* 370 */
+                 scc, ucc )                                            /* 370 */
+                                                                       /* 370 */
+        writef( "Abend occurred on line %N in pass %n",                /* 370 */
+                 linenumber, (pass1  ->  1, (pass2  ->  2, 0)) )       /* 370 */
+                                                                       /* 370 */
+        IF  getlevel   > 0  THEN  writes( ", in GET file" )            /* 370 */
+        IF  macrodepth > 0  THEN  writes( ", in MACRO expn." )         /* 370 */
+        IF  inmacro         THEN  writes( ", in MACRO defn." )         /* 370 */
+        IF  skiplevel  > 0  THEN  writes( ", in Cond. Assembly")       /* 370 */
+        IF  skipping        THEN  writes( ", whilst skipping" )        /* 370 */
+                                                                       /* 370 */
+        writef( ".*N%S code type at location %X6.",                    /* 370 */
+                 locmode = s.rel  ->  "Relocatable", "Absolute",       /* 370 */
+                 location )                                            /* 370 */
+                                                                       /* 370 */
+        writef( "*NError %Sfound,  Errors = %N,  %SAborted",           /* 370 */
+                 error.found  ->  "", "not ", errors,                  /* 370 */
+                 aborted      ->  "", "Not " )                         /* 370 */
+                                                                       /* 370 */
+        writef( "*NEA:  Mode = %X4  Type = %I3  Exp = %X8",            /* 370 */
+                 op.ea, exptype, exp )                                 /* 370 */
+                                                                       /* 370 */
+        writef( "*NEA': Mode = %X4  Type = %I3  Exp = %X8",            /* 370 */
+                 op1.ea, op1.exptype, op1.exp )                        /* 370 */
+                                                                       /* 370 */
+        writes( "*N*N" )                                               /* 370 */
+                                                                       /* 370 */
+        FOR  i = 1  TO  5  DO                                          /* 370 */
+             writes( "########  Please report this error*N" )          /* 370 */
+                                                                       /* 370 */
+        writes( "*N*N" )                                               /* 370 */
+    $)                                                                 /* 370 */
+                                                                       /* 370 */
+    TEST  oldstack = !(@code-2)  THEN  backtrace()                     /* 370 */
+    ELSE  writes( "*N*NStack Pointer Corrupted.*N*N" )                 /* 370 */
+                                                                       /* 370 */
+    mapstore()                                                         /* 370 */
+    stop( rc.catastrophic )                                            /* 370 */
+$)                                                                     /* 370 */
+$>370
+
+
+
+AND abortassembly()  BE
+$(
+//  This routine is called on some sort of error, usually when we run out of
+//  store.  Close down the streams which have been opened, and free any store
+//  which has been allocated.  Then stop, without futher ado.
+
+    UNLESS  sourcestream = 0  DO
+    $(
+        selectinput( sourcestream )
+        endread()
+    $)
+
+    UNLESS  liststream = 0  DO
+    $(
+        selectoutput( liststream )
+        endwrite()
+    $)
+
+    UNLESS  codestream = 0  DO
+    $(
+        selectoutput( codestream )
+        endwrite()
+    $)
+
+$<68K
+    UNLESS  verstream = 0  DO                                          /* 68K */
+    $(                                                                 /* 68K */
+        selectoutput( verstream )                                      /* 68K */
+        endwrite()                                                     /* 68K */
+    $)                                                                 /* 68K */
+$>68K
+
+    uninitstore()
+
+    stop( rc.catastrophic )
+$)
+
+
+
+AND firstpass()  BE
+$(
+//  Perform the first pass of the assembly.
+
+    relmin          :=  maxint
+    relmax          :=  minint
+    absmin          :=  maxint
+    absmax          :=  minint
+
+    absrp16         :=  0
+    absrp32         :=  0
+    relrp16         :=  0
+    relrp32         :=  0
+    absloc          :=  0
+    relloc          :=  0
+
+    locmode         :=  s.rel
+    relp16          :=  relrp16
+    relp32          :=  relrp32
+    minloc          :=  relmin
+    maxloc          :=  relmax
+    location        :=  0
+
+    errors          :=  0
+    skiplevel       :=  0
+    skipping        :=  0
+    macrodepth      :=  0
+    getlevel        :=  0
+    macrobase       :=  0
+    macroend        :=  0
+    asmlabel        :=  0
+    pass1           :=  yes
+    pass2           :=  no
+    inmacro         :=  no
+    errormessages   :=  no
+    forwardreftype  :=  s.abs16
+    charpos         :=  1
+    ended           :=  no
+    aborted         :=  no
+    noobj           :=  objectmodule  =  o.none
+    listing         :=  parmlisting
+
+    settitle( "" )
+
+    length          :=  -1
+    charpos         :=  0
+    linepos         :=  0
+    onpage          :=  0
+    linenumber      :=  0
+    pagenumber      :=  0
+    linesperpage    :=  60
+    charsperline    :=  132
+    llenfixed       :=  no
+    plenfixed       :=  no
+
+    selectinput( sourcestream )
+
+$<370
+    setwindow( maxllen )                                               /* 370 */
+$>370
+
+    //  If the GET input stream is present, then we must do an
+    //  implicit "GET" of this file before the rest of the program
+    //  is dealt with.
+
+    resetflags()
+
+    listed  :=  yes
+
+$<370
+    doget( "GET" )                                                     /* 370 */
+$>370
+
+$<CAP
+    doget( "HDR" )                                                     /* CAP */
+$>CAP
+
+$<68K
+    UNLESS  name.hdrfile = 0  DO  doget( name.hdrfile )                /* 68K */
+$>68K
+
+    listed  :=  no
+
+    //  Fasten your safety belts...
+
+    UNTIL  ended | aborted  DO
+    $(
+        resetflags()
+
+        doline()
+    $)
+
+    //  Force the saving of final location values.
+
+    IF  absmin = maxint   THEN  absmin  :=  0
+    IF  relmin = maxint   THEN  relmin  :=  0
+    IF  absmax = minint   THEN  absmax  :=  0
+    IF  relmax = minint   THEN  relmax  :=  0
+
+    IF  minloc = maxint   THEN  minloc  :=  0
+    IF  maxloc = minint   THEN  maxloc  :=  0
+
+    //  Align the code buffers to word boundaries
+
+    changemode( s.rel ) ; align( bytesper68000word )
+    changemode( s.abs ) ; align( bytesper68000word )
+    changemode( s.rel )
+
+    absmin  :=  absmin - (absmin REM bytesper68000word )
+$)
+
+
+
+
+AND secondpass( name.sourcestream )  BE
+$(
+//  Allocate the store required for the assembled code.  All the absolute and
+//  relocatable extreme values have already been rounded up or down.
+
+    LET avec  =  getchunk( (absmax - absmin)/bytesperword, TRUE )
+
+    absvec     :=  avec - absmin/bytesperword
+
+    absrvec16  :=  getchunk( absrp16, TRUE )
+    absrvec32  :=  getchunk( absrp32, TRUE )
+    relvec     :=  getchunk( relmax/bytesperword, TRUE )
+    relrvec16  :=  getchunk( relrp16, TRUE )
+    relrvec32  :=  getchunk( relrp32, TRUE )
+
+    //  Clear the code buffers (Tripos SYSLINK depends on this)
+
+    FOR  i = absmin  TO  absmax-1  DO  absvec % i  :=  0
+    FOR  i = relmin  TO  relmax-1  DO  relvec % i  :=  0
+
+    relmin          :=  maxint
+    relmax          :=  0
+    absmin          :=  maxint
+    absmax          :=  0
+
+    absrp16         :=  0
+    absrp32         :=  0
+    relrp16         :=  0
+    relrp32         :=  0
+    absloc          :=  0
+    relloc          :=  0
+
+    locmode         :=  s.rel
+    codevec         :=  relvec
+    relocvec16      :=  relrvec16
+    relocvec32      :=  relrvec32
+    relp16          :=  relrp16
+    relp32          :=  relrp32
+
+    minloc          :=  relmin
+    maxloc          :=  relmax
+    location        :=  0
+
+    ended           :=  no
+    aborted         :=  no
+    errors          :=  0
+    skiplevel       :=  0
+    skipping        :=  0
+    macrodepth      :=  0
+    getlevel        :=  0
+    macrobase       :=  0
+    macroend        :=  0
+    asmlabel        :=  0
+    pass1           :=  no
+    pass2           :=  yes
+    inmacro         :=  no
+    errormessages   :=  no
+    forwardreftype  :=  s.abs16
+    noobj           :=  objectmodule  =  o.none
+    listing         :=  parmlisting
+
+    clearbits()
+
+    settitle( "" )
+
+    length          :=  -1
+    charpos         :=  0
+    linepos         :=  0
+    onpage          :=  0
+    linenumber      :=  0
+    pagenumber      :=  0
+    llenfixed       :=  no
+    plenfixed       :=  no
+
+    // Rewind the input stream and start again from the beginning.
+
+    UNLESS  rewind( name.sourcestream )  DO
+    $(
+        selectoutput( sysout )
+
+        writes( "****** Unable to rewind input stream*N" )
+
+        abortassembly()
+    $)
+
+$<370
+    setwindow( maxllen )                                               /* 370 */
+$>370
+
+    //  If the GET input stream is present, then we must do an
+    //  implicit "GET" of this file before the rest of the program
+    //  is dealt with.
+
+    resetflags()
+
+    listed  :=  yes
+
+$<370
+    doget( "GET" )                                                     /* 370 */
+$>370
+
+$<CAP
+    doget( "HDR" )                                                     /* CAP */
+$>CAP
+
+$<68K
+    UNLESS  name.hdrfile = 0  DO  doget( name.hdrfile )                /* 68K */
+$>68K
+
+    listed  :=  no
+
+    UNTIL  ended | aborted  DO
+    $(
+        resetflags()
+
+        doline()
+    $)
+
+    UNLESS  skipping = 0  DO  warning( 103 )
+
+    IF  inmacro  THEN  warning( 113 )
+
+    IF  relmin = maxint  THEN  relmin  :=  0
+    IF  absmin = maxint  THEN  absmin  :=  0
+    IF  minloc = maxint  THEN  minloc  :=  0
+
+    //  Align the code buffers to word boundaries
+
+    changemode( s.rel ) ; align( bytesper68000word )
+    changemode( s.abs ) ; align( bytesper68000word )
+    changemode( s.rel )
+
+    absmin  :=  absmin - (absmin REM bytesper68000word )
+$)
+
+
+
+$<68K
+AND rewind( name.sourcestream )  =  VALOF                              /* 68K */
+$(                                                                     /* 68K */
+//  Substitute REWIND for the TRIPOS BCPL system.  Close               /* 68K */
+//  and re-open the sourcestream.                                      /* 68K */
+                                                                       /* 68K */
+    endread()                                                          /* 68K */
+                                                                       /* 68K */
+    sourcestream  :=  findinput( name.sourcestream )                   /* 68K */
+                                                                       /* 68K */
+    selectinput( sourcestream )                                        /* 68K */
+                                                                       /* 68K */
+    RESULTIS  sourcestream  \=  0                                      /* 68K */
+$)                                                                     /* 68K */
+$>68K
+
+
+
+AND doline()  BE
+$(
+//  Parse, and generate code for an entire input line.
+
+$<68K
+    IF  testflags( #B0001 )  THEN                                      /* 68K */
+        error( 149 )                                                   /* 68K */
+                                                                       /* 68K */
+    IF  testflags( #B1000 )  THEN                                      /* 68K */
+    $(                                                                 /* 68K */
+        selectoutput( sysout )                                         /* 68K */
+                                                                       /* 68K */
+        writef( "******  Pass %N  File *"%S*"  Line %N  Errors %N*N",  /* 68K */
+                 pass1 -> 1, 2, currentfile, linenumber, errors )      /* 68K */
+                                                                       /* 68K */
+        selectoutput( liststream )                                     /* 68K */
+    $)                                                                 /* 68K */
+$>68K
+
+    labelset      :=  no
+    undefined     :=  no
+    recoverlevel  :=  level()
+
+    rch()
+
+    SWITCHON  ch  INTO
+    $(
+        CASE '**'     : // Comment line
+        CASE '!'      : // New style comment line
+        CASE '*N'     : // Blank line
+
+                        skiprest()
+
+                        symb         :=  s.none
+                        commentline  :=  yes
+
+                        ENDCASE
+
+        CASE '.'      :
+        CASE '_'      :
+
+        CASE 'A'      : CASE 'B'      : CASE 'C'      : CASE 'D'      :
+        CASE 'E'      : CASE 'F'      : CASE 'G'      : CASE 'H'      :
+        CASE 'I'      : CASE 'J'      : CASE 'K'      : CASE 'L'      :
+        CASE 'M'      : CASE 'N'      : CASE 'O'      : CASE 'P'      :
+        CASE 'Q'      : CASE 'R'      : CASE 'S'      : CASE 'T'      :
+        CASE 'U'      : CASE 'V'      : CASE 'W'      : CASE 'X'      :
+        CASE 'Y'      : CASE 'Z'      :
+
+        CASE 'a'      : CASE 'b'      : CASE 'c'      : CASE 'd'      :
+        CASE 'e'      : CASE 'f'      : CASE 'g'      : CASE 'h'      :
+        CASE 'i'      : CASE 'j'      : CASE 'k'      : CASE 'l'      :
+        CASE 'm'      : CASE 'n'      : CASE 'o'      : CASE 'p'      :
+        CASE 'q'      : CASE 'r'      : CASE 's'      : CASE 't'      :
+        CASE 'u'      : CASE 'v'      : CASE 'w'      : CASE 'x'      :
+        CASE 'y'      : CASE 'z'      :
+
+                        readlabel()
+                        IF  ch = ':'  THEN  rch()
+
+                        UNLESS  tagsize.given = ts.none  DO  complain( 1 )
+
+                        FOR  i = 0  TO  tagsize-1  DO  labelvec!i  :=  tagv!i
+
+                        labelset  :=  yes
+                        skiplayout()
+
+                        undefined  :=  no
+                        readopcode()
+
+                        ENDCASE
+
+
+        CASE '\'      : UNLESS  inmacro  DO  complain( 117 )
+                        UNTIL  ch = '*S'  |  ch = '*T'  |  ch = '*N'  DO  rch()
+
+        CASE '*S'     :
+        CASE '*T'     : skiplayout()
+
+                        IF  ch = '*N'  THEN
+                        $(
+                            symb         :=  s.none
+                            commentline  :=  yes
+
+                            ENDCASE
+                        $)
+
+                        IF  ch = '\'  THEN
+                        $(
+                            UNLESS  inmacro  DO  complain( 117 )
+
+                            UNTIL  ch = '*S'  |  ch = '*T'  |  ch = '*N'  DO
+                                   rch()
+
+                            symb  :=  s.none
+
+                            ENDCASE
+                        $)
+
+                        UNLESS  symbolchar( ch, FALSE )  DO
+
+                                //  Not a valid start to a symbol name, and
+                                //  so we should complain.
+
+                                complain( 2 )
+
+                        readlabel()
+
+                        TEST  ch = ':'  THEN
+                        $(
+                            //  This really is a label, since it has the
+                            //  terminating ":" character.
+
+                            rch()
+
+                            UNLESS  tagsize.given = ts.none  DO  complain( 1 )
+
+                            FOR  i = 0  TO  tagsize-1  DO  labelvec!i  :=  tagv!i
+
+                            labelset  :=  yes
+                            skiplayout()
+
+                            undefined  :=  no
+                            readopcode()
+                        $)
+                        ELSE
+                        $(
+                            //  This isn't a label at all, and is in fact an
+                            //  opcode.  We should look this symbol up in the
+                            //  opcode table.
+
+                            undefined  :=  no
+
+                            lookup( tagv, tagtable1 )
+                        $)
+
+                        ENDCASE
+
+
+        CASE endstreamch :
+                        symb  :=  s.none
+
+                        UNLESS  getlevel = 0  DO
+                        $(
+                            //  End of a GET file, so close it, and
+                            //  Return to the previous level.
+
+                            getlevel    :=  getlevel - 1
+                            linenumber  :=  linenumber - 1
+                            ended       :=  no
+
+                            RETURN
+                        $)
+
+                        IF  pass2  THEN
+                        $(
+                            selectoutput( sysout )
+
+                            writes( "******  'END' statement missing*N*N" )
+
+                            selectoutput( liststream )
+                        $)
+
+                        ended  :=  yes
+
+                        ENDCASE
+
+
+        DEFAULT       : complain( 5 )
+    $)
+
+    IF  undefined  &  pass2  THEN
+
+        //  This is an undefined symbol in the opcode field.  This is serious
+        //  unless we are in a macro, in which case this could just be
+        //  something with a "\" in it.
+
+        UNLESS  inmacro  DO  complain( 96 )
+
+    //  Go on to decode the opcode/directive field.
+
+    TEST  skiplevel > 0  THEN
+    $(
+          //  We are in a conditional section, and so we must only
+          //  do something if we have met an ENDC or another IF..
+          //  directive.
+
+          IF  symb = s.dir  &  (symbtype!st.value = d.endc  |
+                                symbtype!st.value = d.ifeq  |
+                                symbtype!st.value = d.ifne  |
+                                symbtype!st.value = d.iflt  |
+                                symbtype!st.value = d.ifle  |
+                                symbtype!st.value = d.ifgt  |
+                                symbtype!st.value = d.ifge  )  THEN
+              dodir()
+
+          commentline  :=  yes
+    $)
+    ELSE
+
+    TEST  inmacro  THEN
+    $(
+        //  We are in a macro body, and unless this is an
+        //  ENDM directive, we must stack up the current
+        //  line in a buffer.  The exception to this is if
+        //  another MACRO directive is found, in which case
+        //  an error must be flagged.
+
+        TEST  symb = s.dir  &   (symbtype!st.value = d.macro  |
+                                 symbtype!st.value = d.endm )  THEN
+              dodir()
+
+        ELSE
+
+        IF  pass1  THEN
+        $(
+            LET newbuff  =  getstore( length/bytesperword )
+            LET newnode  =  heap3( 0, 0, 0 )
+
+            FOR  i = 0  TO  length-1  DO  newbuff % i  :=  inputbuff % i
+
+            macroend!m.buff    :=  newbuff
+            macroend!m.length  :=  length
+            macroend!m.link    :=  newnode
+
+            macroend           :=  newnode
+        $)
+
+        commentline  :=  yes
+    $)
+    ELSE
+
+    TEST  symb = s.instr  THEN  doinstr()      ELSE
+    TEST  symb = s.dir    THEN  dodir()        ELSE
+    TEST  symb = s.macro  THEN  domacro()      ELSE
+    TEST  symb = s.none   THEN
+
+          IF  labelset  THEN
+              setlabel( locmode, location, no )
+
+    ELSE  complain( 3 )
+
+recoverlabel:                       // Recover here on error
+    skiprest()                      // Just in case it hasn't been done before
+
+    listline()
+$)
+
+
+
+AND doinstr()  BE
+$(
+//  We have decoded some sort of instruction.  Decode further to determine if
+//  it is a special type of instruction, how many operands it takes, and what
+//  its mask type is.
+
+    LET t      =  symbtype!st.type
+    LET vh     =  symbtype!st.value.high
+    LET vl     =  symbtype!st.value.low
+    LET sizes  =  0
+
+    instr.mask      :=  symbtype!st.template   // instruction mask
+    instr.masktype  :=  (t >> 4) & #B1111      // instruction mask type
+    source.ea       :=  vh                     // source operand EA
+    dest.ea         :=  vl                     // destination operand EA
+
+    //  Instructions MUST be word aligned.
+
+    UNLESS  aligned( 2 )  DO
+    $(
+        warning( 102 )
+
+        align( 2 )
+    $)
+
+    IF  labelset  THEN  setlabel( locmode, location, no )
+
+    nargs  :=  (t >> 11) & #B11         // Number of arguments
+    sizes  :=  (t >>  8) & #B111        // Possible sizes allowed
+
+    TEST  tagsize.given \= ts.none  THEN  UNLESS  tagsize.given = ts.short  DO
+    $(
+        LET sizebit  =  1 << (tagsize.given - 1)
+
+        TEST  (sizes & sizebit) \= 0  THEN
+              tagsize.given  :=  sizevalue( sizebit )
+
+        ELSE  complain( 6 )
+    $)
+    ELSE  tagsize.given  :=  ts.none
+
+    instr.size  :=  tagsize.given
+
+    TEST  instr.masktype = 0  THEN  specialinstruction( dest.ea )
+    ELSE
+    $(
+        //  The size of the instruction has been verified as being correct.
+        //  Now read the operands (each is the form of an effective address)
+
+        IF  nargs = 0  THEN  readsymb()
+
+        IF  instr.size = ts.short  THEN  complain( 86 )
+
+        IF  nargs = 1  THEN
+        $(
+            nextsymb()
+            evaluate( effective.address() )
+
+            IF  (dest.ea & op.ea) = 0  THEN  complain( 7 )
+        $)
+
+        IF  nargs = 2  THEN
+        $(
+            nextsymb()
+            evaluate( effective.address() )
+
+            IF  (source.ea & op.ea) = 0  THEN  complain( 8 )
+
+            //  the first operand is correct, so store it away, and read the
+            //  second.
+
+            swapoperands()
+
+            checkfor( s.comma, 10 )
+
+            evaluate( effective.address() )
+
+            IF  (dest.ea & op.ea) = 0  THEN  complain( 9 )
+        $)
+
+        //  the operands should have been terminated.
+        //  If they were terminated by a ','  then there
+        //  are too many arguments.  If not by a space, tab
+        //  or newline, then bad termination of arguments.
+
+        TEST  symb = s.comma  THEN  complain( 11 )     ELSE
+        TEST  symb \= s.none  THEN  complain( 12 )     ELSE
+
+              skiprest()
+
+        generate( instr.masktype )
+    $)
+$)
+
+
+
+AND aligned( boundary )  =  location REM boundary  =  0
+
+
+
+AND domacro()  BE
+$(
+//  This line is a macro, and must be decoded as such.  Set up the argument
+//  vector, and call "expandmacro" to actually do the expansion.
+
+    LET argvec      =  VEC macroargs
+    LET macrovalue  =  symbtype!st.value
+
+    checklabel( no )
+
+    //  Check for forward reference to a MACRO definition (which is illegal).
+
+    IF  (symbtype!st.flags & stb.setnow) = 0  THEN  complain( 151 )
+
+    FOR  i = 1  TO  macroargs  DO  argvec!i  :=  ""
+
+    instr.size  :=  tagsize.given
+
+    argvec!0    :=  instr.size  =  ts.byte  ->  "B",
+                    instr.size  =  ts.word  ->  "W",
+                    instr.size  =  ts.long  ->  "L",
+                    instr.size  =  ts.short ->  "S",  ""
+
+    skiplayout()
+
+    FOR  i = 1  TO  macroargs  DO
+    $(
+        //  Read the arguments for the macro.
+
+        LET argbuffer  =  VEC maxllen/bytesperword
+        LET arglength  =  0
+        LET argb       =  0
+
+        TEST  ch = '<'  |  ch = '['  THEN    // Bracketed argument
+        $(
+            LET bracket  =  ch = '<'  ->  '>', ']'
+
+            rch()
+
+            UNTIL  ch = bracket  |  ch = '*N'  DO
+            $(
+                arglength              :=  arglength + 1
+                argbuffer % arglength  :=  ch
+
+                rch()
+            $)
+
+            TEST  ch = '*N'
+                THEN  complain( 114 )
+                ELSE  rch()
+        $)
+        ELSE
+
+        UNTIL  ch = ','  |  ch = '*S'  |  ch = '*N'  |  ch = '*T'  DO
+        $(
+            arglength              :=  arglength + 1
+            argbuffer % arglength  :=  ch
+
+            rch()
+        $)
+
+        argbuffer % 0  :=  arglength
+        argb           :=  getstore( arglength/bytesperword )
+
+        FOR  j = 0  TO  arglength  DO  argb % j  :=  argbuffer % j
+
+        argvec!i  :=  argb
+
+        readsymb()
+
+        TEST  symb = s.none   THEN   BREAK
+        ELSE
+            UNLESS  symb = s.comma  DO
+                complain( 115 )
+    $)
+
+    IF  symb = s.comma  THEN  complain( 118 )
+
+    expandmacro( macrovalue, argvec )
+$)
+
+
+
+AND expandmacro( macroptr, argvec )  BE
+$(
+//  Expand the source macro, whose text is pointed to by "macroptr".
+//  The current depth of macro nesting is given by "depth".  The
+//  restriction is that depth must not be greater than 3.  This is
+//  a MOTOROLA restriction, and the macro depth for this implementation
+//  is given by "maxmacrodepth".
+
+    LET macroline  =  macroptr!m.buff
+    LET asml       =  0
+    LET depth      =  macrodepth
+    LET skip       =  skipping
+    LET skipl      =  skiplevel
+
+    //  Macro nesting too deep.  Possibly in a recursive
+    //  loop of macro expansion.
+
+    IF  macrodepth = maxmacrodepth  THEN  complain( 108 )
+
+    //  Before we expand the macro, we must list the line that
+    //  the macro name is on.
+
+    commentline  :=  yes
+
+    listline()
+
+    macrodepth  :=  macrodepth + 1
+
+    resetflags()
+
+    UNTIL  macroline = 0  |  macrodepth = depth  |  ended  |  aborted  DO
+    $(
+        LET sptr     =  0
+        LET mptr     =  0
+        LET wcode    =  0
+        LET mlength  =  macroptr!m.length
+
+        FOR  i = 0  TO  maxllen-1  DO  inputbuff % i  :=  '*S'
+
+        UNTIL  mptr = mlength  DO
+        $(
+            LET char  =  macroline % mptr
+
+            TEST  char = '\'  THEN
+            $(
+                mptr  :=  mptr + 1
+
+                IF  mptr = mlength  THEN
+                $(
+                    wcode  :=  109
+
+                    BREAK
+                $)
+
+                char  :=  macroline % mptr
+
+                TEST  char = '@'  THEN
+                $(
+                    //  This is an assembler generated label.
+                    //  The first time that this is encountered in
+                    //  a macro expansion, a new label is obtained
+                    //  from the function "newasmlabel".  Thereafter
+                    //  this value is used in the entire macro
+                    //  expansion from now on.
+
+                    LET chbuff  =  VEC 10
+                    LET size    =  0
+                    LET label   =  0
+
+                    IF  asml = 0  THEN  asml  :=  newasmlabel()
+
+                    label  :=  asml
+                    size   :=  digits( asml )
+
+                    IF  size < 3  THEN  size  :=  3
+
+                    FOR  i = size  TO  1  BY  -1  DO
+                    $(
+                        chbuff!i  :=  (label REM 10) + '0'
+                        label     :=  label / 10
+                    $)
+
+                    putinbuffer( inputbuff, sptr, '.' )
+
+                    FOR  i = 1  TO  size  DO
+                         putinbuffer( inputbuff, sptr + i, chbuff!i )
+
+                    sptr  :=  sptr + size + 1
+                    mptr  :=  mptr + 1
+                $)
+                ELSE
+
+                //  This should be an argument number (in the range
+                //  '0' to '9' or 'A' to 'Z'), and can be treated as as index
+                //  into "argvec".  Any other character is an error.
+
+                TEST  macrochar( char )  THEN
+                $(
+                    LET argnumber  =  argoffset( char )
+                    LET arg        =  argvec!argnumber
+
+                    FOR  j = 1  TO  arg % 0  DO
+                    $(
+                        putinbuffer( inputbuff, sptr, arg % j )
+
+                        sptr  :=  sptr + 1
+                    $)
+
+                    mptr  :=  mptr + 1
+                $)
+                ELSE
+                $(
+                    wcode  :=  109
+
+                    BREAK
+                $)
+            $)
+            ELSE
+            $(
+                TEST  macroline % mptr = '*S'  THEN
+                $(
+                    //  First, skip all spaces from the macro record
+                    //  to find the column of the next non-space char.
+
+                    WHILE  mptr < mlength  &  macroline % mptr = '*S'   DO
+                           mptr  :=  mptr + 1
+
+                    //  Now pad the output record with spaces up to this
+                    //  column.  We MUST pad at least one space.
+
+                    sptr  :=  sptr + 1  REPEATWHILE  sptr < mptr
+                $)
+                ELSE
+                $(
+                    putinbuffer( inputbuff,  sptr, char )
+
+                    sptr  :=  sptr + 1
+                    mptr  :=  mptr + 1
+                $)
+            $)
+        $)
+
+        //  Having filled up the buffer, look to see if we have overfilled
+        //  it, and if so, complain.
+
+        UNLESS  sptr < maxllen  DO
+        $(
+            wcode  :=  189
+            sptr   :=  maxllen
+        $)
+
+        //  Now call "doline" with the newly constructed, macro expanded
+        //  line.  Then get the next line in the macro expansion (found at
+        //  macroptr!m.link), and carry on.
+
+        TEST  wcode \= 0  THEN
+        $(
+            //  There has been some problem in decoding the formal parameters
+            //  to the Macro, and so, we must print out the offending line
+            //  and not bother to expand anything from it.
+
+            FOR  i = 0  TO  mlength-1  DO  inputbuff % i  :=  macroline % i
+
+            length              :=  mlength
+            inputbuff % length  :=  '*N'
+            commentline         :=  yes
+
+            warning( wcode )
+
+            listline()
+        $)
+        ELSE
+        $(
+            length              :=  sptr
+            inputbuff % length  :=  '*N'
+            charpos             :=  0
+
+            doline()
+        $)
+
+        macroptr   :=  macroptr!m.link
+        macroline  :=  macroptr!m.buff
+
+        resetflags()
+    $)
+
+    IF  macrodepth = depth  DO
+    $(
+        //  If we have executed a "MEXIT" then we must reset the
+        //  "skipping" and "skiplevel" variables.
+
+        skipping    :=  skip
+        skiplevel   :=  skipl
+
+    $)
+
+    macrodepth  :=  depth
+    listed      :=  yes
+$)
+
+
+
+AND argoffset( char )  =  '0' <= char <= '9'  ->  char - '0',
+                       /* 'A' <= char <= 'Z' */   char - 'A' + 10
+
+
+
+AND digits( value )  =  value < 10  ->  1,  (digits( value/10 ) + 1)
+
+
+
+AND newasmlabel()  =  VALOF
+$(
+//  Returns a new assembler generated label.
+
+    asmlabel  :=  asmlabel + 1
+
+    RESULTIS  asmlabel
+$)
+
+
+
+AND putinxreftable( node, ptr )  BE
+$(
+//  "node" points to a node which we want to insert into the sorted
+//  tag table, and ptr is a pointer to the location which should point
+//  to this node, when the node is inserted into the tree.
+
+    TEST  !ptr = 0  THEN  !ptr  :=  heap3( node, 0, 0 )
+    ELSE
+    $(
+        LET p  =  !ptr
+
+        TEST  comparestrings( node+st.name, p!p.ptr0+st.name )  < 0
+              THEN  putinxreftable( node, p+p.ptr1 )
+              ELSE  putinxreftable( node, p+p.ptr2 )
+    $)
+$)
+
+
+
+AND comparestrings( p1, p2 )  =  VALOF
+$(
+//  Compare the "strings" pointed to by p1 and p2, and return
+//  <0  if  p1 < p2    and
+//  >0  if  p1 > p2
+
+    LET l1  =  p1 % 0
+    LET l2  =  p2 % 0
+
+    FOR  i = 1  TO  (l1 < l2  ->  l1, l2)  DO
+    $(
+        LET ch1   =  p1 % i
+        LET ch2   =  p2 % i
+        LET diff  =  ch1 - ch2
+
+        UNLESS  diff = 0  DO  RESULTIS  diff
+    $)
+
+    RESULTIS  l1 - l2
+$)
+
+
+
+AND printxreftable()  BE
+$(
+    listing  :=  yes
+    paging   :=  yes
+    listed   :=  no
+    onpage   :=  0
+
+    settitle( "CROSS-REFERENCE" )
+
+    clearbuffer()
+    printnode( xreftable )
+
+    clearbuffer()
+$)
+
+
+
+AND printnode( node )  BE  UNLESS  node = 0  DO
+$(
+    LET t       =  node!p.ptr0
+    LET l       =  node!p.ptr1
+    LET r       =  node!p.ptr2
+
+    LET type    =  t!st.type  &  st.type.mask
+    LET value   =  t!st.value
+    LET line    =  t!st.definition
+    LET refs    =  t!st.references
+    LET name    =  t+st.name
+
+    LET online  =  0
+
+
+    printnode( l )
+
+    linepos  :=  0
+    writestring( name )
+
+    linepos  :=  32
+
+    TEST  (t!st.type & st.type.mask) = s.ext  THEN
+          writestring( "******EXTERNAL******" )        ELSE
+
+    TEST  line = cr.undefined  THEN
+          writestring( "******UNDEFINED******" )       ELSE
+
+    TEST  line = cr.multiple   THEN
+          writestring( "******MULTIPLE******" )        ELSE
+
+    TEST  line = cr.setsymbol  THEN
+          writestring( "**********SET************" )   ELSE
+
+          writenumber( line, 5 )
+
+    linepos  :=  40
+
+    IF  line > 0  THEN
+
+        SWITCHON  type  INTO
+        $(
+            CASE s.rel     :  writehexvalue( value, 4  )
+                              writechar( '*'' )
+                              ENDCASE
+
+            CASE s.reg     :  writehexvalue( value, 4  )
+                              writechar( 'R' )
+                              ENDCASE
+
+            CASE s.abs16   :  writehexvalue( value, 4 )
+                              ENDCASE
+
+            CASE s.abs32   :  writehexvalue( value, 8 )
+                              ENDCASE
+
+            CASE s.Dr      :  writechar( 'D' )
+                              writehexvalue( value, 1 )
+                              ENDCASE
+
+            CASE s.Ar      :  writechar( 'A' )
+                              writehexvalue( value, 1 )
+                              ENDCASE
+
+            DEFAULT        :  writestring( "????" )
+                              ENDCASE
+        $)
+
+    //  Now print out the references to this particular symbol.
+
+    linepos  :=  52
+
+    TEST  refs = 0  THEN
+    $(
+        linepos  :=  37
+
+        IF  line > 0  THEN  writechar( 'U' )
+    $)
+    ELSE
+    $(
+        UNTIL  refs = 0  DO
+        $(
+            IF  online = 10  THEN
+            $(
+                printbuffer()
+                clearbuffer()
+
+                linepos  :=  50
+                writestring( "- " )
+
+                online   :=  0
+            $)
+
+            writenumber( refs!r.line, 5 )
+
+            TEST  refs!r.file = currentfile
+                THEN  writestring( "  " )
+                ELSE  writestring( "** " )
+
+            refs    :=  refs!r.link
+            online  :=  online  +  1
+        $)
+    $)
+
+    printbuffer()
+    clearbuffer()
+
+    printnode( r )
+$)
+
+

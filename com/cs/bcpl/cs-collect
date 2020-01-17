@@ -1,0 +1,85 @@
+//******************************************************************************
+//*                                                                            *
+//*    CS-COLLECT            By analogy with the CAP program of the same name, *
+//*                          this program collects output from cap which is    *
+//*                          on the spool queue.  The output is placed into    *
+//*                          a TRIPOS file directly.                           *
+//*                                                                            *
+//******************************************************************************
+//*    I. D. Wilson          Last Modified   -   IDW   -   28/06/83            *
+//******************************************************************************
+
+
+SECTION "CS-COLLECT"
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+
+
+MANIFEST
+$(
+    a.entry         =  0
+    a.to            =  1
+
+    dibytesperword  =  bytesperword / 2
+$)
+
+
+
+LET start()  =  VALOF
+$(
+    LET argv     =  VEC 50
+    LET args     =  "SPOOLENTRY/A,TO/A"
+    LET segname  =  "sys:l.call-capcs"
+    LET seg      =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "CS-COLLECT:  Bad arguments for string *"%S*"*N", args )
+        RESULTIS  20
+    $)
+
+    UNLESS  chaos.running()  DO
+    $(
+        writes( "CS-COLLECT:  CAP is not running CHAOS*N" )
+        RESULTIS  20
+    $)
+
+    seg  :=  loadseg( segname )
+
+    IF  seg = 0  THEN
+    $(
+        writef( "CS-COLLECT:  Cannot load *"%S*"*N", segname )
+        RESULTIS  20
+    $)
+
+    UNLESS  globin( seg )  DO
+    $(
+        writef( "CS-COLLECT:  Cannot initialise *"%S*"*N", segname )
+        unloadseg( seg )
+        RESULTIS  20
+    $)
+
+    //  Having initialised the overlay segment, call it
+
+    start( argv!a.entry, argv!a.to )
+
+    unloadseg( seg )
+
+    RESULTIS  0
+$)
+
+
+
+AND chaos.running()  =  VALOF
+$(
+    LET txbuff  =  VEC 3            / dibytesperword
+    LET rxbuff  =  VEC max.ssp.size / dibytesperword
+    LET nsv     =  VEC 3
+
+    RESULTIS  ssp( "CHAOS.RUNNING", txbuff, 3, rxbuff, max.ssp.size, nsv )
+$)
+  
+

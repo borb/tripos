@@ -1,0 +1,304 @@
+// TRIPOS loader version 2.
+// This routine lodes code produced by the linkage editor.
+//  (or by BCPL code-generators).
+
+SECTION "LOADER"
+
+GET "LIBHDR"
+
+GLOBAL $( loader               :  81       // To override 'loadseg'
+          unloader             :  82       //  "    "     'unloadseg'
+          cli.defaultblocksize : 127
+          resident.table       : 126
+       $)
+
+MANIFEST $( // Error codes
+            err.badbinary        = 121
+            err.badres           = 122
+
+            // Offsets in overlay supervisor
+
+            ovsup.id1            =   1 + 1
+            ovsup.stream         =   2 + 1
+            ovsup.ovtab          =   3 + 1
+            ovsup.htab           =   4 + 1
+            ovsup.glbvec         =   5 + 1
+
+            // Overlay supervisor ID words
+
+            id.word1             = #XABCD
+            id.word2             = #XDCBA
+
+            // Binary types
+
+            t.hunk               = 1000
+            t.reloc              = 1001
+            t.end                = 1002
+            t.block              = 1006
+            t.table              = 1008
+            t.lkedext            = 1009
+            t.overlay            = 1010
+            t.break              = 1011
+
+         $)
+
+
+
+LET loader(f1, f2, hunk.table) = VALOF
+  // Returns zero on failure.
+  // f1 and f2 both specify the input file (to guard against PB)
+  $( LET list          = 0
+     LET liste         = @ list
+     LET oldin         = input()
+     LET ovload        = f1 = 0 = f2
+     LET type          = 0
+     LET base, limit   = 0, -1
+     LET stream        = 0
+     LET hmax          = -1
+     LET hnum          = 0
+     LET code, ep, el  = err.badbinary, level(), ?
+     LET info          = @ code
+
+     el := error
+
+     // Open the input file if required
+
+     IF NOT ovload THEN
+       $( stream := findinput(f1, f2)
+          IF stream = 0 THEN
+            RESULTIS 0
+          selectinput(stream)
+       $)
+
+     // See if the file starts with a t.table
+
+     type := getword(info)
+
+     TEST type = t.table THEN
+       $( LET tsize = getword(info)
+
+          hnum     := getword(info)
+          hmax     := getword(info)
+
+          // Allocate the table if required
+
+          IF NOT ovload THEN
+            $( hunk.table := getvector(tsize, info)
+
+               // See if any resident hunks are required
+
+               IF hnum\=0 & (resident.table=0 | resident.table!0 < hnum) THEN
+                 $( code := err.badres
+                    GOTO error
+                 $)
+
+               FOR j = 1 TO hnum DO
+                 hunk.table ! (j-1) := resident.table ! j
+
+            $)
+
+          // Allocate the space for the hunks, using the sizes
+          //  given in the table.
+
+          FOR j = hnum TO tsize DO
+            $( LET v = 0
+               IF j <= hmax THEN
+                 $( LET s = getword(info)
+                    IF s = 0 THEN
+                      s := cli.defaultblocksize
+                    IF s < 3 THEN s := 3
+                    v       := getvector(s, info)
+                    ! liste := v
+                      liste := v
+                 $)
+               hunk.table ! j := v
+            $)
+
+          type := getword(info)
+
+       $)
+      ELSE
+       // Not t.table - this is an error if an overlay load is
+       //  in process.  Otherwise, there is no hunk table
+       $( IF ovload THEN
+            GOTO error
+          hunk.table := 0
+       $)
+
+     // Now start the loop through the items in the file
+
+     $( SWITCHON type INTO
+
+          $( CASE t.hunk: CASE t.block:
+               $( LET space = ?
+                  LET size  = getword(info)
+
+                  limit := size
+
+                  IF size = 0 & type = t.block THEN
+                    size := cli.defaultblocksize
+
+                  IF size < 3 THEN
+                    size := 3
+
+                  TEST hunk.table = 0 THEN
+                    $( space   := getvector(size, info)
+                       ! liste := space
+                         liste := space
+                    $)
+                   ELSE
+                    space := hunk.table ! hnum
+
+                  base := space + 1
+                  hnum := hnum  + 1
+
+                  // Initialise with an empty globals table, and
+                  //  with the size
+
+                  base ! 0, space ! size, space ! (size - 1) := size, 0, 0
+
+                  IF type = t.hunk & readwords(base, limit) \= limit THEN
+                    GOTO error
+
+                  ENDCASE
+               $)
+
+
+             CASE t.reloc: CASE t.lkedext:
+               $( LET c = getword(info)
+                  LET n = c - 1
+                  LET h = base
+                  LET v = ?
+
+                  IF c = 0 THEN BREAK
+
+                  v := getvector(n, info)
+
+                  IF type = t.lkedext THEN
+                    $( LET n = getword(info)
+                       IF n > hmax | n < 0 THEN GOTO relerr
+                       h := hunk.table ! n + 1
+                    $)
+
+                  IF readwords(v,c) \= c THEN GOTO relerr
+
+                  FOR j = 0 TO n DO
+                    $( LET o = v!j
+                       UNLESS 0 <= o < limit THEN
+                         GOTO relerr
+                       base ! o := base ! o + h * mcaddrinc
+                    $)
+               freevec(v)
+               LOOP
+
+       relerr: freevec(v)
+               GOTO error
+
+               $) REPEATWHILE type = t.lkedext
+               ENDCASE
+
+
+             CASE t.overlay:
+               $( LET s  = getword(info)
+                  LET ov = ?
+                  LET n  = s + 1
+
+                  // Must ensure that there is a hunk, and that
+                  //  this didn't occur during an overlay load.
+
+                  IF list = 0 | ovload THEN
+                    GOTO error
+
+                  ov := getvector(s)
+
+                  list ! ovsup.stream := stream;     stream     := 0
+                  list ! ovsup.ovtab  := ov
+                  list ! ovsup.htab   := hunk.table; hunk.table := 0
+                  list ! ovsup.glbvec := @ globsize
+
+                  IF readwords(ov, n) ~= n THEN
+                    GOTO error
+               $)
+
+
+             CASE t.break:
+               IF limit = -1 THEN
+                 $( selectinput(oldin)
+                    RESULTIS list
+                 $)
+
+
+             DEFAULT: GOTO error
+
+
+             CASE t.end:
+               limit := -1
+               ENDCASE
+
+          $)
+
+     $) REPEATWHILE readwords(@ type, 1) \= 0
+
+
+     GOTO ok
+
+error: limit := 0
+
+ok:  // Now tidy up
+
+     IF stream \= 0 THEN
+       $( endread()
+          selectinput(oldin)
+       $)
+
+     freevec(hunk.table)
+
+     // Check for error
+
+     IF limit \= -1 THEN
+       $( unloader(list)
+          result2 := code
+          RESULTIS 0
+       $)
+
+     RESULTIS list
+  $)
+
+
+AND getword(info) = VALOF
+  $( LET n = ?
+     IF readwords(@ n, 1) = 0 THEN
+       longjump(info!1, info!2)
+     RESULTIS n
+  $)
+
+
+AND getvector(upb, info) = VALOF
+  $( LET v = getvec(upb)
+     IF v = 0 THEN
+       $( info!0 := result2
+          longjump(info!1, info!2)
+       $)
+     v ! 0 := 0
+     RESULTIS v
+  $)
+
+
+AND unloader(list) BE
+  IF list \= 0 THEN
+    $( IF list!ovsup.id1 = id.word1 & ovsup.glbvec!list = @ globsize THEN
+         $( LET o = input()
+            selectinput(ovsup.stream ! list)
+            endread()
+            selectinput(o)
+            freevec(list ! ovsup.htab)
+            freevec(list ! ovsup.ovtab)
+         $)
+       UNTIL list = 0 DO
+         $( LET n = ! list
+            freevec(list)
+            list := n
+         $)
+    $)
+
+

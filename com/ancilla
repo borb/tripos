@@ -1,0 +1,2997 @@
+/******************************************************************************\
+*                            Systems Research Group                            *
+********************************************************************************
+
+
+        ####    ##    ##    #####   ########  ##        ##          ####
+       ######   ###   ##   #######  ########  ##        ##         ######
+      ##    ##  ####  ##  ##           ##     ##        ##        ##    ##
+      ########  ## ## ##  ##           ##     ##        ##        ########
+      ##    ##  ##  ####  ##           ##     ##        ##        ##    ##
+      ##    ##  ##  ####  ##           ##     ##        ##        ##    ##
+      ##    ##  ##   ###   #######  ########  ########  ########  ##    ##
+      ##    ##  ##    ##    #####   ########  ########  ########  ##    ##
+
+
+********************************************************************************
+*    I. D. Wilson           Last Modified   -   IDW   -   04/12/84             *
+\******************************************************************************/
+
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "sys:idw.bcpl.fshdr"
+
+
+GLOBAL
+$(
+    hunklist         :  ug
+    inputfile        :  ug + 1
+    file.buff        :  ug + 2
+    name.buff        :  ug + 3
+    buffp            :  ug + 4
+    buffe            :  ug + 5
+    loadinfo         :  ug + 6
+    loadptr          :  ug + 7
+    mctype           :  ug + 8
+    mcwordsize       :  ug + 9
+    veclist          :  ug + 10
+    name             :  ug + 11
+    name2            :  ug + 12
+    file             :  ug + 13
+    rootpuid         :  ug + 14
+    function         :  ug + 15
+    nullstring       :  ug + 16
+    beginning        :  ug + 17
+    mcstrname        :  ug + 18
+    s.offset         :  ug + 19
+    b.offset         :  ug + 20
+    hunkcount        :  ug + 21
+    pktlist          :  ug + 22
+    logpuid          :  ug + 23
+    logtuid          :  ug + 24
+    dateseg          :  ug + 25
+    maxchunksize     :  ug + 26
+    error.label      :  ug + 27
+    error.level      :  ug + 28
+    interactive      :  ug + 29
+
+    //  Global Routines
+
+    dat.to.strings   :  1
+
+    gvec             :  ug + 50
+    fvec             :  ug + 51
+    fvectors         :  ug + 52
+    zerouid          :  ug + 53
+    fileuid          :  ug + 54
+    indexuid         :  ug + 55
+    equal32          :  ug + 56
+    add32            :  ug + 57
+    subtract32       :  ug + 58
+    less32           :  ug + 59
+    retrieve         :  ug + 60
+    retain           :  ug + 61
+    read             :  ug + 62
+    write            :  ug + 63
+    delete           :  ug + 64
+    create.index     :  ug + 65
+    create.file      :  ug + 66
+    open             :  ug + 67
+    close            :  ug + 68
+    getpuids         :  ug + 69
+    lowercase        :  ug + 70
+    createsystem     :  ug + 71
+    savesystem       :  ug + 72
+    locatename       :  ug + 73
+    addname          :  ug + 74
+    deletename       :  ug + 75
+    removename       :  ug + 76
+    replacename      :  ug + 77
+    getnamebyte      :  ug + 78
+    putnamebyte      :  ug + 79
+    readnamefile     :  ug + 80
+    writenewbootfile :  ug + 81
+    compare          :  ug + 82
+    error            :  ug + 83
+    refresh          :  ug + 84
+    alias            :  ug + 85
+    queue.pktwait    :  ug + 86
+    flushlog         :  ug + 87
+    release          :  ug + 88
+$)
+
+
+MANIFEST
+$(
+    a.file           =  0
+    a.name           =  1
+    a.name2          =  2
+    a.lsi4           =  3
+    a.m68k           =  4
+    a.pdp11          =  5
+    a.create         =  6
+    a.delete         =  7
+    a.rename         =  8
+    a.replace        =  9
+    a.alias          =  10
+    a.list           =  11
+    a.readlog        =  12
+    a.flushlog       =  13
+    a.release        =  14
+    a.init           =  15
+    a.quit           =  16
+    a.chunksize      =  17
+
+    ac.stop          =  0
+    ac.mctype        =  1
+    ac.setms         =  2
+    ac.ignore        =  3
+    ac.load          =  4
+    ac.skip          =  5
+    ac.clear         =  6
+    ac.init          =  7
+    ac.setinit       =  8
+    ac.entry         =  256
+    ac.entryind      =  257
+    ac.reqvec        =  512
+    ac.repvec        =  513
+
+    ac.unknown       =  0
+    ac.lsi4          =  1
+    ac.68000         =  2
+    ac.pdp11         =  3
+
+    h.link           =  0
+    h.addrh          =  1
+    h.addrl          =  2
+    h.endh           =  3
+    h.endl           =  4
+
+    t.hunk           =  1000
+    t.reloc          =  1001
+    t.end            =  1002
+    t.abshunk        =  1003
+    t.absreloc       =  1004
+
+    nodesize         =  5
+    workslot         =  0
+    nameslot         =  0
+    logslot          =  100
+    systembase       =  1024
+
+    chunksize        =  0
+
+    //  ----------------------------------------------------------------------
+    //
+    //  The following buffer size is limited to the maximum size of the
+    //  Ancilla name file.  If the magic number is changed in the Ancilla
+    //  code, then it must be changed here also.
+
+    byte.buffsize    =  1024
+    name.buffsize    =  byte.buffsize / bytesperword
+
+    //  ----------------------------------------------------------------------
+
+    file.buffsize    =  5000
+
+    reqvec           =  #X04D0
+    repvec           =  #X04F0
+
+    lsi4.rtn         =  8
+    lsi4.rtn.ks      =  12
+    entryind         =  lsi4.rtn + lsi4.rtn.ks
+
+    topbit           =  1 << (bitsperword - 1)
+
+    info.dbsize      =  3
+    info.slot        =  0
+    info.function    =  1
+    info.length      =  2
+
+    b.resultlength   =  40
+    w.resultlength   =  b.resultlength / bytesperword
+
+    bytesperpuid     =  8
+    wordsperpuid     =  bytesperpuid / bytesperword
+    offset.tuid      =  1
+    offset.tpuid     =  offset.tuid    +  wordsperpuid
+    offset.authy     =  offset.tpuid   +  wordsperpuid
+    offset.puid      =  offset.authy   +  wordsperpuid
+
+    dibytesperword   =  bytesperword / 2
+
+    init.possible    =  FALSE               //  Flag for Initialisation
+$)
+
+.
+
+
+SECTION "ANCILLA"
+
+
+
+GET ""
+GET "BCPL.SSPLIB"
+GET "BCPL.RINGMAP"
+
+
+
+LET start()  BE
+$(
+//  This program manipulates the Ancilla's filing system. It adds, deletes,
+//  and modifies names, boot files and machines in this filing system
+//  depending on the arguments given.
+
+    LET  sysin  =  input()
+    LET  argv   =  VEC 100
+    LET  args   =  "FILE,NAME/K,NAME2/K,*
+                   *LSI4/S,M68K=68000/S,PDP11/S,*
+                   *CREATE/S,DELETE/S,RENAME/S,REPLACE/S,ALIAS/S,*
+                   *LIST/S,READLOG/S,FLUSHLOG/S,RELEASE/S,INIT/S,*
+                   *Q=QUIT/S,*
+                   *CHUNKSIZE/K"
+
+
+    rootpuid  :=  TABLE  #X8005, #X2A6E, #X839A, #X6079
+
+
+    //  Set PKTWAIT so that it looks in a queue of packets, rather than
+    //  taking the world as it comes.
+
+    pktwait  :=  queue.pktwait
+
+
+    //  The arguments given can be treated as follows:
+    //
+    //      a)  File, Name and CREATE    -  add a name and file.
+    //      b)        Name and DELETE    -  delete a name from the name table.
+    //      c)        Name and RENAME    -  change a name.
+    //      d)        Name and ALIAS     -  alias two names
+    //      e)  File, Name and REPLACE   -  replace the boot file for name.
+    //      f)                 INIT      -  initialise the world for machine
+    //      g)                 LIST      -  list information for machine
+    //      h)                 READLOG   -  read the change log
+    //      i)                 FLUSHLOG  -  flush the change log
+    //      j)        Name and RELEASE   -  release new system
+    //
+    //  Most commands require one of "LSI4/M68K/PDP11" to be quoted. The program
+    //  uses  "slot=1"  for LSI4,  "slot=2"  for M68K,  and "slot=3" for PDP11.
+
+    inputfile    :=  0
+    dateseg      :=  0
+    hunklist     :=  0
+    pktlist      :=  0
+    veclist      :=  0
+    buffp        :=  0
+    buffe        :=  0
+    loadinfo     :=  0
+    function     :=  0
+    s.offset     :=  0
+    b.offset     :=  0
+    interactive  :=  FALSE
+
+    logtuid      :=  0
+    logpuid      :=  gvec( 4 )
+
+
+    IF  rdargs( args, argv, 100 ) = 0  THEN
+        error( "Bad arguments for string*N****** %S", args )
+
+
+    //  Before we go any further, make sure that we have ANCPRIV.  If not,
+    //  give the guy a rhubarb, and stop!
+
+    UNLESS  checkancpriv()  DO  error( "ANCPRIV privilege could not be obtained" )
+
+
+    nullstring    :=  (TABLE  0)
+    beginning     :=  (TABLE  0, 0)
+
+    file.buff     :=  gvec( file.buffsize )
+    name.buff     :=  gvec( name.buffsize )
+
+    IF  zerouid( rootpuid )  THEN
+        error( "ROOT Puid does not exist" )
+
+    IF  fileuid( rootpuid )  THEN
+        error( "ROOT Puid does not refer to an index" )
+
+    UNLESS  ancilla.initialise( rootpuid )  DO
+        error( "Cannot initialise FSLIB" )
+
+
+    //  Try and obtain an exclusive lock on the log file, at offset "logslot"
+    //  in the root index.  If we cannot get an exclusive lock, then we give
+    //  a suitable error message and stop.
+
+    retrieve( rootpuid, logslot, logpuid )
+
+    IF  zerouid( logpuid )  THEN
+        error( "Log-File PUID does not exist." )
+
+    IF  indexuid( logpuid )  THEN
+        error( "Log-File is an INDEX!" )
+
+    logtuid  :=  gvec( 4 )
+
+    UNLESS  fs.open( logpuid, TRUE, logtuid, FALSE )  DO
+    $(
+        //  We have been unable to get an exclusive lock, so write out an
+        //  error message, and finish.
+
+        fvec( logtuid )     ;    logtuid  :=  0
+
+        error( "ANCILLA Filing System is in use  -  Try Later." )
+    $)
+
+    //  Load the Dat-To-Strings overlay for use by the rest of the system
+
+    dateseg  :=  loadseg( "sys:l.dat-to-strings" )
+
+    IF  dateseg = 0  THEN
+        error( "Cannot load the DAT-TO-STRINGS overlay" )
+
+    UNLESS  globin( dateseg )  DO
+        error( "Cannot initialise the DAT-TO-STRINGS overlay" )
+
+
+    //  Decide whether we are interactive or not.  If the user has just
+    //  typed "ANCILLA", and nothing else, we will prompt for input, until
+    //  "@Q" is typed.
+
+    writes( "ANCILLA  Version 6.46*N" )
+
+    $(  //  Loop to count whether the user has typed anything...
+
+        LET count  =  0
+
+        FOR  a  =  a.file  TO  a.chunksize  DO
+            UNLESS  argv!a = 0  DO  count  :=  count + 1
+
+        TEST  count = 0  THEN
+        $(
+            //  We are interactive, so prompt the outside world for some
+            //  indication of what to do.
+
+            LET ch  =  0
+
+            interactive  :=  TRUE
+            error.level  :=  level()
+
+            error.label:
+
+            $(  //  Loop to get commands from the console.  Stop when EOF
+                //  ("@Q"), or Q=QUIT is typed.
+
+                selectinput( sysin )
+
+                writes( "*C! *E" )
+
+                ch  :=  rdch()  REPEATWHILE  ch = '*S'
+
+                IF  ch = endstreamch       THEN  BREAK
+                IF  ch = '*N' | ch = '*E'  THEN  LOOP
+
+                unrdch()
+
+                UNLESS  rdargs( args, argv, 100 )  DO
+                $(
+                    writef( "****** Bad arguments for string*N****** %S*N", args )
+
+                    LOOP
+                $)
+
+                IF  argv!a.quit  THEN  BREAK
+
+                docommand( argv )
+            $)
+            REPEAT
+        $)
+        ELSE
+
+        //  We have only one input line, so handle that.
+
+        docommand( argv )
+    $)
+
+    fs.close( logtuid, TRUE )
+
+    unloadseg( dateseg )
+
+    fvec( logpuid )
+    fvec( logtuid )
+    fvec( file.buff )
+    fvec( name.buff )
+
+    fvectors( veclist )
+$)
+
+
+
+AND ancilla.initialise( puid )  =  VALOF
+$(
+//  Initialise the FS library.  Before we can do this, we must call Packserver
+//  to tell us which file server has the Ancilla root index.
+
+    LET fileserve  =  VEC 20 / dibytesperword
+    LET txblock    =  VEC  7 / dibytesperword
+
+    //  Copy the puid into the SSP request block.
+
+    FOR  i = 0  TO  3  DO  put2bytes( txblock, i+3, puid!i )
+
+    TEST  ssp( "PUID.LOCATE", txblock, 7, fileserve, 20, 0 )  THEN
+    $(
+        //  We have succeeded in looking up the puid, so see if we can
+        //  initialise the FS library.
+
+        LET length  =  fileserve % 16
+
+        //  Copy the string down from the middle of the reply buffer,
+        //  so that we can pass it to "fslib.initialize"
+
+        FOR  i = 0  TO  length  DO
+             fileserve % i  :=  fileserve % (16 + i)
+
+        RESULTIS  fslib.initialize( fileserve )
+    $)
+    ELSE  RESULTIS  FALSE
+$)
+
+
+
+AND checkancpriv()  =  VALOF
+$(
+//  Check with PRIVMan that we are allowed ANCPRIV.  First, make dibyte buffers
+//  with the ANCPRIV and USER puids in them, and then send an SSP request off
+//  to find out if what we want to do is valid.
+
+    LET puid       =  rootnode!rtn.info!rtninfo.ring!ri.uidset + offset.puid
+    LET ancpriv    =  makepuid( "FF02C7381704BC96" )
+    LET user       =  makepuid( "FF02FBF78FB014C3" )
+    LET txbuff     =  VEC 16 / dibytesperword
+    LET rxbuff     =  VEC  4 / dibytesperword
+
+    //  Check with privman to make sure that we are entitled to the privilege
+    //  allowing us to use the ANCILLA filing system.
+
+    put2bytes( txbuff, bb.ssp.arg1, 0 )   //  ALLOW opcode
+
+    FOR  i = 0  TO  3  DO
+    $(
+        put2bytes( txbuff, 4  + i, get2bytes( puid, i ) )
+        put2bytes( txbuff, 8  + i, get2bytes( user, i ) )
+        put2bytes( txbuff, 12 + i, get2bytes( ancpriv, i ) )
+    $)
+
+    //  Now send an SSP off to the Privilege manager...
+
+    $(
+        LET rc  =  ssp( "PRIVMAN", txbuff, 16, rxbuff, 4, 0 )
+        LET r2  =  result2
+
+        UNLESS  rc  DO
+        $(
+            writes( "****** SSP to *"PRIVMAN*" failed:  " )
+            fault( r2 )
+        $)
+
+        RESULTIS  rc
+    $)
+$)
+
+
+
+AND makepuid( string )  =  VALOF
+$(
+    LET buffer  =  gvec( bytesperpuid / bytesperword )
+
+    FOR  i = 0  TO  bytesperpuid-1  DO
+    $(
+        LET offset  =  i * 2
+        LET hb      =  hexvalue( string % (offset+1) )
+        LET lb      =  hexvalue( string % (offset+2) )
+
+        buffer % i  :=  (hb << 4) + lb
+    $)
+
+    RESULTIS  buffer
+$)
+
+
+
+AND hexvalue( ch )  =  '0' <= ch <= '9'  ->  ch - '0',
+                       'A' <= ch <= 'F'  ->  ch - 'A' + 10,  0
+
+
+
+AND convertnumber( string, defaultnumber )  =  VALOF
+$(
+//  Take the string given to us, and convert it into a number.
+//  The syntax is Decimal digits only.
+
+    LET result  =  0
+
+    IF  string = 0  THEN  RESULTIS  defaultnumber
+
+    FOR  i = 1  TO  string % 0  DO
+    $(
+        LET ch  =  string % i
+
+        UNLESS  '0' <= ch <= '9'  DO
+            error( "Invalid decimal number: *"%S*"", string )
+
+        result  :=  result * 10  +  ch  -  '0'
+    $)
+
+    RESULTIS  result
+$)
+
+
+
+AND docommand( argv )  BE
+$(
+//  Handle an individual command, whose arguments are given in "argv".
+
+    refresh()
+
+    $(  //  Decide on the machine we want to load for.
+        //  The machines currently in service are:
+        //
+        //      a)  LSI4    16 bit machine     name "LSI4"
+        //      b)  M68K    32 bit machine     name "68000"
+        //      c)  PDP11   16 bit machine     name "PDP11"
+
+        LET machinecount  =  0
+        LET m.lsi4        =  a.lsi4
+        LET m.m68k        =  a.m68k
+        LET m.pdp11       =  a.pdp11
+
+        mctype  :=  ac.unknown
+
+        FOR  a = m.lsi4  TO  m.pdp11  DO
+        $(
+            //  For all possible machines,  look to see if that keyword
+            //  was quoted, and if so, keep a note of it.
+
+            IF  argv!a  THEN
+            $(
+                mctype  :=  a = m.lsi4  ->  ac.lsi4,
+                            a = m.m68k  ->  ac.68000,
+                                            ac.pdp11
+
+                machinecount  :=  machinecount + 1
+            $)
+        $)
+
+        IF  machinecount > 1  THEN
+            error( "Must quote only one of *"LSI4/M68K/PDP11*"" )
+    $)
+
+    mcwordsize    :=  mctype = ac.lsi4   ->        4,
+                      mctype = ac.68000  ->        8,
+                      mctype = ac.pdp11  ->        4,  0
+
+    mcstrname     :=  mcstringname( mctype )
+
+    maxchunksize  :=  convertnumber( argv!a.chunksize, chunksize )
+
+    updatesystem( mctype, argv )
+$)
+
+
+
+AND updatesystem( slot, argv )  BE
+$(
+    file        :=  argv!a.file
+    name        :=  argv!a.name
+    name2       :=  argv!a.name2
+
+    $(  //  Decide on the funtion we wish to perform.  This is done by
+        //  inspecting the keywords CREATE, DELETE, RENAME, REPLACE, ALIAS
+        //  LIST, READLOG, FLUSHLOG, RELEASE or INIT,  one of which must 
+        //  be quoted.
+
+        LET  totalcount  =  0
+
+        FOR  a = a.create  TO  a.init  DO
+        $(
+            //  For all possible keywords, look and see if it has been
+            //  quoted, and if it has, keep a not of it, and the total
+            //  number of keywords quoted.
+
+            IF  argv!a  THEN
+            $(
+                totalcount  :=  totalcount + 1
+                function    :=  a
+            $)
+        $)
+
+        UNLESS  totalcount = 1  DO
+            error( "Must quote one of CREATE/DELETE/RENAME/REPLACE/ALIAS/*
+                                     *LIST/READLOG/FLUSHLOG/RELEASE/INIT" )
+    $)
+
+
+    SWITCHON  function  INTO
+    $(
+        CASE  a.create    :
+        CASE  a.replace   :  //  Create and Replace MUST have a FILE, and a
+                             //  NAME. Check this first of all.
+
+                             checkmctype( slot, TRUE )
+
+                             check( file,  TRUE,  "BOOT FILE NAME" )
+                             check( name,  TRUE,  "BOOT NAME" )
+                             check( name2, FALSE, "Second BOOT NAME" )
+
+                             TEST  function = a.create
+                                   THEN  create( slot )
+                                   ELSE  replace( slot )
+
+                             ENDCASE
+
+        CASE  a.delete    :
+        CASE  a.rename    :
+        CASE  a.alias     :  
+        CASE  a.release   :  //  Delete, Rename, Alias and Release MUST have 
+                             //  a NAME with/without a NAME2.
+
+                             checkmctype( slot, TRUE )
+
+                             check( file,  FALSE, "BOOT FILE NAME" )
+                             check( name,  TRUE,  "BOOT NAME" )
+
+                             check( name2,
+                                    function = a.rename  |  function = a.alias,
+                                    "Second BOOT NAME" )
+
+                             TEST  function = a.delete THEN
+                                   deletename( slot )
+
+                             ELSE
+                             TEST  function = a.rename  THEN
+                                   rename( slot )
+
+                             ELSE  
+                             TEST  function = a.alias  THEN
+                                   alias( slot )
+                                   
+                             ELSE  release( slot )
+                             ENDCASE
+
+
+        CASE  a.init      :
+        CASE  a.list      :  //  Init and List take only a machine name.
+
+                             checkmctype( slot, TRUE )
+
+                             check( file,  FALSE, "BOOT FILE NAME" )
+                             check( name,  FALSE, "BOOT NAME" )
+                             check( name2, FALSE, "Second BOOT NAME" )
+
+                             TEST  function = a.init
+                                   THEN  initialise( slot )
+                                   ELSE  listfiles( slot )
+
+                             ENDCASE
+
+
+        CASE  a.readlog   :
+        CASE  a.flushlog  :  //  Nothing required here at all.
+
+                             checkmctype( slot, FALSE )
+
+                             check( file,  FALSE, "BOOT FILE NAME" )
+                             check( name,  FALSE, "BOOT NAME" )
+                             check( name2, FALSE, "Second BOOT NAME" )
+
+                             TEST  function = a.readlog
+                                   THEN  readlog()
+                                   ELSE  flushlog()
+
+                             ENDCASE
+
+
+        DEFAULT           :  error( "Urgle!!!  Function = %N", function )
+    $)
+
+    UNLESS  function = a.list  |  function = a.readlog  |  function = a.flushlog  DO
+            writelog( slot, function, name, name2, file )
+$)
+
+
+
+AND checkmctype( type, necessary )  BE
+    UNLESS  (type = ac.unknown)  NEQV  necessary  DO
+        error( necessary  ->  "Must quote one of *"LSI4/68000/PDP11*"",
+                              "Superfluous *"LSI4/68000/PDP11*"" )
+
+
+
+AND check( item, necessary, message )  BE
+$(
+//  Check to see if the item specified by "item", is given, and if this
+//  matches "necessary".  If not, print out the message "message".
+
+    LET present  =  item \= 0
+
+    IF  present NEQV necessary  THEN
+
+        //  We have an overall argument mismatch chaps...
+
+        error( necessary -> "%S expected", "Unexpected %S", message )
+$)
+
+
+
+AND error( string, argument )  BE
+$(
+    LET r2  =  result2
+
+    UNLESS  inputfile = 0  DO
+    $(
+        endstream( inputfile )
+        
+        inputfile  :=  0
+    $)
+
+    IF  interactive  THEN
+    $(
+        writes( "*N*N****** ANCILLA Error:  " )
+        writef( string, argument )
+        writes( "*N*N" )
+
+        longjump( error.level, error.label )
+    $)
+
+    writes( "*C****** ANCILLA Error: " )
+    writef( string, argument )
+    writes( "*N****** ANCILLA abandoned.*N" )
+
+    UNLESS  dateseg = 0    DO  unloadseg( dateseg )
+    UNLESS  logtuid = 0    DO  fs.close( logtuid, FALSE )
+
+    fvectors( veclist )
+
+    result2  :=  r2
+
+    stop( 20 )
+$)
+
+
+
+AND writelog( slot, function, n, n2, f )  BE
+$(
+//  Write information from the log about the machine in slot "slot".
+//  The first 2 dibytes of the file are a dibyte upb of the space used
+//  in the log file.  Each entry in the log file looks like:
+//
+//      (MCtype Function Length)  "User/Date/Time/Name/Name2/File"
+
+    LET userpuid  =  rootnode!rtn.info!rtninfo.ring!ri.uidset + offset.puid
+
+    LET name      =  n  = 0  ->  "", n
+    LET name2     =  n2 = 0  ->  "", n2
+    LET file      =  f  = 0  ->  "", f
+    LET datevec   =  VEC 15
+    LET user      =  VEC w.resultlength
+    LET infovec   =  VEC info.dbsize/dibytesperword
+    LET work      =  VEC 2/dibytesperword
+    LET ptr       =  VEC 2
+    LET string    =  0
+    LET dblength  =  0
+
+    //  Read the high water mark of the log file.
+
+    read( logtuid, work, 4, beginning )
+
+    ptr!0  :=  get2bytes( work, 0 )
+    ptr!1  :=  get2bytes( work, 1 )
+
+    //  First get the initials of the current user...
+
+    UNLESS  lookupuser( user )  DO  user  :=  "????"
+
+    //  Now get the string representations of the time and date...
+
+    dat.to.strings( rootnode+rtn.days, datevec )
+
+    //  Having done all that, we are in the state of being able to write this
+    //  entry out to disc.  First we must make a composite string of all the
+    //  sub strings available.  The final format is:
+    //
+    //      User / Date / Time / Name / Name2 / File
+
+    string    :=  makestring( user, datevec+0, datevec+5, name, name2, file )
+    dblength  :=  (string % 0) / 2  +  1
+
+    //  We can now write the entry out to disc.  The write is done in two
+    //  parts.  Firstly, the info buffer is written, consisting of the
+    //  machine type, function code, and string dibyte length.  Then the
+    //  string itself is written.
+
+    //  First, put the essential values into the info vector.
+
+    put2bytes( infovec, info.slot, slot )
+    put2bytes( infovec, info.function, function )
+    put2bytes( infovec, info.length, dblength )
+
+    //  Now write the two items out to the log file.
+
+    write( logtuid, infovec, info.dbsize*2, ptr )
+
+    add32( ptr!0, ptr!1, 0, info.dbsize, ptr+0, ptr+1 )
+
+    write( logtuid, string, dblength*2, ptr )
+
+    add32( ptr!0, ptr!1, 0, dblength, ptr+0, ptr+1 )
+
+    //  And update the length of the file
+
+    put2bytes( work, 0, ptr!0 )
+    put2bytes( work, 1, ptr!1 )
+
+    write( logtuid, work, 4, beginning )
+
+    fvec( string )
+$)
+
+
+
+AND readlog()  BE
+$(
+    LET work      =  VEC  2/dibytesperword
+    LET workbuff  =  0
+    LET ptr       =  0
+    LET upb       =  0
+    LET dblength  =  0
+
+    //  Read the upperbound of the log file, and start reading the
+    //  entries.  Set up "ptr" to point to the first entry in the file.
+
+    ptr  :=  2
+
+    read( logtuid, work, 4, beginning )
+
+    upb  :=  get2bytes( work, 1 )
+
+    UNLESS  get2bytes( work, 0 ) = 0  DO
+        error( "Log file is too large" )
+
+    //  Now try and get a buffer of "upb" dibytes.
+
+    workbuff  :=  gvec( upb / dibytesperword )
+
+    read( logtuid, workbuff, upb*2, beginning )
+
+    writestring( "M/C", 6 )
+    writestring( "USER", 6 )
+    writestring( "DATE", 10 )
+    writestring( "TIME", 10 )
+    writes( "FUNCTION...*N" )
+
+
+    UNTIL  ptr = upb  DO
+    $(
+        LET infoptr  =  ptr
+
+        IF  testflags( #B0001 )  THEN
+        $(
+            writes( "****** BREAK*N" )
+
+            RETURN
+        $)
+
+        //  The format of each entry is an "info.dbsize" sized info vector
+        //  containing info about the slot, function and string length.
+        //  The next entry is a string, of dibyte length given in the info
+        //  vector, and corresponds to:
+        //
+        //      User / Date / Time / Name / Name2 / File
+
+        ptr       :=  ptr + info.dbsize
+        dblength  :=  get2bytes( workbuff, infoptr + info.length )
+
+        $(  //  Read the string part of the log.
+
+            LET slot      =  get2bytes( workbuff, infoptr + info.slot )
+            LET function  =  get2bytes( workbuff, infoptr + info.function )
+            LET string    =  gvec( dblength / dibytesperword )
+            LET user      =  0
+            LET date      =  0
+            LET time      =  0
+            LET name      =  0
+            LET name2     =  0
+            LET file      =  0
+            LET p         =  1
+
+            FOR  i = 0  TO  dblength-1  DO
+                put2bytes( string, i, get2bytes( workbuff, ptr+i ) )
+
+            //  We have now got all the information we need into memory.  Munge
+            //  it around a bit, and print out the relevant bits.
+
+            user   :=  unmakestring( string, @p )
+            date   :=  unmakestring( string, @p )
+            time   :=  unmakestring( string, @p )
+            name   :=  unmakestring( string, @p )
+            name2  :=  unmakestring( string, @p )
+            file   :=  unmakestring( string, @p )
+
+            //  We are now ready to print things out.
+
+            writestring( mcstringname( slot ), 6 )
+            writestring( user, 6 )
+            writestring( date, 10 )
+            writestring( time, 10 )
+
+            SWITCHON  function  INTO
+            $(
+                CASE a.init     :  writes( "Init" )                            ;  ENDCASE
+                CASE a.create   :  writef( "Create:   %S (%S)",  name, file )  ;  ENDCASE
+                CASE a.replace  :  writef( "Replace:  %S (%S)",  name, file )  ;  ENDCASE
+                CASE a.delete   :  writef( "Delete:   %S",       name )        ;  ENDCASE
+                CASE a.rename   :  writef( "Rename:   %S as %S", name, name2 ) ;  ENDCASE
+                CASE a.alias    :  writef( "Alias:    %S as %S", name, name2 ) ;  ENDCASE
+                CASE a.release  :  writef( "Release:  %S",       name )        ;  ENDCASE
+
+                DEFAULT         :  writes( "****** Bad Log Entry ******" )     ;  ENDCASE
+            $)
+
+            newline()
+
+            fvec( string )
+            fvec( user )
+            fvec( date )
+            fvec( time )
+            fvec( name )
+            fvec( name2 )
+            fvec( file )
+        $)
+
+        ptr  :=  ptr + dblength
+    $)
+
+    fvec( workbuff )
+
+    writef( "End of Log.*N" )
+$)
+
+
+
+AND flushlog()  BE
+$(
+    LET workpuid  =  VEC  3
+    LET workvec   =  VEC  1
+    LET work      =  VEC  2/dibytesperword
+    LET workbuff  =  0
+    LET ptr       =  0
+    LET lwb       =  2
+    LET upb       =  0
+    LET dblength  =  0
+    LET workptr   =  0
+
+    //  Read the upperbound of the log file, and start reading the
+    //  entries.  Set up "ptr" to point to the first entry in the file.
+
+    ptr  :=  lwb
+
+    read( logtuid, work, 4, beginning )
+
+    upb  :=  get2bytes( work, 1 )
+
+    UNLESS  get2bytes( work, 0 ) = 0  DO
+        error( "Log file is too large" )
+
+
+    //  If there is nothing in the log file, then there can't be any
+    //  garbage collection to be done!
+
+    IF  upb = lwb  THEN  RETURN
+
+
+    //  Now try and get a buffer of "upb" dibytes.
+
+    workbuff  :=  gvec( upb / dibytesperword )
+
+    read( logtuid, workbuff, upb*2, beginning )
+
+    //  Strategy here is as follows:
+    //
+    //      a)  Scan down the log FIFO, reversing all the pointers, so that
+    //          further scans can be LIFO.
+    //
+    //      b)  Read the name files for each machine in the Ancilla filing
+    //          system.
+    //
+    //      c)  For each active name in the name list, search for the last
+    //          occurrence of that name in the log, and copy the log info
+    //          across to a new file.
+
+    dblength  :=  0
+
+    UNTIL  ptr = upb  DO
+    $(
+        LET entrylength  =  get2bytes( workbuff, ptr + info.length )
+
+        put2bytes( workbuff, ptr + info.length, dblength )
+
+        dblength  :=  entrylength
+        ptr       :=  ptr + entrylength + info.dbsize
+    $)
+
+    //  Now, for each of the name files, read the strings, and search for
+    //  the first entry of each.
+
+    FOR  i = ac.lsi4  TO  ac.pdp11  DO
+    $(
+        LET puid.i  =  VEC 3
+        LET puid.n  =  VEC 3
+
+        writef( "*NFlushing log for machine %S, slot %N*N", mcstringname( i ), i )
+
+        getpuids( i, puid.i, puid.n )
+
+        readnamefile( puid.n )
+
+        UNTIL  getnamebyte( b.offset )  =  0  DO
+        $(
+            LET length   =  getnamebyte( b.offset )
+            LET strname  =  gvec( length/bytesperword + 1 )
+            LET success  =  FALSE
+            LET dbsize   =  dblength
+
+            FOR  i = 0  TO  length  DO
+            $(
+                strname % i  :=  getnamebyte( b.offset )
+                b.offset     :=  b.offset + 1
+            $)
+
+            //  Print out some information, as the next loop might take a long
+            //  time!
+
+            writef( "    System: *"%S*"  ", strname )
+
+            FOR  i = strname % 0  TO  20  DO  wrch( '*S' )
+
+            wrch( '*E' )
+
+            ptr  :=  upb
+
+            $(  //  Loop to search the log list LIFO for this entry
+
+                LET strptr    =  0
+                LET length    =  0
+                LET function  =  0
+                LET slot      =  0
+
+                ptr       :=  ptr - dbsize - info.dbsize
+                strptr    :=  ptr + info.dbsize
+                length    :=  dbsize
+                dbsize    :=  get2bytes( workbuff, ptr + info.length )
+                function  :=  get2bytes( workbuff, ptr + info.function )
+                slot      :=  get2bytes( workbuff, ptr + info.slot )
+
+                //  First, decide whether the slot is relevant, and if it is,
+                //  look to see if this is a relevant operation.
+
+                IF  slot = i  &  (function = a.create  |
+                                  function = a.replace |
+                                  function = a.rename  |
+                                  function = a.alias   |
+                                  function = a.release)   THEN
+                $(
+                    //  This is indeed a relevant entry.  Look to see if the
+                    //  name of the system is the same one as we are interested
+                    //  in.  If so, flag it as such, and stop looking for
+                    //  further examples.
+
+                    LET string    =  gvec( length / dibytesperword )
+                    LET user      =  0
+                    LET date      =  0
+                    LET time      =  0
+                    LET name      =  0
+                    LET name2     =  0
+                    LET file      =  0
+                    LET p         =  1
+                    LET compname  =  0
+
+                    FOR  j = 0  TO  length-1  DO
+                        put2bytes( string, j, get2bytes( workbuff, strptr+j ) )
+
+                    user   :=  unmakestring( string, @p )
+                    date   :=  unmakestring( string, @p )
+                    time   :=  unmakestring( string, @p )
+                    name   :=  unmakestring( string, @p )
+                    name2  :=  unmakestring( string, @p )
+                    file   :=  unmakestring( string, @p )
+
+                    //  The relevant system name is "name" if the function is
+                    //  CREATE, REPLACE or RELEASE, and "name2" if the 
+                    //  function is RENAME or ALIAS.
+        
+                    compname  :=  (function = a.create   |
+                                   function = a.replace  |
+                                   function = a.release)  ->  name, name2
+
+                    IF  compare( compname, strname )  THEN
+                    $(
+                        //  We have found the entry for this name.  Flag
+                        //  the entry as being special, and break out of
+                        //  the loop.
+
+                        put2bytes( workbuff, ptr + info.function, -function )
+
+                        success  :=  TRUE
+                    $)
+
+                    fvec( string )
+                    fvec( user )
+                    fvec( date )
+                    fvec( time )
+                    fvec( name )
+                    fvec( name2 )
+                    fvec( file )
+                $)
+            $)
+            REPEATUNTIL  success  |  ptr = lwb
+
+            //  We have finished with this object.  Print out information on
+            //  it, and keep up our claim on the interlock.
+
+            refresh()
+
+            UNLESS  success  DO  writes( "  (not found)" )
+
+            newline()
+
+            fvec( strname )
+        $)
+
+        newline()
+    $)
+
+    //  Having marked the entries which are special, we can reverse the
+    //  pointers again, (for good measure) and then print out the log
+    //  entries in order.
+
+    ptr  :=  upb - dblength - info.dbsize
+
+    UNTIL  ptr = lwb  DO
+    $(
+        LET entrylength  =  get2bytes( workbuff, ptr + info.length )
+
+        put2bytes( workbuff, ptr + info.length, dblength )
+
+        ptr       :=  ptr - entrylength - info.dbsize
+        dblength  :=  entrylength
+    $)
+
+    put2bytes( workbuff, ptr + info.length, dblength )
+
+    //  The tables are turned now (in more ways than one!)  We should create
+    //  a new file in which to put the copied entries.  After doing that, scan
+    //  through the log again, looking for those entries which have their
+    //  function field negated.  This is the flag indicating that we must
+    //  copy this entry across.  Make sure that we still have a handle on
+    //  the filing system...
+
+    refresh()
+
+    create.file( rootpuid, workslot, FALSE, workpuid )
+
+    ptr      :=  lwb
+    workptr  :=  lwb
+
+    workvec!0  :=  0
+    workvec!1  :=  workptr
+
+    UNTIL  ptr = upb  DO
+    $(
+        LET dbsize    =  get2bytes( workbuff, ptr + info.length )
+        LET function  =  signextend( get2bytes( workbuff, ptr + info.function ) )
+
+        //  If this is a flagged entry, then we must negate the flag, and
+        //  write the entry out to the new file.
+
+        IF  function < 0  THEN
+        $(
+            LET size    =  dbsize  +  info.dbsize
+            LET dbbuff  =  gvec( size / dibytesperword )
+
+            put2bytes( workbuff, ptr + info.function, -function )
+
+            FOR  j = 0  TO  size - 1  DO
+                put2bytes( dbbuff, j, get2bytes( workbuff, ptr + j ) )
+
+            write( workpuid, dbbuff, size*2, workvec )
+
+            workptr    :=  workptr + size
+            workvec!1  :=  workptr
+
+            fvec( dbbuff )
+        $)
+
+        ptr  :=  ptr + dbsize + info.dbsize
+    $)
+
+    //  Having made the new copy, we must put the length into it.
+
+    put2bytes( work, 0, workvec!0 )
+    put2bytes( work, 1, workvec!1 )
+
+    write( workpuid, work, 4, beginning )
+
+    //  Now rename the new work file on top of the old one.
+
+    refresh()
+
+    retain( rootpuid, logslot, workpuid )
+
+    delete( rootpuid, workslot )
+
+    //  And re-open the new log file.
+
+    open( workpuid, TRUE, logtuid, FALSE )
+$)
+
+
+
+AND signextend( dibyte )  =  VALOF
+$(
+    LET signbit  =  dibyte & #X8000
+
+    FOR  i = 16  TO  bitsperword-1  DO
+    $(
+        signbit  :=  signbit << 1
+        dibyte   :=  dibyte | signbit
+    $)
+
+    RESULTIS  dibyte
+$)
+
+
+
+AND mcstringname( slot )  =  slot = ac.lsi4    ->  "LSI4",
+                             slot = ac.68000   ->  "68000",
+                             slot = ac.pdp11   ->  "PDP11",   "Unknown"
+
+
+
+AND writestring( string, width )  BE
+$(
+    writes( string )
+    FOR  i = string % 0  TO  width  DO  wrch( '*S' )
+$)
+
+
+
+AND lookupuser( result )  =  VALOF
+$(
+    LET uid      =  rootnode!rtn.info!rtninfo.ring!ri.uidset + offset.puid
+    LET puid     =  VEC wordsperpuid * 2
+    LET rc       =  0
+
+    //  Unpack the PUID of the updating personage!  We look
+    //  this up using the MAP service, to give us the initials of
+    //  the person concerned.
+
+    puid % 0  :=  bytesperpuid * 2
+
+    FOR  i = 0  TO  bytesperpuid-1  DO
+    $(
+        LET offset  =  i * 2
+        LET byte    =  uid % i
+        LET hb      =  (byte >> 4)  &  #X0F
+        LET lb      =  (byte     )  &  #X0F
+
+        puid % (offset + 1)  :=  hexchar( hb )
+        puid % (offset + 2)  :=  hexchar( lb )
+    $)
+
+    RESULTIS  ringmap( puid, "PUID", "PNAME", result, b.resultlength )
+$)
+
+
+
+AND hexchar( value )  =  (0 <= value <= 9)  ->  value + '0',
+                                                value + 'A' - 10
+
+
+
+AND makestring( user, date, time, name, name2, file )  =  VALOF
+$(
+    LET vector    =  @user
+    LET number    =  6
+    LET length    =  sumlengths( vector, number ) + number - 1
+    LET dblength  =  length/2 + 1
+    LET string    =  gvec( dblength / dibytesperword )
+    LET ptr       =  0
+
+    FOR  i = 0  TO  number-1  DO
+    $(
+        LET s  =  vector!i
+
+        FOR  j = 1  TO  s % 0  DO
+        $(
+            ptr           :=  ptr + 1
+            string % ptr  :=  s % j
+        $)
+
+        UNLESS  i = number-1  DO
+        $(
+            //  i.e.  For all but the last file in the list
+
+            ptr           :=  ptr + 1
+            string % ptr  :=  '/'
+        $)
+    $)
+
+    string % 0  :=  length
+
+    RESULTIS  string
+$)
+
+
+
+AND unmakestring( string, ptr )  =  VALOF
+$(
+    LET buffer  =  0
+    LET length  =  0
+    LET p       =  !ptr
+
+    FOR  i  =  p  TO  string % 0  DO
+    $(
+        IF  string % i  =  '/'  THEN  BREAK
+
+        length  :=  length + 1
+    $)
+
+    buffer      :=  gvec( length / bytesperword )
+    buffer % 0  :=  length
+
+    FOR  i = 1  TO  length  DO  buffer % i  :=  string % (p + i - 1)
+
+    !ptr  :=  p + length + 1
+
+    RESULTIS  buffer
+$)
+
+
+
+AND sumlengths( vector, number )  =  VALOF
+$(
+    LET length  =  0
+
+    FOR  i = 0  TO  number-1  DO  length  :=  length  +  (vector!i) % 0
+
+    RESULTIS  length
+$)
+
+
+
+AND refresh()  BE
+$(
+//  Refresh the TUID for the lock on the filing system.
+
+    LET work  =  VEC  1
+
+    UNLESS  fs.read( logtuid, work, bytesperword, beginning )  DO
+            error( "Refresh of Log-File TUID failed." )
+$)
+
+
+
+AND create( slot )  BE
+$(
+//  Create a boot file for machine whose root of the filing system is
+//  "slot".  This will involve creating a new arm of the filing system,
+//  and adding the new file into the first free slot of the index file,
+//  and appending the string name to the end of the list.
+//  The name MUST NOT already exist.
+
+    LET indexpuid  =  VEC 3
+    LET namepuid   =  VEC 3
+    LET puid.i     =  VEC 3
+    LET puid.n     =  VEC 3
+
+    //  Before anything else, we must investigate whether the system is
+    //  intact, and all parts are there as expected.
+
+    getpuids( slot, puid.i, puid.n )
+
+    //  Having verified the system, we should take a copy of it, and
+    //  try to construct the new part of the filing system.
+
+    createsystem( indexpuid, namepuid )
+
+    //  Now count the strings, and copy the relevant puids across from
+    //  puid.i  to  indexpuid.  The name of the system is lower-cased
+    //  initially, and if the comparison with any of the strings succeeds,
+    //  then the create fails.
+
+    lowercase( name )
+
+    readnamefile( puid.n )
+
+    IF  locatename( name )  THEN
+        error( "Name *"%S*" already exists  -  use REPLACE", name )
+
+    //  On dropping through here, s.offset points to the first unused slot,
+    //  and b.offset points to the beginning of the null string terminating
+    //  the name file.
+
+    //  Copy all puids up to this one across into the new index.
+
+    FOR  i = 1  TO  s.offset-1  DO
+    $(
+        LET puid  =  VEC  3
+
+        retrieve( puid.i, i, puid )
+        retain( indexpuid, i, puid )
+    $)
+
+    //  "b.offset" is currently pointing to the Null String at the end of the
+    //  name file.  Write the new name, and add a new null string.
+
+    addname( name )
+    addname( "" )
+
+    write( namepuid, name.buff, byte.buffsize, beginning )
+
+    //  Now write the boot file to position "s.offset"
+
+    writenewbootfile( s.offset, indexpuid )
+
+    //  So - all has gone well, and we can update the name file, and
+    //  save the result in the slot of the filing system.
+
+    savesystem( indexpuid, slot )
+
+    writef( "*NCreation of system *"%S*" complete.*N", name )
+$)
+
+
+
+AND  replace( slot )  BE
+$(
+//  Replace the boot file, whose name is "name" with the file "file",
+//  using the "slot" arm of the filing system.
+
+    LET indexpuid  =  VEC 3
+    LET namepuid   =  VEC 3
+    LET puid.i     =  VEC 3
+    LET puid.n     =  VEC 3
+    LET rslot      =  0
+
+    //  First get the essential puids for this arm of the filing system.
+
+    getpuids( slot, puid.i, puid.n )
+
+    //  Now, take a copy of the system, ready to be updated with the  new
+    //  boot file.
+
+    createsystem( indexpuid, namepuid )
+
+    //  We must first check to see that this name is indeed in the filing
+    //  system, and if it is, where it is.  This is done by "locatename".
+
+    lowercase( name )
+
+    readnamefile( puid.n )
+
+    UNLESS  locatename( name )  DO
+        error( "Name *"%S*" does not exist - use CREATE", name )
+
+    //  We have "s.offset" pointing to the slot which must be updated
+    //  with the new boot file.  Save this value in "rslot", and search
+    //  for the end of the file.
+
+    rslot  :=  s.offset
+
+    locatename( "" )
+
+    //  Now copy across all puids but the one to be updated, and update
+    //  the "rslot" with the new boot file puid.
+
+    FOR  i = 1  TO  s.offset-1  UNLESS  i = rslot  DO
+    $(
+        LET puid  =  VEC 3
+
+        retrieve( puid.i, i, puid )
+        retain( indexpuid, i, puid )
+    $)
+
+    //  Now, write the new boot file, and write the name file to disc.
+    //  if all this works, we can safely update the filing system.
+
+    writenewbootfile( rslot, indexpuid )
+
+    write( namepuid, name.buff, byte.buffsize, beginning )
+
+    //  All is OK, so we can save the system, anc return.
+
+    savesystem( indexpuid, slot )
+
+    writef( "*NReplacement of system *"%S*" complete.*N", name )
+$)
+
+
+
+AND deletename( slot )  BE
+$(
+//  Delete the entry whose name is "name" from the arm of the filing
+//  system given by "slot".  The filing system (minus this entry) is
+//  copied into the new arm.
+
+    LET indexpuid  =  VEC 3
+    LET namepuid   =  VEC 3
+    LET puid.i     =  VEC 3
+    LET puid.n     =  VEC 3
+    LET rslot      =  0
+
+    //  Get the essential puids for this arm of the filing system.
+
+    getpuids( slot, puid.i, puid.n )
+
+    //  Take a copy of the system
+
+    createsystem( indexpuid, namepuid )
+
+    //  Now look in the name file, and check that this name exists.
+    //  If it does, copy up to and including it, and then from it to
+    //  the end into the new version.
+
+    lowercase( name )
+
+    readnamefile( puid.n )
+
+    UNLESS  locatename( name )  DO
+        error( "Name *"%S*" does not exist  -  cannot DELETE", name )
+
+    //  s.offset points to the occurrence of the name, so copy all
+    //  puids up to, and including this one.  Save the offset in
+    // "rslot".
+
+    rslot  :=  s.offset
+
+    FOR  i = 1  TO  s.offset-1  DO
+    $(
+        LET puid  =  VEC 3
+
+        retrieve( puid.i, i, puid )
+        retain( indexpuid, i, puid )
+    $)
+
+    //  Now find the end of the name list, and copy the remaining relevant
+    //  puids across.
+
+    locatename( "" )
+
+    FOR  i = rslot+1  TO  s.offset-1  DO
+    $(
+        LET puid  =  VEC 3
+
+        retrieve( puid.i, i, puid )
+        retain( indexpuid, i-1, puid )
+    $)
+
+    //  Having done that, all that is necessary is to remove the name
+    //  from the name list, and write the amended list to disc.
+
+    removename( name )
+
+    write( namepuid, name.buff, byte.buffsize, beginning )
+
+    //  All is ok - take the money and run!
+
+    savesystem( indexpuid, slot )
+
+    writef( "*NDeletion of system *"%S*" complete.*N", name )
+$)
+
+
+
+AND removename( string )  BE
+$(
+//  Remove the string "string" from the buffer of the name file.
+
+    LET copy    =  gvec( name.buffsize )
+    LET ptr     =  0
+    LET length  =  0
+
+    FOR  i = 0  TO  byte.buffsize-1  DO
+         copy % i  :=  getnamebyte( i )
+
+    b.offset  :=  0
+    length    :=  copy % ptr
+
+    UNTIL  length = 0  DO
+    $(
+        LET strname  =  gvec( length/bytesperword + 1 )
+
+        FOR  i = 0  TO  length  DO
+            strname % i  :=  copy % (ptr + i)
+
+        UNLESS  compare( strname, string )  DO  addname( strname )
+
+        fvec( strname )
+
+        ptr     :=  ptr + length + 1
+        length  :=  copy % ptr
+    $)
+
+    addname( "" )
+
+    fvec( copy )
+$)
+
+
+
+
+AND replacename( string1, string2 )  BE
+$(
+//  Replace the occurrence of the string "string1" in the name file
+//  by "string2".
+
+    LET copy    =  gvec( name.buffsize )
+    LET ptr     =  0
+    LET length  =  0
+
+    FOR  i = 0  TO  byte.buffsize-1  DO
+         copy % i  :=  getnamebyte( i )
+
+    b.offset  :=  0
+    length    :=  copy % ptr
+
+    UNTIL  length = 0  DO
+    $(
+        LET strname  =  gvec( length/bytesperword + 1 )
+
+        FOR  i = 0  TO  length  DO
+            strname % i  :=  copy % (ptr + i)
+
+        addname( compare( strname, string1 ) -> string2, strname )
+
+        fvec( strname )
+
+        ptr     :=  ptr + length + 1
+        length  :=  copy % ptr
+    $)
+
+    addname( "" )
+
+    fvec( copy )
+$)
+
+
+
+AND rename( slot )   BE
+$(
+//  Rename the item given by "name" to "name2", in the arm of the
+//  filing system given by "slot".
+
+    LET indexpuid  =  VEC 3
+    LET namepuid   =  VEC 3
+    LET puid.i     =  VEC 3
+    LET puid.n     =  VEC 3
+
+    //  Get the essential puids for this arm of the filing system.
+
+    getpuids( slot, puid.i, puid.n )
+
+    //  Now create a new arm of the filing system into which to copy the
+    //  modified name file.
+
+    createsystem( indexpuid, namepuid )
+
+    //  Now check that the name actually exists in the file.
+
+    lowercase( name )
+
+    readnamefile( puid.n )
+
+    UNLESS  locatename( name )  DO
+        error( "Name *"%S*" does not exist  -  cannot RENAME", name )
+
+    //  Now, locate the end of the filing system, and copy over all
+    //  puids from the old index into the new.
+
+    locatename( "" )
+
+    FOR  i = 1  TO  s.offset-1  DO
+    $(
+        LET puid  =  VEC 3
+
+        retrieve( puid.i, i, puid )
+        retain( indexpuid, i, puid )
+    $)
+
+    //  Now, all there is left to do is to replace the name in the
+    //  name file by "name2".  This is only legal if "name2" does
+    //  not already exists.
+
+    lowercase( name2 )
+
+    b.offset  :=  0
+    s.offset  :=  1
+
+    IF  locatename( name2 )  THEN
+        error( "Name *"%S*" already exists  -  cannot RENAME", name2 )
+
+    replacename( name, name2 )
+
+    write( namepuid, name.buff, byte.buffsize, beginning )
+
+    //  All is ok, so save the system in its correct slot, and return.
+
+    savesystem( indexpuid, slot )
+
+    writef( "*NRenaming of *"%S*" as *"%S*" complete.*N", name, name2 )
+$)
+
+
+
+AND alias( slot )   BE
+$(
+//  Alias the item given by "name" as "name2", in the arm of the
+//  filing system given by "slot".
+
+    LET indexpuid  =  VEC 3
+    LET namepuid   =  VEC 3
+    LET puid.i     =  VEC 3
+    LET puid.n     =  VEC 3
+    LET bootpuid   =  VEC 3
+
+    //  Get the essential puids for this arm of the filing system.
+
+    getpuids( slot, puid.i, puid.n )
+
+    //  Now create a new arm of the filing system into which to copy the
+    //  modified name file.
+
+    createsystem( indexpuid, namepuid )
+
+    //  Now check that the name actually exists in the file.
+
+    lowercase( name )
+
+    readnamefile( puid.n )
+
+    UNLESS  locatename( name )  DO
+        error( "Name *"%S*" does not exist  -  cannot ALIAS", name )
+
+    retrieve( puid.i, s.offset, bootpuid )
+
+    //  Now, locate the end of the filing system, and copy over all
+    //  puids from the old index into the new.
+
+    locatename( "" )
+
+    FOR  i = 1  TO  s.offset-1  DO
+    $(
+        LET puid  =  VEC 3
+
+        retrieve( puid.i, i, puid )
+        retain( indexpuid, i, puid )
+    $)
+
+    //  Now, all there is left to do is to add a new entry for the name
+    //  "name2", but with boot puid "bootpuid".
+
+    lowercase( name2 )
+
+    b.offset  :=  0
+    s.offset  :=  1
+
+    IF  locatename( name2 )  THEN
+        error( "Name *"%S*" already exists  -  cannot ALIAS", name2 )
+
+    addname( name2 )
+    addname( "" )
+
+    retain( indexpuid, s.offset, bootpuid )
+
+    write( namepuid, name.buff, byte.buffsize, beginning )
+
+    //  All is ok, so save the system in its correct slot, and return.
+
+    savesystem( indexpuid, slot )
+
+    writef( "*NAliasing of *"%S*" as *"%S*" complete.*N", name, name2 )
+$)
+
+
+
+AND release( slot )  BE
+$(
+//  This is the most complicated primitive by far.  Its effect is to release
+//  a new version of a system to the world in an indivisible manner.  It is
+//  assumed that:
+//
+//      XXX             Is the name of the current system
+//      backup-XXX      Is the name of the backup system
+//      new-XXX         Is the name of the new system
+//
+//  The old version of the backup is deleted, the current version is renamed
+//  to be the backup, and the new version is renamed to be the current version.
+//  All this happens indivisibly.
+
+    LET indexpuid  =  VEC 3
+    LET namepuid   =  VEC 3
+    LET puid.i     =  VEC 3
+    LET puid.n     =  VEC 3
+    
+    LET length     =  0
+    LET n.name     =  0
+    LET b.name     =  0
+    LET n.slot     =  0
+    LET c.slot     =  0
+    LET b.slot     =  0
+
+    //  Get the essential puids for this arm of the filing system
+
+    getpuids( slot, puid.i, puid.n )
+
+    //  Create a new arm of the filing system into which we are going to put
+    //  the updated version.
+
+    createsystem( indexpuid, namepuid )
+
+    //  Now, lowercase the name given, generate the "new" and "backup" versions
+    //  of the name, and read the current name file into memory.
+    
+    lowercase( name )
+    
+    length  :=  name % 0
+    
+    n.name  :=  gvec( (length + 4) / bytesperword )
+    b.name  :=  gvec( (length + 7) / bytesperword )
+    
+    FOR  i = 1  TO  4  DO  n.name % i  :=  "new-" % i
+    FOR  i = 1  TO  7  DO  b.name % i  :=  "backup-" % i
+    
+    FOR  i = 1  TO  length  DO
+    $(
+        n.name % (i + 4)  :=  name % i
+        b.name % (i + 7)  :=  name % i
+    $)
+    
+    n.name % 0  :=  length + 4
+    b.name % 0  :=  length + 7
+
+    readnamefile( puid.n )
+
+    //  We are now in a position to check the setup in the name file.  The
+    //  only thing of relevance is that the new system must exist.
+    
+    UNLESS  locatename( n.name )  DO
+        error( "Name *"%S*" does not exist  -  cannot INSTALL", n.name )
+
+    n.slot    :=  s.offset
+    
+    //  Now, check the offsets of the other entries (which are not actually
+    //  necessary).
+    
+    b.offset  :=  0
+    s.offset  :=  1
+    
+    IF  locatename( name )   THEN  c.slot  :=  s.offset
+
+    b.offset  :=  0
+    s.offset  :=  1
+    
+    IF  locatename( b.name )  THEN  b.slot  :=  s.offset
+
+    //  Ok, so we have found the relevant offsets.  First thing to do is to
+    //  remove the backup entry, if it exists.
+    
+    TEST  b.slot = 0  THEN
+    $(
+        //  There is no backup entry, so we should copy over all of the
+        //  puids from the old index to the new one.
+        
+        locatename( "" )
+        
+        FOR  i = 1  TO  s.offset-1  DO
+        $(
+            LET puid  =  VEC 3
+            
+            retrieve( puid.i, i, puid )
+            retain( indexpuid, i, puid )
+        $)
+    $)
+    ELSE
+    $(
+        //  There is a backup entry.  Delete it by removing the name, and
+        //  taking out the slot in the index.
+        
+        FOR  i = 1  TO  b.slot-1  DO
+        $(
+            LET puid  =  VEC 3
+            
+            retrieve( puid.i, i, puid )
+            retain( indexpuid, i, puid )
+        $)
+        
+        //  Now, find the high water mark, and copy over the rest of the
+        //  puids.
+        
+        locatename( "" )
+        
+        FOR  i = b.slot+1  TO  s.offset-1  DO
+        $(
+            LET puid  =  VEC 3
+            
+            retrieve( puid.i, i, puid )
+            retain( indexpuid, i-1, puid )
+        $)
+        
+        //  We can now remove the "backup" name from the name file.
+        
+        removename( b.name )
+    $)
+
+    //  We are now in a position to update the main part of the name file.
+    //  This means replacing the current name by the backup name, and
+    //  replacing the new name by the current name.
+    
+    replacename( name, b.name )
+    replacename( n.name, name )
+
+    fvec( b.name )
+    fvec( n.name )
+
+    //  We can now write the name file to disc, and then wind the show up.
+
+    write( namepuid, name.buff, byte.buffsize, beginning )
+    
+    savesystem( indexpuid, slot )
+    
+    //  Tell the user what we have done, and then return to civilisation.
+    
+    writef( "*NInstallation of system *"%S*" complete.*N", name )
+$)
+        
+
+        
+AND initialise( slot )  BE
+$(
+//  Initialise the arm of the filing system for the machine whose slot
+//  is "slot".  First, create a new copy, and then write this on top
+//  of the old one.
+
+    LET indexpuid  =  VEC 3
+    LET namepuid   =  VEC 3
+
+    //  We only allow initialisation if the manifest "init.possible"
+    //  is set to TRUE.
+
+    TEST  init.possible  THEN
+    $(
+        writef( "*NInitialising system for machine %S at slot %N*N",
+                 mcstrname, slot )
+
+        createsystem( indexpuid, namepuid )
+
+        writef( "Index Puid = %X4 %X4 %X4 %X4*N", indexpuid!0, indexpuid!1,
+                                                  indexpuid!2, indexpuid!3 )
+
+        writef( "Name  Puid = %X4 %X4 %X4 %X4*N", namepuid!0,  namepuid!1,
+                                                  namepuid!2,  namepuid!3  )
+
+        //  Having created the index, and name file, write a null
+        //  string to the from of the name file, to initialise the
+        //  system properly.
+
+        write( namepuid, nullstring, bytesperword, beginning )
+
+        savesystem( indexpuid, slot )
+
+        writes( "*NInitialisation complete.*N" )
+    $)
+
+    ELSE  error( "Initialisation not allowed  -  Recompile ANCILLA" )
+$)
+
+
+
+
+AND listfiles( slot )  BE
+$(
+    LET  puid.i   =  VEC  3
+    LET  puid.n   =  VEC  3
+
+    writef( "*NFiling system for machine %S in slot %N*N",
+            mcstrname, slot )
+
+    getpuids( slot, puid.i, puid.n )
+
+    writef( "Machine ROOT uid:  %X4 %X4 %X4 %X4*N", puid.i!0, puid.i!1,
+                                                    puid.i!2, puid.i!3 )
+
+    writef( "Machine NAME uid:  %X4 %X4 %X4 %X4*N", puid.n!0, puid.n!1,
+                                                    puid.n!2, puid.n!3 )
+
+
+    //  Right!  Start reading the string file, and pick out the names of
+    //  the boot files one by one.
+
+    readnamefile( puid.n )
+
+    UNTIL  getnamebyte( b.offset ) = 0  DO
+    $(
+        LET length   =  getnamebyte( b.offset )
+        LET strname  =  gvec( length/bytesperword + 1 )
+
+        LET puid     =  VEC 3
+
+        FOR  i = 0  TO  length  DO
+        $(
+            strname % i  :=  getnamebyte( b.offset )
+            b.offset     :=  b.offset + 1
+        $)
+
+        //  We have now read the name in, so can read the index
+        //  corresponding to it.
+
+        retrieve( puid.i, s.offset, puid )
+
+        //  Now write out the information.
+
+        writef( "%X4 %X4 %X4 %X4:  *"%S*"*N", puid!0, puid!1,
+                                              puid!2, puid!3, strname )
+
+        s.offset  :=  s.offset + 1
+
+        fvec( strname )
+    $)
+
+    writes( "End of BOOT files.*N*N" )
+$)
+
+.
+
+SECTION "ANCILLA-2"
+
+
+GET ""
+
+
+LET createsystem( indexpuid, namepuid )  BE
+$(
+//  Create an arm of the filing system, at slot "workslot" in the root
+//  index.  Then create the name file, and put this at offset "nameoffset"
+//  in the index.
+
+    //  First, create an index in the "workslot" slot of the root index.
+    //  The default size of 1000 is taken.
+
+    create.index( rootpuid, workslot, indexpuid )
+
+    //  Having created the index, we must create the name file, and
+    //  put its puid in slot "nameslot".
+
+    create.file( indexpuid, nameslot, FALSE, namepuid )
+
+    //  Having created the file, we write into the file, to cause it to
+    //  become a 2-level object.
+
+    write( namepuid, (TABLE -1), bytesperword, (TABLE 0, 2000) )
+$)
+
+
+
+AND savesystem( indexpuid, slot )  BE
+$(
+//  Save the arm of the filing system (as given by "indexpuid") at slot
+//  "slot" in the root index.  The entry in slot "workslot" is then deleted.
+//  Before we do any of this, we must make sure that we still have a handle
+//  on the filing system, by refreshing the Log File TUID.
+
+    refresh()
+
+    retain( rootpuid, slot, indexpuid )
+
+    delete( rootpuid, workslot )
+$)
+
+
+
+AND getpuids( slot, puid.i, puid.n )  BE
+$(
+//  Get the relevant puids for the arm of the filing system, which
+//  starts at "slot".  The index puid is returned in "puid.i", and the
+//  name file puid in "puid.n"
+
+    retrieve( rootpuid, slot, puid.i )
+
+    IF  zerouid( puid.i )  THEN
+        error( "Machine ROOT index does not exist - use INIT." )
+
+    IF  fileuid( puid.i )  THEN
+        error( "Machine ROOT index is a file!  -  use INIT." )
+
+    retrieve( puid.i, nameslot, puid.n )
+
+    IF  zerouid( puid.n )  THEN
+        error( "Machine NAME file does not exists - use INIT." )
+
+    IF  indexuid( puid.n )  THEN
+        error( "Machine NAME file is an index!  -  use INIT." )
+
+    //  Dropping through here implies that everything is alright, so
+    //  return whence we came!
+$)
+
+
+
+AND locatename( name )  =  VALOF
+$(
+//  Locate the string "name" in the name buffer, returning TRUE if it is
+//  found, and FALSE otherwise.  The variables "s.offset" and "b.offset"
+//  are left pointing to the string (+slot) if found, or the Null string,
+//  and the last used slot it not found.
+
+    UNTIL  getnamebyte( b.offset ) = 0  DO
+    $(
+        LET length    =  getnamebyte( b.offset )
+        LET strbuff   =  gvec( length/bytesperword + 1 )
+
+        FOR  i = 0  TO  length  DO
+             strbuff % i  :=  getnamebyte( b.offset + i )
+
+        IF  compare( name, strbuff )  THEN
+        $(
+            fvec( strbuff )
+            RESULTIS  TRUE
+        $)
+
+        s.offset  :=  s.offset + 1
+        b.offset  :=  b.offset + length + 1
+
+        fvec( strbuff )
+    $)
+
+    //  If we drop through here, then the string was not found.  The
+    //  variables "s.offset" and "b.offset" are set up as desired, so
+    //  just return FALSE.
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND compare( string1, string2 )  =  VALOF
+$(
+//  Return TRUE of the strings are lexically equal, and FALSE otherwise.
+
+    LET l1  =  string1 % 0
+    LET l2  =  string2 % 0
+
+    TEST  l1 = l2  THEN
+    $(
+        FOR  i = 1  TO  l1  DO
+             UNLESS  string1 % i  =  string2 % i  DO
+                  RESULTIS  FALSE
+
+        RESULTIS  TRUE
+    $)
+    ELSE  RESULTIS  FALSE
+$)
+
+
+
+AND lowercase( string )  BE
+    FOR  i = 1  TO  string % 0  DO
+        string % i  :=  lowercasech( string % i )
+
+
+
+AND  lowercasech( ch )  =  'A' <= ch <= 'Z'  ->  ch - 'A' + 'a',  ch
+
+
+
+AND getnamebyte( byte )  =  VALOF
+$(
+    TEST  byte >= byte.buffsize  THEN
+          error( "Ancilla name buffer full (size %N bytes)", byte.buffsize )
+
+    ELSE  RESULTIS  name.buff % byte
+$)
+
+
+
+AND putnamebyte( byte, data )  BE
+$(
+    TEST  byte >= byte.buffsize  THEN
+          error( "Ancilla name buffer full (size %N bytes)", byte.buffsize )
+
+    ELSE  name.buff % byte  :=  data
+$)
+
+
+
+AND readnamefile( puid )  BE
+$(
+    read( puid, name.buff, byte.buffsize, beginning )
+
+    s.offset  :=  1
+    b.offset  :=  0
+$)
+
+
+
+AND addname( string )  BE
+$(
+    FOR  i = 0  TO  string % 0  DO
+    $(
+        putnamebyte( b.offset, string % i )
+
+        b.offset  :=  b.offset + 1
+    $)
+$)
+
+
+
+AND writenewbootfile( slot, puid.i )  BE
+$(
+//  Create a file, and put all the loading information into it.
+//  We put the file at slot "slot" in the index whose puid is "puid.i"
+
+    LET outputpuid  =  VEC 3
+
+    create.file( puid.i, slot, FALSE, outputpuid )
+
+    //  Having created the file, write all the loading information into it.
+
+    inputfile  :=  findinput( file )
+
+    IF  inputfile = 0  THEN
+        error( "Cannot open input file *"%S*"", file )
+
+    selectinput( inputfile )
+
+    loadhunks( outputpuid )
+    mergehunks( hunklist )
+    addloadinfo( outputpuid, hunklist )
+    printlist( hunklist )
+
+    endread()  ;  inputfile  :=  0
+
+    writef( "*NNew BOOT file Puid = %X4 %X4 %X4 %X4*N", outputpuid!0,
+             outputpuid!1, outputpuid!2, outputpuid!3 )
+$)
+
+
+AND loadhunks( outputpuid )  BE
+$(
+    LET type       =  readhex( mcwordsize )
+    LET hunks      =  0
+    LET relocs     =  0
+    LET absrelocs  =  0
+
+    hunkcount  :=  0
+
+    writes( "*NHunks to be loaded:" )
+
+    $(  //  Loop to read in hunks.  These should all be absolute hunks, but
+        //  we allow other assorted ones, provided they do not contain any
+        //  information!
+        
+        LET length  =  0
+        
+        SWITCHON  type  INTO
+        $(
+            CASE t.hunk      :
+            CASE t.reloc     :
+            CASE t.absreloc  :  //  Normally illegal, but we allow them if
+                                //  there is no actual information.
+                                
+                                length  :=  readhex( mcwordsize )
+                                
+                                UNLESS  length = 0  DO  BREAK
+                                
+                                //  If the length is zero, then add one to the
+                                //  relevant count, so that we can put in a
+                                //  warning message at the end.
+                                
+                                IF  type = t.hunk      THEN  hunks      :=  hunks + 1
+                                IF  type = t.reloc     THEN  relocs     :=  relocs + 1
+                                IF  type = t.absreloc  THEN  absrelocs  :=  absrelocs + 1
+                                
+                                ENDCASE
+
+
+            CASE t.abshunk   :  //  This is what we are expecting, so go to it
+                                //  and load the hunk.
+                                
+                                loadhunk( outputpuid )
+
+                                ENDCASE
+            
+            
+            DEFAULT          :  //  Don't know what this is, but we expect it
+                                //  to be an END marker.
+                                
+                                BREAK
+        $)
+
+        type  :=  readhex( mcwordsize )
+    $)
+    REPEAT
+
+    UNLESS  type = t.end  DO  error( "Illegal type %N in object module", type )
+
+    UNLESS  hunks = 0  &  relocs = 0  &  absrelocs = 0  DO
+    $(
+        //  We have ignored some things while reading this section in, so
+        //  should put out a warning now.
+        
+        writes( "*N*NWarning:  " )
+
+        writeplural( hunks,     "HUNK"  )
+        writeplural( relocs,    "RELOC"  )
+        writeplural( absrelocs, "ABSRELOC" )
+        
+        writes( "-  ignored" )
+    $)
+
+    writef( "*N*NTotal number of unmerged hunks:  %N*N", hunkcount )
+$)
+
+
+
+AND writeplural( number, string )  BE  
+    UNLESS  number = 0  DO
+        writef( "%N %S%S  ", number, string, (number = 1  ->  "", "s") )
+
+
+
+AND loadhunk( outputpuid )  BE
+$(
+//  Load an absolute hunk.  The address can be anywhere in the address
+//  space.
+
+    LET  addrh   =  mcwordsize = 8  ->  readhex( 4 ), 0
+    LET  addrl   =  readhex( 4 )
+
+    LET  endh    =  0
+    LET  endl    =  0
+
+    LET  dbpw    =  mcwordsize / 4
+
+    LET  sizeh   =  mcwordsize = 8  ->  readhex( 4 ), 0
+    LET  sizel   =  readhex( 4 )
+
+    IF  mcwordsize = 8  THEN
+    $(
+        addrh  :=  (addrh << 1) + (addrl >> 15)
+        addrl  :=  (addrl << 1)
+    $)
+
+    //  The size we have read in, is the number of "mcwordsize" digits to
+    //  be read in.  We limit this to 1024 at once.
+
+    UNTIL  equal32( sizeh, sizel, 0, 0 )  DO
+    $(
+        LET s       =  less32( sizeh, sizel, 0, 1024 )  ->  sizel, 1024
+        LET dibytes =  s * dbpw
+        LET nbytes  =  dibytes * 2
+        LET nwords  =  nbytes / bytesperword
+        LET buffer  =  gvec( nwords )
+
+        FOR  i = 0  TO  dibytes-1  DO
+             writetobuffer( buffer, i*2, readhex( 4 ) )
+
+        IF  hunkcount REM 8  =  0  THEN  newline()
+
+        writef( ":%X2%X4  *E", addrh, addrl )
+
+        //  We must add this hunk to the file-server file, and also, add the
+        //  entry to the list of hunks loaded so far.
+
+        writebuffer( outputpuid, buffer, nbytes, addrh, addrl )
+
+        add32( addrh, addrl, 0, dibytes, @endh, @endl )
+
+        putinlist( @hunklist, addrh, addrl, endh, endl )
+
+        fvec( buffer )
+
+        hunkcount  :=  hunkcount + 1
+        addrh      :=  endh
+        addrl      :=  endl
+
+        subtract32( sizeh, sizel, 0, s, @sizeh, @sizel )
+
+        refresh()
+    $)
+$)
+
+
+
+AND  writetobuffer( buffer, offset, word )  BE
+$(
+    LET  hb = (word >> 8) & #XFF
+    LET  lb = (word     ) & #XFF
+
+    buffer % (offset + 0)  :=  hb
+    buffer % (offset + 1)  :=  lb
+$)
+
+
+
+AND writebuffer( outputpuid, buffer, bytesize, addrh, addrl )  BE
+$(
+//  Write the buffer "buffer" to the output file, at the address given by
+//  (addrh,addrl), but add the "systembase" to it first!
+
+    LET offsetv = VEC 1
+
+    add32( addrh, addrl, 0, systembase, offsetv+0, offsetv+1 )
+
+    write( outputpuid, buffer, bytesize, offsetv )
+$)
+
+
+
+AND addloadinfo( outputpuid, hunk )  BE
+$(
+    LET  addrh  =  0
+    LET  addrl  =  0
+
+    loadinfo  :=  gvec( systembase )
+
+    IF  loadinfo = 0  THEN  error( "Cannot get load info buffer" )
+
+    loadptr   :=  0
+
+    info( ac.ignore, systembase )
+    info( ac.mctype, mctype     )
+
+    UNTIL  hunk = 0
+    $(
+        //  First, if necessary, skip and ignore words of the
+        //  file, and the machine's memory.
+
+        LET  ah  =  hunk!h.addrh
+        LET  al  =  hunk!h.addrl
+        LET  eh  =  hunk!h.endh
+        LET  el  =  hunk!h.endl
+        LET  sh  =  0
+        LET  sl  =  0
+
+        subtract32( eh, el, ah, al, @sh, @sl )
+
+        UNLESS  equal32( addrh, addrl, ah, al )  DO
+        $(
+            // We must skip/ignore the difference in these addresses.
+
+            LET dh  =  0
+            LET dl  =  0
+
+            subtract32( ah, al, addrh, addrl, @dh, @dl )
+
+            UNLESS  dh = 0  DO  info( ac.setms, dh )
+            info( ac.ignore, dl )
+
+            UNLESS  dh = 0  DO  info( ac.setms, dh )
+            info( ac.skip,   dl )
+        $)
+
+        //  Now load this hunk.
+
+        TEST  maxchunksize = chunksize  THEN
+        $(
+            //  No chunk limit has been set, so load the whole lot
+            //  in one hunk.
+
+            UNLESS  sh = 0  DO  info( ac.setms, sh )
+
+            info( ac.load, sl )
+        $)
+        ELSE
+        $(
+            //  We have been given a limit on the size of chunks
+            //  which we can load.  Split the chunk up into units of
+            //  this size.
+
+            UNTIL  less32( sh, sl, 0, maxchunksize )  DO
+            $(
+                UNLESS  sh = 0  DO  info( ac.setms, sh )
+
+                info( ac.load, maxchunksize )
+
+                subtract32( sh, sl, 0, maxchunksize, @sh, @sl )
+            $)
+
+            UNLESS  sl = 0  DO  info( ac.load, sl )
+        $)
+
+        addrh  :=  eh
+        addrl  :=  el
+        hunk   :=  hunk!h.link
+    $)
+
+    IF  mctype = ac.68000  THEN
+    $(
+        info( ac.reqvec, reqvec     )
+        info( ac.repvec, repvec     )
+    $)
+
+    IF  mctype = ac.lsi4  THEN
+        info( ac.entryind, entryind )
+
+    info( ac.stop, 0 )
+
+    write( outputpuid, loadinfo, loadptr, beginning )
+
+    fvec( loadinfo )
+$)
+
+
+
+AND info( a, b )  BE
+$(
+//  Add the information (a,b) to the loadinfo vector.  Caution:  to make
+//  this routine work on 16 and 32 bit machines, byte order dependencies have
+//  been introduced.
+
+    LET  al  =  (a     )  &  #XFF
+    LET  ah  =  (a >> 8)  &  #XFF
+    LET  bl  =  (b     )  &  #XFF
+    LET  bh  =  (b >> 8)  &  #XFF
+
+    loadinfo % (loadptr + 0)  :=  ah
+    loadinfo % (loadptr + 1)  :=  al
+    loadinfo % (loadptr + 2)  :=  bh
+    loadinfo % (loadptr + 3)  :=  bl
+
+    loadptr                   :=  loadptr + 4
+
+    IF  loadptr/2 = systembase  THEN
+        error( "Info vector overflow (size %N)  -  recompile ANCILLA", systembase )
+$)
+
+
+
+AND putinlist( hunkptr, addrh, addrl, endh, endl )  BE
+$(
+    LET  hunk  =  hunkptr = 0  ->  0, hunkptr!h.link
+
+    UNTIL  hunk = 0  DO
+    $(
+        //  We are chasing down the list, waiting for a comparison
+        //  which is greater.
+
+        IF  less32( addrh, addrl, hunk!h.addrh, hunk!h.addrl )  THEN  BREAK
+
+        hunkptr  :=  hunk
+        hunk     :=  hunk!h.link
+    $)
+
+    //  On reaching here, we have found the correct place in the list for the
+    //  address, so add it in.
+
+    hunkptr!h.link  :=  newnode( hunk, addrh, addrl, endh, endl )
+$)
+
+
+
+AND mergehunks( hunk )  BE
+$(
+//  Having built up the list of hunks, see if we can merge one hunk into
+//  the next.
+
+    LET nhunks  =  0
+
+    UNTIL  hunk = 0  DO
+    $(
+        //  Base hunk pointed to by "hunk".  See if we can merge any
+        //  following hunks.
+
+        LET hunk1  =  hunk!h.link
+        LET endh   =  hunk!h.endh
+        LET endl   =  hunk!h.endl
+
+        UNTIL  hunk1 = 0  DO
+        $(
+            //  Look at the next hunks, to see if they can be merged.
+
+            LET oldhunk1  =  hunk1
+            LET endh1     =  hunk1!h.endh
+            LET endl1     =  hunk1!h.endl
+            LET addrh1    =  0
+            LET addrl1    =  0
+
+            subtract32( hunk1!h.addrh, hunk1!h.addrl, 0, 64, @addrh1, @addrl1 )
+
+            UNLESS  less32( addrh1, addrl1, endh, endl )  DO  BREAK
+
+            IF  less32( endh, endl, endh1, endl1 )  THEN
+            $(
+                endh   :=  hunk1!h.endh
+                endl   :=  hunk1!h.endl
+            $)
+
+            hunk1  :=  hunk1!h.link
+
+            fvec( oldhunk1 )
+        $)
+
+        //  We drop through here when we can do no more merging.
+
+        nhunks       :=  nhunks + 1
+        hunk!h.link  :=  hunk1
+        hunk!h.endh  :=  endh
+        hunk!h.endl  :=  endl
+        hunk         :=  hunk1
+    $)
+
+    writef( "Total number of merged hunks:    %N*N", nhunks )
+$)
+
+
+
+AND printlist( node )  BE
+$(
+    writes( "*N    Map of hunks to be loaded*N*N*
+              *          Start    End*N*N" )
+
+    UNTIL  node = 0  DO
+    $(
+        writef( "        :%X2%X4  :%X2%X4*N",
+                 node!h.addrh, node!h.addrl, node!h.endh, node!h.endl )
+
+        node  :=  node!h.link
+    $)
+$)
+
+
+
+AND newnode( link, addrh, addrl, endh, endl )  =  VALOF
+$(
+    LET node  =  gvec( nodesize )
+
+    node!h.link   :=  link
+    node!h.addrh  :=  addrh
+    node!h.addrl  :=  addrl
+    node!h.endh   :=  endh
+    node!h.endl   :=  endl
+
+    RESULTIS  node
+$)
+
+
+
+AND readhex( digits )  =  VALOF
+$(
+    LET result = 0
+    LET nwords = digits / 4
+
+    FOR  i = 0  TO  nwords - 1  DO  result  :=  (result << 16) + readword()
+
+    RESULTIS  result
+$)
+
+
+
+AND readword()  =  VALOF
+$(
+//  Caution:  to make this routine wordsize independent, byte order
+//  dependencies have been introduced.
+
+    LET result  =  0
+
+    IF  testflags( 1 )  THEN  error( "BREAK." )
+
+    IF  buffp = buffe  THEN
+    $(
+        buffe  :=  (ABS readwords( file.buff, file.buffsize )) * bytesperword
+        buffp  :=  0
+    $)
+
+    IF  buffe = 0  THEN  error( "Premature END-OF-FILE" )
+
+    result  :=  (file.buff % (buffp + 0)  <<  8)  +  (file.buff % (buffp + 1))
+    buffp   :=  buffp + 2
+
+    RESULTIS  result
+$)
+
+
+
+
+
+AND zerouid( uid )    =  uid!0 = 0  &  uid!1 = 0  &  uid!2 = 0  &  uid!3 = 0
+
+
+
+AND fileuid( uid )    =  (uid!0 & #X8000) = 0
+
+
+
+AND indexuid( uid )   =  (uid!0 & #X8000) \= 0
+
+
+
+AND equal32( a1, a2, b1, b2 )  =  (a1 = b1)  &  (a2 = b2)
+
+
+
+
+AND add32( a1, a2, b1, b2, r1, r2 )  BE
+$(
+    LET a.digits = VEC 3
+    LET b.digits = VEC 3
+    LET r.digits = VEC 3
+    LET carry    = 0
+
+    unpackdigits( a1, a2, a.digits )
+    unpackdigits( b1, b2, b.digits )
+
+    FOR  i = 0  TO  3  DO
+    $(
+        LET  digit = a.digits!i + b.digits!i + carry
+
+        r.digits!i  :=  digit  &  #XFF
+        carry       :=  asr( digit, 8 )
+    $)
+
+    !r1  :=  (r.digits!3 << 8) + (r.digits!2)
+    !r2  :=  (r.digits!1 << 8) + (r.digits!0)
+$)
+
+
+
+AND subtract32( a1, a2, b1, b2, r1, r2 )  BE
+$(
+    LET a.digits  =  VEC 3
+    LET b.digits  =  VEC 3
+    LET r.digits  =  VEC 3
+    LET carry     =  0
+
+    unpackdigits( a1, a2, a.digits )
+    unpackdigits( b1, b2, b.digits )
+
+    FOR  i = 0  TO  3  DO
+    $(
+        LET digit  =  a.digits!i - b.digits!i + carry
+
+        r.digits!i  :=  digit  &  #XFF
+        carry       :=  asr( digit, 8 )
+    $)
+
+    !r1  :=  (r.digits!3 << 8) + (r.digits!2)
+    !r2  :=  (r.digits!1 << 8) + (r.digits!0)
+$)
+
+
+
+AND less32( a1, a2, b1, b2 )  =  VALOF
+$(
+//  This is V. Grubby - does a subtraction, and tests the sign of the result
+
+    LET r1  =  0
+    LET r2  =  0
+
+    subtract32( a1, a2, b1, b2, @r1, @r2 )
+
+    RESULTIS  negative( r1, r2 )
+$)
+
+
+
+AND negative( n1, n2 )  =  (n1 & #X8000) \= 0
+
+
+
+AND unpackdigits( n1, n2, nbuff )  BE
+$(
+    nbuff!3  :=  (n1 >> 8) & #XFF
+    nbuff!2  :=  (n1     ) & #XFF
+    nbuff!1  :=  (n2 >> 8) & #XFF
+    nbuff!0  :=  (n2     ) & #XFF
+$)
+
+
+
+AND asr( value, amount )  =  VALOF
+$(
+//  Perform an Arithmetic Shift Right for the value "value", by
+//  the amount "amount".
+
+    LET  signbit  =  value & topbit
+
+    FOR  i = 1  TO  amount  DO
+         value  :=  (value >> 1)  |  signbit
+
+    RESULTIS  value
+$)
+
+
+AND gvec( vecsize )  =  VALOF
+$(
+//  Add a new vector to the list of those "got" already.
+
+    LET node   =  getvec( 2 )
+    LET space  =  getvec( vecsize )
+
+    TEST  node = 0  |  space = 0  THEN
+    $(
+        //  Cannot get either the main space, or the node space.
+        //  Free whichever one was successful, and flag an error.
+
+        UNLESS  node   = 0  DO  freevec( node )
+        UNLESS  space  = 0  DO  freevec( space )
+
+        error( "Cannot get vector of size %U5", vecsize )
+    $)
+    ELSE
+    $(
+        //  We have got the vector successfully, so add it to the
+        //  chain of allocated vectors.
+
+        node!0  :=  veclist
+        node!1  :=  space
+        veclist :=  node
+
+        RESULTIS  space
+    $)
+$)
+
+
+
+AND fvec( vector )  BE
+$(
+//  Free the vector pointed to by "vector".  Look in the allocated space chain
+//  to find this vector, and when found, de-allocate the space.
+
+    LET node  =  veclist
+    LET ptr   =  @veclist
+
+    UNTIL  node = 0  DO
+    $(
+        IF  node!1 = vector  THEN
+        $(
+            //  We have found the vector to deallocate.  Remove this node from
+            //  the list, and deallocate the space involved.
+
+            !ptr   :=  node!0
+
+             freevec( vector )
+             freevec( node )
+
+             RETURN
+        $)
+
+        ptr   :=  node
+        node  :=  node!0
+    $)
+
+    error( "Cannot free vector %N", vector )
+$)
+
+
+
+AND fvectors( list )  BE
+$(
+//  Free all the vectors pointed to by the list "list".
+
+    UNTIL list = 0  DO
+    $(
+        LET nlist  =  list!0
+        LET space  =  list!1
+
+        freevec( space )
+        freevec( list  )
+
+        list  :=  nlist
+    $)
+$)
+
+
+
+AND queue.pktwait( id, pkt )  =  VALOF
+$(
+//  Send off the packet "pkt", and wait for its return.
+
+    LET p  =  lookinpktqueue( pkt )
+
+    UNTIL  p = pkt  DO
+    $(
+        p!pkt.link  :=  pktlist
+        pktlist     :=  p
+        p           :=  taskwait()
+    $)
+
+    RESULTIS  p
+$)
+
+
+
+AND lookinpktqueue( pkt )  =  VALOF
+$(
+//  Look in the packet queue, for the packet "pkt".
+
+    LET queue  =  pktlist
+    LET ptr    =  @pktlist
+
+    UNTIL  queue = 0  DO
+    $(
+        TEST  queue = pkt  THEN
+        $(
+            !ptr    :=  !queue
+            !queue  :=  notinuse
+
+            RESULTIS  queue
+        $)
+        ELSE
+        $(
+            ptr    :=  queue
+            queue  :=  !queue
+        $)
+    $)
+
+    RESULTIS  taskwait()
+$)
+
+
+
+AND retrieve( a, b, c )  BE
+    UNLESS  fs.retrieve( a, b, c )  DO
+        error( "FS RETRIEVE failed:  RC = %X4", result2 )
+
+
+
+AND retain( a, b, c )  BE
+    UNLESS  fs.retain( a, b, c )  DO
+        error( "FS RETAIN failed:  RC = %X4", result2 )
+
+
+
+AND read( a, b, c, d )  BE
+    UNLESS  fs.read( a, b, c, d )  DO
+        error( "FS READ failed:  RC = %X4", result2 )
+
+
+
+AND write( a, b, c, d )  BE
+    UNLESS  fs.write( a, b, c, d )  DO
+        error( "FS WRITE failed:  RC = %X4", result2 )
+
+
+
+AND delete( a, b )  BE
+    UNLESS  fs.delete( a, b )  DO
+        error( "FS DELETE failed:  RC = %X4", result2 )
+
+
+
+AND create.index( a, b, c )  BE
+    UNLESS  fs.create.index( a, b, c )  DO
+        error( "FS CREATE INDEX failed:  RC = %X4", result2 )
+
+
+
+AND create.file( a, b, c, d )  BE
+    UNLESS  fs.create.file( a, b, c, d )  DO
+        error( "FS CREATE FILE failed:  RC = %X4", result2 )
+
+
+
+AND open( a, b, c, d )  BE
+    UNLESS  fs.open( a, b, c, d )  DO
+        error( "FS OPEN failed:  RC = %X4", result2 )
+
+
+
+AND close( a, b )  BE
+    UNLESS  fs.close( a, b )  DO
+        error( "FS CLOSE failed:  RC = %X4", result2 )
+
+

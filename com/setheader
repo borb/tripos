@@ -1,0 +1,23 @@
+AND setheader( name, sizek, sizeb, dated, datem, datet )  BE
+$(
+//  Set the header of the file to contain the OLD information from before
+//  the last archive.
+//
+//  ********  N.B.  This will only work for FMFH systems  ********
+
+    LET task   =  devicetask( name )
+    LET lock   =  result2
+    LET sizev  =  VEC 1
+    LET datev  =  VEC 2
+
+    sizev!0  :=  sizek >> 6
+    sizev!1  :=  sizeb  +  ((sizek & #B111111) << 10)
+
+    datev!0  :=  dated
+    datev!1  :=  datem
+    datev!2  :=  datet
+
+    sendpkt( notinuse, task, action.setheader, 0, 0, lock, name, sizev, datev )
+$)
+
+

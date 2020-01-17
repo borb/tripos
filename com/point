@@ -1,0 +1,26 @@
+//  Source library which enables us to POINT within an open file.
+
+
+GET "IOHDR"
+GET "MANHDR"
+
+
+LET pointword( position )  BE
+$(
+    LET task  =  cis!scb.type
+    LET arg   =  cis!scb.arg1
+
+    LET pvec  =  VEC 2
+
+    LET bpos  =  position * bytesperword
+    LET posh  =  (bpos >> 16)  &  #XFFFF
+    LET posl  =  (bpos)        &  #XFFFF
+    
+    pvec!0  :=  posh
+    pvec!1  :=  posl
+    pvec!2  :=  0
+    
+    sendpkt( notinuse, task, action.point, 0, 0, arg, pvec )
+$)
+
+

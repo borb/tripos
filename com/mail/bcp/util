@@ -1,0 +1,252 @@
+SECTION "UTIL"
+
+GET "header"
+GET "IOHDR"                     // Act.how.much.input
+GET "BCPL.inputwaiting"
+GET "bcp.basicutil"
+GET "bcp.convertname"
+GET "bcp.read-keys"
+
+//*****************************************************************************
+//                  MAIL SERVER UTILITY ROUTINES                             //
+//*****************************************************************************
+
+//=============================================================================
+
+// Free all vectors and work files.
+LET tidyup() BE
+$(
+    // Release temporary vectors.
+    little.tidyup()
+
+    // Delete the work files if they exist
+    UNLESS workfile.base < root.first.workfile
+    $(  LET x = workfile.base
+        workfile.base := 0      // In case of error !!!!
+        FOR i = 0 TO workfile.slot.size DO delete(root, x+i)
+    $)
+
+    // Release all the vectors obtained by "get.perm.vec"
+    unloadseg(ms.perm.vec.chain);       ms.perm.vec.chain       := 0
+    ENDSTREAM(norm.input);              norm.input              := 0
+$)
+
+//=============================================================================
+
+LET z80timestamp (tvec) BE
+$(
+    // Set up a timestamp in the given vector "tvec" in the Z80 "DAT" date and
+    // time server format.
+
+    LET k = ?
+    LET days.in.month = TABLE 31,0,31,30,31,30,31,31,30,31,30,31
+    LET tripos.time = VEC 3
+    LET days = ?
+
+    tripos.time := datstamp(tripos.time)
+    days := tripos.time!0
+
+$<TRACE IF trace WRITEF("Days = %N, ", days) $>TRACE
+    // First extract year:
+    tvec%0 := 78
+    $(
+        k := 365
+        // Add an extra day for leap years:
+        IF (tvec%0 & 3) = 0 THEN k := 366
+        IF k > days THEN BREAK
+        days := days - k
+        tvec%0 := tvec%0 + 1
+    $) REPEAT
+
+$<TRACE IF trace WRITEF("Days = %N:Yr=%N, ", days, tvec%0) $>TRACE
+    // Adjust size of February for leap years
+    TEST (tvec%0 & 3) = 0 THEN days.in.month!1 := 29
+                                       ELSE days.in.month!1 := 28
+
+    // Extract month:
+    tvec%1 := 1
+    FOR i=0 TO 11 DO $(
+        IF days < days.in.month!i THEN BREAK
+        days := days - days.in.month!i
+        tvec%1 := tvec%1 + 1
+    $)
+
+$<TRACE IF trace WRITEF("Days = %N:Yr=%Nmn=%N, ", days, tvec%0, tvec%1) $>TRACE
+    // Set day value
+    tvec%2 := days + 1
+$<TRACE IF trace WRITEF("Dy=%N:Yr=%Nmn=%N, ", tvec%2, tvec%0, tvec%1) $>TRACE
+
+    // Set hour value:
+    tvec%3 := tripos.time!1/60
+
+    // Set minute value:
+    tvec%4 := tripos.time!1 - (tripos.time!1/60)*60
+
+    // Set seconds value:
+    tvec%5 := tripos.time!2/tickspersecond
+
+    // Don't bother setting "day in week" value
+$<TRACE IF trace WRITEF("Dy=%N:Yr=%Nmn=%N, ", tvec%2, tvec%0, tvec%1) $>TRACE
+
+    // Now add the time zone: ...
+    tvec%1 |:= (ABS time.zone) << 4
+    IF time.zone < 0 THEN tvec%5 |:= #X80
+$)
+
+//==============================================================================
+
+LET set.date.header(mode, resent) BE
+$(
+    // Write the Date header line to the current message file.
+    // New.umid is 6 bytes, containing
+    //  0:      Year since 1980
+    //  1:      Top nibble = offset from GMT, Bottom nibble = month
+    //  2:      Day of month    (32)
+    //  3:      Hour            (16)
+    //  4:      Minute          (64)
+    //  5:      Second          (64), Top bit -> GMT offset is NEGATIVE
+
+    LET zone    = (new.umid%1) >> 4
+    LET accurate= mode = 1
+    LET full    = (accurate) -> FALSE, mode
+
+    IF (new.umid%5 & #X80) ~= 0 THEN zone := -zone
+
+    UNLESS (full=FALSE) write.string.to.file(header.file,(resent) -> "*NResent-Date: ", "*nDate:    ")
+    // Set day-in-month:
+    IF new.umid%2 >= 10 THEN write.byte.to.file(header.file,'0'+(new.umid%2/10))
+    write.byte.to.file(header.file,'0' + new.umid%2 - (new.umid%2/10)*10)
+
+    write.byte.to.file(header.file, (mode=FALSE) -> '/', ' ')
+    // Set month:
+    $( LET month = VALOF SWITCHON (new.umid%1) & #XF INTO
+                                        $(      DEFAULT:RESULTIS "???"
+                                                CASE 1: RESULTIS "January"
+                                                CASE 2: RESULTIS "February"
+                                                CASE 3: RESULTIS "March"
+                                                CASE 4: RESULTIS "April"
+                                                CASE 5: RESULTIS "May"
+                                                CASE 6: RESULTIS "June"
+                                                CASE 7: RESULTIS "July"
+                                                CASE 8: RESULTIS "August"
+                                                CASE 9: RESULTIS "September"
+                                                CASE 10:RESULTIS "October"
+                                                CASE 11:RESULTIS "November"
+                                                CASE 12:RESULTIS "December"
+                                        $)
+        FOR i = 1 TO (full=FALSE) -> 3, month%0
+        DO write.byte.to.file(header.file, month%i)
+    $)
+
+    // Set year:
+    write.string.to.file(header.file, (mode=FALSE) -> "/8", " 198")
+    write.byte.to.file(header.file,'0' + new.umid%0 - (new.umid%0/10)*10)
+    write.byte.to.file(header.file,' ')
+    IF full THEN write.byte.to.file(header.file,' ')
+
+    // Set time:
+    write.byte.to.file(header.file,'0' + new.umid%3/10)
+    write.byte.to.file(header.file,'0' + new.umid%3 - (new.umid%3/10)*10)
+    write.byte.to.file(header.file,':')
+    write.byte.to.file(header.file,'0' + new.umid%4/10)
+    write.byte.to.file(header.file,'0' + new.umid%4 - (new.umid%4/10)*10)
+    IF accurate
+    $(
+//      LET tripos.time = VEC 3
+//      LET small       =  ?
+//      tripos.time := datstamp(tripos.time)
+//      small := (((tripos.time ! 2) REM tickspersecond) * 100) / tickspersecond
+        write.byte.to.file(header.file,':')
+        write.byte.to.file(header.file,'0' + new.umid%5/10)
+        write.byte.to.file(header.file,'0' + new.umid%5 - (new.umid%5/10)*10)
+//      write.byte.to.file(header.file,'.')
+//      write.byte.to.file(header.file,'0' + small/10)
+//      write.byte.to.file(header.file,'0' + small - (small/10)*10)
+    $)
+    $(  LET zone.name = VALOF SWITCHON zone INTO
+        $(      DEFAULT:        RESULTIS ""     //unknown time zone
+                CASE 0:         RESULTIS "GMT"
+                CASE 1:         RESULTIS "BST"
+//              CASE 2:         RESULTIS "GMT+2"
+//              CASE 3:         RESULTIS "GMT+3"
+//              CASE 4:         RESULTIS "GMT+4"
+//              CASE 5:         RESULTIS "GMT+5"
+//              CASE 6:         RESULTIS "GMT+6"
+//              CASE 7:         RESULTIS "GMT+7"
+//              CASE 8:         RESULTIS "GMT+8"
+//              CASE 9:         RESULTIS "GMT+9"
+//              CASE 10:        RESULTIS "GMT+10"
+//              CASE 11:        RESULTIS "GMT+11"
+//              CASE 12:        RESULTIS "GMT+12"
+//              CASE 13:        RESULTIS "GMT+13"
+//              CASE 14:        RESULTIS "GMT+14"
+        $)
+        UNLESS zone.name%0 = 0
+        write.string.to.file(header.file, "-")
+        write.string.to.file(header.file, zone.name)
+    $)
+//  UNLESS (full=FALSE) write.string.to.file(header.file, "*N")
+
+$)
+
+//=============================================================================
+
+LET get.temp.files() BE
+$(
+    // Note the directory positions for the two work files that will be used
+    // in any "send"s in this session, and create one of them.  (The text
+    // work file is not created now as a new one is needed for each send.)
+//    LET group.file.entry = ?
+
+    $<TRACE IF trace THEN writes("getting work files*n") $>TRACE
+
+    workfile.base               := root.first.workfile  +
+                (rootnode!rtn.info!rtninfo.ring!ri.myaddr*workfile.slot.size)
+
+    send.file!cache.address     := get.perm.vec(200/rwpw)
+    send.file!cache.size        := 200
+
+    header.file!cache.address   := get.perm.vec(200/rwpw)
+    header.file!cache.size      := 200
+
+    create.file(root, workfile.base+workfile.puid.slot, recipients.puids.file,
+                                                                        FALSE)
+    recipients.puids.file!cache.address := get.perm.vec(200/rwpw)
+    recipients.puids.file!cache.size    := 200
+
+    create.file(root, workfile.base+workfile.group.slot, expanded.groups.file,
+                                                                        FALSE)
+    expanded.groups.file!cache.address  := get.perm.vec(200/rwpw)
+    expanded.groups.file!cache.size     := 200
+$)
+
+//=============================================================================
+
+LET read.line(line,words) = VALOF
+$(
+    // Read an input line into the string "LINE".
+    LET count = 1
+    LET char = ?
+
+    $(  break.test()
+        char := rdch()
+        line%count := char
+        count := count+1
+        IF char = endstreamch
+        $(  endread()
+            selectinput(findinput("**"))
+            BREAK
+        $)
+        IF count >= words * Bytesperword
+        $(  writes("Subject too long*N")
+            line%0 := 0
+            BREAK
+        $)
+    $) REPEATUNTIL char='*N'
+
+    line%0 := count-2
+$)
+
+//=============================================================================
+
+

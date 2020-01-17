@@ -1,0 +1,1184 @@
+//****************************************************************************
+//*                                                                          *
+//*   ##    ##   ######    ######   ##    ##    ####     ######   ##    ##   *
+//*   ###  ###  ########  ########  ##   ##    ######   ########  ###  ###   *
+//*   ########  ##        ##    ##  ##  ##    ##    ##  ##        ########   *
+//*   ## ## ##  #######    ######   ####      ########  #######   ## ## ##   *
+//*   ##    ##  ##    ##  ##    ##  ## ##     ##    ##        ##  ##    ##   *
+//*   ##    ##  ##    ##  ##    ##  ##  ##    ##    ##        ##  ##    ##   *
+//*   ##    ##   ######   ########  ##   ##   ##    ##  ########  ##    ##   *
+//*   ##    ##    ####     ######   ##    ##  ##    ##   ######   ##    ##   *
+//*                                                                          *
+//*   ====================================================================   *
+//*         Macro Assembler for the Motorola MC68000 Microprocessor          *
+//*   ====================================================================   *
+//*                                                                          *
+//****************************************************************************
+
+
+
+//****************************************************************************
+//*                                                                          *
+//* There are certain portions of the code which are dependent to particular *
+//* machines and operating systems, and these are surrounded by conditional  *
+//* compilation tags of the form "$<xxx  $>xxx", where "xxx" is the name of  *
+//* the dependency.                                                          *
+//*                                                                          *
+//*         TAG        Computer                                  O/S         *
+//*         ---        --------                                  ---         *
+//*                                                                          *
+//*         IBM370     IBM 370  (3081)                           (OS/MVT)    *
+//*         CAP1       Cambridge CAP computer                    (CHAOS)     *
+//*         TRIPOS     Cambridge processor bank                  (TRIPOS)    *
+//*         PANOS      Acorn 32016 Cambridge Co-Processor        (PANOS)     *
+//*         MINOS      Topexpress LSI4/95                        (MINOS)     *
+//*                                                                          *
+//*                                                                          *
+//*   N.B.  This assembler ASSUMES a 32-bit implementation of BCPL, but will *
+//*         run on a 16 bit machine, provided that only 16 bit arithmetic is *
+//*         required.                                                        *
+//*                                                                          *
+//*                                                                          *
+//****************************************************************************
+//*    I. D. Wilson              Last Modified:      IDW     24/11/86        *
+//****************************************************************************
+
+
+
+
+
+SECTION "M68KASM"
+
+
+
+$<IBM370
+NEEDS "M2"
+NEEDS "M3"
+NEEDS "M4"
+NEEDS "M5"
+NEEDS "M6"
+NEEDS "M7"
+NEEDS "M8"
+NEEDS "M9"
+NEEDS "M10"
+NEEDS "M11"
+NEEDS "M12"
+$>IBM370
+
+
+
+GET "LIBHDR"
+
+GET "M68KHDR"
+
+
+
+LET start( parm )  BE
+$(
+//  The entry point of the assembler.
+
+$<TRIPOS.MINOS.PANOS
+    LET av  =  VEC a.size
+    LET sv  =  VEC 15
+    LET as  =  "FROM/A,TO,VER/K,LIST/K,PROLOG/K,HDR/K,DEFINE/K,EQU/K,SYMBOLS/K,OPT/K"
+$>TRIPOS.MINOS.PANOS
+
+    LET name.sourcestream  =  0
+    LET name.liststream    =  0
+    LET name.codestream    =  0
+    LET name.verstream     =  0
+    LET name.equstream     =  0
+    LET name.symbolstream  =  0
+
+    fatalerrorlabel  :=  label
+    fatalerrorlevel  :=  level()
+
+$<IBM370
+    datestring  :=  date()
+    timestring  :=  timeofday()
+$>IBM370
+
+$<CAP1
+    datestring  :=  date()
+    timestring  :=  time()
+$>CAP1
+
+$<TRIPOS.MINOS.PANOS
+    sv              :=  datstring( sv )
+    datestring      :=  sv + 0
+    timestring      :=  sv + 5
+
+    //  Massage the date so that it looks reasonable.  We expect the date to
+    //  be of the form "dd-mmm-yy".
+
+    IF  datestring % 0  =  9  THEN
+    $(
+        //  Strip a leading zero, if it is present.
+
+        IF  datestring % 1  =  '0'  THEN
+            datestring % 1  :=  '*S'
+
+        //  And remove the "-" characters from the date.
+
+        datestring % 3  :=  '*S'
+        datestring % 7  :=  '*S'
+    $)
+
+    //  Massage the time so that it looks reasonable.  We expect the time to
+    //  be of the form "hh:mm:ss".
+
+    IF  timestring % 0  =  8  THEN
+    $(
+        //  Strip the seconds value, since this is meaningless.
+
+        timestring % 0  :=  5
+
+        //  And force the separating character to be "."
+
+        timestring % 3  :=  '.'
+    $)
+$>TRIPOS.MINOS.PANOS
+
+    //  Initialise the modification record and storage allocation package.
+
+    version  :=  12
+    release  :=  193
+
+    initstore( storesize )
+
+    tagv            :=  getchunk( tagsize, TRUE )
+    macroname       :=  getchunk( tagsize, TRUE )
+    labelvec        :=  getchunk( tagsize, TRUE )
+    expvec          :=  getchunk( expsize, TRUE )
+    expvecp         :=  expvec + expsize
+
+    inputbuff       :=  getchunk( maxllen/bytesperword,       TRUE )
+    titlevec        :=  getchunk( titlecharsmax/bytesperword, TRUE )
+    outbuff         :=  getchunk( maxllen/bytesperword,       TRUE )
+    codebuff        :=  getchunk( codesize*cb.size,           TRUE )
+    errorvec        :=  getchunk( errorsize*eb.size,          TRUE )
+    filelist        :=  getchunk( maxfile,                    TRUE )
+
+    extrnsymbols    :=  0
+    entrysymbols    :=  0
+    sourcestream    :=  0
+    liststream      :=  0
+    codestream      :=  0
+    verstream       :=  0
+    linenumber      :=  0
+    includefiles    :=  0
+    definesymbols   :=  0
+    filenumber      :=  0
+    macrobuffers    :=  0
+
+    sysout          :=  output()
+
+    failed          :=  FALSE
+    paging          :=  TRUE
+    parmlisting     :=  FALSE
+    xref            :=  FALSE
+    externalref     :=  FALSE
+    pass1           :=  FALSE
+    pass2           :=  FALSE
+    dummysection    :=  FALSE
+    pass1errors     :=  FALSE
+
+    objectmodule    :=  o.none
+    ts.default      :=  ts.word
+    headingtype     :=  h.code
+    addressmask     :=  mask.68020
+
+$<IBM370
+    IF  sysout = 0  THEN
+    $(
+        // No output stream - "SYSPRINT" was not given.
+        // Write a panic message and give up.  On the IBM/370 this
+        // is done by writing to the HASP log.  Most other systems
+        // will have some safety valve which can be used.
+
+        writetolog( "****** M68KASM:  DD for *"SYSPRINT*" missing" )
+
+        stop( rc.catastrophic )
+    $)
+
+    sourcestream  :=  findinput( "SYSIN" )
+    checkopen( sourcestream, "SYSIN" )
+
+    liststream    :=  findoutput( "LISTING" )
+    checkopen( liststream, "LISTING" )
+
+    codestream    :=  findoutput( "CODE" )
+    checkopen( codestream, "CODE" )
+
+    currentfile   :=  makefile( "SYSIN" )
+$>IBM370
+
+
+$<CAP1
+    $(  //  Do the parameter decoding for CAP.  We have to extract the
+        //  parameter string, and then add on any options which were
+        //  implied by the files given.
+
+        LET userparm     =  VEC 256/bytesperword
+        LET defaultparm  =  "  "
+        LET lparm        =  defaultparm % 0
+        LET rc           =  keyarg( "OPT", parms.string )
+
+        sourcestream  :=  findinput( "PROGRAM|1" )
+
+        IF  sourcestream = 0  THEN
+        $(
+            writes( "****** Cannot open PROGRAM source file*N" )
+
+            failed  :=  TRUE
+        $)
+
+        liststream   :=  findoutput( "LIST" )
+        codestream   :=  findoutput( "TO" )
+
+        currentfile  :=  makefile( "PROGRAM" )
+
+        //  Having attempted to open the listing and output files, we
+        //  should construct the parameter string to be decoded later.
+
+        parm  :=  getstore( 256/bytesperword )
+
+        TEST  rc = parms.ok
+            THEN  movestring( k.n0, userparm )
+            ELSE  userparm % 0  :=  0
+
+        FOR  i = 0  TO  lparm  DO  parm % i  :=  defaultparm % i
+
+        TEST  liststream = 0  THEN  liststream  :=  findoutput( "/A" )
+                              ELSE  parm % 1    :=  'L'
+
+        TEST  codestream = 0  THEN  codestream  :=  findoutput( "/A" )
+                              ELSE  parm % 2    :=  'T'
+
+        FOR  i = 1  TO  userparm % 0  DO
+        $(
+            lparm         :=  lparm + 1
+            parm % lparm  :=  userparm % i
+        $)
+
+        parm % 0  :=  lparm
+
+        IF  liststream = 0  THEN  failed  :=  TRUE
+        IF  codestream = 0  THEN  failed  :=  TRUE
+    $)
+$>CAP1
+
+
+$<TRIPOS.MINOS.PANOS
+    //  Tripos form of the argument decoding.  Like Cap, we must make
+    //  the final options string out of the one given, and the one
+    //  implied by the extra arguments.
+
+    TEST  rdargs( as, av, a.size ) = 0  THEN
+    $(
+        writes( "******  Bad arguments for string:*N" )
+        writef( "******  *"%S*"*N", as )
+
+        failed  :=  TRUE
+    $)
+    ELSE
+    $(
+        LET ns           =  av!a.from
+        LET nc           =  av!a.to
+        LET nv           =  av!a.ver
+        LET nl           =  av!a.list
+        LET np           =  av!a.prolog
+        LET nh           =  av!a.hdr
+        LET ndef         =  av!a.define
+        LET neq          =  av!a.equ
+        LET nsymb        =  av!a.symbols
+        LET opt          =  av!a.opt
+
+        LET defaultparm  =  "  "
+        LET parmlength   =  defaultparm % 0
+
+        LET uparm        =  opt = 0  ->  "", opt
+        LET uparmlength  =  uparm % 0
+
+        LET plength      =  parmlength + uparmlength
+
+        //  The following devices have different names on different systems.
+
+        LET ttydevice    =  $<TRIPOS.MINOS  "**"     $>TRIPOS.MINOS
+                            $<PANOS         "tt:"    $>PANOS
+
+        LET nulldevice   =  $<TRIPOS.MINOS  "nil:"   $>TRIPOS.MINOS
+                            $<PANOS         "null:"  $>PANOS
+
+        //  Set up the parm string as defined by the arguments which have
+        //  been given.
+
+        parm  :=  getstore( 256/bytesperword )
+
+        FOR  i = 1  TO  parmlength  DO  parm % i  :=  defaultparm % i
+
+        FOR  i = 1  TO  uparmlength  DO
+             parm % (parmlength + i)  :=  uppercase( uparm % i )
+
+        parm % 0           :=  plength
+
+        name.sourcestream  :=  ns
+        name.codestream    :=  nc = 0  ->  nulldevice, nc
+        name.verstream     :=  nv = 0  ->  ttydevice,  nv
+        name.liststream    :=  nl = 0  ->  nulldevice, nl
+        name.equstream     :=  neq
+        name.symbolstream  :=  nsymb
+        name.prologfile    :=  np
+
+        UNLESS  nh = 0    DO  includefiles   :=  nh
+        UNLESS  ndef = 0  DO  definesymbols  :=  ndef
+
+        sourcestream  :=  findinput( name.sourcestream )
+        checkopen( sourcestream, result2, name.sourcestream, "input" )
+
+        liststream  :=  findoutput( name.liststream )
+        checkopen( liststream, result2, name.liststream, "output" )
+
+        UNLESS  nl = 0  DO  parm % 1  :=  'L'
+
+$<MINOS    codestream  :=  findbinoutput( name.codestream )    $>MINOS
+$<MINOS'   codestream  :=  findoutput( name.codestream )       $>MINOS'
+
+        checkopen( codestream, result2, name.codestream, "output" )
+
+        UNLESS  nc = 0  DO  parm % 2  :=  'T'
+
+        verstream  :=  findoutput( name.verstream )
+        checkopen( verstream, result2, name.verstream, "output" )
+
+        currentfile  :=  makefile( name.sourcestream )
+    $)
+$>TRIPOS.MINOS.PANOS
+
+
+    IF  failed  THEN  abortassembly()
+
+
+    //                           Temporary Fix
+    //                           Temporary Fix
+    //                           Temporary Fix
+
+
+    UNLESS  includefiles = 0  DO
+    $(
+        //  Check for those people who are using the "HDR" option in the
+        //  old format, in other words as a "prolog" file.
+
+        LET oldstyle  =  TRUE
+        
+        FOR  i = 1  TO  includefiles % 0  DO
+        $(
+            LET ch  =  includefiles % i
+            
+            //  Check for one of the "special" characeters which mean that
+            //  this option is being used properly.
+            
+            IF  ch = '='  |  ch = ','  THEN
+            $(
+                oldstyle  :=  FALSE
+                
+                BREAK
+            $)
+        $)
+        
+        IF  oldstyle  THEN
+        $(
+            //  "HDR" is being used in the wrong context, so we should alter
+            //  its meaning to be "PROLOG" instead, as this is almost certainly
+            //  what the user actually intended.
+
+            writes( "******  The *"HDR*" option has changed its meaning.*N*
+                    *******  This option is now available as *"PROLOG*" instead.*N*N" )
+
+            name.prologfile  :=  includefiles
+            includefiles     :=  0
+        $)
+    $)
+
+    //                       End of Temporary Fix
+    //                       End of Temporary Fix
+    //                       End of Temporary Fix
+
+
+    //  Decode the parm string.  Parameters have the following meaning:
+    //
+    //  X          -    Produce an Alphabetic Cross Reference
+    //  L          -    Produce an Assembler Listing
+    //  T          -    Produce a  TRIPOS     object module
+    //  M          -    Produce a  MOTOROLA   object module
+    //  H          -    Produce an INTEL HEX  object module
+    //  P          -    Report pass one errors
+    //  A          -    Force restricted (24 bit) addressing
+    //  B          -    Force restricted (28 bit) addressing
+
+    FOR  i = 1  TO  parm % 0  DO
+    $(
+        SWITCHON  uppercase( parm % i )   INTO
+        $(
+            CASE 'X'  :  xref          :=  TRUE           ;  LOOP
+            CASE 'L'  :  parmlisting   :=  TRUE           ;  LOOP
+            CASE 'T'  :  objectmodule  :=  o.tripos       ;  LOOP
+            CASE 'M'  :  objectmodule  :=  o.motorola     ;  LOOP
+            CASE 'H'  :  objectmodule  :=  o.intelhex     ;  LOOP
+            CASE 'P'  :  pass1errors   :=  TRUE           ;  LOOP
+            CASE 'A'  :  addressmask   :=  mask.68000     ;  LOOP
+            CASE 'B'  :  addressmask   :=  mask.68010     ;  LOOP
+
+
+            CASE '*S' :
+            CASE ','  :  LOOP
+
+
+            DEFAULT   :  writef( "******  Option *"%C*" ignored*N", parm % i )
+        $)
+    $)
+
+    //  Now, set up the tag tables.  There are two, one for each class of
+    //  symbol.
+
+    tagtable1  :=  getchunk( tagtablesize, TRUE )
+    tagtable2  :=  getchunk( tagtablesize, TRUE )
+
+    FOR  i = 0  TO  tagtablesize-1  DO
+    $(
+        tagtable1!i  :=  0
+        tagtable2!i  :=  0
+    $)
+
+$<TRIPOS.MINOS.PANOS
+    sysout  :=  verstream
+$>TRIPOS.MINOS.PANOS
+
+    selectoutput( sysout )
+
+    writef( "MC68020 Macro Assembler  Version %N.%N", version, release )
+
+$<IBM370
+    UNLESS  parm % 0  =  0  DO  writef( "  Opt = *"%S*"", parm )
+$>IBM370
+
+    newline()
+
+    systemwords  :=  TRUE
+    declsyswords()
+    systemwords  :=  FALSE
+
+    selectoutput( liststream )
+    selectinput( sourcestream )
+
+    firstpass()
+
+    selectoutput( sysout )
+    newline()                             //  Mark end of first pass
+    selectoutput( liststream )
+
+    secondpass( name.sourcestream )
+
+    UNLESS  noobj  DO
+            TEST  objectmodule = o.tripos      THEN  triposmodule()       ELSE
+            TEST  objectmodule = o.motorola    THEN  motorolamodule()     ELSE
+            TEST  objectmodule = o.intelhex    THEN  intelhexmodule()     ELSE
+
+                  UNLESS  objectmodule = o.none  DO  complain( 0 )
+
+    //  We now terminate the run by printing out all the relevant information
+    //  about the run.  For this, we should set "listing" to be TRUE, and then
+    //  rely on "parmlisting" to tell us whether to produce output.
+
+    listing  :=  TRUE
+
+    IF  parmlisting  THEN
+    $(
+        //  Print out the error messages
+
+        printerrors()
+
+        //  And, if necessary, a cross reference listing
+
+        IF  xref  THEN  printxreftable()
+    $)
+
+    selectoutput( sysout )
+
+    //  Now print the equates file if we have been asked to do so.  We look
+    //  to see if the DDname or keyword EQU has been given, and if so, we
+    //  print out the equates file.
+
+$<IBM370.CAP1
+    printequates( findoutput( "EQU" ), "EQU" )
+$>IBM370.CAP1
+
+$<TRIPOS.MINOS.PANOS
+    UNLESS  name.equstream = 0  DO
+    $(
+        LET stream  =  findoutput( name.equstream )
+
+        checkopen( stream, result2, name.equstream, "output" )
+
+        IF  failed  THEN  abortassembly()
+
+        printequates( stream, name.sourcestream )
+    $)
+$>TRIPOS.MINOS.PANOS
+
+$<IBM370.CAP1
+    dumpsymbols( findoutput( "SYMBOLS" ), "SYMBOLS" )
+$>IBM370.CAP1
+
+$<TRIPOS.MINOS.PANOS
+    UNLESS  name.symbolstream = 0  DO
+    $(
+        LET stream  =  findoutput( name.symbolstream )
+
+        checkopen( stream, result2, name.symbolstream, "output" )
+
+        IF  failed  THEN  abortassembly()
+
+        dumpsymbols( stream, name.sourcestream )
+    $)
+$>TRIPOS.MINOS.PANOS
+
+    //  Now, print out the statistics associated with the assembly.
+    //  This is the last thing we have to do before we can push off home!
+
+    TEST  errors = 0  THEN  writes( "No " )
+                      ELSE  writef( "%N ", errors )
+
+    writef( "error%S found in this assembly*N", errors = 1  ->  "", "s" )
+
+    writes( "*NAssembly statistics (32 bit words)*N*N*
+             *         Absolute   Relocatable*N" )
+
+    writef( "Code        %I5         %I5*N", (absmax-absmin)/bytesper68000word,
+                                                    (relmax)/bytesper68000word )
+
+    writef( "Reloc [16]  %I5         %I5*N", absrp16, relrp16  )
+    writef( "      [32]  %I5         %I5*N", absrp32, relrp32 )
+
+label:
+
+    IF  aborted  THEN  writes( "*N*N******  Assembly Aborted*N" )
+
+    uninitstore()
+
+    writef( "*N%N out of %N words of workspace used*N",
+             storage.wordsused, storage.totalwords )
+
+    selectoutput( liststream )    ;   endwrite()
+    selectoutput( codestream )    ;   endwrite()
+    selectoutput( sysout )        ;   endwrite()
+
+    selectinput( sourcestream )   ;   endread()
+
+    stop( aborted  ->  rc.aborted, errors > 0  ->  rc.errors, 0 )
+$)
+
+
+
+AND printerrors()  BE
+$(
+//  Print out the error messages for the program we have just assembled.
+
+    clearbuffer()
+
+    spacelines( 3 )
+
+    listed   :=  FALSE
+    linepos  :=  0
+
+    //  If there are no errors to print, then say so and return without
+    //  further ado.
+
+    IF  errors = 0  THEN
+    $(
+        writestring( "No errors found in this assembly" )
+        printbuffer()
+
+        RETURN
+    $)
+
+    //  If we have aborted for some reason, then say so.
+
+    IF  aborted  THEN
+    $(
+        writestring( "Fatal error  -  assembly aborted" )
+        printbuffer()
+    $)
+
+    headingtype  :=  h.errors
+    onpage       :=  0
+
+    settitle( "ERROR-DIAGNOSTICS" )
+
+    FOR  i = 0  TO  errors-1  DO
+    $(
+        LET offset  =  i*eb.size
+        LET line    =  errorvec!(offset + eb.line)
+        LET code    =  errorvec!(offset + eb.code)
+        LET file    =  errorvec!(offset + eb.file)
+
+        clearbuffer()
+
+        linepos  :=  0
+        writestring( filelist!file )
+
+        linepos  :=  54
+        writenumber( line, 5 )
+
+        linepos  :=  63
+        writestring( message( code ) )
+
+        printbuffer()
+    $)
+
+    clearbuffer()
+
+    spacelines( 3 )
+
+    listed   :=  FALSE
+    linepos  :=  0
+
+    writenumber( errors, 4 )
+    writestring( " error" )
+
+    UNLESS  errors = 1  DO  writechar( 's' )
+
+    writestring( " found in this assembly" )
+
+    printbuffer()
+$)
+
+
+
+
+$<IBM370
+AND checkopen( stream, DDname )  BE  IF  stream = 0  THEN
+$(
+    writef( "****** Cannot Open DDname *"%S*"*N", DDname )
+
+    failed  :=  TRUE
+$)
+$>IBM370
+
+
+
+$<TRIPOS.MINOS.PANOS
+AND checkopen( stream, r2, name, type )  BE  IF  stream = 0  THEN
+$(
+//  Called after a findinput or findoutput, we must check to
+//  see that the stream specified has been opened properly.
+
+    writef( "****** Cannot open %S for %S:  ", name, type )
+
+$<TRIPOS       fault( r2 )                        $>TRIPOS
+$<MINOS.PANOS  fault.message( r2 )  ;  newline()  $>MINOS.PANOS
+
+    failed  :=  TRUE
+$)
+$>TRIPOS.MINOS.PANOS
+
+
+
+$<IBM370
+AND abort( code, address, oldstack, data )  BE
+$(
+    LET scc  =  (code >> 12) & #XFFF
+    LET ucc  =  (code)       & #XFFF
+    LET ssp  =  findoutput( "SYSPRINT" )
+
+    IF  ssp = 0  THEN
+    $(
+        LET log  =  findlog()
+
+        IF  log = 0  THEN
+        $(
+            writetolog( "****** M68KASM:  Cannot open SYSPRINT" )
+            stop( rc.catastrophic )
+        $)
+
+        selectoutput( log )
+
+        writef( "****** M68KASM Abend at :%X6 SCC=%X3 UCC=%X3*N",
+                 address, scc, ucc )
+
+        stop( 100 )
+    $)
+
+    selectoutput( ssp )
+
+    //  Post mortem dump for M68KASM on the IBM370.  Print out the
+    //  values of certain variables, and if the error code looked
+    //  important, ask the users to see IDW.
+
+    writef( "*N*NM68KASM Error at address :%X6 on %S at %S*N*N",
+             address, date(), timeofday() )
+
+    //  Look to see if the abend is something like 083, E37, 013,
+    //  084, 0D1, 80A and if so, explain it.
+
+    TEST  scc = #X083  |  scc = #XE37  |  scc = #X013  |
+          scc = #X084  |  scc = #X0D1  |  scc = #X80A  THEN
+    $(
+        writef( "System completion code %X3:  ", scc )
+        writes( scc = #X083  ->  "CPU time limit exceeded",
+                scc = #X0D1  ->  "CPU time limit exceeded",
+                scc = #XE37  ->  "Cannot extend output file",
+                scc = #X013  ->  "Cannot open PDS member",
+                scc = #X80A  ->  "Insufficient IOSPACE",
+                scc = #X084  ->  "Printer limit exceeded", "" )
+
+        writes( "*N*N" )
+        stop( rc.catastrophic )
+    $)
+
+    ELSE
+    $(
+        //  The result is more serious, and we must continue with
+        //  the entire mapstore.  Print out a message, so that the
+        //  output will be send to someone who understands it.
+
+        writef( "Fatal Abend:   SCC = %X3   UCC = %N*N*N",
+                 scc, ucc )
+
+        writef( "Abend occurred on line %N in pass %n",
+                 linenumber, (pass1  ->  1, (pass2  ->  2, 0)) )
+
+        IF  getlevel   > 0  THEN  writes( ", in GET file" )
+        IF  macrodepth > 0  THEN  writes( ", in MACRO expn." )
+        IF  inmacro         THEN  writes( ", in MACRO defn." )
+        IF  skiplevel  > 0  THEN  writes( ", in Cond. Assembly")
+        IF  skipping        THEN  writes( ", whilst skipping" )
+
+        writef( ".*N%S code type at location %X6.",
+                 locmode = s.rel  ->  "Relocatable", "Absolute",
+                 location )
+
+        writef( "*NError %Sfound,  Errors = %N,  %SAborted",
+                 error.found  ->  "", "not ", errors,
+                 aborted      ->  "", "Not " )
+
+        writef( "*NEA:  Mode = %X4  Type = %I3  Exp = %X8",
+                 op.ea, exptype, exp )
+
+        writef( "*NEA': Mode = %X4  Type = %I3  Exp = %X8",
+                 op1.ea, op1.exptype, op1.exp )
+
+        writes( "*N*N" )
+
+        FOR  i = 1  TO  5  DO
+             writes( "########  Please report this error*N" )
+
+        writes( "*N*N" )
+    $)
+
+    TEST  oldstack = !(@code-2)  THEN  backtrace()
+    ELSE  writes( "*N*NStack Pointer Corrupted.*N*N" )
+
+    mapstore()
+    stop( rc.catastrophic )
+$)
+$>IBM370
+
+
+
+AND abortassembly()  BE
+$(
+//  This routine is called on some sort of error, usually when we run out of
+//  store.  Close down the streams which have been opened, and free any store
+//  which has been allocated.  Then stop, without futher ado.
+
+    UNLESS  sourcestream = 0  DO
+    $(
+        selectinput( sourcestream )
+        endread()
+    $)
+
+    UNLESS  liststream = 0  DO
+    $(
+        selectoutput( liststream )
+        endwrite()
+    $)
+
+    UNLESS  codestream = 0  DO
+    $(
+        selectoutput( codestream )
+        endwrite()
+    $)
+
+$<TRIPOS.MINOS.PANOS
+    UNLESS  verstream = 0  DO
+    $(
+        selectoutput( verstream )
+        endwrite()
+    $)
+$>TRIPOS.MINOS.PANOS
+
+    uninitstore()
+
+    stop( rc.catastrophic )
+$)
+
+
+
+AND firstpass()  BE
+$(
+//  Perform the first pass of the assembly.
+
+    relmin          :=  maxint
+    relmax          :=  minint
+    absmin          :=  maxint
+    absmax          :=  minint
+
+    absrp16         :=  0
+    absrp32         :=  0
+    relrp16         :=  0
+    relrp32         :=  0
+    absloc          :=  0
+    relloc          :=  0
+
+    locmode         :=  s.rel
+    relp16          :=  relrp16
+    relp32          :=  relrp32
+    minloc          :=  relmin
+    maxloc          :=  relmax
+    location        :=  0
+
+    dummysection    :=  FALSE
+    dummyminloc     :=  absmin
+    dummymaxloc     :=  absmax
+    dummylocation   :=  0
+
+    errors          :=  0
+    skiplevel       :=  0
+    skipping        :=  0
+    macrodepth      :=  0
+    getlevel        :=  0
+    macrobase       :=  0
+    macroend        :=  0
+    asmlabel        :=  0
+    pass1           :=  TRUE
+    pass2           :=  FALSE
+    inmacro         :=  FALSE
+    forwardreftype  :=  s.abs16
+    charpos         :=  1
+    ended           :=  FALSE
+    aborted         :=  FALSE
+    noobj           :=  objectmodule = o.none
+    listing         :=  parmlisting
+    filenumber      :=  currentfile
+
+    settitle( "" )
+
+    length          :=  -1
+    charpos         :=  0
+    linepos         :=  0
+    onpage          :=  0
+    linenumber      :=  0
+    pagenumber      :=  0
+    linesperpage    :=  60
+    charsperline    :=  132
+    llenfixed       :=  FALSE
+    plenfixed       :=  FALSE
+
+    selectinput( sourcestream )
+
+$<RECORDIO
+    setwindow( maxllen )
+$>RECORDIO
+
+    //  If the GET input stream is present, then we must do an
+    //  implicit "GET" of this file before the rest of the program
+    //  is dealt with.
+
+    resetflags()
+
+    UNLESS  definesymbols = 0  DO  define( definesymbols )
+
+    listed  :=  TRUE
+
+$<IBM370
+    doget( "PROLOG" )
+$>IBM370
+
+$<CAP1
+    doget( "PROLOG" )
+$>CAP1
+
+$<TRIPOS.MINOS.PANOS
+    UNLESS  name.prologfile = 0  DO
+        UNLESS  doget( name.prologfile )  DO
+            error( 128 )
+$>TRIPOS.MINOS.PANOS
+
+    listed  :=  FALSE
+
+    //  Fasten your safety belts...
+
+    UNTIL  ended | aborted  DO
+    $(
+        resetflags()
+
+        doline()
+    $)
+
+    //  Reset the minimum and maximum locations, if we ended in a dummy
+    //  section.
+
+    IF  dummysection  THEN
+    $(
+        minloc    :=  dummyminloc
+        maxloc    :=  dummymaxloc
+
+        location  :=  dummylocation
+    $)
+
+    //  Force the saving of final location values.
+
+    IF  absmin = maxint   THEN  absmin  :=  0
+    IF  relmin = maxint   THEN  relmin  :=  0
+    IF  absmax = minint   THEN  absmax  :=  0
+    IF  relmax = minint   THEN  relmax  :=  0
+
+    IF  minloc = maxint   THEN  minloc  :=  0
+    IF  maxloc = minint   THEN  maxloc  :=  0
+
+    //  Align the code buffers to word boundaries
+
+    changemode( s.rel ) ; align( bytesper68000word )
+    changemode( s.abs ) ; align( bytesper68000word )
+    changemode( s.rel )
+
+    absmin  :=  absmin - (absmin REM bytesper68000word )
+$)
+
+
+
+AND secondpass( name.sourcestream )  BE
+$(
+//  Allocate the store required for the assembled code.  All the absolute and
+//  relocatable extreme values have already been rounded up or down.
+
+    LET avec  =  getchunk( (absmax - absmin)/bytesperword, TRUE )
+
+    absvec     :=  avec - absmin/bytesperword
+
+    absrvec16  :=  getchunk( absrp16, TRUE )
+    absrvec32  :=  getchunk( absrp32, TRUE )
+    relvec     :=  getchunk( relmax/bytesperword, TRUE )
+    relrvec16  :=  getchunk( relrp16, TRUE )
+    relrvec32  :=  getchunk( relrp32, TRUE )
+
+    //  Clear the code buffers (Tripos SYSLINK depends on this)
+
+    FOR  i = absmin  TO  absmax-1  DO  absvec % i  :=  0
+    FOR  i = relmin  TO  relmax-1  DO  relvec % i  :=  0
+
+    relmin          :=  maxint
+    relmax          :=  0
+    absmin          :=  maxint
+    absmax          :=  0
+
+    absrp16         :=  0
+    absrp32         :=  0
+    relrp16         :=  0
+    relrp32         :=  0
+    absloc          :=  0
+    relloc          :=  0
+
+    locmode         :=  s.rel
+    codevec         :=  relvec
+    relocvec16      :=  relrvec16
+    relocvec32      :=  relrvec32
+    relp16          :=  relrp16
+    relp32          :=  relrp32
+
+    minloc          :=  relmin
+    maxloc          :=  relmax
+    location        :=  0
+
+    dummysection    :=  FALSE
+    dummyminloc     :=  absmin
+    dummymaxloc     :=  absmax
+    dummylocation   :=  0
+
+    ended           :=  FALSE
+    aborted         :=  FALSE
+    errors          :=  0
+    skiplevel       :=  0
+    skipping        :=  0
+    macrodepth      :=  0
+    getlevel        :=  0
+    macrobase       :=  0
+    macroend        :=  0
+    asmlabel        :=  0
+    pass1           :=  FALSE
+    pass2           :=  TRUE
+    inmacro         :=  FALSE
+    forwardreftype  :=  s.abs16
+    noobj           :=  objectmodule  =  o.none
+    listing         :=  parmlisting
+    filenumber      :=  currentfile
+
+    clearbits()
+
+    settitle( "" )
+
+    length          :=  -1
+    charpos         :=  0
+    linepos         :=  0
+    onpage          :=  0
+    linenumber      :=  0
+    pagenumber      :=  0
+    llenfixed       :=  FALSE
+    plenfixed       :=  FALSE
+
+    // Rewind the input stream and start again from the beginning.
+
+    UNLESS  rewind( name.sourcestream )  DO
+    $(
+        selectoutput( sysout )
+
+        writes( "****** Unable to rewind input stream*N" )
+
+        abortassembly()
+    $)
+
+$<RECORDIO
+    setwindow( maxllen )
+$>RECORDIO
+
+    //  If the GET input stream is present, then we must do an
+    //  implicit "GET" of this file before the rest of the program
+    //  is dealt with.
+
+    resetflags()
+
+    UNLESS  definesymbols = 0  DO  define( definesymbols )
+
+    listed  :=  TRUE
+
+$<IBM370
+    doget( "PROLOG" )
+$>IBM370
+
+$<CAP1
+    doget( "PROLOG" )
+$>CAP1
+
+$<TRIPOS.MINOS.PANOS
+    UNLESS  name.prologfile = 0  DO
+        UNLESS  doget( name.prologfile )  DO
+            error( 128 )
+$>TRIPOS.MINOS.PANOS
+
+    listed  :=  FALSE
+
+    UNTIL  ended | aborted  DO
+    $(
+        resetflags()
+
+        doline()
+    $)
+
+    UNLESS  skipping = 0  DO  warning( 103 )
+
+    IF  inmacro  THEN  warning( 113 )
+
+    //  Reset the minimum and maximum locations, if we ended in a dummy
+    //  section.
+
+    IF  dummysection  THEN
+    $(
+        minloc    :=  dummyminloc
+        maxloc    :=  dummymaxloc
+
+        location  :=  dummylocation
+    $)
+
+    IF  relmin = maxint  THEN  relmin  :=  0
+    IF  absmin = maxint  THEN  absmin  :=  0
+    IF  minloc = maxint  THEN  minloc  :=  0
+
+    //  Align the code buffers to word boundaries
+
+    changemode( s.rel ) ; align( bytesper68000word )
+    changemode( s.abs ) ; align( bytesper68000word )
+    changemode( s.rel )
+
+    absmin  :=  absmin - (absmin REM bytesper68000word )
+$)
+
+
+
+AND define( string )  BE
+$(
+//  Given a string containing a series of symbols (separated by commas)
+//  initialise them to have the value "0".
+
+    LET length  =  0
+
+    FOR  i = 1  TO  string % 0  DO
+    $(
+        LET ch  =  string % i
+
+        TEST  ch = ','  THEN
+
+            //  This is a separator, so we should fill in the symbol length
+            //  and initialise the symbol.
+
+            UNLESS  length = 0  DO
+            $(
+                labelvec % 0  :=  length
+
+                setlabel( s.abs, 0, FALSE )
+
+                length  :=  0
+            $)
+
+        ELSE
+
+            //  Not a separator, so this must be a symbol character.  Unless
+            //  we have reached the maximum tag length, add this character
+            //  to the tag vector.
+
+            UNLESS  length = tagchars  DO
+            $(
+                length             :=  length + 1
+                labelvec % length  :=  uppercase( ch )
+            $)
+    $)
+
+    //  When we come out of that, we should set the final symbol value
+    //  in the list.
+
+    UNLESS  length = 0  DO
+    $(
+        labelvec % 0  :=  length
+
+        setlabel( s.abs, 0, FALSE )
+    $)
+$)
+
+
+
+$<TRIPOS.MINOS.PANOS
+AND rewind( name.sourcestream )  =  VALOF
+$(
+//  Dummy "rewind" routine, which simply re-opens the main input stream.
+
+    endread()
+
+    sourcestream  :=  findinput( name.sourcestream )
+
+    selectinput( sourcestream )
+
+    RESULTIS  sourcestream  \=  0
+$)
+$>TRIPOS.MINOS.PANOS
+
+

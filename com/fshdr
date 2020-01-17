@@ -1,0 +1,107 @@
+//  FSHDR.
+//  ======
+//
+//  Header file for linking "FSLIB"
+//  BJK & IDW   -   17/11/81
+
+
+MANIFEST
+    $(
+    // Fileserver operation codes
+
+    fs.op.ci            =  0  // Create index
+    fs.op.retrieve      =  1  // Retrieve
+    fs.op.retain        =  2  // Retain
+    fs.op.delete        =  3  // Delete
+    fs.op.ris           =  4  // Read Index Size
+    fs.op.cis           =  5  // Change Index Size
+    fs.op.createfile    =  6  // Create File
+    fs.op.read          =  21 // Read
+    fs.op.write         =  22  // Write
+    fs.op.rfs           =  9  // Read file size
+    fs.op.cfs           = 10  // Change File Size
+    fs.op.open          = 11  // Open
+    fs.op.ensure        = 12  // Ensure
+    fs.op.close         = 13  // Close
+    fs.op.explain       = 14  // Explain
+
+    fs.op.ssp.read      = 16  // Single Shot Read
+    fs.op.ssp.write     = 17  // Single Shot Write
+    fs.op.status        = 18  // Status
+    fs.op.rfhwm         = 20  // Read file high water mark
+
+    // Offsets in ring basic blocks sent to/received from the fileserver
+
+    fsbb.tag            = 3
+    fsbb.args           = 4
+    fsbb.arg1           = 4
+    fsbb.arg2           = 5
+
+    bytesperringword            = 2 // 16-bit ring
+    max.ssp.transfer.bytes      = 256*bytesperringword // For SSP read and write
+
+
+    uninitialized.file.value    = #XFFFF  // Uninitialized regions of files
+
+    max.tx.tries        = 30  // Max attempts at ring transmission
+
+    bytesize.uid        = 8 // Bytes in TUID or PUID
+    wordupb.uid         = 3 // Upb when uid stored 16 bits per word
+    wordsize.uid        = wordupb.uid + 1
+
+    lock.wait.time      = tickspersecond    // Retry period for getting a lock
+    max.lock.tries      = 5                 // Attempts at FS OPEN
+    fs.wait.time        = tickspersecond*4  // Timeout on FS replies
+
+
+    fs.rc.base          = 2000  // Conversion from FS to TRIPOS RCs
+
+    // Sizes of replies to fileserver commands in dibytes
+
+    retrieve.reply.size = fsbb.args + 4
+    read.reply.size     = fsbb.args + 2
+    read.req.size       = fsbb.args + 8
+    write.reply.size    = fsbb.args + 2 // Bigger of the two replies
+    write.req.size      = fsbb.args + 8
+    open.reply.size     = fsbb.args + 4
+    createfile.reply.size = fsbb.args + 4
+    hwm.reply.size      = fsbb.args + 2
+    close.reply.size    = fsbb.args
+    delete.reply.size   = fsbb.args
+    ex.reply.size       = fsbb.args + 50/bytesperword
+    tx.buff.upb         = fsbb.args + 10 // Largest command
+    $)
+
+
+GLOBAL
+    $(
+    rhtaskid                     : ug +  0  // Task ID of Ring Handler
+    fs.mc.id                     : ug +  1  // Fileserver machine number
+    fs.comm.port                 : ug +  2  // Fileserver command.port
+    fileserver.deaf              : ug +  3
+    fileserver.really.deaf       : ug +  4
+    global.tag                   : ug +  5  // Tag for FS commands
+
+    fslib.initialize             : ug +  6
+    fs.retrieve                  : ug +  7
+    fs.ensure                    : ug +  8
+    fs.retain                    : ug +  9
+    fs.create.index              : ug + 10
+    fs.open                      : ug + 11
+    fs.close                     : ug + 12
+    fs.read                      : ug + 13
+    fs.write                     : ug + 14
+    fs.create.file               : ug + 15
+    fs.delete                    : ug + 16
+    fs.read.file.size            : ug + 17
+    fs.read.file.hwm             : ug + 18
+    fs.read.index.size           : ug + 19
+    $)
+
+MANIFEST
+$(
+    fs.ug                        =  ug
+    ug                           =  fs.ug + 20
+$)
+
+

@@ -1,0 +1,84 @@
+MANIFEST
+$( TERM.GLOBAL          = 157   // On all NORMAL console tasks
+   ACT.SET.TERMVEC      = 805
+   ACT.READ.TERMVEC     = 806
+
+// GET "BCPL.readtermvec"
+// LET termvec = readtermvec()
+// IF termvec=0
+// THEN TEST RESULT2=0
+//      THEN <unset term info>
+//      ELSE <unable to find term info>
+// yields a pointer to a vector, with offsets:
+
+   TERM.NUMBER  = 0
+   TERM.STRING  = TERM.NUMBER   +1
+   TERM.WIDTH   = TERM.STRING   +1
+   TERM.DEPTH   = TERM.WIDTH    +1
+   TERM.CHAIN   = TERM.DEPTH    +1
+   TERM.VEC.SIZE= TERM.DEPTH    +2              // For expantion:
+        // If TERM.VEC.SIZE changes from SIX (6) Then recompile:
+        // :com.bcp.setterm             to :c.setterm
+        //
+
+// Where TERM!TERM.NUMBER is one of
+   TERM.MIN     =       -2
+   TERM.INVALID = TERM.MIN      -1
+   TERM.UNSET   = TERM.INVALID  -1
+
+   TERM.TTY     = TERM.MIN
+   TERM.VDU     = TERM.TTY      +1
+   TERM.7009    = TERM.VDU      +1
+   TERM.7004    = TERM.7009     +1
+   TERM.2605    = TERM.7004     +1
+   TERM.2632    = TERM.2605     +1
+   TERM.AMPEX   = TERM.2632     +1
+   TERM.ADM     = TERM.AMPEX    +1
+   TERM.3101    = TERM.ADM      +1
+   TERM.VT100   = TERM.3101     +1
+   TERM.VT52    = TERM.VT100    +1
+   TERM.VT55    = TERM.VT52     +1
+   TERM.GT101   = TERM.VT55     +1
+   TERM.LYME    = TERM.GT101    +1
+   TERM.CMC     = TERM.LYME     +1
+   TERM.HAZEL   = TERM.CMC      +1
+   TERM.5670    = TERM.HAZEL    +1
+   TERM.MELLOR  = TERM.5670     +1
+   TERM.5680    = TERM.MELLOR   +1
+   TERM.TEST    = TERM.5680     +1
+   TERM.BBC     = TERM.TEST     +1
+   TERM.BBC32   = TERM.BBC      +1
+   TERM.DECIV   = TERM.BBC32    +1
+   TERM.DECVT125= TERM.DECIV    +1
+   TERM.MAX     = TERM.DECVT125
+   TERM.MIN.CURSOR = TERM.7009
+
+
+// And TERM!TERM.STRING points to a string, WHOSE LENGTH MUST BE AT LEAST
+   TERM.MIN.STRING=7
+
+
+// And TERM!TERM.DEPTH may be 0 (unset), the depth of the screen, or
+   TERM.DEPTH.LARGE=MAXINT-1
+
+
+// And TERM!CHAIN is a CHAIN (i.e. can be UNLOADSEGed) of device dependant junk
+//
+// They are keyed fields, ALL listed below
+//
+   TERM.CHAIN.CHAIN     = 0
+   TERM.CHAIN.TYPE      = TERM.CHAIN.CHAIN + 1
+
+      // Term.chain.type may be one of
+      TERM.CHAIN.IGNORE = 0     // This is NOT an entry, but is put here to
+                                // allow UNLOADSEG to clean up!
+
+      TERM.CHAIN.FKEYS  = 1     // This is a TABLE of the function keys
+        TERM.CHAIN.FKEYS.Number = TERM.CHAIN.TYPE+1     // This is the number
+        TERM.CHAIN.FKEYS.First  = TERM.CHAIN.FKEYS.Number+1 // This is the start
+                TERM.CHAIN.FKEYS.NUMBER.2632 = 4        // Got 4 keys
+
+      TERM.CHAIN.INIT   = 2     // This is the init string
+$)
+
+

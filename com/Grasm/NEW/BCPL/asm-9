@@ -1,0 +1,673 @@
+
+
+
+
+
+
+
+SECTION "asm9"
+
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+
+
+
+//
+//                Command  Line  &  Machine  Dependent  Parts
+//
+
+
+
+
+
+
+
+LET startasm(version) = "Undefined assembler section"
+//  This procedure is to be redefined in the user's part of the assembler.
+//  The 'version' given is a number in the thousands.  The number of thousands
+//  must match the number of thousands of the version of the general assembler
+//  that a specific assembler was written under since changing this number
+//  indicates a non compatible change in the interface.
+//  Compatible changes iterate through the lower orders of the number.
+//  If the version is found to be incompatible a string should be returned
+//  giving the version of the assembler that was expected -- otherwise zero
+//  should be returned.
+
+
+
+
+
+LET endasm() BE RETURN
+
+
+
+LET useropt(ch) = FALSE            // for redefinition
+
+
+LET decodeopt(s) = VALOF
+$(  LET error=FALSE
+    LET temp = ?
+    // defaults for options have already been set up
+    UNLESS s=null DO FOR p=1 TO s%0 DO
+    $(  TEST useropt(s%p) THEN LOOP ELSE
+        SWITCHON capitalch(s%p) INTO
+        $(  CASE 'P':
+              /* include page throws in output */
+              throws:=TRUE
+              LOOP
+            CASE 'C':
+              /* compress output listing */
+              short:=TRUE
+              LOOP
+            CASE 'W':
+              /* page width (default is 76 chars) */
+              temp := @pw
+              ENDCASE
+            CASE 'H':
+              /* width of relocatable binary output (default 16 words) */
+              temp := @hexoutwidth
+              ENDCASE
+            CASE 'S':
+              /* amount of store available for label dictionary */
+              temp := @memsize
+              ENDCASE
+            CASE 'L':
+              /* depth of 'list 1' directives or getfiles to ignore */
+              temp := @list
+              ENDCASE
+            CASE 'F':
+              /* Set the maximum number of header files allowed */
+              temp := @max.files
+              ENDCASE
+            CASE 'A':
+              /* For All symbols to be printed in the dictionary */
+              allsyms:=TRUE
+            CASE ',': CASE '/': CASE '*S':
+              LOOP
+            DEFAULT:
+              writef("Unknown option - *'%C*'*N",s%p)
+              error:=TRUE
+              LOOP
+          $)
+          // read in a number and put it in the location
+          // indicated by temp:
+          $(  LET flag = TRUE
+              !temp := 0
+              $(rpt
+                  p := p+1
+                  UNLESS p>s%0 DO SWITCHON s%p INTO
+                  $(  CASE '1': CASE '2': CASE '3': CASE '4': CASE '5':
+                      CASE '6': CASE '7': CASE '8': CASE '9': CASE '0':
+                        !temp := 10*!temp + s%p - '0'
+                        flag  := FALSE
+                        LOOP
+                      CASE '*S': IF flag LOOP
+                  $)
+                  IF FLAG DO !temp := -1
+                  BREAK
+              $)rpt REPEAT
+              p := p-1
+          $)
+      $)
+    IF list<0 DO list := 1
+    hexoutwidth:=hexoutwidth/bytesperasmword
+    error:=error | memsize<0 | pw<50 | \1<=hexoutwidth<=32 | max.files<=1
+    RESULTIS error
+$)
+
+
+
+
+
+//*<TRIPOS
+MANIFEST
+$(  bad.rc = 20
+    startargsize = 100/bytesperword
+$)
+LET getargs(startarg) = VALOF
+$(  LET vect = getvec(startargsize)
+    IF vect\=0 THEN
+    TEST 0=rdargs("Prog=From/a,To=Hex,List,Opt/k",vect, startargsize) THEN
+    $(  freevec(vect)
+        vect := 0
+    $) ELSE
+    IF vect!2~=0 THEN
+    $(  // presume that options should be set up as for a listing:
+        pw := 136         // page width for printer
+        list := 1         // list one level by default
+    $)
+    RESULTIS vect
+$)
+LET findasmin(file.name) = VALOF
+$(  LET rc=findinput(file.name)
+    LET r2=result2
+    IF rc=0 THEN
+    $(  writef("Can't open '%S': ",file.name)
+        fault(r2)
+    $)
+    RESULTIS rc
+$)
+LET findgetin(file.name) = VALOF
+$(  LET ans=findinput(file.name)
+    LET prefix="SYS:Ring."
+    IF ans=0 & prefix%0+name%0<40 THEN
+    $(  LET dir=VEC 20
+        LET savedir=currentdir
+        LET newdir=?
+        FOR i=1 TO prefix%0 DO dir%i:=prefix%i
+        FOR i=1 TO name%0 DO dir%(prefix%0+i):=name%i
+        dir%0 := prefix%0+name%0
+        newdir:=locatedir(dir)
+        UNLESS newdir=0 THEN
+        $(  currentdir:=newdir
+            ans:=findinput(file.name)
+            UNLESS newdir=savedir THEN freeobj(newdir)
+            currentdir:=savedir
+        $)
+    $)
+    RESULTIS ans
+$)
+LET get.time(vect, n) = VALOF
+$(  LET v = TABLE  0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0
+    LET tim=v+5
+    LET dat=v
+    LET ans=vect
+    STATIC $( got.dat = FALSE $)
+    UNLESS got.dat THEN datstring(v)
+    TEST n*2<=1+tim%0+dat%0 THEN ans:="" ELSE
+    $(  FOR i=1 TO tim%0 DO vect%i:=tim%i
+        vect%(tim%0+1):='*S'
+        FOR i=1 TO dat%0 DO vect%(tim%0+i+1):=dat%i
+        vect%0:=dat%0+tim%0+1
+        got.dat := TRUE
+    $)
+    RESULTIS ans
+$)
+/*TRIPOS>*/
+
+
+/*<RSX
+MANIFEST
+$(  bad.rc = 100
+    startargsize = 250
+$)
+LET getargs(startarg) = VALOF
+$(  STATIC
+    $(  rsxgetvec=0
+    $)
+    LET standardisedgetvec(size) = VALOF
+    $(  LET rc=rsxgetvec(size)
+        IF rc<0 DO RESULTIS 0
+        RESULTIS rc
+    $)
+    LET ftstr=".HEX/.LST/.???"
+    LET cmlstr="???"
+    LET rc=0
+    LET vect = ?
+    rsxgetvec := getvec   // This code will only be executed once
+    getvec := standardisedgetvec
+    vect := getvec(startargsize)
+    UNLESS vect=0 THEN
+    $(  FOR i=1 TO 3 DO ftstr%(11+i),cmlstr%i:=name%i,name%i
+        selectinput(findcml(cmlstr))
+        rc:=findtitles(2, vect, ftstr)
+        endread()
+        selectinput(sysin)   // we need all the space we can get!!
+        endread()
+        TEST rc<0 THEN
+        $(  freevec(vect)
+            vect := 0
+        $) ELSE
+        $(  // findtitles returns two strings per file title
+            // (1 for the file, 1 for the switches)
+            // This routine must return a listing file,
+            // a binary file, a source file and an option string
+            // Therefore move pointers as necessary
+            vect!1 := vect!0      // HEX output file
+        //  vect!2 := vect!2     // LIST output file
+            vect!0 := vect!4     // SOURCE input file
+            vect!3 := vect!5     // OPTIONS
+            // Now force non-explicitly given output files to null:
+            IF rc<2 THEN vect!2:= 0
+            IF vect!2~=0 THEN
+            $(  // presume that listing is needed:
+                pw := 136        // width of line printer
+                list := 1        // list one level of files
+            $)
+        $)
+    $)
+    RESULTIS vect
+$)
+LET findasmin(file.name) = VALOF
+$(  LET rc=findinput(file.name)
+    IF rc<=0 THEN writef("Open on %S failed: rc = %N*N", file.name ,rc)
+    RESULTIS (rc<0->0,rc)
+$)
+LET findgetin(file.name) = VALOF
+$(  LET rc=findinput(file.name)
+    LET prefix="DP3:[75,2]"
+    IF rc<=0 & file.name%0+prefix%0+2+name%0<40 THEN
+    $(  LET s=VEC 20
+        FOR i=1 TO prefix%0 DO s%i := prefix%i
+        FOR i=1 TO file.name%0 DO s%(prefix%0+i):=file.name%i
+        s%(prefix%0+file.name%0+1):='.'
+        FOR i=1 TO (name%0<3->name%0,3) DO s%(prefix%0+file.name%0+1+i):=name%i
+        s%0:=prefix%0+file.name%0+1+(name%0<3->name%0,3)
+        rc:=findinput(s)
+    $)
+    IF rc<=0 THEN
+    writef("Open on %S failed: rc = %N*N", file.name, rc)
+    RESULTIS (rc<0->0, rc)
+$)
+LET get.time(vect, n)=VALOF
+$(  LET tim = TABLE 0,0,0, 0,0,0
+    LET dat = TABLE 0,0,0, 0,0,0
+    LET ans=vect
+    STATIC $( got.dat = FALSE $)
+    UNLESS got.dat THEN
+    $(  timeofday(tim)
+        date(dat)
+    $)
+    TEST n*2<=1+tim%0+dat%0 THEN ans:="" ELSE
+    $(  FOR i=1 TO tim%0 DO vect%i:=tim%i
+        vect%(tim%0+1):='*S'
+        FOR i=1 TO dat%0 DO vect%(tim%0+i+1):=dat%i
+        vect%0:=dat%0+tim%0+1
+        got.dat := TRUE
+    $)
+    RESULTIS ans
+$)
+/*RSX>*/
+
+
+/*<CAP
+MANIFEST
+$(  bad.rc = 20
+    startargsize = 40
+$)
+LET getargs(startarg) = VALOF
+$(  STATIC $(
+        parmno=3
+        error=FALSE
+    $)
+    LET vect = getvec(startargsize)
+    LET putstr(vect, p, n) BE
+    TEST error THEN
+    $(  vect!parmno:=0
+        parmno:=parmno+1
+    $) ELSE
+    $(  LET size=K.N0%0 / bytesperword + 1
+        vect!parmno := vect+!p
+        parmno := parmno+1
+        TEST !p+size>n THEN error:=TRUE
+        ELSE
+        $(  FOR i=!p TO !p+size-1 DO
+            vect!i:= K.N0!(i-!p)
+            !p:=!p+ size
+        $)
+    $)
+    LET p=4        // start of free store in 'vect'
+    UNLESS vect=0 THEN
+    $(  vect!0:="From|Prog|1"
+        vect!1:="Hex|To|2|/a"
+        vect!2:="List|3|/m"
+        TEST 0=keyarg("OPT",parms.string) THEN putstr(vect, @p, startargsize)
+        ELSE
+        $(  vect!3:=0
+            parmno:=parmno+1
+        $)
+        IF error THEN
+        $(  freevec(vect)
+            vect := 0
+        $)
+    $)
+    RESULTIS vect
+$)
+LET get.time(vect, n) = VALOF
+$(  STATIC
+    $(  tim = 0
+        dat = 0
+    $)
+    LET ans=vect
+    IF tim=0 THEN tim:=time()
+    IF dat=0 THEN dat:=date()
+    TEST n*2<=1+tim%0+dat%0 THEN ans:="" ELSE
+    $(  dat%3:='-'
+        dat%7:='-'
+        FOR i=1 TO tim%0 DO vect%i:=tim%i
+        vect%(tim%0+1):='*S'
+        FOR i=1 TO dat%0 DO vect%(tim%0+i+1):=dat%i
+        vect%0:=dat%0+tim%0+1
+    $)
+    RESULTIS ans
+$)
+LET findasmin(find.name) = VALOF
+$(  LET rc=findinput(find.name)
+    IF rc=0 THEN
+    $(  LET r2=errorcode
+        writes("Can't open input file: ")
+        writes(fault(r2))
+        wrch('*N')
+    $)
+    RESULTIS rc
+$)
+LET findgetin(file.name) = VALOF
+$(  LET rc=?
+    rc:=findinput(file.name)
+    IF rc=0 THEN
+    $(  LET savedir=current.dir
+        LET save.r2 = result2
+        LET s=VEC 20
+        MANIFEST $( p3=#X40030000 $)
+        current.dir:=p3   // directory for file header lookup on CAP
+        TEST file.name%0>=40 THEN rc:=0 ELSE   // name too long!
+        $(  FOR i=1 TO file.name%0 DO s%(1+i):=file.name%i
+            s%1:='.'
+            s%0:=file.name%0+1
+            rc:=findinput(s)
+        $)
+        IF rc=0 THEN result2 := save.r2
+        current.dir:=savedir
+    $)
+    IF rc=0 THEN
+    $(  LET r2 = result2
+        writef("Can't open '%S': ",file.name)
+        writes(fault(r2))
+        wrch('*N')
+    $)
+    RESULTIS rc
+$)
+/*CAP>*/
+
+
+
+/*<IBM
+MANIFEST
+$(  bad.rc = 12
+    startargsize = 50
+$)
+STATIC
+$(  sys.abend = ?
+$)
+LET getargs(startarg) = VALOF
+$(  // format of startarg is:
+    //          "<file name>;<options>"   or
+    //          "<file name> <options>"
+    LET i=1                     // counts character position in 'startarg'
+    LET len=startarg%0          // length of startarg
+    LET ch=?
+    LET vect=getvec(startargsize)
+    UNLESS vect=0 THEN
+    $(  vect!0 := vect+4
+        WHILE i<len & i<bytesperword*(startargsize-4) & VALOF
+        $(  ch:=startarg%i
+            RESULTIS ch\=';' & ch\='*S'
+        $) DO
+        $(  vect!0%i := ch
+            i:=i+1
+        $)
+        vect!0%0 := i-1             // length of file string
+        i:=i+1                      // skip the ';' or '*S' terminator
+        vect!1:="HEX"
+        vect!2:="LIST"
+        vect!3:=vect+4+(i-2+1+bytesperword-1)/bytesperword
+        FOR n=i TO len DO vect!3%(n-i+1) := startarg%n
+        vect!3%0 := len-i+1         // size of options string
+        selectoutput(findoutput("SYSPRINT"))
+        //  This is a good place to patch ABORT so that it does not
+        // dump huge ammounts of data when the user specifies a bad
+        // input file!
+        sys.abend := abort
+        abort := my.abort
+    $)
+    RESULTIS vect
+$)
+AND my.abort(code, addr, oldstack, data) BE
+$(  LET scc, ucc = (code>>12) & #XFFF, code & #XFFF
+    LET sysprint = findoutput("SYSPRINT")
+    LET go.abort = TRUE
+    IF sysprint=0 THEN
+    $(  writetolog("MICROLIB Assembler requires SYSPRINT")
+        STOP(16)
+    $)
+    selectoutput(sysprint)
+    writef("%S Assembler ABEND, ", name)
+    TEST ucc=0 THEN
+    $(  SWITCHON scc INTO
+        $(  CASE #X0D1: writes("run out of comp time*N")
+                        go.abort := FALSE
+                        ENDCASE
+            CASE #X0D2: writes("fatal I/O error*N");      ENDCASE
+            CASE #X0D3: writes("stack overflow*N");       ENDCASE
+            DEFAULT:    writef("system completion code %X3*N", scc)
+        $)
+    $) ELSE writef("user completion code %N - ASSEMBLER ERROR*N",ucc)
+    IF scc = #X001 THEN
+    $(  writes("Possibly missing membername for PDS input*N")
+        go.abort := FALSE
+    $)
+    IF scc = #X013 THEN
+    $(  writes("Member of PDS not found*N")
+        go.abort := FALSE
+    $)
+    IF (scc & #XFF) = #X37 THEN
+    $(  writes("Some limit exceeded on output file size*N")
+        go.abort := FALSE
+    $)
+    IF (scc >> 4) = #XC | scc = #X0D3 THEN
+    $(  writes("Try increasing memory available (with %S) otherwise*N*
+               * decrease the S option to the assembler (default s4000)*N")
+        go.abort := FALSE
+    $)
+    IF (scc >> 4) = #X80 THEN
+    $(  writes("Possibly insufficient I/O space. Use K run-time option*N")
+        go.abort := FALSE
+    $)
+    IF (scc >> 4) = #X08 THEN   // Local to CAMBRIDGE 370 only
+                         writes("Some resource limit has been exceeded*N")
+    endwrite()
+    TEST go.abort THEN
+    sys.abend(code, addr, oldstack, data) ELSE stop(16)
+$)
+LET myfindinput(file) = VALOF
+$( STATIC $( ddcount = 0 $)
+   GLOBAL $( createdd : 120 $)
+   // this global is provided by a linked assembly routine
+   // which allows the dynamic creation of DDnames
+   LET ddname = "DDxxxx"
+   LET v      = VEC 3
+   LET lnz    = 3
+   LET ddc    = ddcount
+   ddcount := ddcount + 1
+   FOR j = 1 TO file % 0 DO file % j := capitalch(file % j)
+   FOR j = 3 TO 0 BY -1 DO
+     $( v ! j := ddc REM 10 + '0'
+        ddc   := ddc  /  10
+        IF v ! j \= '0' THEN lnz := j
+     $)
+   ddname % 0 := 6 - lnz
+   FOR j = 3 TO lnz BY -1 DO ddname % (3 + j - lnz) := v ! j
+// writef("file = '%S' DDname = '%S'*N*N",file,ddname)
+   RESULTIS (createdd(ddname, file, FALSE) = 0 -> findinput(ddname), 0)
+$)
+LET findasmin(file.name)=VALOF
+$(  LET rc=myfindinput(file.name)
+    IF rc=0 THEN writef("Can't open '%S' for input*N",file.name)
+    RESULTIS rc
+$)
+LET findgetin(file.name) = VALOF
+$(  LET rc = myfindinput(file.name)
+    IF rc=0 THEN rc:=findinput(file.name)
+    IF rc=0 THEN
+    $(  LET getlib = "GETLIB(xxxxxxxxx"
+        MANIFEST
+        $(  firstch = 8
+            maxlen  = 8
+        $)
+        UNLESS file.name%0 > maxlen THEN
+        $(  FOR i=1 TO file.name%0 DO getlib%(i-1+firstch) := file.name%i
+            getlib%(file.name%0+firstch) := ')'
+            getlib%0 := firstch+file.name%0
+            rc := findinput(getlib)
+        $)
+    $)
+    RESULTIS rc
+$)
+LET get.time(vect, n) = VALOF
+$(  STATIC
+    $(  tim = 0
+        dat = 0
+    $)
+    LET ans=vect
+    IF tim=0 THEN tim:=timeofday()
+    IF dat=0 THEN dat:=date()
+    TEST n*2<=1+(tim%0-1)+(dat%0-2) THEN ans:="" ELSE
+    $(  dat%(2+3):='-'
+        FOR i=2+5 TO 2+6 DO IF 'A'<=dat%i<='Z' THEN dat%i:=dat%i+'a'-'A'
+        dat%(2+7):='-'
+        tim%(1+3):=':'
+        tim%(1+6):=':'
+        FOR i=2 TO tim%0 DO vect%(i-1):=tim%i
+        vect%(tim%0-1+1):='*S'
+        FOR i=3 TO dat%0 DO vect%(tim%0-1+i+1-2):=dat%i
+        vect%0:=(dat%0-2)+(tim%0-1)+1
+    $)
+    RESULTIS ans
+$)
+/*IBM>*/
+
+
+
+
+
+LET start(startarg) BE
+$(  LET error=TRUE
+    LET args = 0   // argument vector
+    LET initialised = FALSE
+    LET listfile = ?
+    $(  LET versionno = 3069
+        LET versionid = "Version 3.069 27-Jan-83"
+        LET asmver = ?
+        msbytefirst := FALSE     // order of bytes in an address
+        mscharfirst := TRUE      // order of characters in a word of a string
+        binbufwidth := 4
+        i.here := i.mult
+        i.strlbkt := i.lt
+        i.strrbkt := i.gt
+        comntch:=';'
+        i.elbkt := i.lbkt
+        i.erbkt := i.rbkt
+        i.endlab:=i.colon
+        comntcheck := FALSE
+        sepch := '.'
+        bytesperasmword := 1
+        wordsperaddress := 2
+        name := "unnamed"
+        asmver := startasm(versionno)
+        TEST asmver\=0
+        THEN writef("Incompatible assembler section version numbers*N*
+             *General assembler id: %S*N*
+             *Specific assembler id: %S*N",versionid,asmver)
+        ELSE
+        $(  // set up default values of options so that GETARGS can
+            // change them should it so desire:
+            memsize:=3000
+            throws:=FALSE
+            list:=0
+            short:=FALSE
+            allsyms:=FALSE
+            pw:=80
+            hexoutwidth:=32
+            max.files:=25
+            // now call machine specific routine to
+            // return file names + option string
+            args := getargs(startarg)
+            TEST args=0 THEN
+            writef("Bad arguments for %S assembler*N",name) ELSE
+            TEST decodeopt(args!3) THEN
+            writef("Bad OPT string for %S assembler*N", name) ELSE
+            $(  LET outfile=args!2
+                fromfile:=args!0
+                writef("%S assembler.  %S*N",name,versionid)
+                binfile := findoutput(args!1)
+                listfile:= (outfile=0->output(), findoutput(outfile))
+                out := output()
+                memory := getvec(memsize)
+                TEST memsize<100 | memory=0 THEN
+                writes("Insufficient store for execution*N") ELSE
+                TEST listfile=0
+                THEN writef("Can't open %S for output*N",
+                             (outfile=0 -> "OUTPUT stream", outfile) )
+                ELSE error:=FALSE
+                initialised:=TRUE
+            $)
+        $)
+    $)
+    UNLESS error THEN
+    $(  UNLESS out=listfile DO selectoutput(listfile)
+        memory!0 := 1    // initialise memory vector
+        memory!memsize := memsize
+        errorlevel := level()
+        errorlabel := emergencyexit
+        codes := null
+        initcodes()
+        initsyms()
+        parse(fromfile)
+emergencyexit:
+        selectoutput(out)
+        IF pass=second THEN
+        $(  TEST  badlabs=0 & errcount=0 THEN
+            $(  writes("No errors ")
+                error:=FALSE
+            $) ELSE
+            $(  UNLESS errcount=0 THEN
+                writef("%N error%S ", errcount, (errcount=1->"","s"))
+                UNLESS errcount=0 | badlabs=0 THEN writes("and ")
+                UNLESS badlabs=0 THEN
+                writef("%N bad label%S ", badlabs, (badlabs=1->"","s"))
+            $)
+            writes("in this assembly*N")
+        $)
+    $)
+    IF initialised THEN
+    $(  UNLESS listfile=0 | listfile=out DO
+        $(  selectoutput(listfile)
+            endwrite()
+        $)
+        UNLESS binfile=0 DO
+        $(  selectoutput(binfile)
+            endwrite()
+        $)
+        selectoutput(out)
+        UNLESS memory=0 DO freevec(memory)
+    $)
+    endasm()
+    UNLESS args=0 THEN freevec(args)
+    IF error | fatal THEN stop(bad.rc)
+$)
+
+

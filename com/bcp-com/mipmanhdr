@@ -1,0 +1,30 @@
+// MIPMANHDR
+// Header file for the machine independent part of code generators
+// This should be split into AE manifests and OCODE manifests!!!!
+$<AEOCHDR'      GET "AEOCHDR"   $>AEOCHDR'
+$<OCODEHDR'     GET "OCODEHDR"  $>OCODEHDR'
+MANIFEST
+$(
+$<TRIPOS
+t.hunk  = 1000; t.reloc = 1001; t.end   = 1002; t.ext   = 1005; ext.ref =129
+sectionword     = 12345
+$>TRIPOS
+h1=0; h2=1; h3=2; h4=3
+// items in simulated stack, in registers,
+k.none=1
+k.numb=2
+k.loc=3;        k.glob=4;       k.lab=5
+k.mloc=6;       k.mglob=7;      k.mlab=8
+k.lvloc=9;      k.lvglob=10;    k.lvlab=11
+k.reg=12
+k.xmin=20;      k.bxmin=30
+
+ps.size         = 6     // procstk entry size
+ps.maxssp       = 0     // maxssp store
+ps.stkstvp      = 1     // stvp for stack size
+ps.exitlab      = 2     // exit label
+n.regs          = 16    // Size of register slave store
+$)
+$$MIPMANHDR := TRUE
+
+

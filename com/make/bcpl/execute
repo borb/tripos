@@ -1,0 +1,1107 @@
+/*****************************************************************************\
+*                        Olivetti Research Laboratory                         *
+*******************************************************************************
+
+
+      ########  #      #  ########    #####   ##    ##  ########  ######## 
+      ########  ##    ##  ########   #######  ##    ##  ########  ######## 
+      ##         ##  ##   ##        ##        ##    ##     ##     ##       
+      ######       ##     ######    ##        ##    ##     ##     ######   
+      ##          #  #    ##        ##        ##    ##     ##     ##       
+      ##         ##  ##   ##        ##        ##    ##     ##     ##       
+      ########  ##    ##  ########   #######  ########     ##     ######## 
+      ########  #      #  ########    #####    ######      ##     ######## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   15/05/87             *
+\*****************************************************************************/
+
+
+
+SECTION "EXECUTE"
+
+
+
+GET "MAKEHDR"
+GET "BCPL.OBJINFO"
+
+
+
+LET makeitem( tag, dependencies )  =  VALOF
+$(
+//  Given a thing to make, we should look to find a rule to make it, and when
+//  we have done so, we should look to see whether it doesn't exist, or
+//  whether the things it depends on are more up to date than it.
+
+    LET rules       =  currentnode!node.rules
+    LET imports     =  currentnode!node.imports
+    LET explicit    =  FALSE
+    LET imported    =  FALSE
+    LET implicit    =  FALSE
+    LET make        =  FALSE
+
+    LET commands    =  NIL
+    LET importnode  =  NIL
+    LET importtag   =  ""
+
+    //  Before going any further, look to see if this file is one which we
+    //  know to exist, but which does not have any rules attached.
+    
+    IF  findtag( tag, currentnode!node.files )  THEN  RESULTIS  FALSE
+
+    //  Otherwise, we really do have some work to do, so we should get on with
+    //  it!
+
+    IF  testflags( #B0011 )  THEN  error( "BREAK" )
+    IF  testflags( #B1000 )  THEN  message( "Making *"%S*"", tag )
+
+    IF  debugging  THEN  writef( "Making *"%S*"*N", tag )
+    
+    UNTIL  rules = NIL  DO
+    $(
+        //  Look at the rule, and see whether we have something which enables
+        //  us to make the item in question.
+        
+        IF  findtag( tag, rules!rule.tags )  THEN
+        $(
+            //  This item is in the list of things which can be made for this
+            //  rule.  We execute the commands, unless there aren't any, in
+            //  which case we should remember the dependencies, but go on
+            //  to look further.
+            
+            copydependencies( rules!rule.depends, @dependencies )
+            
+            commands  :=  rules!rule.commands
+            explicit  :=  TRUE
+            
+            UNLESS  commands = NIL  DO
+            $(
+                make  :=  mustremake( tag, dependencies )  
+    
+                IF  make  THEN  obeycommands( commands, NIL, tag, NIL )
+    
+                UNLESS  commands = NIL  DO  GOTO  made
+            $)
+        $)
+        
+        //  Otherwise, move on to the next item in the list, since it is 
+        //  possible that things will improve there.
+        
+        rules  :=  rules!rule.link
+    $)
+    
+    //  If we drop through here, then we have failed to find an explicit
+    //  rule to handle this object.  We should look to see whether this 
+    //  object belongs to one of the imported directories, and if so, call
+    //  ourselves recursively.
+    
+    UNTIL  imports = NIL  DO
+    $(
+        //  We have an import here, so compare the stem of the name with that
+        //  of the import directory.
+        
+        LET dirnode  =  imports!import.node
+        LET dirtag   =  dirnode!node.tag
+        
+        IF  matchstem( dirtag, tag )  THEN
+        $(
+            //  This stem matches, so we should look to see whether it is
+            //  longer than the one we have remembered up to now.  We always
+            //  choose the one with the longest matching stem.
+            
+            IF  dirtag % 0  >  importtag % 0  THEN
+            $(
+                importnode  :=  dirnode
+                importtag   :=  dirtag
+            $)
+            
+            imported  :=  TRUE
+        $)
+       
+        imports  :=  imports!import.link
+    $)
+
+    //  If, when we drop out of that, we have managed to find the directory
+    //  stem, then we should set the new current node and current directory,
+    //  and call ourselves recursively.
+
+    IF  imported  THEN
+    $(
+        //  This is an imported item.  We have to assume now that this imported
+        //  set of rules will deal with the object.
+
+        LET newtag   =  stripstem( importtag, tag )
+
+        LET oldnode  =  currentnode
+        LET olddir   =  currentdir
+        
+        LET oldelev  =  errorlevel
+        LET oldelab  =  errorlabel
+        
+        errorlevel   :=  level()
+        errorlabel   :=  label
+        
+        currentnode  :=  importnode
+        currentdir   :=  importnode!node.lock
+        
+        make         :=  makeitem( newtag, dependencies )
+        
+        errorlevel   :=  oldelev
+        errorlabel   :=  oldelab
+        
+        currentnode  :=  oldnode
+        currentdir   :=  olddir
+        
+        GOTO  made
+        
+        //  Error condition.  We come here when we detect an error during
+        //  the making of an imported object.
+
+    label:
+    
+        errorlevel   :=  oldelev
+        errorlabel   :=  oldelab
+        
+        currentnode  :=  oldnode
+        currentdir   :=  olddir
+        
+        longjump( errorlevel, errorlabel )
+    $)
+
+    //  If we drop through here, then we have failed to find an import which
+    //  matches the relevant value.  We should therefore look to see if there
+    //  is an implicit rule which would help us make the object.
+
+    rules  :=  currentnode!node.rules
+
+    UNTIL  rules = NIL  DO
+    $(
+        //  Scan each of the rules in turn to see whether it matches up to
+        //  any particular prefix/suffix combination.
+        
+        LET tags  =  rules!rule.tags
+        
+        UNTIL  tags = NIL  DO
+        $(
+            LET prefixes  =  currentnode!node.prefixes
+            LET suffixes  =  currentnode!node.suffixes
+    
+            LET ruletag   =  tags!tl.tag
+            LET found     =  FALSE
+            LET source    =  NIL
+            LET stem      =  NIL
+            
+            //  Look for the prefix case first, to see whether this matches
+            //  the current rule.
+            
+            UNTIL  prefixes = NIL  |  found  DO
+            $(
+                LET ptag  =  prefixes!tl.tag
+        
+                IF  matchprefix( ruletag, ptag )  THEN
+
+                    found  :=  doimplicit( rules, 
+                                           ruletag, 
+                                           tag, 
+                                           ptag, 
+                                           joinprefix,
+                                           @source,
+                                           @stem )
+                                          
+                prefixes  :=  prefixes!tl.link
+            $)
+
+            //  If the prefix case failed, then we should check the suffix
+            //  case to see if we have any more joy with it.
+
+            UNTIL  suffixes = NIL  |  found  DO
+            $(
+                LET ptag  =  suffixes!tl.tag
+        
+                IF  matchprefix( ruletag, ptag )  THEN
+
+                    found  :=  doimplicit( rules, 
+                                           ruletag, 
+                                           tag, 
+                                           ptag, 
+                                           joinsuffix,
+                                           @source,
+                                           @stem )
+                                          
+                suffixes  :=  suffixes!tl.link
+            $)
+
+            //  Look to see whether we have found the object, and if we have,
+            //  whether we have any commands to be executed.
+            
+            IF  found  THEN
+            $(
+                //  We have found an implicit rule which matches, so we
+                //  should add the relevant dependencies.  If we have
+                //  commands to execute, then we should execute them.
+                
+                LET item  =  gettagitem( source )
+                
+                copydependencies( rules!rule.depends, @dependencies )
+                
+                item!tl.link  :=  dependencies
+                dependencies  :=  item
+                
+                commands      :=  rules!rule.commands
+                implicit      :=  TRUE
+                
+                UNLESS  commands = NIL  DO
+                $(
+                    //  Not only have we found a rule which matches our object,
+                    //  but we have found some commands to execute.
+                    
+                    make  :=  mustremake( tag, dependencies )
+                    
+                    IF  make  THEN  obeycommands( commands, source, tag, stem )
+                    
+                    UNLESS  commands = NIL  DO  GOTO  made
+                $)
+            $)
+
+            //  If we drop through here, then we can do nothing with this
+            //  rule tag, so we should move on to the next one.
+            
+            tags  :=  tags!tl.link
+        $)
+        
+        //  If we come here, then we have run out of tags to look at for this
+        //  rule, so we should move on to the next rule.
+        
+        rules  :=  rules!rule.link
+    $)
+
+    //  If we drop through here, we have found no commands to remake this 
+    //  object, but there may be things which it depends on.
+    
+    UNTIL  dependencies = NIL  DO
+    $(
+        make  :=  make  |  makeitem( dependencies!tl.tag, NIL )
+        
+        dependencies  :=  dependencies!tl.link
+    $)
+    
+    //  If we drop out of this loop and we have been totally unable to find
+    //  a rule which can be used for making this object,  we should, 
+    //  complain that we don't know how to make it.
+
+    UNLESS  explicit  DO  
+
+        //  We haven't found any rules as to how to make this object, but
+        //  this may be because it is a leaf node.  In this case, we only
+        //  complain if it doesn't exist.  If it does, then we have performed
+        //  the search of the rules in vain, so remember this so we don't have 
+        //  to do it again.
+        
+        TEST  fileexists( tag )  THEN  addfile( tag )
+        ELSE
+
+            //  Oh dear.  This file does not exist, so we should complain
+            //  about it, since it is needed and cannot be built.
+
+            error( "Don't know how to make *"%S*"", tag )
+            
+    //  This is the end of this object!  If necessary, print out a message,
+    //  and then return to the caller.  We should also take note of the date
+    //  of the object made, since it may well have changed if we have obeyed
+    //  any rules.
+    
+made:
+
+    IF  make  THEN
+    $(
+        //  We have obeyed some rules, so we should take the date of the
+        //  object again.  We don't worry if this fails.
+        
+        LET datev  =  finddate( tag )
+        
+        UNLESS  datev = NIL  DO  getdate( tag, datev )
+    $)
+
+    IF  debugging  THEN  writef( "End of *"%S*"*N*N", tag )
+
+    RESULTIS  make
+$)
+
+
+
+AND addfile( file )  BE
+$(
+//  Add this file to the list of files which Make knows to be up to date.
+
+    LET item  =  gettagitem( file )
+
+    item!tl.link            :=  currentnode!node.files
+    currentnode!node.files  :=  item
+$)
+
+
+
+AND doimplicit( rule, ruletag, dest, pruffix, join, lv.source, lv.stem )  =  VALOF
+$(
+//  Split the rule tag into two, so that we look at the first and second part 
+//  of it separately.  For the uninitiated a "pruffix" is either a prefix or
+//  a suffix  -  easy really!
+
+    LET part1   =  pruffix
+    LET part2   =  stripprefix( ruletag, pruffix )
+
+    //  We know that part1 matches a prefix, so we should find out whether 
+    //  part2 is at all relevant.
+
+    LET prefix  =  findtag( part2, currentnode!node.prefixes )
+    LET suffix  =  findtag( part2, currentnode!node.suffixes )
+
+    //  If we have had a success here, then we should look to see whether the 
+    //  rule is relevant, and if it is, whether the associated files exist.
+
+    IF  prefix  |  suffix  THEN
+    $(
+        //  We really are on to something here.  We have found an implicit 
+        //  rule, but before we can use it we must decide whether it is for 
+        //  us or not!
+
+        LET match  =  prefix  ->  matchprefix,  matchsuffix
+        LET strip  =  prefix  ->  stripprefix,  stripsuffix
+        
+        IF  match( dest, part2 )  THEN
+        $(
+            //  The item matches the thing we are trying to make, so split the 
+            //  stem off and construct the source item.
+
+            LET stem    =  strip( dest, part2 )
+            LET source  =  join( stem, part1 )
+            
+            //  Having calculated what the source would be, we should look to 
+            //  see if the file exists.
+            
+            IF  fileexists( source )  THEN
+            $(
+                //  Success!  We have found a rule which would make this item 
+                //  from a source item, and we have ascertained that the 
+                //  source item exists.
+
+                !lv.source  :=  source
+                !lv.stem    :=  stem
+
+                RESULTIS  TRUE
+            $)
+        $)
+    $)
+    
+    //  If we come here, then this rule is not for us.  We should, therefore
+    //  return back to the caller with an indication that this is the case.
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND matchprefix( tag, prefix )  =  VALOF
+$(
+//  Return TRUE if this prefix is valid for this tag.
+
+    LET tlen  =  tag % 0
+    LET plen  =  prefix % 0
+    
+    UNLESS  plen < tlen  DO  RESULTIS  FALSE
+    
+    FOR  i = 1  TO  plen  DO
+        UNLESS  tag % i  =  prefix % i  DO
+            RESULTIS  FALSE
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND matchsuffix( tag, suffix )  =  VALOF
+$(
+//  Return TRUE if this suffix is valid for this tag.
+
+    LET tlen  =  tag % 0
+    LET slen  =  suffix % 0
+    
+    UNLESS  slen < tlen  DO  RESULTIS  FALSE
+    
+    FOR  i = 0  TO  slen-1  DO
+        UNLESS  tag % (tlen - i)  =  suffix % (slen - i)  DO
+            RESULTIS  FALSE
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND joinprefix( stem, prefix )  =  joinstrings( prefix, stem )
+
+
+
+AND joinsuffix( stem, suffix )  =  joinstrings( stem, suffix )
+
+
+
+AND joinstrings( a, b )  =  VALOF
+$(
+//  Join the given strings together.
+
+    LET buffer  =  VEC string.words
+    
+    LET la      =  a % 0
+    LET lb      =  b % 0
+    LET length  =  la + lb
+
+    IF  length > string.bytes  THEN  error( "Concatenated string too long" )
+    
+    FOR  i = 1  TO  la  DO  buffer % i         :=  a % i
+    FOR  i = 1  TO  lb  DO  buffer % (la + i)  :=  b % i
+
+    buffer % 0  :=  length
+
+    RESULTIS  lookuptag( buffer )
+$)
+
+
+
+AND stripprefix( tag, prefix )  =  VALOF
+$(
+//  Given a tag and a prefix, return the stem part of the tag with the
+//  prefix removed.
+
+    LET buffer  =  VEC string.words
+    
+    LET tlen    =  tag % 0
+    LET plen    =  prefix % 0
+
+    LET length  =  tlen - plen
+    
+    FOR  i = 1  TO  length  DO  buffer % i  :=  tag % (plen + i)
+    
+    buffer % 0  :=  length
+
+    RESULTIS  lookuptag( buffer )
+$)
+
+
+
+AND stripsuffix( tag, suffix )  =  VALOF
+$(
+//  Given a tag and a suffix, return the stem part of the tag with the
+//  suffix removed.
+
+    LET buffer  =  VEC string.words
+    
+    LET tlen    =  tag % 0
+    LET slen    =  suffix % 0
+
+    LET length  =  tlen - slen
+    
+    FOR  i = 1  TO  length  DO  buffer % i  :=  tag % i
+    
+    buffer % 0  :=  length
+
+    RESULTIS  lookuptag( buffer )
+$)
+
+
+
+AND findtag( tag, taglist )  =  VALOF
+$(
+//  Look in the list given to see whether the tag appears in it.
+
+    UNTIL  taglist = NIL  DO
+    $(
+        IF  tag = taglist!tl.tag  THEN  RESULTIS  TRUE
+        
+        taglist  :=  taglist!tl.link
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND matchstem( dirtag, tag )  =  VALOF
+$(
+//  For this stem to match, the dirtag must be a prefix of the tag.  We must
+//  also check for the file separator character, if this is necessary.
+
+    LET dpos   =  dirtag % 0  +  1
+    LET nodot  =  isassignment( dirtag )
+
+    UNLESS  matchprefix( tag, dirtag )  DO  RESULTIS  FALSE
+    
+    RESULTIS  nodot  NEQV  (tag % dpos  =  '.')
+$)
+
+
+
+AND stripstem( dirtag, tag )  =  VALOF
+$(
+//  Strip the directory part from this tag, and return the residual part
+//  of the file name.
+
+    LET buffer  =  VEC string.words
+
+    LET tlen    =  tag % 0
+    LET dlen    =  dirtag % 0
+    
+    LET dpos    =  dlen + 1
+    LET length  =  0
+    
+    IF  tag % dpos  =  '.'  THEN  dlen  :=  dlen + 1
+
+    length  :=  tlen - dlen
+    
+    FOR  i = 1  TO  length  DO  buffer % i  :=  tag % (dlen + i)
+
+    buffer % 0  :=  length
+
+    RESULTIS  lookuptag( buffer )
+$)
+
+
+
+AND copydependencies( list, lv.queue )  BE
+$(
+//  Make a copy of the dependency list given, and add it to the queue of
+//  items already on the dependency list.
+
+    UNTIL  list = NIL  DO
+    $(
+        LET item  =  gettagitem( list!tl.tag )
+        
+        item!tl.link  :=  !lv.queue
+        !lv.queue     :=  item
+        
+        list          :=  list!tl.link
+    $)
+$)
+
+
+
+AND mustremake( tag, dependencies )  =  VALOF
+$(
+//  Returns a boolean so say whether this item should be remade.  This implies
+//  that it does not exist, or that it depends on something which is newer
+//  than it.
+
+    LET list      =  dependencies
+
+    LET d.item    =  0
+    LET d.depend  =  0
+    
+    LET make      =  FALSE
+
+    //  Before doing anything else, execute the rules which make up each of
+    //  the items which this thing depends on.
+    
+    UNTIL  list = NIL  DO
+    $(
+        make  :=  make  |  makeitem( list!tl.tag, NIL )
+        
+        list  :=  list!tl.link
+    $)
+    
+    //  If we have remade any of the constituent objects, then it is obvious
+    //  that we must remake this one.  Handle this simple case first.
+    
+    IF  make  THEN  RESULTIS  TRUE
+    
+    //  Otherwise, look for the next simplest case.  This is where the object
+    //  in question does not exist.
+    
+    d.item  :=  finddate( tag )
+    
+    IF  d.item = NIL  THEN
+    $(
+        IF  debugging  THEN  writef( "*"%S*" does not exist*N", tag )
+        
+        RESULTIS  TRUE
+    $)
+    
+    IF  debugging  THEN
+    $(
+        writef( "Date for *"%S*" is ", tag )
+        writedate( d.item )
+        newline()
+    $)
+
+    //  Otherwise, the object appears to exist, so we should scan the list
+    //  of dependencies to see whether we must do the remake.
+    
+    UNTIL  dependencies = NIL  DO
+    $(
+        LET dependency  =  dependencies!tl.tag
+        
+        //  Attempt to obtain the modification date of this dependency.  If it
+        //  is more recent than the current object, then we must perform the
+        //  remake.
+        
+        d.depend  :=  finddate( dependency )
+
+        IF  d.depend = NIL  THEN
+
+            //  We cannot make this object, so we should complain about
+            //  it!  It is an internal error, since this case should have
+            //  been ironed out long ago.
+            
+            error( "Internal Error:  *"%S*" has not been made", dependency )
+        
+        //  Now, compare the dates of the two items, and if the dependency
+        //  is more recent than the current item, we should remake the
+        //  object.
+        
+        IF  debugging  THEN
+        $(
+            writef( "Date for *"%S*" is ", dependency )
+            writedate( d.depend )
+            newline()
+        $)
+        
+        IF  morerecent( d.depend, d.item )  THEN  
+        $(
+            IF  debugging  THEN  
+                writef( "*"%S*" is more recent than *"%S*"*N", dependency, tag )
+
+            RESULTIS  TRUE
+        $)
+        
+        //  Otherwise, move on to the next item, since we may depend on that 
+        //  one instead.
+        
+        dependencies  :=  dependencies!tl.link
+    $)
+
+    //  If we drop through here, it appears that we do not need to remake the
+    //  object.
+
+    IF  debugging  THEN  writef( "*"%S*" is up to date*N", tag )
+    
+    RESULTIS  FALSE
+$)
+
+
+
+AND writedate( date )  BE
+$(
+//  Write out the date in a human form.
+
+    LET datev  =  VEC 15
+
+    callseg( "sys:l.dat-to-strings", date, datev )
+    
+    writef( "%S, %S at %S", datev+10, datev+0, datev+5 )
+$)
+
+
+
+AND finddate( file )  =  VALOF
+$(
+//  Scan the date list for this file to see if we know its date already.  If
+//  we don't, then go to disc to get it.
+
+    LET datev  =  VEC 2
+    LET date   =  currentnode!node.dates
+
+    UNTIL  date = NIL  DO
+    $(
+        IF  date!date.tag = file  THEN  RESULTIS  date + date.days
+        
+        date  :=  date!date.link
+    $)
+
+    //  If we drop through here, then the date of this object was not cached,
+    //  so we should go to disc and obtain the date.
+    
+    UNLESS  getdate( file, datev )  DO  RESULTIS  NIL
+    
+    //  We have obtained the date, so add this item to the list of dates which
+    //  we know about.
+    
+    date                    :=  getstore( date.size )
+    
+    date!date.link          :=  currentnode!node.dates
+    date!date.tag           :=  file
+    date!date.days          :=  datev!0
+    date!date.mins          :=  datev!1
+    date!date.ticks         :=  datev!2
+
+    currentnode!node.dates  :=  date
+
+    RESULTIS  date + date.days
+$)
+
+
+
+AND getdate( item, date )  =  VALOF
+$(
+//  Attempt to get a lock on the object, and then examine it to find the
+//  date and time of last update.
+
+    LET lock  =  locateobj( item )
+    
+    TEST  lock = 0  THEN  RESULTIS  FALSE
+    ELSE
+    $(
+        LET entryinfo  =  VEC size.exinfo
+
+        examine.obj( lock!lock.task, lock, entryinfo )
+        objinfo.ex( objinfo.date, lock, entryinfo, date )
+        freeobj( lock )
+        
+        RESULTIS  TRUE
+    $)
+$)
+
+
+
+AND examine.obj( fhtask, lock, entryinfo )  =
+    sendpkt( notinuse, fhtask, action.examineobject, 0, 0, lock, entryinfo )
+
+
+
+AND morerecent( date1, date2 )  =  VALOF
+$(
+//  Return TRUE iff the first date is more recent than the second.
+
+    FOR  i = 0  TO  2  DO
+    $(
+        LET d1  =  date1!i
+        LET d2  =  date2!i
+
+        IF  d1 > d2  THEN  RESULTIS  TRUE
+        IF  d1 < d2  THEN  RESULTIS  FALSE
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND obeycommands( commands, source, dest, stem )  BE
+
+//  Given a chain of commands, write them out to the work file, performing
+//  any substitution necessary.
+
+    UNLESS  commands = NIL  DO
+    $(
+        LET o       =  output()
+        
+        LET file    =  0
+        LET stream  =  0
+    
+        UNLESS  nomake  DO
+        $(
+            file    :=  newtempfile()
+            stream  :=  findoutput( file )
+    
+            IF  stream = 0  THEN  error( "Failed to open *"%S*"", file )
+
+            selectoutput( stream )
+        $)
+
+        UNTIL  commands = NIL  DO
+        $(
+            //  Write the command line out to the command file.  Note that the
+            //  line is held internally as a ROPE, since it may get quite
+            //  long.
+
+            LET command  =  commands!command.line
+            LET length   =  rope.length( command )
+            LET pos      =  0
+        
+            WHILE  pos < length  DO
+            $(
+                LET char  =  rope.getbyte( command, pos )
+            
+                pos  :=  pos + 1
+            
+                TEST  char = ch.special  THEN
+                $(
+                    //  Special character, which means that we have some sort
+                    //  of substitution to do.
+                
+                    char  :=  rope.getbyte( command, pos )
+                    pos   :=  pos + 1
+                
+                    TEST  char = ch.all          THEN  writedefault( source )  ELSE
+                    TEST  char = ch.source       THEN  writedefault( source )  ELSE
+                    TEST  char = ch.destination  THEN  writedefault( dest )    ELSE
+                    TEST  char = ch.stem         THEN  writedefault( stem )
+                    
+                    ELSE  writes( "(Make: Internal Error)" )
+                $)
+                ELSE  wrch( char )
+            $)
+        
+            newline()
+
+            commands  :=  commands!command.link
+        $)
+        
+        //  After writing the commands, we should execute them.  We should
+        //  only do this if we have been asked to, though.
+    
+        UNLESS  nomake  DO
+        $(
+            endwrite()
+
+            selectoutput( o )
+
+            //  Having written the commands out to the file, we should execute
+            //  the file.
+        
+            UNLESS  rex.obeyfile( file )  DO
+                error( "STOP with return code %N  [r2 %N]", 
+                        cli.returncode, cli.result2 )
+
+            deleteobj( file )
+        $)
+    $)
+
+
+
+AND writedefault( string )  BE
+    UNLESS  string = NIL  DO
+        writes( string )
+
+
+
+AND fileexists( file )  =  VALOF
+$(
+//  Look to see whether the file given exists.
+
+    LET lock  =  locateobj( file )
+
+    IF  lock = 0  THEN  RESULTIS  FALSE
+    
+    freeobj( lock )
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND newtempfile()  =  VALOF
+$(
+//  Return the name of a file which we know to be unique within this machine.
+//  We cannot use the task id, since "make" may well call itself.  We cannot
+//  use the time, since it is not guaranteed to be of fine enough grain, and
+//  we cannot use a serial sequence number since each incarnation of make
+//  would start at the same value.  As a result we use the pointer to the
+//  current stack frame, since this is guaranteed to be unique.
+
+    LET buffer   =  VEC string.words
+
+    LET prefix   =  "T:Make-"
+    LET prefixl  =  prefix % 0
+    
+    LET unique   =  level()
+    LET uniquel  =  8
+    
+    FOR  i = 1  TO  prefixl  DO  buffer % i  :=  prefix % i
+    
+    FOR  i = uniquel  TO  1  BY  -1  DO
+    $(
+        buffer % (prefixl + i)  :=  unique REM 10  +  '0'
+        unique                  :=  unique  /  10
+    $)
+
+    buffer % 0  :=  prefixl + uniquel
+
+    RESULTIS  lookuptag( buffer )
+$)
+
+
+
+AND rex.obeyfile( filename )  =  VALOF
+$(
+//  Run the Shell on the file given.  Open the file, and if all succeeds,
+//  call the shell to deal with it.
+
+    LET scb  =  findinput( filename )
+    
+    IF  scb = 0  THEN
+
+        //  We have failed to open the file, and so should return to the
+        //  caller with an error code.
+        
+        RESULTIS  FALSE
+
+    //  Otherwise, the stream is opened properly, and we should call the
+    //  routine to apply the shell.
+
+    RESULTIS  rex.runshell( scb )
+$)
+
+
+
+AND rex.runshell( scb )  =  VALOF
+$(
+//  Run a new shell, whose input stream is the one given.
+
+    LET shpkt     =  getvec( shpkt.size )
+    LET oldgv     =  getvec( globsize )
+    LET gbase     =  @globsize
+    LET gsize     =  globsize
+    LET gwarning  =  FALSE
+    LET startco   =  0
+    
+    IF  shpkt = 0  |  oldgv = 0  THEN  
+    $(
+        //  We have failed to allocate storage, and so we can go no
+        //  further.
+        
+        UNLESS  shpkt = 0  DO  freevec( shpkt )
+        UNLESS  oldgv = 0  DO  freevec( oldgv )
+        
+        endstream( scb )
+        
+        result2  :=  error.getvecfailure
+        
+        RESULTIS  FALSE
+    $)
+    
+    //  Given that we have the storage for a global vector, we should
+    //  copy the current one for later.
+    
+    FOR  i = 1  TO  gsize  DO  oldgv!i  :=  gbase!i
+
+    //  Now, initialise the "shpkt", so that we can pass the parameters on
+    //  to the shell when it is created.
+
+    shpkt!pkt.link         :=  notinuse
+    shpkt!pkt.id           :=  taskid
+    shpkt!pkt.type         :=  0
+    shpkt!pkt.res1         :=  0
+    shpkt!pkt.res2         :=  0
+    shpkt!shpkt.scb        :=  scb
+    shpkt!shpkt.prompt     :=  cli.prompt
+    shpkt!shpkt.faillevel  :=  currentnode!node.faillevel
+    
+    //  Initialise the global vector to contain its default information.
+    
+    globin( tcb!tcb.seglist!1 )
+    globin( tcb!tcb.seglist!2 )
+    globin( tcb!tcb.seglist!4 )
+
+    //  And set up "cli.init" to be our own private one.
+
+    cli.init  :=  rex.cli.init
+
+    //  Create the coroutine associated with "start", the entry point of
+    //  the shell.
+    
+    startco  :=  createco( start, tcb!tcb.stsiz )
+    
+    TEST  startco = 0  THEN
+    $(
+        //  We have failed to allocate storage, and so we can go no
+        //  further.
+        
+        freevec( shpkt )
+        freevec( oldgv )
+        
+        endstream( scb )
+        
+        result2  :=  error.getvecfailure
+        
+        RESULTIS  FALSE
+    $)
+    ELSE
+    $(
+        //  All went well.  We have created the shell coroutine, and so we
+        //  should call it to deal with the input stream.
+        
+        LET rc  =  0
+        LET r2  =  0
+    
+        callco( startco, shpkt )
+        
+        rc  :=  cli.returncode
+        r2  :=  cli.result2
+
+        //  When we return from calling the shell, we should restore the old
+        //  global vector, and return to the caller, giving the return code and
+        //  result2 returned to us from the shell.
+    
+        deleteco( startco )
+
+        //  Before copying back the global vector, we should check to see that
+        //  it has not moved, and is still the same size!
+        
+        UNLESS  gbase = @globsize  &  gsize = globsize  DO
+        $(
+            //  There is very little we can do here, since the program which
+            //  called us may well rely on addresses in the global vector,
+            //  which appears to have moved, or been modified destructively.
+            
+            gbase     :=  @globsize
+            gsize     :=  globsize
+            
+            gwarning  :=  TRUE
+        $)
+    
+        FOR  i = 1  TO  gsize  DO  gbase!i  :=  oldgv!i
+
+        freevec( oldgv )
+        
+        //  If there has been some problem with global sizes, then we should
+        //  moan here, but there's not a lot else we can do.
+        
+        IF  gwarning  THEN
+        $(
+            LET o  =  output()
+
+            selectoutput( cli.standardoutput )
+            writes( "****** WARNING:  Global vector location has changed ...*N" )
+            selectoutput( o )
+        $)
+        
+        cli.returncode  :=  rc
+        cli.result2     :=  r2
+
+        result2         :=  r2
+        
+        RESULTIS  cli.returncode = 0
+    $)
+$)
+
+
+
+AND rex.cli.init( shpkt )  =  VALOF
+$(
+//  Dummy version of "cli.init" which initialises what it needs to in order
+//  to run the shell recursively.
+
+    currentdir           :=  copydir( currentdir )
+    cli.commanddir       :=  copydir( cli.commanddir )
+
+    cli.currentinput     :=  shpkt!shpkt.scb
+    cli.currentoutput    :=  findoutput( "**" )
+
+    cli.background       :=  NOT (cli.currentinput!scb.type < 0)
+    cli.standardinput    :=  cli.currentinput
+    cli.standardoutput   :=  cli.currentoutput
+        
+    returncode           :=  0
+    cli.returncode       :=  0
+    cli.faillevel        :=  shpkt!shpkt.faillevel
+    cli.result2          :=  0
+    cli.commandfile % 0  :=  0
+    cli.module           :=  0
+
+    FOR  i = 0  TO  shpkt!shpkt.prompt % 0  DO  cli.prompt % i  :=  shpkt!shpkt.prompt % i
+
+    result2              :=  shpkt
+
+    RESULTIS  freevec
+$)
+
+

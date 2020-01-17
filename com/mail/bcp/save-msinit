@@ -1,0 +1,128 @@
+    // Sends off a BSP open block with an authorization message in
+    // the user data part.  The format of the block is as follows:
+    //
+    //       +---------------+
+    //       |    #X6A02     |  BSP OPEN code
+    //       |---------------|
+    //       |  REPLY PORT   |
+    //       |---------------|
+    //       |  FUNC CODE    |
+    //       |---------------|
+    //       |       2       |  Number of BSP parms
+    //       |---------------|
+    //       | MAX RX BLKSIZE|
+    //       |---------------|
+    //       | MAX TX BLKSIZE|
+    //       |---------------|
+    //       |  64   | N+128 | Mess type; No. of octets, last fragment
+    //       |---------------|
+    //       |               |
+    //       |--           --|
+    //       |               |
+    //       |--    N/2    --|
+    //       |    dibytes    |
+    //       |--           --|
+    //       |               |
+    //       |--           --|
+    //       |               |
+    //       |---------------|
+    //       |  16   |  128  |  Mess type; called
+    //       |---------------|
+    //       | N+128 |  N    |  Calling
+    //       |-------+--   --|
+    //       | bytes of data |
+    //       |-------+-------|
+    //       |  128  |  128  |  quality; expalanation
+    //       |-------+-------|
+    //       |   0   |       |  End of messages
+    //       +---------------+
+    //
+    // The authorization information is taken from the data which RM passes
+    // on from the load command.  There should normally be 12 dibytes of data.
+
+    LET ringinfo        = rootnode ! rtn.info ! rtninfo.ring
+    LET rhtaskid        = ringinfo ! ri.rhtaskid
+    LET load.data       = ringinfo ! ri.load.data
+    LET uidset          = ringinfo ! ri.uidset
+    LET load.data.dibytes=get2bytes(load.data, 0) // Size of load data
+    LET nsvec           = VEC 3
+    LET instr           = ?
+    LET bsp.handler     = ?
+    LET tx.block        = VEC open.block.upb
+    LET rx.block        = VEC bb.ssp.arg3
+    LET num.bsp.parms   = ?
+    LET rx.pkt          = TABLE notinuse, 0, act.rx.bb,
+                          0, 0, 0, bb.ssp.arg3+1, 0, 0, short.timeout
+    LET rx.port         = 0
+    LET tx.port         = ?
+    LET machine.id      = ?
+    LET max.tx.blocksize= pref.blocksize
+    LET max.rx.blocksize= pref.blocksize
+    LET rhtcb           = ?
+    LET status          = ?
+    LET suffix.len      = ?
+    LET flags           = ?
+    LET tx.len          = (bb.ssp.arg4+load.data.dibytes)*bytesperringword +1
+
+    IF rhtaskid=0
+    THEN $( result2 := 400; RESULTIS 0 $) // No ring handler
+
+    UNLESS lookup.name(service.name, nsvec) THEN RESULTIS 0
+
+    // Test that this really is a BSP service
+    flags := nsv.flags ! nsvec
+    IF (flags & nsv.flags.pmask) \= nsv.flags.bsp
+    THEN $( result2 := 422; RESULTIS 0 $)
+
+    rx.port    := sendpkt(notinuse, rhtaskid, act.findfreeport)
+    tx.port    := nsvec ! nsv.port
+    machine.id := nsvec ! nsv.machine.id
+
+    pkt.id     ! rx.pkt      := rhtaskid
+    rhpkt.buff ! rx.pkt      := rx.block
+    rhpkt.port ! rx.pkt      := rx.port
+    rhpkt.station   ! rx.pkt := machine.id
+    IF (flags & nsv.flags.slow) \= 0
+    THEN rhpkt.lifetime ! rx.pkt := long.timeout // Slow machine
+
+    FOR i=0 TO open.block.upb DO tx.block!i := 0
+
+    put2bytes(tx.block, bb.ssp.type,      code.open | #X02)
+    put2bytes(tx.block, bb.ssp.replyport, rx.port)
+    put2bytes(tx.block, bb.ssp.func,      nsvec ! nsv.func)
+    put2bytes(tx.block, bb.ssp.arg1,      2)      // Bsp parameters
+    put2bytes(tx.block, bb.ssp.arg2,      pref.blocksize)
+    put2bytes(tx.block, bb.ssp.arg3,      pref.blocksize)
+
+    // Put in the authentication information as a user data message
+    // Message type = 64; last parameter marked by 128 bit.
+
+    put2bytes( tx.block, bb.ssp.arg4 , (64 << 8) | load.data.dibytes*2 | 128 )
+
+    FOR i=1 TO load.data.dibytes
+    DO put2bytes(tx.block, bb.ssp.arg4+i, get2bytes[load.data, i] )
+    byteput(tx.block, tx.len,  16); tx.len +:= 1        // connect
+    byteput(tx.block, tx.len, 128); tx.len +:= 1        // Called
+    $(  LET name        = ringinfo! ri.loaders.name
+        LET first       = name%0 +1
+        FOR i = 1 TO name%0 IF name%i = '/' THEN first := i+1 <> BREAK
+        byteput(tx.block, tx.len, 128 | name%0-first+1); tx.len +:= 1
+        FOR i = first TO name%0 DO
+        $( byteput(tx.block, tx.len, name%i); tx.len +:= 1      $)
+    $)
+
+    byteput(tx.block, tx.len, 128); tx.len +:= 1        // Quality of service
+    byteput(tx.block, tx.len, 128); tx.len +:= 1        // Explanation text
+    byteput(tx.block, tx.len,   0); tx.len +:= 1
+
+    qpkt(rx.pkt)
+    status := sendpkt(notinuse, rhtaskid, act.tx,
+                      0, 0, tx.block, (tx.len-2)/BYTESPERRINGWORD +1,
+                      machine.id, tx.port)
+    IF status \= txst.accepted THEN $( result2 := status; GOTO failed $)
+
+
+
+/*****/
+
+

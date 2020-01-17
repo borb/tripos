@@ -1,0 +1,531 @@
+;*********************************************************
+;                                                        *
+;         Driver for the DEQNA Ethernet Interface        *
+;                                                        *
+; Author: Martyn Johnson, January 1985                   *
+;                                                        *
+; Function 1: "Read physical address"                    *
+; -----------------------------------                    *
+;                                                        *
+;  TYPE = 1                                              *
+;  ARG1 = Pointer to 6 byte buffer                       *
+;                                                        *
+; On return:                                             *
+;                                                        *
+; RES2    0 for success                                  *
+; buffer  6 byte address, l.s. byte first                *
+;                                                        *
+; Function 2: "Set status"                               *
+; ------------------------                               *
+;  TYPE = 2                                              *
+;  ARG1 = status bits                                    *
+;                                                        *
+; The status bits are adjusted to prevent changing bits  *
+; which would confuse the driver, and written to the CSR *
+;                                                        *
+; On return:                                             *
+;                                                        *
+; RES2    0 for success                                  *
+;                                                        *
+;                                                        *
+; Function 3: "Transmit packet"                          *
+; Function 4: "Receive packet"                           *
+; ----------------------------                           *
+;                                                        *
+;  TYPE = 3, 4                                           *
+;  ARG1 = address descriptor bits & high address bits    *
+;  ARG2 = low order address bits                         *
+;  ARG3 = - word count                                   *
+;  ARG4-8 must exist (used as workspace and corrupted)   *
+;                                                        *
+; The arguments are in the format required by the DEQNA. *
+;                                                        *
+; On return:                                             *
+;                                                        *
+;  RES1 = status word 1                                  *
+;  RES2 = status word 2                                  *
+;                                                        *
+;*********************************************************
+
+
+
+; DCB symbols
+
+D.ID    =       2.               ; Device ID
+D.WKQ   =       4.               ; Work queue
+D.STRT  =       6.               ; Start routine
+D.STOP  =       8.               ; Stop routine
+D.JSR   =       10.              ; subroutine jump to
+D.INT   =       12.              ; interrupt routine
+D.I     =  D.JSR+4               ; offset for interrupt rtn
+D.VEC   =       14.              ; interrupt vector
+D.CSR   =       16.              ; CSR address
+D.TXH   =       18.              ; Head of transmit descriptor queue
+D.TXT   =       20.              ; Tail of transmit descriptor queue
+D.RXH   =       22.              ; Head of receive descriptor queue
+D.RXT   =       24.              ; Tail of receive descriptor queue
+D.RSCNT =       26.              ; Count of device resets
+D.LSS   =       28.              ; Last device status written
+
+
+;*********************************************************
+;                                                        *
+;                Packet Symbols                          *
+;                                                        *
+;     The 'buffer descriptors' supplied to the DEQNA are *
+; constructed within the TRIPOS packets for the          *
+; corresponding requests.                                *
+;                                                        *
+;                                                        *
+;   +---------------+                                    *
+;   |     Flag      |  PKT.RES2                          *
+;   |---------------|                                    *
+;   |Desc| High addr|  PKT.ARG1                          *
+;   |---------------|                                    *
+;   |    Low addr   |  PKT.ARG2                          *
+;   |---------------|                                    *
+;   |  -Word count  |  PKT.ARG3                          *
+;   |---------------|                                    *
+;   |   Status 1    |  PKT.ARG4                          *
+;   |---------------|                                    *
+;   |   Status 2    |  PKT.ARG5                          *
+;   |---------------|                                    *
+;   |     Flag      |  PKT.ARG6  )                       *
+;   |---------------|            )                       *
+;   |Desc| High addr|  PKT.ARG7  ) Used to chain to next *
+;   |---------------|            )   descriptor          *
+;   |    Low addr   |  PKT.ARG8  )                       *
+;   +---------------+                                    *
+;                                                        *
+;                                                        *
+;*********************************************************
+
+P.LINK  =      0.                ; Packet link field
+P.ID    =      2.                ; Device or task ID
+P.TYPE  =      4.                ; Packet type
+P.RES1  =      6.                ; First result
+P.RES2  =      8.                ; Second result
+P.A1    =      10.               ; First argument
+P.A2    =      12.
+P.A3    =      14.
+P.A4    =      16.
+P.A5    =      18.
+P.A6    =      20.
+P.A7    =      22.
+P.A8    =      24.
+
+P.FLG1  =      P.RES2
+P.ADH1  =      P.A1
+P.BUFF  =      P.A2
+P.WCNT  =      P.A3
+P.ST1   =      P.A4
+P.ST2   =      P.A5
+P.FLG2  =      P.A6
+P.ADH2  =      P.A7
+P.CHAIN =      P.A8
+
+
+; Root Node
+
+CRNTSK  =      456               ; Current TCB
+DEVMVP  =      502               ; pointer to MOVPKT routine
+DEVINT  =      504               ; pointer to INTENT
+DEVRET  =      506               ; pointer to INTRET
+
+; Other absolute addresses
+
+CLKVEC =       100               ; clock interrupt vector
+
+; Constants
+
+F.RPA   =      1                 ; function code "read physical address"
+F.SS    =      2                 ; function code "set status"
+F.TX    =      3                 ; transmit
+F.RX    =      4                 ; receive
+
+INVFN   =      209.              ; "invalid packet type"
+
+
+;*********************************************************
+;                                                        *
+;                   How it works                         *
+;                                                        *
+;    This device does not follow the usual convention of *
+; doing one I/O operation at once, and leaving the       *
+; packet which does it on the head of the work queue.    *
+;                                                        *
+;    Instead, all packets received are immediately       *
+; removed from the work queue, and either sent back (if  *
+; an error is detected or the answer can be given        *
+; immediately), or held on one of the chains of active   *
+; descriptors which start from the DCB.  Thus, the work  *
+; queue is always empty whenever interrupts are enabled, *
+; so DQPKT cannot be used.                               *
+;                                                        *
+;    In order to circumvent hardware bugs, it is         *
+; necessary to have a watchdog timer on the DEQNA and    *
+; kick it if it goes to sleep. The commonly observed     *
+; symptom is that it jams up in the middle of copying a  *
+; packet between a buffer and a FIFO. The timer is       *
+; implemented by attaching a blister routine to the      *
+; line clock interrupt handler.                          *
+;                                                        *
+;*********************************************************
+
+
+        .WORD  INIT              ; Initialisation routine
+        .WORD  UNIN              ; Uninitialisation routine
+
+
+
+;********************************************************
+;                                                       *
+; Initialisation routine                                *
+;                                                       *
+; On entry:  R0 holds the device ID                     *
+;            R2 holds the DCB address                   *
+;                                                       *
+;********************************************************
+
+INIT:   MOV    #START,D.STRT(R2) ; Start routine
+        MOV    #STOP,D.STOP(R2)  ; Stop routine
+        MOV    #INTRTN,D.INT(R2) ; Interrupt routine
+        MOV    D.CSR(R2),R3      ; Get base of device registers
+        MOV    #2,16(R3)         ; Set 'reset' bit in DEQNA
+        CLR    16(R3)            ; and clear it again
+        MOV    D.VEC(R2),R1      ; Get interrupt vector address
+        MOV    R2,(R1)           ; Plug it with address
+        ADD    #D.JSR,(R1)       ;  of interrupt JSR
+        MOV    R1,14(R3)         ; Give the device its vector
+        MOV    #100,16(R3)       ; Enable device interrupts
+        MOV    @#CLKVEC,KCLK     ; Save address of clock int rtn
+        MOV    #CLKINT,@#CLKVEC  ; Plug in our own
+        MOV    R2,DCBAD          ; Save DCB address
+        RTS    PC
+
+
+;********************************************************
+;                                                       *
+; Uninitialisation routine                              *
+;                                                       *
+; On entry:  R2 holds DCB address                       *
+;                                                       *
+;********************************************************
+
+
+UNIN:   MOV    D.CSR(R2),R1      ; Get base of device registers
+        MOV    #2,16(R1)         ; Set 'reset' bit in DEQNA
+        CLR    16(R1)            ;  and clear it again
+        MOV    KCLK,@#CLKVEC     ; Remove blister routine
+        RTS    PC
+
+
+;********************************************************
+;                                                       *
+; Device start routine                                  *
+;                                                       *
+; On entry:  R2 holds the DCB address                   *
+;            R0 holds BCPL address of packet            *
+;                                                       *
+; R0 must be non-zero on exit.                          *
+;                                                       *
+;********************************************************
+
+START:  ASL    R0                 ; m/c address of packet
+        MOV    P.LINK(R0),D.WKQ(R2) ; dequeue packet
+
+; Check for bad packet contents.
+
+        CMP    P.TYPE(R0),#F.RPA  ; is it "read physical address"?
+        BEQ    RPA                ; yes
+        CMP    P.TYPE(R0),#F.SS   ; is it "set status"?
+        BEQ    SS                 ; yes
+        CMP    P.TYPE(R0),#F.TX   ; is it "transmit"?
+        BEQ    TXRX               ; yes
+        CMP    P.TYPE(R0),#F.RX   ; is it "receive"?
+        BEQ    TXRX               ; yes
+        MOV    #INVFN,P.RES1(R0)  ; invalid function result
+        BR     ERROR              ; error return
+
+RPA:    MOV    R0,-(SP)           ; save packet address
+        MOV    R2,-(SP)           ; and DCB address
+        MOV    D.CSR(R2),R1       ; base address of device registers
+        MOV    P.A1(R0),R0        ; BCPL address of buffer
+        ASL    R0                 ; machine address
+        MOV    #6,R2              ; loop count
+RPALP:  MOV    (R1)+,R3           ; get a word containing one byte of address
+        MOVB   R3,(R0)+           ; put it in buffer
+        SOB    R2,RPALP           ; and loop
+        MOV    (SP)+,R2           ; restore DCB address
+        MOV    (SP)+,R0           ; point R0 at packet again
+        CLR    P.RES1(R0)         ; zero return code
+        BR     RETPKT             ; return packet
+
+SS:     MOV    D.CSR(R2),R1       ; base address of device registers
+        MOV    P.A1(R0),R3        ; get argument
+        BIC    #174376,R3         ; clear the bits which may not be set
+        BIS    #000100,R3         ; force interrupts on
+        MOV    R3,16(R1)          ; write the CSR
+        MOV    R3,D.LSS(R2)       ; and remember last status in DCB
+
+ERROR:
+RETPKT: MOV    @#CRNTSK,R1        ; BCPL address of current TCB
+        ASL    R1                 ; machine address
+        JSR    PC,SNDPKT          ; Return TRIPOS packet to caller
+        MOV    #-1,R0             ; Make R0 non-zero
+        RTS    PC                 ; Return
+
+
+TXRX:
+
+; Transmission and reception are basically the same - they just work
+; on different queues, status bits etc.
+
+; First tidy up the packet to make a valid buffer descriptor
+
+        MOV    #100000,P.FLG1(R0) ; Initialise first flag word
+        BIC    #040000,P.ADH1(R0) ; Kill chain bit in address
+        BIS    #100000,P.ADH1(R0) ; and force valid bit
+        MOV    #100000,P.ST1(R0)  ; Initialise status
+        MOV    #1,P.ST2(R0)       ; and the second status word
+        MOV    #100000,P.FLG2(R0) ; Initialise second flag word
+        CLR    P.ADH2(R0)         ; Make chain address invalid
+        CLR    P.CHAIN(R0)        ; For tidiness
+
+; If there is a non-empty chain of descriptors in existence already,
+; chain this one onto it. Of course, the DEQNA may run off the chain
+; and go idle while we are doing this - this is checked afterwards.
+
+        CMP   P.TYPE(R0),#F.TX    ; Test type to get the right chain
+        BNE   RX1                 ;
+
+        CLR   P.ST2(R0)           ; Transmit status 2 should be 0 for tx
+
+        MOV   D.TXT(R2),R1        ; Get tail of chain
+        BNE   MORETX              ; Not empty, so adding more
+        MOV   R0,D.TXH(R2)        ; Make this the only item in chain
+        MOV   R0,D.TXT(R2)        ;
+        BR    NEWTX               ; Go off to give it to the DEQNA
+MORETX: MOV   R0,P.LINK(R1)       ; Link the new descriptor onto the old
+        MOV   R0,D.TXT(R2)        ; Update tail pointer of chain
+        MOV   R0,P.CHAIN(R1)      ; Set up descriptor chain
+        ADD   #P.FLG1,P.CHAIN(R1) ;  to point to the descriptor
+        MOV   #140000,P.ADH2(R1)  ; Mark it as a valid chain address
+                                  ; ************** see below
+        BIT   #040000,P.FLG2(R1)  ; Did the DEQNA beat us to it?
+        BEQ   ENDTX               ; Definitely not, so the job is done
+        MOV   D.CSR(R2),R3        ; Base of I/O addresses
+        TST   #20,16(R3)          ; Is the list still valid?
+        BEQ   ENDTX               ; Yes, the DEQNA must have got in at the
+                                  ; exact point marked with asterisks above.
+                                  ; So assume all is OK
+NEWTX:  MOV   D.CSR(R2),R3        ; Base of I/O addresses
+        ADD   #P.FLG1,R0          ; Address of descriptor
+        MOV   R0,10(R3)           ; Give it to the DEQNA
+        CLR   12(R3)              ; Write the high order address bits
+ENDTX:  MOV   #-1,R0              ; Make R0 non-zero
+        RTS   PC                  ; Return to kernel
+
+RX1:                              ; Effectively the same code for reception
+        MOV   D.RXT(R2),R1        ; Get tail of chain
+        BNE   MORERX              ; Not empty, so adding more
+        MOV   R0,D.RXH(R2)        ; Make this the only item in chain
+        MOV   R0,D.RXT(R2)        ;
+        BR    NEWRX               ; Go off to give it to the DEQNA
+MORERX: MOV   R0,P.LINK(R1)       ; Link the new descriptor onto the old
+        MOV   R0,D.RXT(R2)        ; Update tail pointer of chain
+        MOV   R0,P.CHAIN(R1)      ; Set up descriptor chain
+        ADD   #P.FLG1,P.CHAIN(R1) ;  to point to the descriptor
+        MOV   #140000,P.ADH2(R1)  ; Mark it as a valid chain address
+                                  ; ************** see below
+        BIT   #040000,P.FLG2(R1)  ; Did the DEQNA beat us to it?
+        BEQ   ENDRX               ; Definitely not, so the job is done
+        MOV   D.CSR(R2),R3        ; Base of I/O addresses
+        TST   #40,16(R3)          ; Is the list still valid?
+        BEQ   ENDRX               ; Yes, the DEQNA must have got in at the
+                                  ; exact point marked with asterisks above.
+                                  ; So assume all is OK
+NEWRX:  MOV   D.CSR(R2),R3        ; Base of I/O addresses
+        ADD   #P.FLG1,R0          ; Address of descriptor
+        MOV   R0,4(R3)            ; Give it to the DEQNA
+        CLR   6(R3)               ; Write the high order address bits
+ENDRX:  MOV   #-1,R0              ; Make R0 non-zero
+        RTS   PC                  ; Return to kernel
+
+
+;********************************************************
+;                                                       *
+; Device Stop Routine                                   *
+;                                                       *
+; Can never be called because packets do not stay on    *
+; the work queue.                                       *
+;                                                       *
+;********************************************************
+
+STOP:   RTS    PC
+
+
+;********************************************************
+;                                                       *
+; Interrupt routine                                     *
+;                                                       *
+; On entry: R2 points after the JSR in the DCB,         *
+; previous R2 is saved on the stack.                    *
+;                                                       *
+;********************************************************
+
+INTRTN: MOV    R1,-(SP)          ; Save regs on stack
+        MOV    R0,-(SP)
+        MOV    R3,-(SP)
+        SUB    #D.I,R2           ; Adjust DCB pointer
+        MOV    @#CRNTSK,R1       ; R1 will hold highest pri task
+        ASL    R1                ;  to which packet has been sent
+
+        MOV    D.CSR(R2),R3      ; Base of I/O addresses
+        BIT    #4,16(R3)         ; Non-existent memory interrupt?
+        BEQ    NOTNXM            ; No, OK
+        TRAP   15.               ; This is a disaster!
+
+NOTNXM: BIS    #100200,16(R3)    ; Clear the interrupts
+TXILP:  MOV    D.TXH(R2),R0      ; Get head packet from queue
+        BEQ    NOTXI             ; There isn't one
+        TST    P.ST2(R0)         ; Is its status valid?
+        BEQ    NOTXI             ; No, this descriptor is still alive
+        MOV    P.ST1(R0),P.RES1(R0) ; Copy status to results
+        MOV    P.ST2(R0),P.RES2(R0) ;
+        CMP    D.TXH(R2),D.TXT(R2) ; Is this the only one on chain?
+        BNE    TXINE             ; No
+        CLR    D.TXH(R2)         ; Empty the chain
+        CLR    D.TXT(R2)         ;
+        JSR    PC,SNDPKT         ; Send the packet back
+        BR     NOTXI             ; That's all
+
+TXINE:  MOV    P.LINK(R0),D.TXH(R2) ; Update head pointer
+        JSR    PC,SNDPKT         ; Send this packet back
+        BR     TXILP             ; And loop to see if this one is ready
+
+NOTXI:
+RXILP:  MOV    D.RXH(R2),R0      ; Get head packet from queue
+        BEQ    NORXI             ; There isn't one
+        CMPB   P.ST2(R0),P.ST2+1(R0) ; Status valid?
+        BNE    NORXI             ; No, this descriptor is still alive
+        MOV    P.ST1(R0),P.RES1(R0) ; Copy status to results
+        MOV    P.ST2(R0),P.RES2(R0) ;
+        CMP    D.RXH(R2),D.RXT(R2) ; Is this the only one on chain?
+        BNE    RXINE             ; No
+        CLR    D.RXH(R2)         ; Empty the chain
+        CLR    D.RXT(R2)         ;
+        JSR    PC,SNDPKT         ; Send the packet back
+        BR     NORXI             ; That's all
+
+RXINE:  MOV    P.LINK(R0),D.RXH(R2) ; Update head pointer
+        JSR    PC,SNDPKT         ; Send this packet back
+        BR     RXILP             ; And loop to see if this one is ready
+
+NORXI:  MOV    @#DEVINT,PC       ; Return from interrupt
+
+
+
+;*********************************************************
+;                                                        *
+;    This routine sends back the packet in R0            *
+;                                                        *
+; On entry:  R2 contains the DCB address                 *
+;            R0 contains the packet address              *
+;            R1 points to the TCB of the highest pri task*
+;              to which a packet has been returned       *
+;                                                        *
+; R1 is updated, R2 is preserved.                        *
+;                                                        *
+;*********************************************************
+
+SNDPKT: MOV    #-1,P.LINK(R0)    ; Set 'notinuse'
+        MOV    D.ID(R2),R3       ; Device ID for MOVPKT
+        MOV    R2,-(SP)          ; Save DCB pointer
+        MOV    R0,R2             ; For MOVPKT
+        MOV    @#DEVMVP,R0       ; Get MOVPKT routine
+        JSR    PC,(R0)           ; Send packet back
+        MOV    (SP)+,R2          ; Restore DCB pointer
+        SEZ
+        RTS    PC                ; Return with Z set
+
+
+
+;*********************************************************
+;                                                        *
+;    This section deals with checking for DEQNA hangups. *
+; The code which follows is entered on every clock       *
+; interrupt, and checks for hung buffers. It does this   *
+; by using the 'flag' field of a buffer descriptor. In   *
+; normal operation, this word is initialised to #100000, *
+; and set to #177777 by the DEQNA (observed fact, only   *
+; bit 14 is actually defined to be set). If this routine *
+; sees the flag set to #177777, it clears the low order  *
+; bit, giving #177776. If it sees #177776, the buffer    *
+; must have been hanging around for at least 20ms, which *
+; implies that the DEQNA is wedged. At this point the    *
+; device is reset and the buffer descriptors restored to *
+; their initial state and resubmitted.                   *
+;                                                        *
+;    The interrupt routine is entered with interrupts    *
+; disabled, and must not alter any registers. It exits   *
+; by jumping to the real interrupt routine.              *
+;                                                        *
+;*********************************************************
+
+; Impure section - for addressability:
+
+KCLK:   .WORD  0                 ; Holds address of kernel clock int rtn
+DCBAD:  .WORD  0                 ; Holds DCB address
+
+CLKINT: MOV    R1,-(SP)          ; Save a couple of
+        MOV    R2,-(SP)          ;  registers
+        MOV    DCBAD,R2          ; Point at DCB
+        MOV    D.TXH(R2),R1      ; Head of transmit queue
+        BEQ    CLKRX             ; Nothing there, try RX queue
+        CMP    P.FLG1(R1),#177777 ; buffer in progress?
+        BNE    CLK1              ; no
+        BIC    #1,P.FLG1(R1)     ; clear the bottom bit
+        BR     CLKEX             ; that will do for now
+CLK1:   CMP    P.FLG1(R1),#177776 ; stuck buffer?
+        BEQ    STUCK             ; yes - go off to unwedge it
+CLKRX:  MOV    D.RXH(R2),R1      ; Head of receive queue
+        BEQ    CLKEX             ; Nothing there
+        CMP    P.FLG1(R1),#177777 ; buffer in progress?
+        BNE    CLK2              ; no
+        BIC    #1,P.FLG1(R1)     ; clear the bottom bit
+        BR     CLKEX             ; that will do for now
+CLK2:   CMP    P.FLG1(R1),#177776 ; stuck buffer?
+        BEQ    STUCK             ; yes - go off to unwedge it
+
+CLKEX:  MOV    (SP)+,R2          ; Restore R2
+        MOV    (SP)+,R1          ;  and R1
+        JMP    @KCLK             ; Jump to real interrupt routine
+
+
+; Here is the code to get out of the stuck state which is detected above:
+
+; R2 points at the DCB, R1 is scratch, all other registers must be preserved.
+
+STUCK:  MOV   R3,-(SP)           ; save another register
+        MOV   D.CSR(R2),R3       ; get I/O address base to R3
+        MOV   #2,16(R3)          ; assert the 'reset' bit
+        CLR   16(R3)             ; and clear it again
+        MOV   D.LSS(R2),16(R3)   ; rewrite the last status written
+        MOV   D.RXH(R2),R1       ; head of receive queue
+        MOV   #100000,P.FLG1(R1) ; restore initial state of flag word
+        ADD   #P.FLG1,R1         ; address of descriptor
+        MOV   R1,4(R3)           ; give it to the DEQNA
+        CLR   6(R3)              ; write the low order address bits
+        MOV   D.TXH(R2),R1       ; head of transmit queue
+        MOV   #100000,P.FLG1(R1) ; restore initial state of flag word
+        ADD   #P.FLG1,R1         ; address of descriptor
+        MOV   R1,10(R3)          ; give it to the DEQNA
+        CLR   12(R3)             ; write the low order address bits
+        INC   D.RSCNT(R2)        ; increment count of resets
+        MOV   (SP)+,R3           ; restore R3
+        BR    CLKEX              ; return
+
+        .END
+
+

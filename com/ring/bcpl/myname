@@ -1,0 +1,69 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+       ##    ##  #      #  ##    ##    ####    ##    ##  ########
+       ###  ###  ##    ##  ###   ##   ######   ###  ###  ########
+       ########   ##  ##   ####  ##  ##    ##  ########  ##
+       ## ## ##    ####    ## ## ##  ########  ## ## ##  ######
+       ##    ##     ##     ##  ####  ##    ##  ##    ##  ##
+       ##    ##     ##     ##  ####  ##    ##  ##    ##  ##
+       ##    ##     ##     ##   ###  ##    ##  ##    ##  ########
+       ##    ##     ##     ##    ##  ##    ##  ##    ##  ########
+
+************************************************************************
+**    Author:   Brian Knight                        October 1979      **
+***********************************************************************/
+
+
+// Command to find out the name of this ring station by reverse
+// lookup in the nameserver.
+// If lookup is successful, then the name and station number are set
+// in the ring info vector accessible from the rootnode.
+
+SECTION "myname"
+GET "libhdr"
+GET "ringhdr"
+GET "sys:ring.bcpl.ssplib"
+
+
+
+LET start() BE
+    $(
+    LET info.vec = rootnode ! rtn.info ! rtninfo.ring
+    LET oldname  = info.vec ! ri.myname
+    LET newname = ?
+    LET len = ?
+    LET tx.block = VEC bb.ssp.args
+    LET nsvec   = VEC 3
+    LET rx.buff = VEC 64
+
+
+    UNLESS ssp("ownname", tx.block, bb.ssp.args, rx.buff, 64, nsvec)
+    THEN GOTO ns.problem
+
+    // All OK
+
+    len := byteget(rx.buff+bb.ssp.arg1, 0)
+    newname := getvec(len/bytesperword)  // Small, so won't fail (!)
+    FOR i=0 TO len DO newname%i := byteget(rx.buff+bb.ssp.arg1, i)
+
+    freevec(oldname)
+    info.vec ! ri.myname := newname
+
+//  Now do a forward lookup to get our device number.  (Ugh!)
+
+    UNLESS lookup.name(newname,nsvec) THEN GOTO ns.problem
+    info.vec!ri.myaddr:=nsv.machine.id!nsvec
+
+    RETURN
+
+ns.problem:
+    // Failed to use name server, or it doesn't know the name.
+    // Don't reset name in store
+    fault(result2)
+    stop(20)
+    $)
+
+

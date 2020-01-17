@@ -1,0 +1,153 @@
+SECTION "SYN2"
+
+GET "SYNHDR"
+
+LET lookupword() = VALOF                // optimised lookup for ASCII machines
+$(1 MANIFEST $( uc  = #X5F $)
+
+$<PDPRSX
+   LET UCequal = ( TABLE
+        #010002, #005000, #006302, #006301, #121221, #001021, #010446, #010546,
+        #012746, #177640, #112203, #112204, #112105, #074504, #041604, #001004,
+        #005303, #003371, #012700, #177777, #005726, #012605, #012604, #062716,
+        #000002, #000207 ) << 1
+$>PDPRSX
+$<PDPRSX'
+    LET ucequal(a, b) = (a%0 ~= b%0) -> FALSE, VALOF
+    $( FOR i=1 TO a%0 UNLESS (a%i&uc)=(b%i&uc) RESULTIS FALSE ; RESULTIS TRUE $)
+$>PDPRSX'
+
+    LET strl    = wordv%0
+    LET hashval = ABS (strl + (((wordv%1)&uc) << 10) + (((wordv%strl)&uc) << 4)
+                      ) rem nametablesize
+    LET prev    = nametable+hashval
+
+    wordnode := !prev
+
+    UNTIL wordnode=0 | ucequal(wordnode+2, wordv)
+    DO $( prev := wordnode+h2; wordnode := h2!wordnode $)
+
+    TEST wordnode=0 THEN
+    $(   LET wordsize = strl/bytesperword
+         wordnode := newvec(wordsize+2)
+         wordnode!0 := s.name
+         wordnode!1 := nametable!hashval
+         FOR i = 0 TO wordsize DO wordnode!(i+2) := wordv!i
+         nametable!hashval := wordnode
+    $)
+    ELSE
+$(      LET match = "**MC68000TRIPOS"
+        IF ucequal(wordv, match)
+        $( CALLSYNREPORT(2, wordv); REPORTCOUNT := REPORTCOUNT-1 $)
+    UNLESS prev=nametable+hashval DO
+    $(  !prev := h2!wordnode
+        h2!wordnode := nametable!hashval
+        nametable!hashval := wordnode
+    $)
+$)
+    RESULTIS h1!wordnode
+$)1
+
+
+AND declsyswords() BE                      // SET ALL TAGS SET AS OPTIONS
+$(1
+   CONDPTR := CONDVEC+1
+
+   FOR I=1 TO !CONDVEC DO
+   $(
+//      IF CONDPTR > CONDVEC+30 THEN BREAK
+//      TEST CONDPTR%2 > 18 | CONDPTR%2 = 0
+//      THEN $( DEB("Len = %N for SETDOLLAR*N", CONDPTR%2); BREAK $)
+//      ELSE
+      SETDOLLARNAME(CONDPTR+1, !CONDPTR)
+      CONDPTR := CONDPTR + (GETBYTE(CONDPTR+1,0)/BYTESPERWORD) + 2
+   $)
+   INTAG := 0
+
+   symb := TABLE
+      s.and,s.abs,
+      s.be,s.break,s.by,
+      s.case,
+      s.do,s.default,
+      s.eq,s.eqv,s.or,s.endcase,
+      s.false,s.for,s.finish,
+      s.goto,s.ge,s.gr,s.global,s.get,
+      s.if,s.into,
+      s.let,s.lv,s.le,s.ls,s.logor, s.logand,s.loop,s.lshift,
+      s.manifest,
+      s.ne,s.not,s.neqv,s.needs,
+      s.slctap,s.or,
+      s.resultis,s.return,s.rem,s.rshift,s.rv,
+      s.repeat,s.repeatwhile,s.repeatuntil,
+      s.switchon,s.slct,s.static,s.section,
+      s.to,s.test,s.true,s.do,s.table,
+      s.until,s.unless,
+      s.vec,s.valof,
+      s.while,
+      0
+
+    d("AND/ABS/*
+      *BE/BREAK/BY/*
+      *CASE/*
+      *DO/DEFAULT/*
+      *EQ/EQV/ELSE/ENDCASE/*
+      *FALSE/FOR/FINISH/*
+      *GOTO/GE/GR/GLOBAL/GET/*
+      *IF/INTO/*
+      *LET/LV/LE/LS/LOGOR/LOGAND/LOOP/LSHIFT//")
+
+    d("MANIFEST/*
+      *NE/NOT/NEQV/NEEDS/*
+      *OF/OR/*
+      *RESULTIS/RETURN/REM/RSHIFT/RV/REPEAT/REPEATWHILE/REPEATUNTIL/*
+      *SWITCHON/SLCT/STATIC/SECTION/*
+      *TO/TEST/TRUE/THEN/TABLE/*
+      *UNTIL/UNLESS/*
+      *VEC/VALOF/*
+      *WHILE/*
+      *$//")
+
+     nulltag := wordnode
+$)1
+
+
+AND d(words) BE
+$(1 LET i, length = 1, 0
+
+    $( LET ch = words%i
+       TEST ch='/'
+       $( IF length=0 RETURN
+          wordv%0 := length
+          lookupword()
+          h1!wordnode := !symb
+          symb := symb + 1
+          length := 0
+       $)
+       ELSE $( length := length + 1; wordv%length := ch $)
+       i := i + 1
+    $) REPEAT
+$)1
+
+AND Setdollarname(name, value) BE
+$(
+    LET node = wordnode
+//P LET charv=VEC 20
+
+    TEST name=0
+    THEN DEB("Setdollar given %N,%N*N", NAME, VALUE)
+    ELSE
+    $(  LET len = name%0
+        FOR i = 1 TO len DO wordv%(i+1) := name%i
+        wordv%1 := '**'
+        wordv%0 := len+1
+//P     UNPACKSTRING(NAME, CHARV+1)
+//P     CHARV!0 := 1+CHARV!1
+//P     CHARV!1 := '**'
+//P     PACKSTRING(CHARV, WORDV)
+        LOOKUPWORD()
+    $)
+    H1!WORDNODE := value -> -S.NAME, S.NAME
+    wordnode := node
+$)
+
+

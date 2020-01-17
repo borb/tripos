@@ -1,0 +1,379 @@
+;*********************************************************
+;                                                        *
+;          Driver for the Data Ring Transmitter          *
+;      using the second type of "type 2" interface       *
+;      ___________________________________________       *
+;                                                        *
+;             PDP11 version                              *
+;                                                        *
+;                                                        *
+; The transmitter and receiver are separate TRIPOS       *
+; devices.                                               *
+;                                                        *
+; It is important to note that the Type2 works entirely  *
+; in 16-bit quantities, and that the interface is wired  *
+; up such that Type2 DMA uses word addresses.  Thus all  *
+; codeword and buffer addresses sent to the Type2 must   *
+; be BCPL addresses, i.e. machine address/2              *
+;                                                        *
+; Transmitter Packets                                    *
+; -------------------                                    *
+;     There is only one function, requesting             *
+; transmission of a basic block to a given destination   *
+; and port.                                              *
+;                                                        *
+;   TYPE = 1  (Transmit Basic Block)                     *
+;   ARG1 = Destination Ring Station                      *
+;   ARG2 = Port number for basic block                   *
+;   ARG3 = Number of data words in basic block           *
+;   ARG4 = BCPL address of buffer containing the data    *
+;          part of the basic block                       *
+;   ARG5   Must exist (used as workspace and corrupted)  *
+;                                                        *
+; On return:                                             *
+;                                                        *
+;   RES1 = TXST.ACCEPTED (in BCPL header 'RINGHDR')      *
+;          if all the data was sent and accepted.        *
+;                                                        *
+; If the transfer failed:                                *
+;                                                        *
+;   RES1 = one of:-                                      *
+;          TXST.UNSEL.HDR      unselected for hdr packet *
+;          TXST.UNSEL.IN.BLK   unselected after header   *
+;          TXST.IGNORED        ignored                   *
+;          TXST.BUSY           busy                      *
+;          TXST.RING.ERROR     ring errors/ring broken   *
+;          TXST.BAD.TX.REQ     invalid tx request        *
+;                                                        *
+;                                                        *
+; Author: Martyn Johnson, September 1884, based on       *
+;         the LSI4 driver written by                     *
+;                                                        *
+;          Brian Knight  October 1980                    *
+;          Based on the 'noddy' type 2 driver written    *
+;            by Martyn Johnson (based in turn on the     *
+;            picoprocessor driver written by BJK).       *
+;                                                        *
+;  Modifications:                                        *
+;    2 Feb 81 by BJK: conversion to revised 'type 2'     *
+;                     interface.                         *
+;*********************************************************
+
+
+
+; DCB symbols
+
+D.ID    =       2                ; Device ID
+D.WKQ   =       4                ; Work queue
+D.STRT  =       6                ; Start routine
+D.STOP  =       8.               ; Stop routine
+D.JSR   =       10.              ; subroutine jump to
+D.INT   =       12.              ; interrupt routine
+D.I     =  D.JSR+4               ; offset for interrupt rtn
+D.VEC   =       14.              ; interrupt vector
+D.CSR   =       16.              ; CSR address
+
+
+;*********************************************************
+;                                                        *
+;                  Packet symbols                        *
+;                                                        *
+;    The codeword supplied to the type2 is part of the   *
+; transmission request packet, accounting for order of   *
+; the arguments.  The codeword extends from the RES2     *
+; field of the packet to the ARG5 field and has the      *
+; following layout:                                      *
+;                                                        *
+;   +---------------+                                    *
+;   |    LINK (=0)  |  PKT.RES2                          *
+;   |---------------|                                    *
+;   | #X02  |STATION|  PKT.ARG1 (ms byte holds flag for  *
+;   |---------------|         interrupt at end of block) *
+;   |      PORT     |  PKT.ARG2                          *
+;   |---------------|                                    *
+;   |   DATA SIZE   |  PKT.ARG3                          *
+;   |---------------|                                    *
+;   |    BUFFER     |  PKT.ARG4                          *
+;   |---------------|                                    *
+;   |  RC   | FLAGS |  PKT.ARG5                          *
+;   +---------------+                                    *
+;                                                        *
+;   The last word of the codeword is used by the type2   *
+; to return results.                                     *
+;                                                        *
+;   The RC byte can have the following values:           *
+;                                                        *
+;       0: Whole basic block successfully transmitted    *
+;     128: Failed while trying to transmit header pkt    *
+;     129: Failed while trying to transmit port packet   *
+;     130: Failed while trying to transmit a data packet *
+;     131: Failed while trying to transmit checksum pkt  *
+;                                                        *
+;   The flag byte reflects the hardware transmission     *
+;   status bits:                                         *
+;                                                        *
+;       #B00001:  busy                                   *
+;       #B00010:  unselected                             *
+;       #B00100:  accepted                               *
+;       #B01000:  ignored                                *
+;       #B10000:  ring error                             *
+;                                                        *
+;   The TRIPOS return code for 'unselected during block' *
+; is produced when the unselected flag is set and the    *
+; RC byte is not 128.                                    *
+;                                                        *
+;*********************************************************
+
+
+P.LINK  =      0                 ; Packet link field
+P.ID    =      2                 ; Device or task ID
+P.TYPE  =      4                 ; Packet type
+P.RES1  =      6                 ; First result
+P.RES2  =      8.                ; Second result
+P.A1    =      10.               ; First argument
+P.A2    =      12.
+P.A3    =      14.
+P.A4    =      16.
+P.A5    =      18.
+P.A6    =      20.
+P.CACW  =      P.ID              ; 'Cancel' codeword
+P.CW    =      P.RES2            ; Codeword starts here in packet
+P.CWFS  =      P.A1              ; Station address & flags
+P.CWR   =      P.A5              ; Result field of codeword
+
+; Root Node
+
+CRNTSK  =      456               ; Current TCB
+DEVMVP  =      502               ; pointer to MOVPKT routine
+DEVINT  =      504               ; pointer to INTENT
+DEVRET  =      506               ; pointer to INTRET
+
+
+;*********************************************************
+
+        .WORD  INIT              ; Initialisation routine
+        .WORD  UNIN              ; Uninitialisation routine
+
+
+
+;********************************************************
+;                                                       *
+; Initialisation routine                                *
+;                                                       *
+; On entry:  R0 holds the device ID                     *
+;            R2 holds the DCB address                   *
+;                                                       *
+;********************************************************
+
+INIT:   MOV    #START,D.STRT(R2) ; Start routine
+        MOV    #STOP,D.STOP(R2)  ; Stop routine
+        MOV    #INTRTN,D.INT(R2) ; Interrupt routine
+        MOV    D.VEC(R2),R1      ; Get interrupt vector address
+        MOV    R2,(R1)           ; Plug it with address
+        ADD    #D.JSR,(R1)       ;  of interrupt JSR
+        MOVB   #100,@D.CSR(R2)   ; Enable device interrupts
+        RTS    PC
+
+
+;********************************************************
+;                                                       *
+; Uninitialisation routine                              *
+;                                                       *
+; On entry:  R2 holds DCB address                       *
+;                                                       *
+;********************************************************
+
+UNIN:   CLRB   @D.CSR(R2)        ; Disable device interrupts
+        RTS    PC
+
+
+;********************************************************
+;                                                       *
+; Device start routine                                  *
+;                                                       *
+; On entry:  R2 holds the DCB address                   *
+;            R0 holds BCPL address of packet            *
+;                                                       *
+; R0 must be non-zero on exit.                          *
+;                                                       *
+;********************************************************
+
+START:  JSR    PC,DRTRAN         ; Initiate transmission
+        MOV    #-1,R0            ; Make A non-zero
+        RTS    PC                ; Return
+
+
+;********************************************************
+;                                                       *
+; Device Stop Routine                                   *
+;                                                       *
+; On entry:  R2 holds DCB address                       *
+;                                                       *
+;********************************************************
+
+; This routine presents a problem, because transmission
+; packets cannot be cancelled.  This code follows that on
+; the LSI4, and does nothing, on the assumption that
+; nobody will DQPKT a transmission packet while it is
+; outstanding.
+
+STOP:   RTS    PC
+
+
+;********************************************************
+;                                                       *
+; Interrupt routine                                     *
+;                                                       *
+;    Entered when the type2 completes the last          *
+; requested action.  The data word returned by the      *
+; type 2 is the codeword address.                       *
+;                                                       *
+; On entry: R2 points after the JSR in the DCB,         *
+; previous R2 is saved on the stack.                    *
+;                                                       *
+;********************************************************
+
+INTRTN: MOV    R1,-(SP)          ; save regs on stack
+        MOV    R0,-(SP)
+        MOV    R3,-(SP)
+        SUB    #D.I,R2           ; Adjust DCB pointer
+        MOV    D.WKQ(R2),R0      ; Packet at head of work queue (BCPL addr)
+        BNE    INTPKT            ;
+        TRAP   10.               ; Panic if none
+        BR     INTEXIT
+
+INTPKT: ASL    R0                ; Machine address of packet
+        BITB   #2,@D.CSR(R2)     ; Test whether data available
+        BEQ    NODATA            ; Bad news
+        MOV    D.CSR(R2),R1      ; CSR address
+        TST    2(R1)             ; Read it to clear it
+
+; Examine the returncode field of the codeword, and thus
+; set the RES1 field of the packet.
+
+        CMP    P.CWR(R0),#-1     ; See if CW result field has changed
+        BNE    CWOK              ; J if yes (i.e. codeword OK)
+        MOV    #RCBADR,P.RES1(R0) ; "Bad request"
+        BR     TXOK
+
+CWOK:   TSTB   P.CWR+1(R0)       ; Test m.s. byte of result
+        BNE    NSENT             ; J if non-zero (not all sent)
+        MOV    #RCACC,P.RES1(R0) ; "Accepted"
+        BR     TXOK
+
+NSENT:  BITB   #1,P.CWR(R0)      ; Destination busy?
+        BEQ    NBUSY             ; J if not busy
+        MOV    #RCBUSY,P.RES1(R0) ; "Destination busy"
+        BR     TXOK
+
+NBUSY:  BITB   #8.,P.CWR(R0)     ; Ignored?
+        BEQ    NIGN              ; J if not ignored
+        MOV    #RCIGN,P.RES1(R0) ; "Ignored"
+        BR     TXOK
+
+NIGN:   BITB   #16.,P.CWR(R0)    ; Ring error?
+        BEQ    NRERR             ; J if not
+        MOV    #RCERR,P.RES1(R0) ; "Ring error"
+        BR     TXOK
+
+NRERR:  BITB   #2,P.CWR(R0)      ; Unselected?
+        BEQ    NUNSEL            ; J if not unselected
+
+; Need to inspect top byte of returncode word to
+; distinguish between "unselected at start of block"
+; and "unselected during block".
+
+        CMPB   P.CWR+1(R0),#128. ; 128 = "trying to send header"
+        BEQ    USHDR             ; J if unsel for hdr
+        MOV    #RCUINB,P.RES1(R0); "Unselected in block"
+        BR     TXOK
+
+USHDR:  MOV    #RCUHDR,P.RES1(R0); "Unselected for hdr"
+        BR     TXOK
+
+NUNSEL: MOV    #RCUNKN,P.RES1(R0); "Unknown TX failure"
+
+; Arrive here with TRIPOS return code in RES1
+
+TXOK:   CLRB   P.CWFS+1(R0)
+        MOV    @#CRNTSK,R1       ; Current TCB for MOVPKT
+        ASL    R1                ; Machine address
+        JSR    PC,SNDPKT         ; Send packet back
+
+        MOV    D.WKQ(R2),R0      ; Any more packets?
+        BEQ    INTTX1            ; Jump if no
+
+        JSR    PC,DRTRAN         ; Initiate next transmission
+
+INTTX1: MOV    @#DEVINT,PC       ; Return to kernel
+
+
+NODATA: TRAP   11.               ; spurious interrupt
+
+INTEXIT:MOV    @#DEVRET,PC       ; know no packet has been sent
+
+
+;********************************************************
+;                                                       *
+;    This routine initiates the transmission requested  *
+; by the head packet.                                   *
+;                                                       *
+; On entry:  R2 contains the DCB address                *
+;            R1 contains the address of the highest pri *
+;              TCB to which a packet has been sent back *
+;                                                       *
+;********************************************************
+
+DRTRAN: MOV    D.WKQ(R2),R0      ; Get packet
+        ASL    R0                ; BCPL to machine address
+        MOV    #-1,P.CWR(R0)     ; Set CW result field to a known value
+        CLR    P.CW(R0)          ; Clear link field of CW
+        BIS    #INTBLK,P.CWFS(R0) ; Flag for interrupt at end of block
+TYPE2:  BITB   #1,@D.CSR(R2)     ; Test whether OK to write
+        BEQ    TYPE2             ; Wait until it is
+        MOV    D.CSR(R2),R3      ;
+        ADD    #P.CW,R0          ; Machine address of codeword
+        ASR    R0                ; BCPL address of codeword
+        MOV    R0,2(R3)          ; Write codeword address
+        RTS    PC                ;
+
+
+;*********************************************************
+;                                                        *
+;    This routine sends back the head packet             *
+;                                                        *
+; On entry:  R2 contains the DCB address                 *
+;            R1 points to the TCB of the highest pri task*
+;              to which a packet has been returned       *
+;                                                        *
+; R1 is updated, R2 is preserved.                        *
+;                                                        *
+;*********************************************************
+
+SNDPKT: MOV    R2,-(SP)          ; Save DCB pointer
+        MOV    D.ID(R2),R3       ; Device id for MOVPKT
+        MOV    D.WKQ(R2),R0      ; BCPL address of head packet
+        ASL    R0                ; Machine address
+        MOV    P.LINK(R0),D.WKQ(R2) ; Unlink packet from work queue
+        MOV    R0,R2             ; For MOVPKT
+        MOV    @#DEVMVP,R0       ; Get MOVPKT routine
+        JSR    PC,(R0)           ; Send packet back
+        MOV    (SP)+,R2          ; Restore DCB pointer
+        RTS    PC                ; Return with Z set
+
+
+; Constants
+
+RCACC   =        0               ; "Accepted"
+RCIGN   =      410.              ; "Ignored"
+RCERR   =      411.              ; "Ring error"
+RCUHDR  =      412.              ; "Unselected for hdr"
+RCUINB  =      413.              ; "Unsel in block"
+RCBUSY  =      414.              ; "Busy"
+RCBADR  =      416.              ; "Bad request"
+RCUNKN  =      999.              ; "Unknown TX rc" (never happens!)
+INTBLK  =      1000              ; Flag for "interrupt at end of block"
+
+        .END
+
+

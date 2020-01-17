@@ -1,0 +1,325 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+      ########  #######    ######   ##    ##  #######   ##    ##  #      # 
+      ########  ########  ########  ###  ###  ########  ##    ##  ##    ## 
+      ##        ##    ##  ##    ##  ########  ##    ##  ##    ##   ##  ##  
+      ######    ########  ##    ##  ## ## ##  #######   ########     ##    
+      ##        #######   ##    ##  ##    ##  ##        ##    ##    #  #   
+      ##        ##  ##    ##    ##  ##    ##  ##        ##    ##   ##  ##  
+      ##        ##   ##   ########  ##    ##  ##        ##    ##  ##    ## 
+      ##        ##    ##   ######   ##    ##  ##        ##    ##  #      # 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   16/06/83             *
+\*****************************************************************************/
+
+
+SECTION "FROMPHX"
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "RINGHDR"
+GET "BCPL.BSPLIB"
+
+
+
+GLOBAL
+$(
+    bs.name        :  ug + 0
+    bs.input       :  ug + 1
+    bs.output      :  ug + 2
+    f.output       :  ug + 3
+    aborted        :  ug + 4
+    errorlevel     :  ug + 5
+    errorlabel     :  ug + 6
+    linenumber     :  ug + 7
+    sysin          :  ug + 8
+    sysout         :  ug + 9
+$)
+
+
+
+MANIFEST
+$(
+    vtp.control.eoil        =  150
+    vtp.control.eool        =  200
+    vtp.control.in.request  =  201
+    vtp.control.escape      =  #X80
+    vtp.length.mask         =  #X7F
+$)
+
+
+
+LET start()  BE
+$(
+    LET args    =  "FROM/A,TO/A,USER/A,PW/A"
+    LET argv    =  VEC 50
+    LET a.from  =  0
+    LET a.to    =  0
+    LET a.user  =  0
+    LET a.pw    =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** FROMPHX:  Bad arguments for string *"%S*"*N", args )
+        
+        stop( 20 )
+    $)
+
+    a.from     :=  argv!0
+    a.to       :=  argv!1
+    a.user     :=  argv!2
+    a.pw       :=  argv!3
+
+    //  First, make sure than we can open the output file.
+    
+    f.output   :=  findoutput( a.to )
+    
+    IF  f.output = 0  THEN
+    $(
+        writef( "****** FROMPHX:  Cannot open *"%S*":  ", a.to )
+        
+        fault( result2 )
+        
+        stop( 20 )
+    $)
+
+    bs.name    :=  "BSP:RATS-PHOENIX"
+    bs.input   :=  findinput( bs.name )
+    bs.output  :=  result2
+
+    IF  bs.input = 0  THEN
+    $(
+        writef( "****** FROMPHX:  Cannot open *"%S*":  ", bs.name )
+        
+        fault( bs.output )    //  !?!?
+        
+        endstream( f.output )
+        
+        stop( 20 )
+    $)
+
+    //  Make copies of our real I/O streams so that we can restore them when
+    //  necessary.
+
+    sysin   :=  input()
+    sysout  :=  output()
+
+    //  Now we have to go through the LOGON sequence  (yuck)
+
+    selectinput( bs.input )
+    selectoutput( bs.output )
+    
+    errorlevel  :=  level()
+    aborted     :=  FALSE
+
+    ignoreline()    //  CUDN banner
+
+    writef( "%S PW %S LIB=TJK1.LIB PGM=LSI4", a.user, a.pw )  ;  vtp.newline()
+    
+    ignoreline()    //  Logon request & Last Session message
+    ignoreline()    //  Started message
+
+    writef( "FROM %S", a.from )  ;  vtp.newline()  ;  vtp.newline()
+
+    selectoutput( sysout )
+
+    $(  //  Loop to get a response back from the Phoenix program, saying
+        //  whether it has been able to open the input file.
+        
+        LET ch  =  vtp.rdch()
+
+        IF  ch = endstreamch  THEN  error( "Unexpected EOF" )
+        IF  ch = '^'          THEN  BREAK
+        
+        wrch( ch )
+    $)
+    REPEAT    //  Until we get a confirmation or denial
+
+    writef( "*N*N****** FROMPHX:  Transferring %S to %S ...*N*N", a.from, a.to )
+
+    selectoutput( f.output )
+    
+    linenumber  :=  0
+
+    $(  //  Loop to read the characters of the file from the byte stream, and
+        //  put them into the TRIPOS file.
+
+        LET ch  =  vtp.rdch()
+        
+        IF  ch = endstreamch     THEN  error( "Unexpected EOF" )
+        IF  testflags( #B0001 )  THEN  error( "BREAK" )
+
+        IF  ch = '^'  THEN
+        $(
+            //  If we get two '^' characters in a row, then this is defined as
+            //  being "end of file".
+            
+            ch  :=  vtp.rdch()
+            
+            TEST  ch = '^'  
+                THEN  BREAK
+                ELSE  wrch( '^' )
+        $)
+        
+        wrch( ch )
+        
+        IF  ch = '*N'  THEN
+        $(
+            selectoutput( sysout )
+            
+            linenumber  :=  linenumber + 1
+            
+            writef( "*CLine %I4  *E", linenumber )
+            
+            selectoutput( f.output )
+        $)
+    $)
+    REPEAT    //  Until end of file.
+
+errorlabel:
+
+    //  Close the byte stream pair...
+    
+    endstream( bs.input )
+//  endstream( bs.output )
+    
+    //  Close the TRIPOS file which we were writing...
+    
+    endstream( f.output )
+    
+    //  And enter the outer darkness (where there is much wailing, etc)
+
+    selectinput( sysin )
+    selectoutput( sysout )
+    
+    writef( "*N*N****** FROMPHX:  %S.*N", aborted -> "Aborted", "Finished" )
+    
+    IF  aborted  THEN  stop( 20 )
+$)
+
+
+
+AND ignoreline()  BE
+$(
+//  Read a line of output from Phoenix, and print it out at the console.
+//  Otherwise, ignore it entirely!
+
+    LET o  =  output()
+
+    selectoutput( sysout )
+    
+    $(  //  Repeat loop to read a heap of characters...
+
+        LET ch  =  vtp.rdch()
+        
+        IF  ch = endstreamch  THEN  error( "Unexpected EOF" )
+        
+        wrch( ch )
+        
+        IF  ch = '*N'         THEN  BREAK
+    $)
+    REPEAT
+
+    selectoutput( o )
+$)
+
+
+
+AND vtp.newline()  BE
+$(
+    wrch( vtp.control.escape + 2 )
+    wrch( vtp.control.eoil )
+    wrch( '*N' )
+    
+    bsp.forceout()
+$)
+
+
+
+AND vtp.rdch()  =  VALOF
+$(
+//  Read the next non-vtp control character from the byte stream.
+
+    LET ch      =  rdch()
+    LET escape  =  (ch & vtp.control.escape) \= 0
+    LET length  =  (ch & vtp.length.mask)
+    
+    IF  bsp.test.reset( bs.input )  THEN  error( "Byte Stream Broken" )
+    IF  ch = endstreamch            THEN  RESULTIS  ch
+    
+    TEST  escape  THEN
+    $(
+        //  This is one of the control codes.  The length is the number of
+        //  characters comprising the control code.
+        
+        IF  length = 0  THEN  LOOP
+        
+        //  Otherwise it is something more complicated.  Deal with the
+        //  relevant ones...
+        
+        ch      :=  rdch()
+        length  :=  length - 1
+        
+        SWITCHON  ch  INTO
+        $(
+            CASE vtp.control.in.request :  //  Input line request.  We should
+                                           //  read as many characters as we
+                                           //  have been told are in the 
+                                           //  sequence.
+                                           
+                                           FOR  i = 1  TO  length  DO
+                                                rdch()
+                                           LOOP
+
+
+            CASE vtp.control.eool       :  //  End of output line.  Take the
+                                           //  next character as the 
+                                           //  terminator, and strip rubbish.
+                                           
+                                           ch      :=  rdch()
+                                           length  :=  length - 1
+                                           
+                                           FOR  i = 1  TO  length  DO
+                                               rdch()
+                                               
+                                           RESULTIS  ch
+
+
+            CASE endstreamch            :  error( "Unexpected EOF" )
+
+
+            DEFAULT                     :  //  HELP!!!
+                                           
+                                           selectoutput( sysout )
+                                           writef( "*N*N****** FROMPHX:  VTP code %N*N*N", ch )
+                                           selectoutput( f.output )
+                                           
+                                           FOR  i = 1  TO  length  DO
+                                                rdch()
+                                           LOOP
+        $)
+    $)
+    ELSE  RESULTIS  ch
+$)
+REPEAT    //  Until we get something sensible
+
+
+
+AND error( message )  BE
+$(
+    aborted  :=  TRUE
+
+    selectoutput( sysout )
+    
+    writef( "*N*N****** FROMPHX:  %S*N*N", message )
+    
+    longjump( errorlevel, errorlabel )
+$)
+   
+

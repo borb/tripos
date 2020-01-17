@@ -1,0 +1,452 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+            #######   #######   ########  ##    ##  ########
+            ########  ########  ########  ###   ##  ########
+            ##    ##  ##    ##     ##     ####  ##     ##
+            #######   ########     ##     ## ## ##     ##
+            ##        #######      ##     ##  ####     ##
+            ##        ##  ##       ##     ##  ####     ##
+            ##        ##   ##   ########  ##   ###     ##
+            ##        ##    ##  ########  ##    ##     ##
+
+************************************************************************
+**    Author:   Adrian Aylward                              1978      **
+***********************************************************************/
+
+
+
+// Modified September 1979 by Brian Knight to use
+// the ring printer by default.
+//    Thus, the default pagesize is set suitably, and
+// allowance is made for 10 lines of debatcher on the
+// first page.
+// Exact length lines corrected Jan 1980 by Piete Brooks.
+
+SECTION "PRINT"
+
+GET "LIBHDR"
+
+MANIFEST
+$(
+def.columns      = 1
+def.width        = 136
+def.pagesize     = 60
+num.width        = 7
+max.width        = 150
+max.pagesize     = 120
+debatcher.lines  = 10  // Unusable space on first page
+max.bytes        = 50 + 10 // In standard to.name
+col.gap          = 2   // Spaces between columns
+$)
+
+GLOBAL
+$(
+inputstream       : ug + 0
+outputstream      : ug + 1
+pagevec           : ug + 2
+width             : ug + 3
+columns           : ug + 4
+pagesize          : ug + 5
+paging            : ug + 6
+truncate          : ug + 7
+numbers           : ug + 8
+linenumber        : ug + 9
+colcount          : ug + 10
+linecount         : ug + 11
+colwidth          : ug + 12
+linev             : ug + 13
+linep             : ug + 14
+linet             : ug + 15
+physical.pagesize : ug + 16 // = pagesize except on 1st page
+auto.mc           : ug + 17 // Auto multi-columning
+$)
+
+LET start() BE
+ $( LET argv = VEC 50
+    LET datv = VEC 14
+    LET rc = 0
+    LET ch = '*P'
+    LET maxpos = 0
+    LET oldoutput = output()
+    LET to.ring.printer = TRUE
+    LET to.name = "LP:12345678901234567890*
+                   *123456789012345678901234567890"
+    LET rdargs.string   = "FROM/A,TO/K,TITLE/K,OPT/K"
+
+    to.name%0 := 3 // Up to ':'
+    datv := datstring(datv)
+    (datv+5)%0 := 5  // Remove seconds
+
+    inputstream := 0
+    outputstream := 0
+    pagevec := 0
+    auto.mc      := FALSE
+
+    IF rdargs(rdargs.string, argv, 50)=0
+    THEN
+      $(
+      writef("Bad args for key string *"%S*"*N", rdargs.string)
+      rc := 20
+      GOTO exit
+      $)
+
+    inputstream := findinput(argv!0)
+    IF inputstream=0 DO
+    $( writef("Can't open %S*N", argv!0)
+       rc := 20
+       GOTO exit $)
+
+    TEST argv!1 = 0
+    THEN // Using default output stream to ring printer.
+         // Send title as part of stream
+         // name.
+         concat(to.name, argv!2=0 -> argv!0,argv!2, max.bytes)
+    ELSE to.name, to.ring.printer := argv!1, FALSE
+
+    outputstream := findoutput(to.name)
+    IF outputstream=0 DO
+    $( writef("Can't open *"%S*"*N", to.name)
+       rc := 20
+       GOTO exit $)
+
+    columns := def.columns
+    physical.pagesize := def.pagesize
+    width := def.width
+    numbers := FALSE
+    truncate := FALSE
+
+    UNLESS argv!3=0 DO
+    $( LET opts = argv!3
+       LET i = 1
+       LET rdn(opts, lvi) = VALOF
+       $( LET n = 0
+          LET i = !lvi+1
+          LET c = opts%i
+          WHILE i<=opts%0 & '0'<=c<='9' DO
+          $( n := n*10+c-'0'
+            i := i+1
+            c := opts%i
+          $)
+          !lvi := i-1
+          RESULTIS n
+       $)
+
+       WHILE i<=opts%0 DO
+       $( SWITCHON capitalch(opts%i) INTO
+          $( CASE 'C': columns := rdn(opts, @i)
+                       auto.mc := FALSE
+                       ENDCASE
+
+             CASE 'P': physical.pagesize := rdn(opts, @i)
+                       ENDCASE
+
+             CASE 'W': width := rdn(opts, @i)
+                       ENDCASE
+
+             CASE 'F': argv!2 := argv!0
+                       ENDCASE
+
+             CASE 'N': numbers := TRUE
+                       ENDCASE
+
+             CASE 'T': truncate := TRUE
+                       ENDCASE
+          $)
+          i := i+1
+       $)
+
+       UNLESS 0<columns<=(width+2)/(numbers -> 3+num.width,3) &
+              ((debatcher.lines<=physical.pagesize<=
+              max.pagesize) | physical.pagesize=0) &
+              width<=max.width DO
+       $( writes("Invalid option values*N")
+          rc := 20
+          GOTO exit $)
+    $)
+
+
+    paging := TRUE
+    IF physical.pagesize=0 DO paging, physical.pagesize := FALSE, 1
+    TEST physical.pagesize>(debatcher.lines+2) THEN
+       UNLESS argv!2=0 DO physical.pagesize := physical.pagesize-2
+    ELSE
+       argv!2 := 0
+
+    // Get page buffer and one vector for each line,
+    // to avoid the need for a large contiguous chunk
+    // of store.
+    // PAGEVEC is a vector of pointers to the line vectors.
+    // In each line vector:
+    //   !0 is a pointer to a list of lines to be overprinted
+    //      (zero if none).
+    //   !1 is the length of the line.
+    //   The characters start at offset 2.
+
+    pagevec := getvec(physical.pagesize)
+    IF pagevec=0 DO
+    $( writes("Can't get page vector*N")
+       rc := 20
+       GOTO exit $)
+    // Clear vector so that all lines can safely
+    // be freed if allocation fails.
+    FOR i = 1 TO physical.pagesize DO pagevec!i := 0
+
+    FOR i = 1 TO physical.pagesize DO
+    $( linev := getvec((width+bytesperword-1)/bytesperword + 1)
+       IF linev = 0
+       THEN $( writes("Insufficient store*N")
+               rc := 20; GOTO exit
+            $)
+       pagevec!i := linev
+       linev!0 := 0
+    $)
+
+    linenumber := 1
+    pagesize := physical.pagesize -
+             (to.ring.printer -> debatcher.lines, 0) // 1st page only
+    colwidth := (width+col.gap)/columns-col.gap
+
+    selectinput(inputstream)
+
+newpage:
+    FOR i = 1 TO pagesize DO
+    $( linev := pagevec!i
+       linev!1 := 0
+    $)
+
+    colcount := 0
+    maxpos   := 0
+
+    // Start of column loop
+    $(cols
+       colcount := colcount+1
+
+       // If doing auto multi-columning, then set the
+       // width of this column to be the remainder
+       // of the RHS of the page.
+       IF auto.mc
+       THEN
+         $( colwidth := (width-maxpos-col.gap)
+            IF colwidth < (numbers -> num.width+1,1)
+            THEN GOTO endpage
+         $)
+
+
+       linecount := 0
+
+       // Start of line loop
+       $(lines
+          LET tab = 0
+          linecount := linecount+1
+
+          linev := pagevec!linecount
+overprint:
+          TEST auto.mc
+          THEN linep := width-colwidth
+          ELSE linep := (colcount-1)*(colwidth+2)
+
+          linet := linep+colwidth
+
+          IF rdch()=endstreamch DO
+          $( UNLESS ch='*C' DO
+                linecount := linecount-1
+             ch := endstreamch
+             GOTO endpage
+          $)
+          unrdch()
+
+          IF numbers DO
+          $( IF ch='*N' | ch='*P' THEN
+             $( LET n = linenumber
+                FOR i = num.width-3 TO 0 BY -1 DO
+                $( ch := n REM 10 + '0'
+                   n := n/10
+                   (linev+2)%(linep+i) := ch
+                   IF n=0 DO
+                   $( FOR j = linev!1-linep TO i-1 DO
+                         (linev+2)%(linep+j) := '*S'
+                      BREAK
+                   $)
+                $)
+                linev!1 := linep+num.width-2
+             $)
+             linep := linep+num.width
+          $)
+
+
+          // Start of character loop
+          $(chars
+             ch := rdch()
+             IF testflags(1) GOTO broken
+
+             // Re-enter here for tabs
+          T: SWITCHON ch INTO
+             $( CASE '*C':
+                   linenumber := linenumber+1
+                   IF linev!1=0 LOOP
+                   IF linev!0=0 DO
+                   $( LET v =
+                         getvec(3+(width-1)/bytesperword)
+                      IF v=0 DO
+                      $( writes("Run out of store*N")
+                         rc := 20
+                         GOTO exit $)
+                      linev!0 := v
+                      v!0, v!1 := 0, 0
+                      linev := v
+                   $)
+                   tab := 0
+                   GOTO overprint
+
+                CASE '*E':
+                   linenumber := linenumber+1
+                   LOOP
+
+                CASE '*N':
+                   linenumber := linenumber+1
+                   BREAK
+
+                CASE '*P':
+                   linenumber := linenumber+1
+                   GOTO endpage
+
+                CASE endstreamch:
+                   GOTO endpage
+
+                CASE '*T':
+                   IF tab REM 8 = 7 DO ch := '*S'
+                   ENDCASE
+
+                DEFAULT:
+                   UNLESS linep>=linet DO
+                   $( IF linep>linev!1 DO
+                         FOR i = linev!1 TO linep DO
+                            (linev+2)%i := '*S'
+                      (linev+2)%linep := ch
+
+                      // Adjust line length
+                      UNLESS linev!1>linep
+                      THEN
+                        $( LET a = linep+1
+                           linev!1 := a
+                           IF a>maxpos THEN maxpos := a
+                        $)
+                   $)
+
+                CASE '*S':
+             $) // End of SWITCHON
+
+             linep := linep+1
+             tab := tab+1
+             IF truncate LOOP
+
+
+             // Line too long for this column?
+             IF linep>=linet
+             // Ignore if the next char will give a new
+             // line anyway.
+             $( LET ch = RDCH()
+                UNRDCH()
+                IF ch='*N' | ch='*P' LOOP
+                BREAK
+             $)
+             IF ch='*T' GOTO T
+          $)chars REPEAT
+
+       $)lines REPEATUNTIL linecount>=pagesize
+
+    $)cols REPEATWHILE auto.mc | (colcount<columns)
+
+endpage:
+    IF colcount>1 DO linecount := pagesize
+    pagesize := physical.pagesize // Debatcher on first page only
+    selectoutput(outputstream)
+
+    UNLESS linecount=0 DO
+    $( UNLESS argv!2=0 DO
+       $( LET title = argv!2
+          IF title%0>width DO title%0 := width
+          writes(title)
+          IF title%0+30<=width UNLESS datv=0 DO
+          $( FOR i = title%0+1 TO width-25 DO
+                wrch('*S')
+             writef("%S %T9 %S", datv+5, datv+10, datv)
+          $)
+          writes("*N*N")
+       $)
+
+        FOR j = 1 TO linecount DO
+        $( linev := pagevec!j
+           $( IF testflags(1) GOTO broken
+              FOR i = 0 TO linev!1-1 DO
+                 wrch((linev+2)%i)
+              linev := linev!0 // Line to overprint?
+              IF linev=0 BREAK
+
+              wrch('*C')
+           $) REPEAT
+           linev := pagevec!j
+
+           // Free overprint buffers
+           $( LET v = linev!0
+              IF v=0 BREAK
+              linev!0 := v!0
+              freevec(v)
+           $) REPEAT
+
+           wrch(j=linecount & paging -> '*P','*N')
+        $)
+     $)
+
+    selectoutput(oldoutput)
+    UNLESS ch=endstreamch GOTO newpage
+
+exit:
+    UNLESS pagevec=0 DO
+    $( FOR i = 1 TO physical.pagesize DO
+       $( linev := pagevec!i
+          IF linev=0 THEN BREAK // No more allocated
+
+          // Free overprint buffers, if any
+          $( LET v = linev!0
+             IF v=0 BREAK
+             linev!0 := v!0
+             freevec(v)
+          $) REPEAT
+
+          freevec(linev)
+       $)
+       freevec(pagevec)
+    $)
+    UNLESS inputstream=0 DO
+    $( selectinput(inputstream)
+       endread() $)
+    UNLESS outputstream=0 DO
+    $( selectoutput(outputstream)
+       endwrite() $)
+    stop(rc)
+
+broken:
+    selectoutput(oldoutput)
+    writes("****BREAK*N")
+    rc := 10
+    GOTO exit
+ $)
+
+
+AND concat(v, s, max) BE
+    $(
+    // Puts string s on the end of the string in v
+    // (but only if there is room).
+    LET len = v%0
+
+    FOR i = len+1 TO len+s%0
+    DO TEST i > max
+       THEN RETURN
+       ELSE v%i, v%0 := s%(i-len), i
+    $)
+
+

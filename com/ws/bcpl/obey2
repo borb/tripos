@@ -1,0 +1,431 @@
+// Source file "obey2" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+SECTION "OBEY2"
+GET "libhdr"
+GET "wrshdr"
+
+LET block.menu() BE $(
+  LET c = cmd.simple
+c(0,"-----------------------------B L O C K   M E N U--------------------------------*n")
+c(0,"---Saving Files---|--Block Operations--|---File Operations----|---Other Menus---*n")
+c(0," X Save and exit  |B  Begin   K  End   | R Read from file     | (from Main only)*n")
+c(0," Q Abandon edits  |H  Hide / Display   | W Write block to file|^J Help  ^K Block*n")
+c(0," S Save and reedit|C  Copy    Y  Delete| %s        |^Q Quick ^P CtlCh*n",
+   (wspl.status ~= pl.unavailable -> "L Lisp system", "             "))
+c(0," D Done, save     |V  Move             | ^ %s     |^O Onscreen*n",
+   (~splitallowed -> "              ",
+     t.split -> "Move Splitline", "Split Screen  "))
+c(0,"--Place  Markers--|N  Column   %s| M obey Meta file     |Space bar returns*n",
+    (t.column -> "off (ON)", "on (OFF)"))
+TEST os.call.char >= 0 THEN
+c(0,"0-9 Set/hide # 0-9|F  Fold    G unfold |%s%c %s|you to Main Menu.*n",
+    (os.call.char > 31 -> " ", ""),
+    os.call.char,
+    "call to Op Sys     ")
+ELSE
+c(0,"0-9 Set/hide # 0-9|F  Fold    G unfold |                      |you to Main Menu.*n")
+IF helplevel < 3 THEN
+c(0,"--------------------------------------------------------------------------------*n") $)
+
+
+LET edit.obey.block() BE $(
+  LET save.on.exit = updated | srcname.not.dstname // for ^KD, ^KX
+  LET c = pop.up.menu(
+    "^K - hit any 'block' command key*n",
+    "^K - hit any 'block' command key      (or press ? for list of commands)*n",
+    "^K - these are the commands available:*n",
+    block.menu)
+  IF 'A'<=c<='Z' | 'a'<=c<='z' | c = '^' THEN c := c & ctl
+  IF c = os.call.char THEN $( // make a string out of it and call OS
+    LET v = VEC 0
+    v%0 := 1; v%1 := c; ws.os.call(v); RETURN $)
+  SWITCHON c INTO $( DEFAULT: message("  Not a ^K command - ignored*n"); sys.keywait(450); ENDCASE
+    CASE ':' :
+    CASE '**': IF processbufallowed THEN send.line.to.process(escapetwid); ENDCASE
+    CASE ' ' : ENDCASE // no - fuss exit
+    CASE ctl&'L': wspl(1); ENDCASE // call to PicoLisp
+    CASE ctl&'I': edit.obey.tab(yes); ENDCASE
+    CASE ctl&'Q': TEST browse THEN $(
+                    message("  Exiting ...*n")
+                    log.writef("  File '%s' browsed*n", source.filename)
+                    deltwid()
+                    text.finish(source.filename, 2) $)
+                  ELSE $( LET c = ?
+                    IF ~updated THEN $(
+                      log.writef("  File '%s' inspected*n", source.filename)
+                      message("  *"%S*" has not been altered*N", source.filename)
+                      deltwid()
+                      text.finish(source.filename, 2); GOTO reentering $)
+
+                    message("Abandoning *"%S*" - are you sure you want this?*n",
+                             source.filename)
+                    scr.dolineupdates(); c := sys.rdch()
+                    TEST c = 'y' | c = 'Y' | c = (ctl&'Y') THEN $(
+                      log.writef("  File '%s' edited and abandoned*n", source.filename)
+                      message("  Edit abandoned*n")
+                      deltwid()
+                      text.finish(source.filename, 2) $) ELSE ENDCASE $)
+                  GOTO reentering // check in case another live window around
+
+    CASE ctl&'D': // finish edit but stay in editor.
+                  IF browse THEN $(
+                    error("Use ^KQ to finish edit in BROWSE mode"); ENDCASE $)
+                  message(~save.on.exit ->
+                    "  *"%S*" not updated ...*n",
+                    "  Saving *"%S*" ...*n", source.filename)
+                  log.writef("  File '%s' %s*n", source.filename,
+                    (save.on.exit -> "edited", "inspected"))
+                  deltwid()
+                  text.finish(source.filename, (save.on.exit -> 1, 2))
+       reentering:
+        killmarkers(); initialise.toggles()
+        message(t.split -> "*n", "Editing no file*N")
+        $( LET answ = ? // ask him for next file name
+           LET v = VEC 30
+           LET browsewanted = ?
+           LET inbuf, inbuf2 = ?, ?
+           inbuf := getvec(80/bytesperword)
+           srcname.not.dstname := no
+       retry:  // in case he mistypes
+           browsewanted := no
+           inbuf2:= getvec(80/bytesperword)
+           cmd.init(v)
+           cmd.simple(2, t.split -> "Hit return to cancel window*n",
+                                    "Hit return to exit editor*n")
+           t.editing := no // so ^] not allowed when answering
+           answ := request.filename(inbuf, "Name of next file? ")
+           t.editing := yes
+           IF answ = (ctl&'U') | qbuf.file%0 = ch.line THEN $(
+             freevec(inbuf);
+             freevec(inbuf2); cmd.finish(); GOTO exiting $)
+           IF answ = ch.line THEN $(
+             LET dud = VEC 2; dud%0 := ch.line
+             browsewanted := cmd.query(inbuf2, 78, dud, "Browse (Y/N):", 0) $)
+           cmd.finish()
+           freevec(inbuf2)
+           $( LET i = 0 // convert to kosher string
+              $( LET c = qbuf.file%i
+                 IF c = ch.line THEN BREAK; i := i + 1
+                 inbuf%i := c $) REPEAT
+              inbuf%0 := i $)
+           message("  Opening *"%S*" ...*n", inbuf)
+           $( LET oldname = source.filename // yech - needed re freevec
+              answ := text.init(inbuf, textspace, textmax) // reuse existing space
+              IF ~answ THEN GOTO retry // message done already
+              freevec(oldname) $)
+           browse := browsewanted $); ENDCASE
+
+    CASE ctl&'X': IF browse THEN $(
+                    error("Use ^KQ to exit when in BROWSE mode"); ENDCASE $)
+                  log.writef("  File '%s' %s*n", source.filename,
+                    (save.on.exit -> "edited", "inspected"))
+                  message(~save.on.exit ->
+                    "  *"%S*" not updated ...*n",
+                           t.split ->
+                    "  Saving *"%S*" and cancelling window ...*n",
+                    "  Saving *"%S*" and exiting ...*n", source.filename)
+                  deltwid()
+                  text.finish(source.filename, (save.on.exit -> 1, 2))
+                  sys.keywaiting()
+                  IF checkint() THEN GOTO reentering
+      exiting:    // check for other window, and if so kill this one gracefully
+                  killmarkers()
+                  freevec(source.filename) // textual name of window
+                  TEST t.split THEN $(
+                    t.split := no
+                    freevec(textspace) // deep magic !!
+                    textspace := 0     // if another window opened, we know to getvec
+                    swapbufs() $)      // move other window in
+                  ELSE t.editing := no // exit from 'main' loop
+                  ENDCASE
+
+    CASE ctl&'S': $( LET save.fc, save.fl, save.ttvl =
+                       filecol, fileline + lines.rolled.past, text.top.vis.line
+                     IF browse THEN $(
+                       error("You cannot save the file in BROWSE mode")
+                       ENDCASE $)
+                     IF ~updated THEN $(
+                       message("  *"%S*" has not been altered*N", source.filename)
+                       sys.keywait(300); ENDCASE $)
+                     message("  Saving *"%S*" ...*n", source.filename)
+                     log.writef("  File '%s' saved during edit*n", source.filename)
+                     lines.rolled.past := 0
+                     deltwid()
+                     text.finish(source.filename, 1)
+                     message("  Re-opening *"%S*" ...*n", source.filename)
+                     IF ~ text.init(source.filename, textspace, textmax) THEN $(
+                       error("Cannot reopen files - Exiting")
+                       GOTO exiting $)
+                     // The file comes alive in exactly its previous state.
+                     FOR i = 1 TO save.fl DO cur.down()
+                     FOR i = 1 TO save.fc DO cur.right()
+                     text.top.vis.line := save.ttvl
+                     updated := no
+                     text.update.info := text.update.info | 15 $)
+                     ENDCASE
+
+    CASE ctl&'M': // Meta file. = RETURN key, dangerous I know. Oh well.
+     $( LET v = VEC 3 * 10
+        LET answ = ?
+        LET inbuf = getvec(80/bytesperword)
+        cmd.init(v)
+        cmd.simple(2, "Input a filename.*n")
+        cmd.simple(2, "The file will be read and the characters in the file obeyed*n")
+        cmd.simple(2, "as if you had typed them at the keyoard.*n")
+        cmd.simple(2, "Hit return to cancel command.*n")
+        answ := request.filename(inbuf, "Name of file? ")
+        cmd.finish()
+        message("  Opening and obeying *"%S*" ...*n", inbuf)
+        IF answ ~= (ctl&'U') & qbuf.file%0 ~= ch.line THEN $(
+          $( LET ptr = 0 // form a kosher string
+             $( LET c = qbuf.file%ptr
+                IF c = ch.line THEN BREAK
+                ptr := ptr + 1
+                inbuf%ptr := c $) REPEAT
+             inbuf%0 := ptr $)
+          meta.file(inbuf, yes); freevec(inbuf) $) $); ENDCASE
+
+    CASE ctl&'N': t.column := ~ t.column; text.update.info := text.update.info | 7
+                  ENDCASE
+//    case ctl&'F': t.directory := ~ t.directory; endcase
+    CASE ctl&'H': text.update.info := text.update.info | 7
+                  marker.hidden!10 := ~marker.hidden!10
+                  marker.hidden!11 := ~marker.hidden!11
+                  IF marker.alternate!10 | marker.alternate!11 THEN $(
+                    swapbufs(); text.update(); swapbufs() $); ENDCASE
+    CASE ctl&'^': edit.obey.split()
+                  IF (scroll.top.line = text.top.scr.line &
+                      scroll.bot.line - scr.y.of.split < 5) |
+                     (scr.y.of.split < text.top.scr.line &
+                      scr.y.of.split - scroll.top.line < 5) THEN $(
+                        message("  The other window is of minimum size*n")
+                        sys.keywait(200); ENDCASE $)
+                  IF scr.y.of.split < text.top.scr.line &
+                     text.top.vis.line = 0 THEN
+                    scr.hardscroll.hint(-1, text.top.scr.line + 1,
+                      text.bot.scr.line)
+                  ENDCASE
+
+    CASE ctl&'R': IF notbrowse() THEN block.readfile(); ENDCASE
+    CASE ctl&'W': block.writefile(); ENDCASE
+    CASE ctl&'C': IF notbrowse() THEN block.copy(); ENDCASE
+    CASE ctl&'Y': IF notbrowse() THEN block.delete(); ENDCASE
+    CASE ctl&'V': IF notbrowse() THEN block.move(); ENDCASE
+    CASE ctl&'F': IF notbrowse() THEN block.fold(); ENDCASE
+    CASE ctl&'G': IF notbrowse() THEN block.unfold(); ENDCASE
+    CASE ctl&'B':
+    CASE ctl&'K': c := '0' + (c=('B'&ctl) -> 10, 11)
+    CASE '0': CASE '1': CASE '2': CASE '3': CASE '4':
+    CASE '5': CASE '6': CASE '7': CASE '8': CASE '9': c := c - '0'
+      TEST marker.x!c = filecol & marker.y!c = fileline & (~marker.alternate!c) THEN
+        marker.hidden!c := ~ marker.hidden!c
+      ELSE $(
+        IF marker.y!c >= 0 & (~marker.hidden!c) & (marker.alternate!c) THEN $(
+          marker.hidden!c := yes // must wipe from other window
+          swapbufs(); text.update(); swapbufs() $)
+        marker.alternate!c := no
+        marker.hidden!c := no
+        marker.x!c := filecol; marker.y!c := fileline $)
+      text.update.info := text.update.info | 7; ENDCASE $) $)
+
+// cancel process in process window
+AND deltwid() BE IF twid ~= 0 THEN $( deletetwid(twid); twid := 0 $)
+
+AND killmarkers() BE $(
+  // The edit of this file is over, make sure that any markers in it are
+  // in a tidy state, in case he stays in the editor.
+  FOR i = 0 TO nmark - 1 DO
+    IF marker.y!i >= 0 & (~marker.alternate!i) THEN $(
+      marker.y!i := -1
+      marker.hidden!i := no
+      marker.alternate!i := no $) $)
+
+AND onscreen.menu() BE $(
+  LET c = cmd.simple
+  LET off, on = "off (ON)", "on (OFF)"
+c(0,"-----------------------O N S C R E E N   M E N U--------------------------------*n")
+
+// The onscreen menu is reorganised to make it neater without all the
+// document stuff.
+
+  c(0,"--Margins & Tabs--|----Toggles---------|----Miscellaneous-----|---Other Menus---*n")
+  c(0,"L set Left margin |T rulr line %s|C Center text on line | (from Main only)*n",
+    (t.ruler -> off, on))
+  c(0,"R set Right margin|W wordwrap  %s|                      |^J Help  ^K Block*n",
+    (t.wordwrap -> off, on))
+  c(0,"X %s |() br flash %s|S redraw Screen       |^Q Quick ^P CtlCh*n",
+    (~t.marrel   -> "Release margins", "unRelse margins"),
+    (t.bracket -> off, on))
+  c(0,"I set tabstop     |V Vari-tabs %s|%s|^O Onscreen*n",
+    (t.tabindent -> on, off),
+    (screen.mode < 0 -> "                      ",
+                        "0-9 set screen mode   "))
+  c(0,"N clear tabstop   |                    |                      |Space bar returns*n")
+  c(0,"F set margins and tabstops from current line in File          |you to Main Menu.*n")
+
+//c(0,"--Margins & Tabs--|--Line  Functions---|----More Toggles------|---Other Menus---*n")
+//c(0,"L set Left margin |C Center text       |                | (from Main only)*n",
+//  (t.justify -> off, on))
+//c(0,"R set Right margin|                    |V Vari-tabs   %s|^J Help  ^K Block*n",
+//  (t.tabindent -> on, off))
+//c(0,"X %s |------Toggles-------|                |^Q Quick ^P CtlCh*n",
+//  (t.hyphhelp -> off, on))
+//c(0,"I Set  N clear tab|W Word wrap %s|                |%s*n",
+//  (t.wordwrap -> off, on),
+//  (t.softhyph -> off, on),
+//  (screen.mode < 0 -> "Space bar returns", "^O Onscreen))
+
+//  (t.ruler -> off, on),
+////  (t.printdisp -> off, on),
+//  (screen.mode < 0 -> "Space bar returns", "you to Main Menu."))
+//c(0,"F Ruler from line |%s|                |%s*n",
+//  (o.highlightblock -> t.bracket -> "() br flash off (ON)",
+//                                    "() br flash on (OFF)",
+//                       "                   "),
+////  (t.pagebreak -> off, on),
+//  (screen.mode < 0 ->  "you to Main Menu.", "0-9 Set scrn mode"))
+
+
+IF helplevel < 3 THEN
+c(0,"--------------------------------------------------------------------------------*n") $)
+
+
+AND edit.obey.onscreen() BE $(
+  LET c = pop.up.menu(
+    "^O - press an 'onscreen' command*n",
+    "^O - press an 'onscreen' command      (or press ? for list of commands)*n",
+    "^O - these are the available commands:*n",
+    onscreen.menu)
+  IF ('A' <= c <= 'Z') | ('a' <= c <= 'z') THEN c := ctl & c
+  SWITCHON c INTO $(
+    DEFAULT: message("  Not a ^O command - ignored*n"); sys.keywait(450); RETURN
+    CASE ' ': RETURN // quiet exit
+//    case ctl&'H': t.hyphhelp     := ~t.hyphhelp;    endcase
+//    case ctl&'E': t.softhyph     := ~t.softhyph;    endcase
+//    case ctl&'D': t.printdisp    := ~t.printdisp;   endcase
+//    case ctl&'V': t.varitabs     := ~t.varitabs;    endcase
+
+    // 25-March-85 ^OS is redraw screen (OnScreen)
+    CASE ctl&'S': scr.jumbled(); ENDCASE
+
+    CASE ctl&'V': t.tabindent    := ~t.tabindent;   build.tabline(); ENDCASE
+    CASE ctl&'X': t.marrel       := ~t.marrel;      build.tabline(); ENDCASE
+    CASE ctl&'J': t.justify      := ~t.justify;     ENDCASE
+//    case ctl&'P': t.pagebreak    := ~t.pagebreak;   endcase
+    CASE ctl&'W': t.wordwrap     := ~t.wordwrap;    ENDCASE
+    CASE ctl&'T': t.ruler        := ~t.ruler;       ENDCASE
+    CASE '(':
+    CASE ')':     t.bracket      := ~t.bracket;     ENDCASE
+    CASE ctl&'L':
+      $( LET menu() BE $(
+           cmd.simple(2, "^U=cancel, ESC=cursor column*n")
+           cmd.simple(0, "Current left margin is %n*n", left.margin + 1)
+           message("Enter the column number for the new left margin*n") $)
+         LET answ = cmd.query.numeric(menu, "New left margin? ")
+         IF answ = (ctl&'U') THEN ENDCASE
+         TEST qbuf.line%0 = ch.line THEN left.margin := filecol ELSE
+           left.margin := result2 - 1
+         build.tabline()
+         ENDCASE $)
+
+    CASE ctl&'R':
+      $( LET menu() BE $(
+           cmd.simple(2, "^U=cancel, ESC=cursor column*n")
+           cmd.simple(0, "Current right margin is %n*n", right.margin + 1)
+           message("Enter the column number for the new right margin*n") $)
+         LET answ = cmd.query.numeric(menu, "New right margin? ")
+         IF answ = (ctl&'U') THEN ENDCASE
+         TEST qbuf.line%0 = ch.line THEN right.margin := filecol ELSE
+           right.margin := result2 - 1
+         build.tabline()
+         ENDCASE $)
+
+    CASE ctl&'I': // set a tabstop
+      $( LET menu() BE $(
+           cmd.simple(2, "^U=cancel, ESC=cursor column*n")
+           message("Enter the column number of a new tabstop*n") $)
+         LET answ = cmd.query.numeric(menu, "New tabstop column? ")
+         LET col = qbuf.line%0 = ch.line -> filecol, result2
+         IF answ = (ctl&'U') THEN ENDCASE
+         IF col < 0 | col > 240 THEN $(
+           error("Cannot put a tabstop in column %n", col); ENDCASE $)
+         tabbuf%col := '!'; build.tabline() $); ENDCASE
+
+    CASE ctl&'N': // clear a tabstop
+      $( LET menu() BE $(
+           cmd.simple(2, "^U=cancel, ESC=cursor column*n")
+           message("Enter column number of tabstop to clear:*n") $)
+         LET answ = cmd.query.numeric(menu, "Tabstop to clear? ")
+         LET col = qbuf.line%0 = ch.line -> filecol, result2
+         IF answ = (ctl&'U') THEN ENDCASE
+         IF col < 0 | col > 240 THEN ENDCASE
+         tabbuf%col := ' '; build.tabline() $); ENDCASE
+
+    CASE ctl&'F': // ruler line from current line
+      $( LET col = 0
+         LET leftyet = no
+         $( LET ch = textspace%(textcur + col)
+            IF col > 240 THEN BREAK
+            IF (ch ~= ' ' & ch ~= (ctl&'I')) & (~leftyet) THEN $(
+              left.margin := col; leftyet := yes $)
+            IF ch = '!' | ch = '#' | ch = '-' THEN tabbuf%col := ch
+            IF ch = ch.line | ch >= ch.lineend THEN BREAK
+            col := col + 1 $) REPEAT
+         right.margin := col - 1
+         WHILE textspace%(textcur + right.margin) = ' ' |
+           textspace%(textcur + right.margin) = (ctl&'I') DO
+             right.margin := right.margin - 1
+         build.tabline() $); ENDCASE
+
+    CASE ctl&'C': IF notbrowse() THEN $( // centre text on current line
+      LET rmarg, c, lmarg, col = ?, ?, ?, filecol
+      cur.endofline()
+      rmarg := filecol
+      lmarg := 0
+      $( c := textspace%(textcur + lmarg)
+         TEST (c = ' ' | c = (ctl&'I')) & lmarg < rmarg THEN
+           lmarg := lmarg + 1 ELSE BREAK $) REPEAT
+      filecol := 0
+      WHILE (right.margin - rmarg) > (lmarg - left.margin) DO $(
+        col := col + 1
+        rmarg := rmarg + 1
+        lmarg := lmarg + 1
+        cur.inschar(' ') $)
+      WHILE (right.margin - rmarg) < (lmarg - left.margin) DO $(
+        col := col - 1
+        rmarg := rmarg - 1
+        lmarg := lmarg - 1; IF lmarg = 0 THEN BREAK
+        cur.delchar() $)
+      FOR i = 1 TO 240 DO $(
+        IF filecol >= col THEN BREAK; cur.right() $) $); ENDCASE
+
+    CASE '0': CASE '1': CASE '2': CASE '3': CASE '4':
+    CASE '5': CASE '6': CASE '7': CASE '8': CASE '9':
+      IF screen.mode = -1 THEN RETURN // no mode changing allowed
+      new.screen.mode(c - '0'); ENDCASE
+    $) $)
+
+AND print.menu() BE $(
+  LET c = cmd.simple
+c(0,"  ANY single character (except space) now entered at the keyboard,*n")
+c(0,"  including a control character,*n")
+c(0,"  will be entered into the text.*n")
+c(0,"--------------------------------------------------------------------------------*n") $)
+
+AND edit.obey.print() BE IF notbrowse() THEN $(
+  LET c = pop.up.menu(
+    "^P - enter control char into text*n",
+    "^P - enter control char into text     (or press ? for explanation)*n",
+    "------------------- ^P  Entering Literal Control Characters --------------------*n",
+    print.menu)
+  IF c = ' ' THEN RETURN
+  TEST t.insertmode THEN cur.inschar(c) ELSE cur.replacechar(c)
+  cur.right() $)
+
+AND notbrowse() = VALOF TEST browse THEN $(
+  error("You are in BROWSE mode - text cannot be altered"); RESULTIS no $)
+  ELSE RESULTIS yes
+
+

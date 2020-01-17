@@ -1,0 +1,25 @@
+SECTION "TEST"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+
+
+
+LET start()  BE
+$(
+    sendpkt( notinuse, consoletask, act.sc.mode, 0, 0, TRUE )
+
+    FOR  i = 1  TO  10  DO
+    $(
+        LET ch  =  sendpkt( notinuse, consoletask, act.sc.read )
+        
+        writef( "Character is #X%X2*N", ch )
+    $)
+
+    sendpkt( notinuse, consoletask, act.sc.mode, 0, 0, FALSE)
+$)
+
+

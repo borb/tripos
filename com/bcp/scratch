@@ -1,0 +1,185 @@
+SECTION "Scratch"
+
+// Piete Brooks June 1981               Mod of IEX
+
+GET "libhdr"
+GET "FILEHDR"
+GET "manhdr"
+
+MANIFEST
+$(  argvupb             = 3 + 80/BYTESPERWORD
+    exinfo.hdr          = dirent.size
+    dibytesize.dirent   = dirent.size * BYTESPERWORD/2
+    size.exinfo         = dibytesize.dirent + dirent.size + 10 // Well ....
+
+    exinfo.name         = dirent.name
+    exinfo.fskey        = dirent.fskey
+    exinfo.dirent.type  = dirent.type
+    exinfo.hdr.type     = exinfo.hdr + file.type
+    exinfo.file.byte.size=exinfo.hdr + file.byte.size
+    A.dir               = 0
+    A.quiet             = A.dir         + 1
+    A.ver               = A.quiet       + 1
+
+    Mode.ver            = 1
+    Mode.default        = 0
+    Mode.quiet          =-1
+$)
+
+$<REENTRANT  GLOBAL $>REENTRANT
+$<REENTRANT' STATIC $>REENTRANT'
+$(  entryinfo           = ug
+    fhtask              = ug +  1
+$)
+
+LET start(dir, mode) = VALOF
+$(  LET argv            = VEC argvupb
+    LET rc              = 0
+    LET rdargs.string   = "dir/k,quiet/s,ver/s"
+    LET dummy1          = VEC size.exinfo-1
+    LET oldstr          = output()
+    LET namelen         = ?
+    LET name            = VEC argvupb
+    LET rc              = 0
+    LET dir.lock        = 0
+    LET more.entries    = TRUE
+    LET tot             = VEC 1
+    LET files           = ?
+    LET type            = ?
+    LET cli.command     = dir=0
+
+    entryinfo           := dummy1
+
+    TEST cli.command
+    $( IF rdargs(rdargs.string, argv, argvupb) = 0
+       $( writef("Bad arguments for key string '%s'*n", rdargs.string);
+          stop(20)
+       $)
+       dir := ((argv!A.dir)=0) ->  "t:", argv!A.dir
+        mode := (argv!A.ver)    -> Mode.ver,
+                (argv!A.quiet)  -> Mode.quiet, mode.default
+    $)
+    ELSE
+    $(  UNLESS ABS mode = 1 DO mode := 0
+        IF dir%0 = 0 THEN dir := "t:"
+    $)
+
+    namelen     := dir%0
+    FOR I=0 TO namelen DO name%i := dir%i
+
+    dir.lock    := locateobj(name)
+
+    IF dir.lock=0
+    $(  LET r2 = result2
+        UNLESS mode<0
+        $( writef("Directory *"%s*" not found: ", name); fault(r2) $)
+        goto exit
+    $)
+
+    fhtask      := dir.lock ! lock.task
+
+    files, tot!0, tot!1 := 0,0,0
+    examine.object(dir.lock)
+    IF entryinfo!exinfo.hdr.type = type.file
+    $( UNLESS mode<0 WRITEF("'%S' is a file!*N", name); rc := 20; GOTO EXIT $)
+
+    UNLESS name%namelen = ':'
+    $(  namelen := namelen + 1
+        name%(namelen) := '.'
+    $)
+
+
+    more.entries := exinfo(dir.lock)
+
+    // Look for first one dead !!
+    WHILE (more.entries=FALSE) & (result2 \= error.NoMoreEntries)
+    DO more.entries := exinfo(dir.lock)
+
+    UNLESS more.entries GOTO exit
+
+    $( // Main loop for examining a directory
+        LET hdr.type    = entryinfo ! exinfo.hdr.type
+        LET open.in.fs  = hdr.type=0
+
+        IF testflags(1) DO BREAK //$( rc := rc.broken; BREAK $)
+        type            := entryinfo!exinfo.dirent.type
+        $( LET len      = (entryinfo+exinfo.name) % 0
+
+           name%0       := namelen+len
+           FOR i=1 TO len
+           DO name%(namelen+i) := (entryinfo+exinfo.name) % i
+        $)
+        UNLESS type = hdr.type | open.in.fs
+        $( WRITEF("****** TYPE MISMATCH ON '%S'*N", name); LOOP $)
+
+        IF mode > 0 THEN WRITEF("Delete '%S'*N", name)
+        TEST Type=Type.dir      // AND not empty
+        THEN UNLESS mode < 0 WRITEF("'%S' is a directory*N", name)
+        ELSE
+        $( LET rc = DELETEOBJ(name)
+           TEST RC=0 UNLESS mode < 0
+           $( WRITEF("Failed to delete '%S' because ", name); FAULT(RESULT2) $)
+           ELSE UNLESS Type = Type.dir
+           $( files := files + 1
+              add.32(tot, entryinfo + exinfo.file.byte.size)
+           $)
+        $)
+        more.entries := exinfo(dir.lock)
+        WHILE (more.entries = FALSE) & (result2 \= error.NoMoreEntries)
+        DO more.entries := exinfo(dir.lock)
+     $) REPEATWHILE more.entries & (rc = 0)
+
+     name%0 := namelen
+     IF name%(name%0) = '.' THEN name%0 := name%0 -1
+     UNLESS files=0 | mode < 0
+     $( Writef("%n files deleted, using ", files)
+        Write.32(tot)
+        writes("bytes.*N")
+     $)
+exit:
+    UNLESS dir.lock=currentdir THEN freeobj(dir.lock)
+    TEST cli.command
+    THEN stop(rc)
+    ELSE RESULTIS rc=0
+$)
+
+AND examine.object(lock) =
+    sendpkt(notinuse, fhtask, action.examineobject, ?, ?, lock, entryinfo)
+
+AND exinfo(lock) = VALOF
+$(  LET res = sendpkt(notinuse, fhtask, action.examinenext, ?, ?, lock, entryinfo, TRUE)
+    UNLESS res THEN IF result2 \= error.NoMoreEntries
+    $( LET r2 = RESULT2;
+        writef("SCRATCH %S failed because ", entryinfo+exinfo.name); fault(r2);
+        RESULT2 := r2
+    $)
+    RESULTIS res
+$)
+
+AND write.32(numvec) BE
+$(  // Write out the 32 bit number in NUMVEC!0 and NUMVEC!1, in full
+    // is the number is less than 10000, otherwise as nK.
+    // The minimum field width is 5 characters.
+
+    LET ms.size   = numvec!0
+    LET ls.size   = numvec!1
+
+    TEST (ms.size=0) & (0 <= ls.size < 10000)
+    THEN writef("%u4 ", ls.size) // Small number
+    ELSE writef("%u4K", (ms.size << 6) | (ls.size >> 10))
+$)
+
+AND add.32(a, b) BE
+$(  // a := a + b  where a and b are 32 bit numbers held in 2-word vectors.
+
+    LET a0      = a!0 + b!0
+    LET a1      = a!1
+    LET aa1     = a1 + b!1
+
+    IF (a1 < 0) & (aa1 > 0) THEN a0 := a0 + 1
+
+    a!0 := a0
+    a!1 := aa1
+$)
+
+

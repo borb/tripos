@@ -1,0 +1,156 @@
+% PostScript header for GTOPS program
+% Last modified:  11/4/86 by PH
+
+% It consists of a mandatory initial part, terminated
+% by %End, followed by optional parts, each named by
+% %<name>. There must be no other % lines between each
+% %End and the following name.
+
+%---- Initialization
+
+statusdict
+ /waittimeout 200 put       % increase timeout
+
+/in {72 mul} def            % convert inches to points
+/pw 8.3 in def              % A4 page width
+/pl 11.7 in def             % A4 page length
+/lm 1 in def                % default left margin
+/tm 1 in def                % default top margin
+/u 2 def                    % default underline gap
+/font 254 array def         % vector for fonts
+/sp ( ) 0 get def           % space character
+/ppend false def            % real page pending
+/ulw 0.3 def                % underline width
+
+
+%---- Procedures (alphabetic order)
+
+% bind font
+/bft {findfont exch scalefont font 3 1 roll put} def
+
+% carriage return
+/cr {currentpoint exch pop lm exch moveto} def
+
+% select font
+/f {font exch get setfont /sw ( ) stringwidth pop def} def
+
+% get char width
+/gw {stringwidth pop} def
+
+% invert page
+/inv {pw pl translate 180 rotate} def
+
+% rotate portrait page to landscape
+/ls {90 rotate 0 pw neg translate /pl pw /pw pl def def} def
+
+% newline
+/nl {currentpoint nld sub exch pop lm exch moveto} def
+
+% scale coordinates, but leave page size parameters alone
+/pscale {dup dup scale 1 exch div dup /pl exch pl mul def
+/pw exch pw mul def} def
+
+% action at logical page top
+/ptop {lm pl tm sub moveto ulw setlinewidth 0 setlinecap} def
+
+% relative move, x & y
+/r {neg rmoveto} def
+
+% plain show
+/s {show} def
+
+% plain show, underlined
+/su {currentpoint 3 -1 roll show uline} def
+
+% set newline depth
+/snl {/nld exch def} def
+
+% underline
+/uline {currentpoint gsave newpath u sub moveto
+u sub lineto stroke grestore} def
+
+% width show
+/w {sw sub 0 sp 4 -1 roll widthshow} def
+
+% width show, underlined
+/wu {currentpoint 4 2 roll w uline} def
+
+% relative move, horizontal
+/x {0 rmoveto} def
+
+% showpage and clear flag
+/xpage {showpage /ppend false def} def
+
+% relative move, vertical
+/y {neg 0 exch rmoveto} def
+
+%End -- Now the Optional Parts (alphabetic order)
+
+%A4 -- LaserWriter A4 fix, not used under MVS
+%      Define a4 operator if it does not exist
+/a4 where {pop}
+ {/a4
+  [
+  [300 72 div 0 0 -300 72 div -72 3436]
+  292 3365
+  {statusdict /jobstate (printing) put
+  0 setblink margins
+  exch 142 add exch 256 add 8 div round cvi frametoroket
+  statusdict /jobstate (busy) put 1 setblink}
+  /framedevice load
+  60 45 {dup mul exch dup mul add 1.0 exch sub} /setscreen load
+  {} /settransfer load /initgraphics load /erasepage load
+  ] cvx
+ statusdict begin bind end
+ readonly def
+ } ifelse
+%End
+
+%A5onA4 -- subpage selection
+/A5t {90 rotate 1 eq {0}{pl 2 div} ifelse pw neg translate
+/pl pw /pw pl 2 div def def} def
+%End
+
+%A6onA4 -- subpage selection
+/A6t {dup 1 and 1 eq {0}{pw 2 div} ifelse exch 3 lt {pl 2 div}{0} ifelse
+translate /pl pl 2 div def /pw pw 2 div def} def
+%End
+
+%Extendfont -- for defining accented characters
+/nextfont 0 def  % 'name' of next new font
+/extendfont
+{dup font exch get /oldfont exch def
+/newfont oldfont maxlength dict def
+oldfont
+ {exch dup /FID ne
+  {dup /Encoding eq
+   {exch dup length array copy
+   newfont 3 1 roll put}
+  {exch newfont 3 1 roll put}
+  ifelse}
+ {pop pop}
+ ifelse}
+
+forall
+0 /Aacute 1 /Acircumflex 2 /Adieresis 3 /Agrave 4 /Aring
+5 /Atilde 6 /Ccedilla 7 /Eacute 8 /Ecircumflex 9 /Edieresis
+10 /Egrave 11 /Iacute 12 /Icircumflex 13 /Idieresis 14 /Igrave
+15 /Ntilde 16 /Oacute 17 /Ocircumflex 18 /Odieresis 19 /Ograve
+20 /Otilde 21 /Scaron 22 /Uacute 23 /Ucircumflex 24 /Udieresis
+25 /Ugrave 26 /Ydieresis 27 /Zcaron
+128 /aacute 129 /acircumflex 130 /adieresis 131 /agrave 132 /aring
+133 /atilde 134 /ccedilla 135 /eacute 136 /ecircumflex 137 /edieresis
+138 /egrave 139 /iacute 140 /icircumflex 141 /idieresis 142 /igrave
+143 /ntilde 144 /oacute 145 /ocircumflex 146 /odieresis 147 /ograve
+148 /otilde 149 /scaron 150 /uacute 151 /ucircumflex 152 /udieresis
+153 /ugrave 154 /ydieresis 155 /zcaron
+56
+{newfont /Encoding get 3 1 roll put}
+repeat
+/nextfont nextfont 1 add def
+nextfont 10 string cvs cvn newfont definefont pop
+font exch newfont put
+}def
+%End
+
+

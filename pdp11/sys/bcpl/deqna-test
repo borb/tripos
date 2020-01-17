@@ -1,0 +1,120 @@
+GET "libhdr"
+
+LET start() BE
+$( LET dcb = 0
+   LET devid = 0
+   LET addr = VEC 2
+   LET setup = VEC 63
+   LET tpkt = VEC pkt.arg1+7
+   LET rpkt1 = VEC pkt.arg1+7
+   LET rpkt2 = VEC pkt.arg1+7
+   LET rpkt3 = VEC pkt.arg1+7
+   LET buff = 0
+   LET testdata = TABLE -1, -1, -1, -1, -1, -1, 1, 2, 3, 4, 5
+
+   dcb := loadseg(":d.deqna-dev")
+   IF dcb = 0 THEN $( writef("loadseg failed %N*N", result2); GOTO stop $)
+   writef("dcb=%N*N", dcb)
+
+   devid := createdev(dcb)
+   IF devid = 0 THEN $( writef("createdev failed %N*N", result2); GOTO stop $)
+   writef("devid=%N*N", devid)
+
+   sendpkt(notinuse, devid, 1, 0, 0, addr)
+   writef("Address is %X2-%X2-%X2-%X2-%X2-%X2*N",
+          addr%0, addr%1, addr%2, addr%3, addr%4, addr%5)
+
+   FOR i = 0 TO 127 DO setup%i := 0
+   FOR abyte = 0 TO 5 DO
+   $( testdata%(abyte+6) := addr%abyte
+      FOR offset = 1 TO 7 DO
+         setup%(offset+abyte*8), setup%(offset+64+abyte*8) :=
+            (offset=1 -> #XFF, addr%abyte), addr%abyte
+   $)
+
+   buff := getvec(1023)
+   IF buff = 0 THEN $( writef("GETVEC failure*N"); GOTO stop $)
+
+   rpkt1!pkt.link := notinuse
+   rpkt1!pkt.id := devid
+   rpkt1!pkt.type := 4
+   rpkt1!pkt.arg1 := 0
+   rpkt1!pkt.arg2 := buff << 1
+   rpkt1!pkt.arg3 := -1024
+   qpkt(rpkt1)
+   rpkt2!pkt.link := notinuse
+   rpkt2!pkt.id := devid
+   rpkt2!pkt.type := 4
+   rpkt2!pkt.arg1 := 0
+   rpkt2!pkt.arg2 := buff << 1
+   rpkt2!pkt.arg3 := -1024
+   qpkt(rpkt2)
+   rpkt3!pkt.link := notinuse
+   rpkt3!pkt.id := devid
+   rpkt3!pkt.type := 4
+   rpkt3!pkt.arg1 := 0
+   rpkt3!pkt.arg2 := buff << 1
+   rpkt3!pkt.arg3 := -1024
+   qpkt(rpkt3)
+
+   FOR light = 1 TO 3 DO
+   $(
+     tpkt!pkt.link := notinuse
+     tpkt!pkt.id := devid
+     tpkt!pkt.type := 3
+     tpkt!pkt.arg1 := #030000 // setup + eom
+     tpkt!pkt.arg2 := setup << 1
+     tpkt!pkt.arg3 := - (128 + (light<<2))/2
+     qpkt(tpkt)
+
+     FOR i = 1 TO 2 DO
+     $( LET pkt = taskwait()
+        pkt!pkt.link := i
+     $)
+
+     writes("tpkt: "); FOR i = 0 TO pkt.arg1+7 DO writef("%X4 ", tpkt!i)
+     writes("*Nbuff: "); FOR i = 0 TO 63 DO writef("%X4 ", buff!i)
+     newline()
+  $)
+
+   writes("*Nrpkt1: "); FOR i = 0 TO pkt.arg1+7 DO writef("%X4 ", rpkt1!i)
+   writes("*Nrpkt2: "); FOR i = 0 TO pkt.arg1+7 DO writef("%X4 ", rpkt2!i)
+   writes("*Nrpkt3: "); FOR i = 0 TO pkt.arg1+7 DO writef("%X4 ", rpkt3!i)
+   newline()
+
+   sendpkt(notinuse, devid, 2, 0, 0, #1401) // enable in ELOOP mode
+
+   rpkt1!pkt.link := notinuse
+   rpkt1!pkt.id := devid
+   rpkt1!pkt.type := 4
+   rpkt1!pkt.arg1 := 0
+   rpkt1!pkt.arg2 := buff << 1
+   rpkt1!pkt.arg3 := -1024
+   qpkt(rpkt1)
+
+   tpkt!pkt.link := notinuse
+   tpkt!pkt.id := devid
+   tpkt!pkt.type := 3
+   tpkt!pkt.arg1 := #020000 // eom
+   tpkt!pkt.arg2 := testdata << 1
+   tpkt!pkt.arg3 := - 256/2
+   qpkt(tpkt)
+
+   FOR i = 1 TO 2 DO
+   $( LET pkt = taskwait()
+      pkt!pkt.link := i
+   $)
+
+   writes("*Ntpkt: "); FOR i = 0 TO pkt.arg1+7 DO writef("%X4 ", tpkt!i)
+   writes("*Nrpkt1: "); FOR i = 0 TO pkt.arg1+7 DO writef("%X4 ", rpkt1!i)
+   writes("*Nbuff: "); FOR i = 0 TO 63 DO writef("%X4 ", buff!i)
+   newline()
+
+stop:
+
+  freevec(buff)
+  deletedev(devid)
+  unloadseg(dcb)
+$)
+
+

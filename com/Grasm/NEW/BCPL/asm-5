@@ -1,0 +1,509 @@
+
+
+
+
+
+
+
+SECTION "asm5"
+
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+/*<CAP
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+/*<IBM
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+
+
+
+
+
+//
+//                      T E X T   M A C R O S
+//
+
+
+STATIC
+$(  macro.savrdch= 0
+$)
+
+
+
+
+
+MANIFEST
+$(  text.link  = 0      // pointer to next MACRO on the stack
+    text.block = 1      // pointer to character buffer
+    text.chars = 2      // number of characters in buffer
+    text.chptr = 3      // number of character currently in CH
+    text.savch = 4      // character extant when macro first called
+    text.parms = 5      // pointer to list of formal parameter names
+    text.times = 6      // number of times expansion is to be made
+    textsize   = 7
+$)
+
+
+
+
+LET macro.var(start.pos, expansions) = VALOF
+TEST expansions=0 THEN RESULTIS null ELSE
+$(  // declares a macro and returns a pointer to its activation
+    LET activation = tempgetvec(textsize-1)
+    TEST activation=0 THEN
+    $(  LET p = macro.stack
+        LET n = 0
+        WHILE p \= null DO
+        $(  p := p!text.link
+            n := n+1
+        $)
+        error(e.macstack, n)
+    $) ELSE
+    $(  activation!text.link  := null
+        activation!text.block := null
+        activation!text.chars := 0
+        activation!text.chptr := start.pos - 1
+        activation!text.parms := null
+        activation!text.times := (expansions<0 -> expansions, expansions-1)
+    $)
+    RESULTIS activation
+$)
+
+
+
+
+
+AND call.macro(activation, text.area, charlen, ch1) BE
+// Causes the macro ACTIVATION to be expanded taking characters from the
+// text buffer TEXT.AREA (which is CHARLEN characters long in total) starting at
+// character number ACTIVATION!TEXT.CHPTR.  The macro is expanded
+// ACTIVATION!TEXT.TIMES number of times with the local variables given in
+// ACTIVATION!TEXT.PARMS (these are the names of the FORMAL parameters).
+// If ACTIVATION!TEXT.TIMES is negative the expansions will repeat indefinitely
+// - a call to END.MACRO.VAR being used to eventually end the sequence.
+//     05.02.82
+
+// CH1 is the character which is first to be given to CH - if this is null
+// (i.e. ENDSTREAMCH) the first character of the buffer is used.
+
+// TEXT.AREA may be null - and in this case should be treated as containing
+// no characters.
+
+UNLESS activation=null THEN
+$(  IF macro.stack = null THEN
+    $(  macro.savrdch := rdch
+        rdch := macro.rdch
+    $)
+    activation!text.link  := macro.stack
+    macro.stack := activation
+    activation!text.block := text.area
+    activation!text.chars := (text.area=null -> 0, charlen)
+    activation!text.savch := (print.expansions -> #X8000, #X0000) |
+                             (ch1=endstreamch -> ch, 0)
+    TEST ch1=endstreamch THEN rch() ELSE ch:=ch1
+$)
+
+
+
+
+AND macro.rdch() = VALOF
+$(  // This routine either takes the next character in the current macro
+    // text buffer or it gives the character that was extant at the time
+    // of the expansion.  If that has been also read END.MACRO.VAR is called.
+    // Text comes from the current buffer is repeated if the TEXT.TIMES field
+    // has not yet reached zero.
+    LET ch = ?
+    LET character.found = ?
+    $(rpt
+        LET this.macro = macro.stack
+        character.found := TRUE
+        this.macro!text.chptr := this.macro!text.chptr + 1
+        TEST this.macro!text.chptr > this.macro!text.chars THEN
+        $(  // we know that all MACRO frames are allocated using TEMPGETVEC:
+            // => we can deallocate the memory:
+            IF macro.stack < memory!0+memory THEN
+            memory!0 := macro.stack - memory
+            macro.stack := macro.stack!text.link
+            IF macro.stack = null THEN rdch := macro.savrdch
+            character.found := FALSE
+            // will try again with new macro
+        $) ELSE
+        TEST this.macro!text.chptr = this.macro!text.chars THEN
+        $(  LET parms = this.macro!text.parms
+            WHILE parms\=null DO
+            $(  unstacktext(parms+1)
+                parms := parms!0
+            $)
+            TEST this.macro!text.times\=0 THEN
+            $(  UNLESS this.macro!text.times<0 THEN
+                this.macro!text.times := this.macro!text.times-1
+                this.macro!text.chptr := 0
+                // it is assumed that TEXT variables are NEVER repeated!
+                // (otherwise the above character pointer will be wrong)
+                ch := (this.macro!text.block) % 0
+            $) ELSE
+            $(  ch := this.macro!text.savch
+                print.expansions := (0 \= (#X8000 & ch))
+                ch := ch & #X00FF
+                IF ch=0 THEN character.found := FALSE
+            $)
+        $) ELSE ch := (this.macro!text.block) % (this.macro!text.chptr)
+    $)rpt REPEATUNTIL character.found | macro.stack = null
+    UNLESS character.found THEN ch := rdch()
+    RESULTIS ch
+$)
+
+
+
+
+AND end.macro.var() = (macro.stack = null -> FALSE, VALOF
+$(  LET this.macro = macro.stack
+    this.macro!text.times := 0
+    this.macro!text.chptr := this.macro!text.chars-1
+    RESULTIS TRUE
+$) )
+
+
+
+
+
+AND unstacktext(text.symbol) BE deletelab(text.symbol, type.text)
+
+
+
+AND stacktext(activation, parm.symbol, string) = VALOF
+TEST activation=null THEN RESULTIS FALSE ELSE
+$(  // make a local copy of the PARM.SYMBOL
+    LET parm.value = getstr(string, tempgetvec)
+    // must do this first since "string" might still be on TEMPGETVEC's stack
+    LET len = 1 + parm.symbol%0/bytesperword
+    LET local = tempgetvec(len)
+    LET forward = TRUE
+    TEST local=null THEN error(e.memfull) ELSE
+    $(  // this store will be freed when the MACRO stack frame for
+        // this ACTIVATION is poped
+        FOR i=0 TO len-1 DO (local+1)!i := parm.symbol!i
+        // chain text name into FORMAL parameter list
+        local!0 := activation!text.parms
+        activation!text.parms := local
+        forward := putlab(local+1, parm.value, type.text | flag.temp)
+    $)
+    RESULTIS forward
+$)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//
+//                      F I L E    T A B L E
+//
+
+
+
+/*
+GLOBAL $(
+//  files: fileman
+//  line.of.file
+//  fileno
+//  max.files
+$)
+*/
+
+
+MANIFEST
+$(  no.of.files = 0        // offset in 'files' of number of files GOT
+    first.line  = 1        // offset in 'files' of number of first line
+    first.file  = 2        // offset of first file entry in 'files'
+$)
+
+
+
+
+// Line number information has to be kept about each of the files opened
+// using the GET directive.  A vector of pointers to information blocks is
+// kept.  The information contained in them is the number of the line counter
+// 'lineno' at the begining of the file, and when the file has been read, and
+// the name of the file.
+// GET directives can be nested so calculation of the actual number of the line
+// within the current file is a little complex ('file.number')!
+
+
+
+
+LET newfile(s) = VALOF
+$(  TEST 0<=files!no.of.files<=max.files THEN
+    IF pass=second THEN
+    $(  LET newfile=simplegetvec(2+s%0/2)
+        files!(files!no.of.files+1) := newfile
+        TEST newfile=null THEN error(e.nospace) ELSE
+        $(  FOR i=0 TO s%0/2 DO newfile!(2+i):=s!i
+            newfile!0 := lineno     // first line
+            newfile!1 := lineno     // last line
+        $)
+    $) ELSE error(e.filexs)
+    files!no.of.files := files!no.of.files + 1
+    RESULTIS files!no.of.files - first.file + 1
+$)
+
+
+AND endfile(fno) BE
+    IF pass=second THEN files!(fno+first.file-1)!1 := lineno    // last line
+
+
+AND printfiles() BE
+IF allsyms DO
+   FOR i=first.file TO files!no.of.files DO
+   IF files!i \= 0 THEN
+   $(  IF restartpage THEN wrch('*P')
+       writef("file +%N is %S (%N lines)*N",
+              i-first.file+1, files!i+2, files!i!1-files!i!0)
+   $)
+
+
+AND resetfiles(to.line) BE
+$(  files!no.of.files:=first.file-1
+    files!first.line:=to.line
+    file.id:=0
+$)
+
+
+
+AND file.number(lv.line) = VALOF
+$(  LET i=first.file
+    LET j=?             // maximum file number included in found file
+    LET n=?             // iterates through immediately included files
+    LET fmax=files!0
+    WHILE i<=fmax & !lv.line>files!i!0 DO i:=i+1
+    i:=i-1
+    j:=i                // highest number for an included file
+    WHILE i>=first.file & !lv.line>files!i!1 DO i:=i-1
+    n:=i+1              // first included file
+    WHILE n<=j DO
+    $(  LET top=files!n!1
+        !lv.line := !lv.line - (top-files!n!0)  // subtract size of files
+        n:=n+1
+        WHILE n<=j & files!n!0<=top DO n:=n+1   // skip files within this one
+    $)
+    TEST i=first.file-1 THEN !lv.line := !lv.line + files!first.line ELSE
+    !lv.line := !lv.line - files!i!0
+    RESULTIS i-first.file+1
+$)
+
+
+
+
+
+
+//
+//                         F I E L D S
+//
+
+
+
+MANIFEST
+$(  f.shift = byte1
+    f.len   = byte2
+    partsize= 8
+$)
+
+
+
+LET getf(no, field) = VALOF
+$(  LET s=(field & f.shift)
+    LET l=(field & f.len)>>partsize
+    RESULTIS (no>>s) & ((1<<l)-1)
+$)
+
+
+LET putf(no, field, too) = VALOF
+$(  LET s=(field & f.shift)
+    LET l=(field & f.len) >> partsize
+    LET m=(1<<l)-1
+    LET ans = (too & \(m<<s)) | ((no & m)<<s)
+    UNLESS fitsmask(no, m) DO warn(e.ftoosmall,no)
+    RESULTIS ans
+$)
+
+
+AND trim(no, field) = VALOF
+$(  LET l=(field & f.len)>>partsize
+    LET m=(1<<l)-1
+    RESULTIS no&m
+$)
+
+
+AND newf(pos, len) = (pos&byte1) | ((len&byte1)<<partsize)
+
+
+AND putwordf(no,field) BE
+IF pass=second DO
+   TEST binbuf!b.top<1
+   THEN error(e.mtbuf)
+   ELSE binbuf!(binbuf!b.top):=putf(no, field, binbuf!(binbuf!b.top))
+
+
+
+
+
+
+
+
+
+
+
+
+//
+//                          T R E E S
+//
+
+
+
+MANIFEST
+$(  t.left  = 0
+    t.right = 1
+    t.str   = 2
+    t.val   = 3
+    t.size  = 4
+$)
+
+
+
+LET tree.put(lvtree, name, item) BE
+$(rpt
+    IF !lvtree=null
+    DO $(  LET newitem=simplegetvec(t.size-1)
+           newitem!t.left, newitem!t.right:= null, null
+           newitem!t.str:=name
+           newitem!t.val:=item
+           !lvtree:=newitem
+           RETURN
+       $)
+    $(  LET c=compstring((!lvtree)!t.str, name)
+        IF c=0 error (e.interror, 7)
+        lvtree := !lvtree+(c<0 -> t.left, t.right)
+    $)
+$)rpt REPEAT
+
+
+
+AND tree.get(tree, name) = VALOF
+$(rpt
+    IF tree=null RESULTIS tree
+    $(  LET c=compstring(tree!t.str, name)
+        IF c=0 RESULTIS tree
+        tree := tree!(c<0 -> t.left, t.right)
+    $)
+$)rpt REPEAT
+
+
+
+
+
+
+//
+//                         C O D E    T A B L E
+//
+
+
+
+
+
+MANIFEST
+$(  c.size = 0
+    c.str  = 0
+    c.fn   = 1
+    c.opstr= 2
+$)
+
+
+LET code.put(name, proc, len, wd1, wd2, wd3, wd4, wd5) BE
+$(  LET l=3+(len>0->len,-len)
+    LET c=simplegetvec(l-1)
+    c!c.str:=name
+    c!c.fn :=proc
+    c!(c.opstr+0) := len
+    FOR i=c.opstr+1 TO l-1 DO c!i:=(@wd1)!(i-(c.opstr+1))
+    tree.put(@codes, name, c)
+$)
+
+
+AND getcode(s) = VALOF
+$(  LET t=tree.get(codes, s)
+    RESULTIS (t=null->null, t!t.val)
+$)
+
+
+AND compcode(s, c) = (0=compstring(s, c!c.str))
+
+
+AND initcodes() BE error(e.nocodes)       // for redefinition
+
+
+
+
+
+
+
+//
+//                 R E G I S T E R    S Y M B O L S
+//
+
+
+
+STATIC  $(  syms=null  $)
+
+
+MANIFEST
+$(  s.size  = 0
+    s.str   = 0
+    s.info  = 1
+    r.bad   = 0
+$)
+
+
+LET reg.put(reg, val) BE tree.put(@syms, reg, val)
+
+
+AND getreg(s) = VALOF
+$(  LET t=tree.get(syms,s)
+    RESULTIS (t=null->r.bad,t!t.val)
+$)
+
+AND initsyms() BE RETURN          //  for redefinition
+
+
+
+
+
+
+
+

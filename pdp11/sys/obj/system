@@ -1,0 +1,64 @@
+| new standard TRIPOS system for the pdp11
+| uses file handler version 3 and new
+| device and handler vectors for mount
+
+absmin       0;
+absmax     164;
+storemin   165;
+storemax 28672;
+memorysize  28;
+rootnode   148;
+tcbsize     19;
+mcaddrinc    2;
+mcrelocinc   1;
+
+info  ( "Micro/PDP11",      | Machine name
+        0,                  | assignment list
+        (0,0,(-2,dudriv,1),0,0,0,0,0),  | device vector
+        (0,0,(0,fihand,1),0,0,0,0,0),   | handler vector
+        "Tripos",           | System type
+        (0,                 | Used to hold taskid of ring handler
+         0,                 | This machine's ring address
+         0                  | This machine's ring name
+        ),
+        0,0,0,0,0           | spare
+      );
+
+ seg    kernel          klib,mlib;
+ seg    blib            blib,xblib;
+ seg    cli             cli;
+ seg    debug           dbroot;
+ seg    cohand          cohand;
+ seg    fihand          fh-access,fh-alloc,fh-disc,fh-support,fh-work,fh-exinfo,fh-main;
+
+*seg    clinit          cli-init;
+*seg    restart         fh-restart;
+*seg    fhinit          fh-init;
+
+ driver rdriv           rdriv;
+ driver pdriv           pdriv;
+ driver dudriv          dudriv;
+
+ dcb    keyboard        ckdcb;
+ dcb    printer         cpdcb;
+ dcb    disk            dudcb;
+ dcb    keyboard2       skdcb;
+ dcb    printer2        spdcb;
+
+tasktab 20;
+
+*task   1 pri 1000 stack 170 segs kernel,blib,clinit,cli;
+ task   2 pri 2000 stack 130 segs kernel,blib,debug;
+ task   3 pri 4000 stack 180 segs kernel,blib,cohand;
+ task   4 pri 3000 stack 100 segs kernel,blib,fihand,fhinit;
+ task  15 pri   10 stack 200 segs kernel,blib,restart;
+
+devtab 20;
+
+ dev   -2 dcb disk      driver dudriv;
+ dev   -3 dcb keyboard  driver rdriv;
+ dev   -4 dcb printer   driver pdriv;
+ dev   -5 dcb keyboard2 driver rdriv;
+ dev   -6 dcb printer2  driver pdriv;
+
+

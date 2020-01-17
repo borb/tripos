@@ -1,0 +1,15 @@
+$(  LET string = "GrpLst @xxxx xxxx xxxx xxxx xxxx"
+    LET pos = 13
+    LET poke(string, X, pos) BE FOR i = 1 TO 4
+    $(  LET n = (X >> ((4-I)*4)) & 15
+        string%(i+pos) := n<10 -> n+'0', n+'A'-10
+    $)
+    poke(string, group.list.file        , pos-5)
+    poke(string, group.list.file!(uid+0), pos+0)
+    poke(string, group.list.file!(uid+1), pos+5)
+    poke(string, group.list.file!(uid+2), pos+10)
+    poke(string, group.list.file!(uid+3), pos+15)
+    wto.mc("Delta", string)
+$)
+
+

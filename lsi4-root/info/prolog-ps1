@@ -1,0 +1,40 @@
+%!
+%%Title:  Prolog for IDW Print/List program
+%%CreationDate:  24 Apr 86
+%%Pages:  (atend)
+%%Endcomments
+
+
+/pl       844  def
+/pw       590  def
+
+/topm     36  def
+/leftm    36  def
+
+/sw       {( ) stringwidth pop}  def
+
+/left     {leftm}  def
+/top      {pl topm sub linedepth sub}  def
+
+/turn     {pw /pw pl def /pl exch def}  def
+/ls       {-90 rotate turn pw neg 0 translate home}  def
+/pt       {home}  def
+
+/pf       {statusdict begin /prefeed exch def end}  def
+
+/p        {show}  def
+/n        {cr 0 linedepth neg rmoveto}  def
+/s        {sw mul 0 rmoveto}  def
+/cr       {currentpoint exch pop leftm exch moveto}  def
+/home     {left top moveto}  def
+/newpage  {copypage erasepage home}  def
+
+
+% Fix for the Topexpress Laser Writer
+
+% 8.5 -27 translate
+
+
+%%EndProlog
+
+

@@ -1,0 +1,136 @@
+GET "LIBHDR"
+GET "BCPL.SORTLIST"
+
+/*****************************************************************************
+*
+*       Naive programme to call naive sort routine (QSORT).
+*
+*       Will run like a proverbial woth sorted data !!
+*
+*       Written PB      13 May 86
+*
+*****************************************************************************/
+
+MANIFEST $(
+        LINK    = 0
+        STRING  = 1
+
+        NULL    = 0
+
+        argv.from = 0
+        argv.to   = 1
+        argv.rev  = 2
+
+        argv.upb = 255/BYTESPERWORD
+
+        failed.ok       = 0     // not failed !
+        failed.broken   = 1     // User hit BREAK
+        failed.getvec   = 2     // GETVEC failed
+$)
+
+LET START() BE
+$(      LET chain       = NULL
+        LET end         = -1
+        LET V           = VEC 255/BYTESPERWORD
+        LET argv.s      = "From/a,To/a,reverse/s"
+        LET argv        = VEC argv.upb
+        LET old.out     = output()
+        LET in          = ?
+        LET out         = ?
+        LET failed      = failed.ok
+
+        UNLESS RDARGS(argv.s, argv, argv.upb)
+        $(      WRITEF("Bad args for `%s'*N", argv.s)
+                STOP(20)
+        $)
+
+        in := findinput(argv!argv.from)
+        IF in = 0
+        $(      WRITEF("Failed to open input `%s'*N", argv!argv.from)
+                STOP(20)
+        $)
+
+        SELECTINPUT(in)
+
+        out := findoutput(argv!argv.to)
+        IF out = 0
+        $(      WRITEF("Failed to open output `%s'*N", argv!argv.to)
+                endread()
+                STOP(20)
+        $)
+
+        SELECTOUTPUT(out)
+
+        WHILE readstring(V)
+        $(      LET new = ?
+
+                IF testflags(1)
+                $(      failed := failed.broken
+                        BREAK
+                $)
+                new := GETVEC(STRING + V%0)
+                IF new = 0
+                $(      failed := failed.getvec
+                        BREAK
+                $)
+
+                new!LINK := chain
+                chain := new
+                FOR i = 0 TO v%0 DO (new+STRING)%i := v%i
+        $)
+
+        IF failed = failed.ok
+        $(      sortlist(@chain, NULL, NULL, link,
+                        (argv!argv.rev) -> rev.compare, for.compare)
+                V := chain   
+
+                UNTIL V = NULL   
+                $(       
+                        WRITEF("%s*N", v+STRING)   
+                        v := v!LINK  
+                $)       
+        $)
+
+        // Tidy up BEFORE error messages ...
+        unloadseg(chain)
+        endwrite()
+        endread()
+        SELECTOUTPUT(old.out)
+
+        UNLESS failed = failed.OK
+        $(
+                SWITCHON failed INTO
+                $(
+                CASE failed.broken:
+                        WRITEF("****** BREAK*N")
+                        ENDCASE
+                CASE failed.getvec:
+                        WRITEF("GETVEC failed*N")
+                        ENDCASE
+                $)
+                STOP(20)
+        $)
+        STOP(0)  
+$)
+
+AND readstring(V) = VALOF
+$(      LET i = 0
+        LET ch = '*N'
+
+        WHILE i < 255
+        $(      ch := RDCH()  
+                IF ch = '*N' | ch = ENDSTREAMCH THEN BREAK   
+                i := i+1  
+                V%i := ch
+        $)       
+
+        IF i = 0 & CH = ENDSTREAMCH RESULTIS FALSE
+        v%0 := i
+        UNTIL ch = '*N' | ch = ENDSTREAMCH DO ch := RDCH()
+        RESULTIS TRUE
+$)
+
+AND for.compare(s1, s2) = COMPSTRING(s1+STRING, s2+STRING)
+AND rev.compare(s1, s2) = COMPSTRING(s2+STRING, s1+STRING)
+
+

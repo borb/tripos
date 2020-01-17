@@ -1,0 +1,134 @@
+SECTION "MISCSER"
+
+$$SMALL   := $$LSI4TRIPOS
+$$COMMAND := FALSE
+
+GET "HEADER"
+$<SMALL'
+GET "BCPL.gethex"
+$>SMALL'
+GET "bcp.pp-z80send"
+
+LET refresh.mail() = VALOF
+$(      LET nsvec               = VEC 4
+
+        UNLESS lookup.name("MAIL", nsvec)
+        $(      writef("*NMailserver name lookup failed %X4=%N*N",
+                         RESULT2, RESULT2);
+                RESULTIS -2
+        $)
+
+        mail.port        := nsvec!2
+        mail.station := nsvec!0
+        RESULTIS 0
+$)
+
+LET z80prod(func, uid1, b1, uid2, b2, end) = VALOF
+$(      LET txbuff              = VEC 12
+        LET rxbuff              = VEC 10
+        LET null                = TABLE 0,0,0,0
+        LET rc          = ?
+        LET r2          = #XA003
+
+        IF uid1=0 & b1=0 THEN uid1 := null
+        IF uid2=0 & b2=0 THEN uid2 := null
+
+        txbuff %% bb.ssp.args := rootnode ! rtn.ticks
+        copy.uid (uid1, b1, txbuff,bb.ssp.args+1)
+        copy.uid (uid2, b2, txbuff,bb.ssp.args+5)
+RESULTIS TRUE
+
+        FOR i=0 TO 1
+        $(      break.test()
+                IF extend.ssp(0, txbuff, 12, rxbuff, 10, 0, func,
+                                mail.station, mail.port, (tickspersecond*3)/2)
+                THEN                                            RESULTIS TRUE
+
+                IF RESULT2=action.already.done.rc       |
+                        RESULT2=user.not.in.system.rc   |
+                        RESULT2=no.new.mail.rc                  RESULTIS TRUE
+
+                IF TRACE WRITEF("Z80prod %N Failed %X4*N", func, RESULT2)
+                IF refresh.mail() < 0 RESULTIS FALSE
+                delay(tickspersecond/2)
+        $)
+        RESULTIS FALSE
+$)
+
+$<SMALL'
+LET ms.new.help() = VALOF
+$(  MANIFEST
+    $(  arg.words       = 16/BYTESPERWORD
+        argv.upb        = 4 + 20/bytesperword
+    $)
+
+    LET help.file       = VEC file.desc.size
+    LET new.help        = VEC file.desc.size
+    LET param           = VEC arg.words
+    LET arg             =
+"new.index,null,bad,send,read=type,terminal,delete,mail,finish,help,print,*
+*reply,undelete,group,new,select,next,syntax,lookat,testing,fullscreen,*
+*public,private,mbox,move,forward,create"
+    LET argv.string     = "Puid/a"
+    LET argv            = VEC argv.upb
+    LET f               = (rditem(param, arg.words)=1)-> findarg(arg, param), -1
+    ms.fs.fail.level, ms.fs.fail.link   := level(), local.fs.fail.link
+
+    IF f<0 THEN $( writef("Unexpected arg for '%S'*N", arg); RESULTIS FALSE $)
+    IF rdargs(argv.string, argv, argv.upb)=0
+    $( UNRDCH(); WRITEF("Bad arg for '%S'*N", argv.string); RESULTIS FALSE $)
+    UNRDCH()
+
+    retrieve.entry(root, root.help.index, help.file)
+    WRITEF("%X4 %X4 %X4 %X4*215",
+                                                (help.file+ uid) %% 0,
+                                                (help.file+ uid) %% 1,
+                                                (help.file+ uid) %% 2,
+                                                (help.file+ uid) %% 3 )
+
+    UNLESS argv!0 % 0 = 16
+    $( WRITEF("Puid must be 16 Hex digits*N"); RESULTIS FALSE $)
+    UNLESS gethex(argv!0, new.help+uid, 8/BYTESPERWORD)
+    $( WRITEF("Puid must be 16 Hex digits*N"); RESULTIS FALSE $)
+
+    TEST f=0
+    THEN retain.in.index(root,          root.help.index,        new.help)
+    ELSE retain.in.index(help.file,     f-1,                    new.help)
+    RESULTIS TRUE
+local.fs.fail.link: WRITES(" --  Main loop re-entered  --*N"); RESULTIS FALSE
+$)
+
+//=============================================================================
+
+LET exterminate() = VALOF
+$(
+    // Create a new database (except for help directory)
+    LET argv.string = "ALL/s,group/s"
+    LET argv    = VEC 10
+    LET all     = ?
+    LET groups  = ?
+    LET r       = RDARGS(argv.string, argv, 10)
+    UNRDCH()
+
+    IF r=0 $( writef("Bad arg for '%S'*N", argv.string); RESULTIS FALSE $)
+
+    ALL         := argv!0
+    groups      := argv!1 | ALL
+    UNLESS groups $( WRITES("Nothing to do*N"); RESULTIS FALSE $)
+
+    IF ALL    THEN create.file (root, root.user.map,            um,TRUE)
+    IF ALL    THEN create.index(root, root.send.index,          master.index)
+    IF ALL    THEN create.index(root, root.master.index,        master.index)
+    IF groups THEN create.file (root, root.dir.public.group,    master.index)
+    IF groups THEN create.index(root, root.index.public.group,  master.index)
+
+    IF ALL    THEN FOR i=0 TO um!cache.size DO (um!cache.address) %% i := 0
+    IF ALL    THEN (um!cache.address)%%first.um.space.pointer :=
+                                                        EXTERMINATE.um.first
+    IF ALL    THEN flush.cache(um)
+    RESULTIS TRUE
+$)
+$>SMALL'
+//=============================================================================
+
+

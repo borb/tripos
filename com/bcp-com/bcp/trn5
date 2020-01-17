@@ -1,0 +1,846 @@
+SECTION "TRN5"
+
+GET "TRNHDR"
+
+$$OP := ~ $$LSI4;
+$$op2 := $$OP
+MANIFEST $( OP.CONST = 1 $)
+STATIC  $( zero.value = S.FALSE $)      //free.pairs = 0 $)
+
+//              EVALTREE understands
+//s.le  s.gr    s.ls    s.ge    s.div   s.rem   s.minus s.neqv  s.name  s.rshift
+//s.not s.true  s.false s.mult  s.logor s.plus  s.eqv   s.eq    s.abs   s.lshift
+//s.ne  s.query s.neg   s.nop   s.logand        s.number        s.globnumber
+
+LET load(x, eval.mode) = VALOF
+$(1
+$<OP
+   UNLESS eval.mode=FALSE | Eval.mode=TRUE | eval.mode=EVAL.JUMPCOND
+   $(   transreport(149, eval.mode)
+        IF (stflags & stf.debug) ~= 0 THEN ABORT(1234)
+   $)
+$>OP
+
+   IF x=0
+   $(   transreport(148, currentbranch);
+$<OP    IF (stflags & stf.debug) ~= 0 THEN ABORT(2345);
+$>OP    loadzero();
+        RESULTIS x
+   $)
+
+                        // Is it constant ??????????????????????????????????????
+$<OP2
+    UNLESS eval.mode = 0
+    $(  x := evaltree(x, eval.mode/*=TRUE*/)    // Side effects!!!!
+        UNLESS isconst(x)=FALSE
+        $(  TEST isconst(x)=OP.CONST
+            THEN out1(x!h1)
+            ELSE out2(s.ln, evalconst(x, TRUE))
+            ssp := ssp+1
+            RESULTIS x
+        $)
+    $)
+$>OP2
+
+   IF smallnumber(x) DO $( out2(s.ln, x); ssp := ssp + 1; RESULTIS x $)
+
+   $( LET op = h1!x
+      LET Other = op
+      LET load.mode = FALSE
+
+      SWITCHON op INTO
+
+      $( DEFAULT: transreport(147, x, op, currentbranch); loadzero();
+$<OP                    IF (stflags & stf.debug) ~= 0 THEN abort(1237,0)
+$>OP                    ENDCASE
+
+        CASE s.halfwordap:
+halfwordap:
+                        TEST (Cgflags&cgf.halfwordop)=0
+                             $( ssp := ssp+savespacesize; out2(s.stack, ssp) $)
+                        ELSE op:=s.gethalfword
+                        load.mode := eval.mode
+                        GOTO load.1
+
+byteap:
+        CASE s.byteap:  TEST (Stflags&stf.byte)=0
+                             $( ssp := ssp+savespacesize; out2(s.stack, ssp) $)
+                        ELSE op:=s.getbyte
+                        load.mode := eval.mode
+                        GOTO load.1
+
+        CASE s.div:     CASE s.rem:     CASE s.minus:
+        CASE s.lshift:  CASE s.rshift:
+
+
+load.1:     load(h2!x, load.mode)
+            load(h3!x, load.mode)
+            TEST op=s.byteap | op=s.halfwordap
+            $( out2(s.lg, op=s.byteap -> g.getbyte, g.gethalfword)
+               ssp := ssp-savespacesize
+               out2(s.fnap, ssp-2)              // Because 2 args
+            $)
+            ELSE out1(op)
+            ssp := ssp - 1
+            ENDCASE
+
+        CASE s.ls:      CASE s.gr:                                      //PB====
+        Other := s.ls+s.gr - op;                GOTO tryswap            //PB====
+                                                                        //PB====
+        CASE s.ge:      CASE s.le:                                      //PB====
+        Other := s.ge+s.le - op;                GOTO tryswap            //PB====
+
+vecap:
+        CASE s.vecap:   load.mode := eval.mode          // Eval tree is thick!
+
+        CASE s.mult:    CASE s.plus:
+        CASE s.eq:      CASE s.ne:      CASE s.logand:
+        CASE s.logor:   CASE s.eqv:     CASE s.neqv:
+tryswap:                                                                //PB====
+//       REGISTER machines want <simple> <complex> <op> as this gives two ops
+//       STACK    machines want <complex> <simple> <op> as it saves stack
+         $( LET simple, complex, swap = h2!x, h3!x, FALSE               //PB====
+
+// This code ought to be changed in light of the new EVALTREE <<<<<<<<<<<<<<<<<<
+//          IF smallnumber(complex) | h1!complex=s.number |             //PB====
+//           ~(smallnumber(simple) | h1!simple=s.number) & h1!complex=s.name
+//          THEN swap, simple,complex := TRUE, h3!x, h2!x               //PB====
+//
+// This code ought to be changed in light of the new EVALTREE >>>>>>>>>>>>>>>>>>
+
+// We have a chain, and at the end is the simple number if any .................
+// Therefore load the oposite one until h3!x is very simple
+
+            TEST (STFLAGS & stf.reg) = 0                                //PB====
+            $( load(complex, load.mode); load(simple, load.mode); swap:=~swap $)
+                                                                        //PB====
+            ELSE $( load(simple, load.mode); load(complex, load.mode) $)
+                                                                        //PB====
+            IF op=s.vecap DO $( out1(s.plus); op, other := s.rv, s.rv $)//PB====
+            out1(swap -> other, op)                                     //PB====
+            ssp := ssp - 1
+            ENDCASE
+         $)
+
+        CASE s.rv: load.mode := eval.mode               // Early eval is thick!!
+                                                        // CHECK FOR @! ????????
+//nop   CASE s.nop:
+        CASE s.neg: CASE s.not: CASE s.abs:
+            load(h2!x, load.mode)
+//nop       UNLESS op=s.nop DO
+            out1(op);                                                   ENDCASE
+
+        CASE s.err:                                                     //PB====
+            loadzero(); load(h2!x, TRUE);                               //PB====
+            out1(((CGFLAGS & cgf.WORDADDRESS) ~= 0) -> s.eq, s.gr);     //PB====
+            ssp := ssp-1;                                               ENDCASE
+
+        CASE s.true: CASE s.false: CASE s.query:
+                out1(op);       ssp := ssp + 1;                         ENDCASE
+
+        CASE s.globnumber:
+        CASE s.number:  out2(s.ln, evalconst(x, TRUE)); ssp := ssp + 1; ENDCASE
+
+        CASE s.lv:      loadlv(h2!x, TRUE);                             ENDCASE
+
+        CASE s.string:  out1(s.lstr); outstring(@ h2!x); ssp := ssp+1;  ENDCASE
+
+        CASE s.name:    transname(x,s.lp,s.lg,s.ll,s.ln); ssp := ssp+1; ENDCASE
+
+        CASE s.valof:
+         $( LET rl, a = resultlabel, dvece
+            IF In.mod $( Transreport(90, x); In.mod := FALSE $)
+            decllabels(h2!x)
+            resultlabel := nextparam()
+            trans(h2!x)
+            complab(resultlabel)
+            out2(s.rstack, ssp)
+            ssp := ssp + 1
+            dvece := a
+            resultlabel := rl
+            ENDCASE
+         $)
+
+
+        CASE s.fnap:
+         $( LET s = ssp
+            IF In.mod $( Transreport(91, x); In.mod := FALSE $)
+            ssp := ssp + savespacesize
+            out2(s.stack, ssp)
+            loadlist(h3!x)
+            load(h2!x, TRUE)
+            out2(s.fnap, s)
+            ssp := s + 1
+            ENDCASE
+         $)
+
+$<SLCT
+//==============================================================================
+//==============================================================================
+        CASE s.slctap:
+        $(  LET const   = evalconst(h2!x, TRUE)
+            LET v       = VEC 2
+            LET size, offset = ?, ?
+
+            unpackslct(const, v)
+            size        := v!0
+            offset      := V!1
+
+            IF size=0 THEN size := BITSPERWORD - offset
+
+            IF (offset REM size) = 0
+                TEST size=8
+                $(  LET disp     = v!2 * BYTESPERWORD +
+                                                (BYTESPERWORD - offset/size -1)
+                    op          := s.byteap
+                    x!h1        := s.byteap
+                    x!h2        := x!h3
+                    x!h3        := disp=0 -> @zero.value,
+                                             smallnumber(disp)-> disp,
+                                                        getv(1, s.number, disp)
+                    GOTO byteap
+                $)
+                ELSE $<LSI4' TEST $>LSI4' $<LSI4 IF $>LSI4 size=bitsperword
+                $(  LET disp    = v!h3
+                    op          := s.vecap
+                    x!h1        := s.vecap
+                    x!h2        := disp=0 -> @Zero.value,
+                                             smallnumber(disp)-> disp,
+                                                        getv(1, s.number, disp)
+                    GOTO vecap
+                $)
+$<LSI4'
+                ELSE IF size=16
+                $(  LET disp     = v!h3 * (BYTESPERWORD/2) +
+                                               (BYTESPERWORD/2 - offset/size -1)
+                    op          := s.halfwordap
+                    x!h1        := s.halfwordap
+                    x!h2        := x!h3
+                    x!h3        := disp=0 -> @Zero.value,
+                                             smallnumber(disp)-> disp,
+                                                        getv(1, s.number, disp)
+                    GOTO halfwordap
+                $)
+$>LSI4'
+//          If all the low bits THEN just do an OR
+//          // Not worth frigging around with low bits in byte ?
+/*          IF offset = 0
+            $(  out1(s.rv)
+deb("... %N gives %X8*N", offset, (1<<offset)-1)
+                out2(s.ln, (1<<offset)-1)
+                out1(s.logand)
+                ENDCASE
+            $)
+*/
+//          UNLESS eval.mode=TRUE | eval.mode=FALSE
+//          // IF a OF b         CONSTant -> IF (a & f(b)
+//          DO deb("BCP - SLCT code - Missed IF A OF B*N")
+$<LSI4TRIPOS
+            transreport(114, v!0, v!1, v!2)
+$>LSI4TRIPOS
+            load(h3!x, TRUE)
+            outslct(s.slctap, const)
+            ENDCASE
+        $)
+
+        CASE s.slct:
+            out2(s.ln, evalconst(x, TRUE))              // TRUE ????
+            ssp := ssp+1
+            ENDCASE
+//==============================================================================
+//==============================================================================
+$>SLCT
+
+
+        CASE s.cond:
+         $( LET l, m = nextparam(), nextparam()
+            LET s = ssp
+            jumpcond(h2!x, FALSE, m)
+            load(h3!x, TRUE)
+            out2(s.res,l)
+            ssp := s; out2(s.stack, ssp)
+            complab(m)
+            load(h4!x, TRUE)
+            out2(s.res,l)
+            complab(l)
+            out2(s.rstack,s)
+            ENDCASE   $)
+
+        CASE s.table:
+         $( LET m = nextparam()
+            LET a = h2!x
+            out2(s.lll, m)
+            compdatalab(m)
+            ssp := ssp + 1
+            UNLESS smallnumber(a) DO
+            $( LET p, n = 0, 0
+               IF h1!a=s.comma     DO p, n := a+1, 2
+               IF h1!a=s.commalist DO p, n := a+2, h2!a
+               UNLESS p=0
+               $( FOR h=0 TO n-1 DO out2(s.itemn, evalconst(h!p, TRUE)); ENDCASE $)
+            $)
+            out2(s.itemn, evalconst(a, TRUE))
+            ENDCASE
+         $)
+      $)
+   $)
+   RESULTIS x
+$)1
+
+
+AND jumpcond(x, b, l) BE
+$(jc LET sw = b
+     UNLESS smallnumber(x) SWITCHON h1!x INTO
+     $(
+//        CASE s.false: b := NOT b
+//        CASE s.true: IF b DO compjump(l)
+//                    RETURN
+
+//nop   CASE s.nop: b := NOT b
+        CASE s.not:
+                    jumpcond(h2!x, NOT b, l)
+                    RETURN
+
+        CASE s.logand: sw := NOT sw
+        CASE s.logor:
+         TEST sw THEN $( jumpcond(h2!x, b, l)
+                         jumpcond(h3!x, b, l)  $)
+
+                 ELSE $( LET m = nextparam()
+                         jumpcond(h2!x, NOT b, m)
+                         jumpcond(h3!x, b, l)
+                         complab(m)  $)
+
+         RETURN
+     $)
+$<OP2
+     x := evaltree(x, EVAL.jumpcond)            // DON'T PASS IT ON ==========
+$>OP2
+
+$<OP
+     WHILE smallnumber(x) -> FALSE, x!h1 = s.not //s.nop        | x!h1 = s.nop
+     $( IF x!h1 = s.not THEN b := NOT b; x := x!h2 $)
+     UNLESS smallnumber(x)
+        IF x!h1 = s.ne THEN x!h1, b := s.eq, NOT b      // Pretty harmless!!!!!!
+$>OP
+     IF isconst(x)
+     $( LET y = evalconst(x, TRUE)
+        transreport(80, y)
+        IF b EQV (y ~= 0) DO compjump(l)
+        RETURN
+     $)
+     load(x, Eval.jumpcond)                             // OK ???????????
+     out2(b -> s.jt, s.jf, l)
+     ssp := ssp - 1
+$)jc
+
+AND loadlv(x) BE
+$(1
+   IF x=0 | smallnumber(x) GOTO err
+
+   SWITCHON h1!x INTO
+
+   $( DEFAULT:
+   err:     transreport(113, currentbranch)
+            loadzero()
+            ENDCASE
+
+        CASE s.name:    transname(x,s.llp,s.llg,s.lll,0); ssp := ssp+1; ENDCASE
+
+        CASE s.rv:      load(h2!x, TRUE);                               ENDCASE
+
+        CASE s.vecap:   x!h1 := s.plus; load(x, TRUE);                  ENDCASE
+
+/*       $( LET a, b = h2!x, h3!x
+ *           IF smallnumber(a) | h1!a=s.name DO a, b := h3!x, h2!x
+ *           load(a, TRUE)
+ *           load(b, TRUE)
+ *           out1(s.plus)
+ *           ssp := ssp - 1
+ *           ENDCASE
+ *      $)
+ */
+   $)
+$)1
+
+AND loadzero() BE $( out2(s.ln, 0); ssp := ssp + 1 $)
+
+AND loadlist(x) BE UNLESS x=0 DO
+$(1
+   UNLESS smallnumber(x)
+   $(2 LET p, n = 0, 0
+      IF h1!x=s.comma     DO p, n := x+1, 2
+      IF h1!x=s.commalist DO p, n := x+2, h2!x
+      UNLESS p=0 $( FOR h = 0 TO n-1 DO load(h!p, TRUE); RETURN $)
+   $)2
+   load(x, TRUE)
+$)1
+
+AND isconst(x) = VALOF
+$(1
+   IF smallnumber(x) RESULTIS TRUE
+
+   SWITCHON h1!x INTO
+   $( DEFAULT:          RESULTIS FALSE
+
+   CASE s.name:         RESULTIS dvec!(cellwithname(x)+1) = s.number
+
+//nop   CASE s.nop:             x := x!h2;      LOOP
+    CASE s.query:
+    CASE s.true:
+    CASE s.false:       RESULTIS OP.CONST
+    CASE s.number:      RESULTIS TRUE
+    $)
+$)1     REPEAT
+
+$<OP2
+// This makes X into the form [op | exp | [op | exp | [ op | exp | n? ] ] ]
+// Where exp are expressions NOT starting with op, and n? may be a constant
+AND evaltree(x, mode) = VALOF                   // MODE IS TRUE or EVAL.CONDJUMP
+$(1
+    // Build up a LISP like chain, with the constant at the end
+    // The exception is that PLUS can yield [-|+chain|+chain]
+    // Thus [+|[-|a|b]|[-|c|d]]         =       [-|[+ac]|[+bd]]
+    // Thus [+|[-|a|b]|c]               =       [+|c|[-|a|b]]
+    // Thus [+|a|[-|b|c]]               =       [-|[+ab]|c]]
+    // ++++ [-|[-|a|b]|c]               =       [-|a|[+cb]]
+    //
+    LET linear.sort(addr, op) BE $<OP' RETURN $>OP'
+$<OP
+    UNTIL smallnumber(!addr)
+    TEST ((!addr)!h1) = op              // Still interested ?
+    $(  LET x = !addr
+        IF testflags(1) THEN transreport(-1)
+//nop   x!h2 := remove.nops(evaltree(x!h2, true))
+//nop   x!h3 := remove.nops(evaltree(x!h3, true))
+        x!h2 := evaltree(x!h2, true)
+        x!h3 := evaltree(x!h3, true)
+        IF op=s.plus
+        $( x := fix.plus.minus(x)
+           !addr := x
+           UNLESS op = x!h1 BREAK
+        $)
+        TEST isconst(x!h2) = FALSE      // An expression ..
+        THEN TEST (x!h2) ! h1 = op      // which is still interesting
+              $( LET d = x!h2
+                 x ! h2 := d ! h2
+                 d ! h2 := x ! h3
+                 x ! h3 := d
+                 x      := x ! h3
+              $)
+              ELSE TEST (op=s.plus) & ((x!h2) ! h1 = s.minus)
+                   THEN deb("-") <> x := fix.plus.minus(x) <> !addr := x <> BREAK
+                   ELSE BREAK           // h2 is a boring expression
+        ELSE TEST isconst(x!h3) = FALSE //   h2 const, h3 not!
+             $( LET d = x!h2; x!h2 := x!h3; x!h3 := d $)
+             ELSE assign.lv(addr)                       // implicit BREAK
+    $)
+    ELSE $( IF (op=s.plus) & ((!addr)!h1 = s.minus)
+            THEN !addr := fix.plus.minus(!addr)
+            BREAK
+         $)
+
+
+    // On entry, left and right are both valid linear chains that may start '-'
+    // On exit, tree is a valid chain that may start with a '-'
+    // before calling linear sort, it is known that the subtree given is a
+    // strictly '+' tree!
+    //
+    AND fix.plus.minus(tree) = VALOF
+    $(  LET op, left, right = tree!h1, tree!h2, tree!h3
+        LET mod = TRUE
+        // - ? -        ==>     + ? -
+        IF op=s.minus & elem(right, h1)=s.minus
+        $(  LET last     = right!h3
+                           right!h3     := right!h2
+                                           right!h2     := last
+            tree !h1    := s.plus
+            op          := s.plus
+            mod := true
+        $)
+        // + - +        ==>     + + -
+        IF op=s.plus & elem(left, h1)=s.minus
+        $(  right       := left
+            left        := tree!h3
+            tree!h2     := left
+            tree!h3     := right
+            mod := true
+        $)
+        // + + + and - + + are both valid, so
+        TEST op = s.plus
+        THEN IF elem(right, h1)=s.minus
+             THEN TEST elem(left, h1)=s.minus           // + - -
+                  $( LET save    = right!h2
+                                   right!h2     := left !h3
+                                                   left !h3     := save
+                     tree!h1    := s.minus
+                     left !h1   := s.plus
+                     right!h1   := s.plus
+                     linear.sort(tree+h2, s.plus)
+                     linear.sort(tree+h3, s.plus)
+                     mod := true
+                  $)
+                  ELSE                                  // + + -
+                  $( tree !h1   := s.minus
+                     right!h1   := s.plus
+                     tree !h3   := right!h3
+                                   right!h3     := tree !h2
+                                                   tree !h2     := right
+                     linear.sort(tree+h2, s.plus)
+                     mod := true
+                  $)
+        ELSE IF elem(left, h1) = s.minus                // - - +
+                  $( left !h1   := s.plus
+                     tree !h2   := left !h2
+                                   left !h2     := tree !h3
+                                                   tree !h3     := left
+                     linear.sort(tree+h3, s.plus)
+                  $)
+
+//nop IF mod THEN tree!h2, tree!h3 := remove.nops(tree!h2), remove.nops(tree!h3)
+
+        // Now check if we have TWO chains with numbers at the end !!
+        IF tree!h1 = s.minus
+        $(  // right and left are the addresses of triplets that ought to be '+'
+            right := @tree
+            WHILE elem((!right)!h3, h1) = s.plus DO right := (!right) + h3
+            left  := tree + h2
+            WHILE elem( !left     , h1) = s.plus DO left  := (!left ) + h3
+            // left and right are the addresses of possible constants!
+            // BEWARE the following:
+            //                  res is zero
+            //                  both were smallnumbers, but now not
+            //
+            //
+            UNLESS isconst(!left)= FALSE | isconst((!right) ! h3) = FALSE
+            $(  LET left.v = !left
+                LET right.v= (!right)!h3
+                LET res = evalconst(left.v,  TRUE) - evalconst(right.v, TRUE)
+                TEST right = @tree              // [-|?|const]
+                THEN TEST left=tree+h2          // [-|n|n]
+                     THEN tree!h1, tree!h2 := S.number, res
+                     ELSE
+                     $( LET spare = tree!h2
+                        !left                   := spare
+                        tree!h1,tree!h2,tree!h3 := spare!h1,spare!h2,spare!h3
+                        spare!h1, spare!h2      := S.number, res
+                     $)
+                ELSE
+                $(  !left       := !right
+                                   !right       := (!right)!h2
+                                                   (!left )!h2  := res
+                    (!left)!h1  := s.number
+                $)
+//nop           UNLESS tree!h1 = s.number
+//nop           DO tree!h2,tree!h3 := remove.nops(tree!h2), remove.nops(tree!h3)
+                IF res=0 tree := evaltree(tree, TRUE)
+                mod := true
+            $)
+        $)
+//IF mod deb(" to ") <> printree(tree)
+        RESULTIS TREE
+    $)
+$>OP
+
+    IF smallnumber(x) RESULTIS x
+
+   SWITCHON h1!x INTO
+   $(
+//   CASE s.slctap:
+//              $(  LET v       = VEC 2
+//                  unpackslct(const, v)
+
+   DEFAULT:     RESULTIS x
+   CASE s.name: $(  LET cell = cellwithname(x)
+                    UNLESS dvec!(cell+1) = s.number RESULTIS x
+                    cell := dvec!(cell+2)
+                    IF smallnumber(cell) THEN x := cell
+                $)
+                RESULTIS x
+//nop CASE s.nop:       x := x!h2;                                      LOOP
+
+    CASE s.query:
+    CASE s.true:
+    CASE s.false:
+    CASE s.number:
+                RESULTIS x      // Well, I can't expand it, now can I?
+    CASE s.abs:    // monadic operators
+    CASE s.neg:
+    CASE s.not: x!h2 := evaltree(x!h2, mode)
+                IF isconst(x!h2)=FALSE RESULTIS x
+    CASE s.globnumber:  assign.lv(@x)
+                RESULTIS x
+
+
+        // symmetric associative dyadic operators
+    CASE s.logor:       // |0, |-1
+    CASE s.logand:      // &0, &-1
+    CASE s.eqv:         // eqv0, eqv-1
+
+    CASE s.mult:        // *0, *1, *-1
+    CASE s.plus:        // +0
+    CASE s.eq:          // IN COND:     =0,  (x&n)  = n
+                        // IN COND:     A OF B = 1/0 where A selects 1 bit
+                        // IN COND:     A OF B = xxx where xxx all 1s or 0s ----
+    CASE s.ne:          // IN COND:     ~=0, (x&n) ~= n
+                $(  LET op = h1!x
+                    linear.sort(@x, op)
+                    UNLESS h1!x = op RESULTIS x //evaltree(x, ?)
+                $)
+                UNLESS isconst(x) = FALSE assign.lv(@x) <> RESULTIS x
+//nop           x!h2, x!h3 := remove.nops(x!h2), remove.nops(x!h3)
+$<OP
+                $(special.cases
+                    LET op, complex, const = x!h1, x!h2, x!h3
+                    LET fixed = eval.if.const(const)
+                    SWITCHON op INTO
+                    $(  CASE s.eq: CASE s.ne:
+                        UNLESS mode=TRUE                //EVAL.CONDJUMP
+                        TEST fixed=0                    // x=0
+                        THEN TEST  op=s.eq
+                             THEN x!h1 := s.not
+                             ELSE x := x!h2
+$<SLCT
+//      SELECTORS:
+//
+//      a OF b  = c
+//                      c = CONSTANT, a = 1bit  => b & f(a)
+//                      c = CONSTANT            => b & f(a) = f(c, a)
+//
+// TREAT THE CASES SEPERATELY even though this is a standard optimisation, as
+// we are using us TRN space at the moment !!
+                        ELSE TEST elem(complex, h1) = s.slctap
+                             $( LET v   = vec 2
+                                unpackslct(evalconst(complex!h2, TRUE), v)
+                                // SELECTOR is a single bit ............
+                                IF isconst(const)
+                                THEN TEST (v!0 = 1)
+                                $(  LET mask    = (1 << (v!1))
+                                    // a OF b = 0       == ~(a OF b)
+                                    // a OF b = 1       ==   a OF b
+                                    IF (fixed&1) = 0
+                                    THEN op := (s.eq+s.ne) - op
+                                    // No word offset
+/*                                  TEST v!2=0 & v!2 ~= 0
+ *                                  $(
+ *                                      LET y            = x ! h2
+ * //                                           LET numb         = y ! h2
+ *                                      LET numb         = getv(1)
+ *                                      TEST op = s.eq
+ * //                                   THEN x  := y ELSE x!h1 := s.not
+ *                                      THEN x!h1 := s.rv
+ *                                      ELSE
+ *                                      $(  LET pair    = getv(1)
+ *                                          x!h1        := s.not
+ *                                          x!h1        := pair
+ *                                      $)
+ *                                      // We know that the SLCTor was
+ *                                      // not a small number ...
+ *                                      (numb ! h1)     := S.number  //in case
+ *                                      (numb ! h2)     := mask
+ *                                       y ! h1         := s.logand
+ *                                       y ! h2         := y ! h3
+ *                                       y ! h3         := numb
+ *                                  $)
+ *                                  ELSE
+ */
+                                        //Likely that the word offset is small
+                                    $(  LET numb        = getv(1)
+                                                                //complex ! h2
+
+                                        x       ! h1    := s.logand
+                                        //                 Correct
+                                        x       ! h3    := numb
+
+                                        //                 v!2=0 -> simple case
+                                        complex ! h1    := v!2=0 -> s.rv, s.vecap
+                                        complex ! h2    := v!2=0 -> complex!h3,
+                                                        smallnumber(v!2) ->
+                                                v!2, getv(1, s.number, v!2)
+                                        //      ! h3       Correct
+
+                                        numb    ! h1    := s.number //in
+                                        numb    ! h2    := mask
+                                        UNLESS op=s.eq
+                                        DO x := getv(1, s.not, x)
+                                    $)
+                                $)
+                                ELSE
+x := x  //                      $( deb("Missed a OF b = CONST*N") $)
+                            $)
+$>SLCT
+                                                        // (X & (1<<n)) = (1<<n)
+                        ELSE IF (fixed & (fixed-1)) = 0 &
+                                elem(complex, h1) = s.logand    &
+                                fixed=eval.if.const(elem(complex, h3))
+                                THEN TEST op=s.eq
+                                     THEN x := x!h2
+                                     ELSE x!h1 := s.not
+                        ENDCASE
+
+                        CASE s.mult:
+                        TEST fixed = 1
+                        THEN x := x!h2
+                        ELSE TEST fixed = -1
+                        THEN x!h1 := s.neg
+                        ELSE IF fixed=0
+                        THEN x!h1, x!h2 := s.number, 0
+                        ENDCASE
+
+                        CASE s.logand: CASE s.logor:
+                        TEST (fixed=0  & op=s.logand) |
+                             (fixed=-1 & op=s.logor)
+                        THEN x!h1, x!h2 := s.number, fixed
+                        ELSE IF (fixed=-1 & op=s.logand) |
+                                (fixed=0  & op=s.logor)
+                             THEN x := x!h2
+                        ENDCASE
+
+                        CASE s.eqv:
+                                TEST fixed=-1   THEN x    := x!h2
+                                ELSE IF fixed=0 THEN x!h1 := s.not
+                        ENDCASE
+
+                    CASE s.plus:
+                                IF fixed = 0    THEN x := x!h2
+                    $)
+                $)special.cases
+$>OP
+        RESULTIS x
+
+    CASE s.neqv:        //      x neqv 0==    x
+//BOOL                  Mode := TRUE            // Don't eval sub tree BOOL mode
+    CASE s.le:          //      <= -1   == <  0
+    CASE s.gr:          //      >  -1   == >= 0
+    CASE s.ls:          //      <   1   == <= 0
+    CASE s.ge:          //      >=  1   == >  0
+    CASE s.div:         //      x/1     ==    x
+                        //      x/0     ==error
+                        //      x/-1    ==   -x
+    CASE s.minus:       //      x-0     ==    x
+    CASE s.rem:
+    CASE s.lshift:      //      x >> 0  ==    x
+    CASE s.rshift:      //      x << 0  ==    x
+                        //      x neqv-1==not x
+                        $( LET left, right = ?, ?
+//BOOL                     h3!x := evaltree(h3!x, mode)
+                           h3!x := evaltree(h3!x, TRUE)
+//BOOL                     h2!x := evaltree(h2!x, mode)
+                           h2!x := evaltree(h2!x, TRUE)
+
+                           IF isconst(h2!x) & isconst(h3!x)
+                           THEN assign.lv(@x) <> RESULTIS x
+$<OP                       IF x!h1 = s.minus
+                           $(
+                                linear.sort(@x, s.plus)
+                                UNLESS x!h1 = s.plus | x!h1 = s.minus
+                                RESULTIS x      // evaltree(x, mode)
+                           $)
+$>OP                       UNLESS isconst(x)=FALSE
+                           DO assign.lv(@x) <> RESULTIS x
+                           left := eval.if.const(x!h2)
+                           right:= eval.if.const(x!h3)
+$<OP                       SWITCHON x!h1 INTO
+                           $( CASE s.minus:
+                                IF right= 0 THEN x := x!h2      // lose(x)
+                                IF left = 0 THEN x!h1,x!h2 := s.neg,x!h3
+                                ENDCASE
+
+                              CASE s.div:
+                                TEST left = 0 THEN x!h1, x!h2 := s.number, 0
+                                ELSE
+                                $(  IF right=-1 THEN x!h1 := s.neg
+                                    IF right= 0 THEN transreport(107, maxint)
+                                    IF right= 1 THEN x := x!h2  //      lose(x)
+                                $)
+                                ENDCASE
+
+                              CASE s.lshift: CASE s.rshift:
+                                IF right= 0 THEN x := x!h2      //      lose(x)
+                                ENDCASE
+
+                              CASE s.neqv:
+                                IF right= 0 THEN x := x!h2      //      lose(x)
+                                IF right=-1 THEN x!h1 := s.not
+                                ENDCASE
+
+                            CASE s.le:          //      <= -1   == <  0
+                                IF right=-1 IF assignzero(x+h3) x!h1 := s.ls
+                                IF left = 1 IF assignzero(x+h2) x!h1 := s.ls
+                                ENDCASE
+
+                            CASE s.gr:          //      >  -1   == >= 0
+                                IF right=-1 IF assignzero(x+h3) x!h1 := s.ge
+                                IF left = 1 IF assignzero(x+h2) x!h1 := s.ge
+                                ENDCASE
+
+                            CASE s.ls:          //      <   1   == <= 0
+                                IF right= 1 IF assignzero(x+h3) x!h1 := s.le
+                                IF left =-1 IF assignzero(x+h2) x!h1 := s.le
+                                ENDCASE
+
+                            CASE s.ge:          //      >=  1   == >  0
+                                IF right= 1 IF assignzero(x+h3) x!h1 := s.gr
+                                IF left =-1 IF assignzero(x+h2) x!h1 := s.gr
+                                ENDCASE
+
+                           $)
+$>OP
+                           RESULTIS x
+                        $)
+ $)
+$)1     REPEAT
+
+//AND lose(x) = VALOF
+//$(  LET res = 0
+//    UNLESS smallnumber(x) | dvec <= x <= dvec+dvece
+//    $(        res := x!h2 //; !x := free.pairs; free.pairs := x
+//    $)
+//    RESULTIS res
+//$)
+
+AND assignzero(addr) = VALOF            // lose(!addr)
+$( !addr := @zero.value; RESULTIS TRUE $)
+
+AND elem(x, h) = smallnumber(x) -> 0, x!h
+
+//nopAND remove.nops(x) = VALOF
+//nop$( WHILE elem(x, h1) = s.nop DO x := x!h2  //      lose(x)
+//nop   RESULTIS x
+//nop$)
+
+//AND printree(x) BE deb("[%N]: ", x) <> printree.(x) <> deb("  []*N")
+
+//AND printree.(x) BE
+//TEST SMALLNUMBER(x)
+//THEN deb(" %N ", x)
+//ELSE TEST (x!h1) = s.plus | (x!h1)=s.minus
+//     $( deb("[ %N | ", x!h1); printree.(x!h2); deb(" | ");
+//                                  printree.(x!h3); deb("] ")
+//     $)
+//     ELSE TEST ISCONST(X) = OP.CONST THEN deb("[%N]", X)
+//      ELSE TEST x!h1 = s.name | x!h1 = s.number
+//      THEN deb("[%N|%n]", x!h1, x!h2)
+//      ELSE deb("[ %N | ", x!h1) <> printree.(x!h2) <> deb("] ")
+
+AND eval.if.const(x) = x=0 -> 999,
+validpointer(@x) -> isconst(x)=FALSE -> 999, evalconst(x, TRUE), VALOF
+$( transreport(150, x); IF (stflags & stf.debug) ~= 0 THEN abort(999, x); RESULTIS 999 $)
+
+AND assign.lv(addr) BE
+$( LET res = evalconst(!addr, TRUE)
+   TEST res = 0 | ~smallnumber(res)
+        (!addr)!h1, (!addr)!h2 := s.number, res
+   ELSE /*lose(!addr) <>*/ !addr := res
+$)
+$>OP2
+
+AND getv(n, a,b,c,d) = VALOF
+$(  LET res = dvec + dvece
+    dvece := dvece + ((n/3)+1)*3
+    FOR i = 0 TO n DO res!i := (@a) !I
+    RESULTIS res
+$)
+.
+
+

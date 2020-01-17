@@ -1,0 +1,999 @@
+// (C) Copyright 1979 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+// Author:  C.G. Girling, based on a program by A.R. Aylward
+
+
+SECTION "Message"
+
+//  Mod record.
+//
+//  21-Jun-84 NJO  Changed to put the result file in t: rather than an
+//     obscure place.  Copies file rather than renaming.  Editor functions
+//     incorporated as part of main code (were got by callseg).
+//  26-Jun-84 NJO  Test for the user "Tripos" to prevent deletion of its
+//     messages by accident.
+//  20-Jul-84 NJO  Attempt to delete "Tripos" messages logged.
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "UIDHDR"
+GET "BCPL.SYNFIND"
+GET "BCPL.USERUIDSET"
+GET "BCPL.GETHEX"
+GET "String-to-Number"       // used by editor
+
+
+STATIC
+$(  terminal.out    = 0      // Output stream to the terminal
+    syswrch         = 0      // Saved value of systed WRCH
+    user.is.tripos  = FALSE  // Special test
+                             // these are used by the editor
+    mess.stream     = 0      // input file stream
+    log.file.name   = 0      // name of illegal operation log file
+    prompting       = 0      // whether to issue prompts or not!
+    item.space      = 0      // space for rdargs to use
+    item.size       = 0      // size of item.space
+$)
+
+
+MANIFEST
+$(  yes = TRUE
+    no  = FALSE
+    no.output          = 0
+    max.messages       = 150
+    temp.filename.size = 60
+$)
+    
+
+LET start(user, to.file, options) BE
+$(  LET argv          = VEC 200/bytesperword
+    LET rc            = 0
+    LET rdargs.string = "USER=USERS=INITIALS=FOR,TO/K,OPT/K"
+    LET to.stream     = 0
+    LET saveout       = output()
+    LET termout       = 0
+    LET logfile       = "sys:users.message-log"
+
+    syswrch := wrch
+
+    log.file.name := logfile
+
+    TEST user=0 THEN  // called as a command, get args with RDARGS
+
+    $(  IF rdargs(rdargs.string, argv, 200/bytesperword) = 0 THEN
+
+        $( writef("MESSAGE: Command line does not fit the RDARGS string:*N*
+                  **"%S*"*N", rdargs.string)
+           rc := 20
+        $)
+
+        terminal.out := saveout
+    $)
+    ELSE              // called by callseg, args are call parameters
+    $(  argv!0 := user
+        argv!1 := to.file
+        argv!2 := options
+
+        termout := findoutput("**")   // also must open terminal explicitly
+        IF termout = 0 THEN
+        $(  rc := 20
+            GOTO exit
+        $)
+        terminal.out := termout
+    $)
+
+    TEST (argv!1 ~= 0) & ((argv!1)%0 ~= 0) THEN   // TO stream specified
+    $(  to.stream := findoutput(argv!1)
+        IF to.stream = 0 THEN
+        $(  writef("MESSAGE: can't open file %S*N",argv!1)
+            GOTO exit
+        $)
+        selectoutput(to.stream)
+    $)
+    ELSE
+    $(  wrch := pwrch        // a page waiting version
+        selectoutput(terminal.out)
+    $)
+
+    IF argv!2 = 0 THEN
+        argv!2 := (argv!0=0 -> "E", "R")
+
+    IF argv!0 = 0 THEN
+        argv!0 := ""
+
+    rc := deal.with.names(argv!0, message, argv!2)
+
+exit:
+    wrch := syswrch
+
+    UNLESS to.stream = 0 DO
+    $(  selectoutput(to.stream)
+        endwrite()
+    $)
+
+    UNLESS termout = 0 DO
+    $(  selectoutput(termout)
+        endwrite()
+    $)
+
+    selectoutput(saveout)
+
+    IF user=0 THEN stop(rc)   // STOP only if not CALLSEGed
+$)
+
+AND deal.with.names(list, name.proc, arg1, arg2, arg3) = VALOF
+$(  LET i=0
+    LET listlen=list%0
+    LET rc = 0
+    WHILE i<=listlen & rc=0 DO
+    $(  LET beginning=i
+        LET name = VEC 30
+        i:=i+1
+        WHILE i-beginning<30*bytesperword & i<=listlen &
+              list%i\='+' & list%i\=',' & list%i\='*S' DO
+        $(  name%(i-beginning):=list%i
+            i:=i+1
+        $)
+        name%0:=i-beginning-1
+
+        user.is.tripos := compstring(name, "tripos") = 0
+
+        rc := name.proc(name, arg1, arg2, arg3)
+    $)
+    RESULTIS rc
+$)
+
+AND message(user, options) = VALOF
+
+$(  LET backupfile    = VEC temp.filename.size/bytesperword
+    LET messagefile   = "SYS:USERS.Message-0123456789ABCDEF"
+    LET mf.start      = 19   //            ^
+    LET messagestream = 0
+    LET testing       = FALSE
+    LET quiet         = FALSE
+    LET reading       = FALSE
+    LET deleting      = FALSE
+    LET summarising   = FALSE
+    LET editing       = FALSE
+    LET finish.on.empty = FALSE
+    LET user.puid     = VEC 3
+    LET using.file    = FALSE      // TRUE if using a message file directly
+    LET rc            = 0          // rather than a user
+
+    FOR option.ch.no = 1 TO options%0 DO
+    SWITCHON capitalch(options%option.ch.no) INTO
+    $( DEFAULT:
+          toterm("Option '%S' invalid*N", options)
+          rc := 20
+          GOTO exit
+
+       CASE 'D':
+          deleting := TRUE
+          ENDCASE
+
+       CASE 'E':
+          deleting := TRUE
+       CASE 'R':
+          reading := TRUE
+          ENDCASE
+
+       CASE 'F':
+          finish.on.empty := TRUE
+          ENDCASE
+
+       CASE 'Q':
+       CASE 'I':
+          quiet := TRUE
+       CASE 'T':
+          testing := TRUE
+          ENDCASE
+
+       CASE 'S':
+          summarising := TRUE
+          ENDCASE
+
+       CASE 'M':
+          editing := TRUE
+       CASE '*S':
+       CASE ',':
+       CASE '/':
+          ENDCASE
+    $)
+
+    TEST user=0 | user%0=0 THEN
+    $(  LET uidset = useruidset(consoletask)
+
+        TEST uidset=0 THEN
+        $(  toterm("No one logged on*N")
+            rc := 20
+            GOTO exit
+        $)
+        ELSE user.puid := uidset+cap.puid
+    $)
+    ELSE user.puid := puid.find(user, user.puid)
+
+    TEST user.puid=0 THEN
+    $(  // assume that string is really the name of a file then
+        messagefile := user
+        using.file := TRUE
+        make.temp.name(backupfile)
+    $)
+    ELSE
+    $(  // make message file name with user's PUID
+        FOR i=0 TO (8/bytesperword)-1 DO
+        $(  FOR j=0 TO bytesperword*2-1 DO
+            $(  LET hex = (user.puid!i >> (((bytesperword*2-1)-j)*4)) & #XF
+
+                messagefile%(mf.start+(bytesperword*2)*i+j) :=
+                                          (hex<#XA -> '0'+hex, 'A'+hex-#XA)
+            $)
+        $)
+        make.temp.name(backupfile)
+    $)
+
+    messagestream := findinput(messagefile)
+
+    IF using.file & messagestream=0 & ~testing THEN
+    $(  // specified name is probably not a file after all:
+        toterm("User *"%S*" unknown*N", user)
+        rc := 20
+        GOTO exit
+    $)
+
+
+    IF reading | summarising | testing | editing THEN
+    $(  LET user.string = (user=0 | user%0=0 -> "you", user)
+        LET preposition = (using.file -> "in file", "for")
+        LET some.output = reading | summarising | editing
+
+        TEST messagestream=0 THEN
+        $(  UNLESS quiet DO
+                writef("****** No message %S %S*N", preposition, user.string)
+        $)
+        ELSE writef("****** Message%S %S %S*N", (some.output->"s",""),
+                                                   preposition, user.string)
+    $)
+
+    TEST messagestream=0 THEN
+    $(  IF finish.on.empty THEN
+            rc := 5
+    $)
+    ELSE
+    $(  LET savein = input()
+
+        selectinput(messagestream)
+
+        IF summarising THEN
+        $(  LET ch=rdch()
+
+            WHILE ch~=endstreamch DO
+            $(  TEST ch='+' THEN
+                $(
+                    $(rpt
+                        wrch(ch)
+                        ch := rdch()
+                    $)rpt REPEATUNTIL ch='*N' | ch=0 | ch=endstreamch
+
+                    newline()
+                $)
+                ELSE
+                // Treat NULL (0) as a line terminator temporarily -
+                // to get around file handler APPEND bug
+
+                WHILE ch~='*N' & ch~=0 & ch~=endstreamch DO
+                    ch := rdch()
+
+                UNLESS ch=endstreamch THEN ch:=rdch()
+            $)
+        $)
+
+        IF reading & rc=0 THEN
+            rc := print.msg()
+
+        endread()
+        selectinput(savein)
+
+        wrch := syswrch    // SYSWRCH contains the original system WRCH
+        selectoutput(terminal.out)
+
+        IF editing & rc=0 THEN
+        $(  writes("Message editor*N")
+            message.edit(messagefile, backupfile)
+        $)
+
+        IF deleting & rc=0 THEN
+        $(  TEST user.is.tripos THEN
+            $(  writes("Deletion of messages for Tripos is forbidden*N")
+                log.illegal.action()
+                rc := 20
+            $)
+            ELSE
+            $(  UNLESS back.up.file(messagefile, backupfile) DO
+                    rc := 20
+            $)
+        $)
+    $)
+
+exit:
+    synfind(0)    // clear in core translation buffers
+    RESULTIS rc
+$)
+
+AND make.temp.name(vect) BE
+$(  LET dir       = "t:"
+    LET id.string = "message"
+
+    vect%0 := 0  // start off with an empyt string
+
+    UNLESS concat(vect, temp.filename.size, dir) GOTO exit
+    UNLESS concat(vect, temp.filename.size, id.string) GOTO exit
+
+//    IF concat(vect, temp.filename.size, "-t") THEN    
+//    $(  LET taskstr = "XX"
+//        LET d1 = (taskid >> 8) & #XFF
+//        LET d2 = (taskid >> 0) & #XFF
+//        LET mc.name = rootnode!rtn.info!rtninfo.ring!ri.myname
+//        taskstr%1 := (d1<10 -> '0'+d1, 'A'+d1-10)
+//        taskstr%2 := (d2<10 -> '0'+d2, 'A'+d2-10)
+//        IF concat(vect, temp.filename.size, taskstr) THEN
+//        IF concat(vect, temp.filename.size, "-") THEN
+//        concat(vect, temp.filename.size, mc.name)
+//    $)
+exit:
+$)
+
+AND concat(vect, bytes, string) = VALOF
+$(  LET strlen = string%0
+    LET veclen = vect%0
+
+    UNLESS veclen+strlen < bytes RESULTIS FALSE
+
+    FOR i=1 TO strlen DO vect%(i+veclen) := string%i
+        vect%0 := veclen+strlen
+
+    RESULTIS TRUE
+$)
+
+AND puid.find(string, puid) =
+    (string%0=16 & gethex(string, puid, 8/bytesperword) -> puid,
+        synfind(string, from.name.domain, 0))
+
+AND print.msg() = VALOF
+$(  LET savein = input()
+    LET ch     = rdch()
+
+    UNTIL testflags(1) | (ch = endstreamch) DO
+    $(  IF ch = 0 THEN
+            ch := '*N'
+
+        wrch(ch)
+        ch:=rdch()
+    $)
+
+    selectinput(savein)
+
+    RESULTIS (ch=endstreamch -> 0, 5)
+$)
+
+
+
+AND pwrch(ch) BE
+$(  MANIFEST $(  page.len = 21  $)
+    STATIC   $(  lineno = 0     $)
+    // NOTE that by the time this procedure is called the
+    // system procedure WRCH will have been copied into SYSWRCH
+    TEST ch=0 THEN lineno:=0 ELSE
+    TEST output()~=terminal.out | ch~='*N' THEN syswrch(ch) ELSE
+    TEST lineno > page.len THEN
+    $(  LET savein = input()
+        selectinput(findinput("**"))
+        syswrch('*E')
+        ch := rdch() REPEATUNTIL ch='*N' | ch=0 | ch=endstreamch
+        endread()
+        selectinput(savein)
+        lineno := 0
+    $) ELSE
+    $(  syswrch(ch)
+        lineno := lineno+1
+    $)
+$)
+
+AND toterm(format, a1, a2, a3, a4, a5, a6, a7) BE
+$(  LET saveout=output()
+    selectoutput(terminal.out)
+    writes("MESSAGE: ")
+    writef(format, a1, a2, a3, a4, a5, a6, a7)
+    selectoutput(saveout)
+$)
+
+AND log.illegal.action() BE    // write an entry into log file
+
+$( LET file = findappend(log.file.name)
+   LET out  = output()
+   LET in   = input()
+   LET char = ?
+
+   IF file = 0 THEN   // error - give up
+      RETURN
+
+   selectinput(
+      findinput("info:%U attempted to delete Tripos messages on %D*N")
+              )
+   selectoutput(file)
+
+   WHILE TRUE DO
+   $( char := rdch()
+      IF char = endstreamch BREAK
+      wrch(char)
+   $)
+
+   endread()
+   endwrite()
+
+   selectinput(in)
+   selectoutput(out)
+$)
+
+AND back.up.file(file1, file2) = VALOF
+
+// Copy FILE1 to FILE2 then delete FILE1.
+
+$(  LET out     = output()
+    LET in      = input()
+    LET stream1 = findinput(file1)
+    LET stream2 = 0
+    LET char    = ?
+    LET del.ok  = FALSE
+
+    IF stream1 = 0 THEN
+    $(  writef("Can't open *"%S*" for input to do backup copy: ", file1)
+        fault(result2)
+        GOTO exit
+    $)
+
+    stream2 := findoutput(file2)
+
+    IF stream2 = 0 THEN
+    $(  writef("Can't open *"%S*" for output to do backup copy: ", file2)
+        fault(result2)
+        GOTO exit
+    $)
+
+    selectinput(stream1)
+    selectoutput(stream2)
+    char := rdch()
+
+    UNTIL char = endstreamch DO
+    $(  wrch(char)
+        char := rdch()
+    $)
+
+    endread()
+    selectinput(in)
+    endwrite()
+    selectoutput(out)
+
+    del.ok := deleteobj(file1) ~= 0
+
+    UNLESS del.ok DO
+    $(  writef("Failed to delete *"%S*": ", file1)
+        fault(result2)
+    $)
+
+exit:
+    RESULTIS del.ok
+$)
+
+AND message.edit(mess.file, backup.file) BE
+$(  LET arg = VEC 30
+    LET message.state = getvec (max.messages/(8*bytesperword))
+    IF mess.file\=0 | VALOF
+    $(  LET ans = FALSE
+        TEST rdargs("File/a", arg, 30)=0 THEN
+        writef("Illegal command line syntax*N") ELSE
+        $(  mess.file := arg!0
+            backup.file := "T:Message-ed"
+            ans:=TRUE
+        $)
+        RESULTIS ans
+    $) THEN
+    IF init.messages(mess.file, message.state) THEN
+    $(  LET prompt="*C<>"
+        LET commands ="SND=send,MSG=message,S=summary,D=delete,U=undelete,*
+                     *N=next,*N*
+                     *   =T=type,CF=close,?=V=verify,RPT=repeat,**=rewind,*N*
+                     *   =Q=quit,W=windup,H=help"
+        LET header = VEC 50
+        LET quiting = FALSE
+        LET open.files = 0
+        LET current.message = 0
+        LET last.typed.message = -1
+        LET item = VEC 40
+        item.space := item
+        item.size  := 40
+        header%0 := 0
+        prompting := TRUE
+        WHILE ~quiting DO
+        $(  quiting := ~ask(prompt, item, item.size)
+            UNLESS quiting THEN
+            SWITCHON findarg(commands, item) INTO
+            $(  CASE -1:
+                    getarg("no such command! nothing")
+                    writes("unknown command*N")
+                    ENDCASE
+                CASE 0:     // send
+                    send.message()
+                    ENDCASE
+                CASE 1:     // message
+                    recieve.message()
+                    ENDCASE
+                CASE 2:     // summary
+                    summarise.file(message.state, mess.file, current.message,
+                        last.typed.message)
+                    ENDCASE
+                CASE 3:     // delete
+                    mark.message.delete(message.state, current.message, yes)
+                    ENDCASE
+                CASE 4:     // undelete
+                    mark.message.delete(message.state, current.message, no)
+                    ENDCASE
+                CASE 5:     // next
+                    TEST current.message = last.typed.message THEN
+                    $(  IF verify(message.state, current.message+1, header) THEN
+                        current.message := current.message + 1
+                    $) ELSE
+                    TEST next.message(current.message, no.output) THEN
+                    $(  get.next.header(header,50)
+                        current.message := current.message + 1
+                        verify(message.state, current.message, header)
+                    $) ELSE
+                    writes("****** no more messages*N")
+                    ENDCASE
+                CASE 6:     // type
+                    TEST current.message = last.typed.message THEN
+                    writef("Message %N already displayed - rewind*N",
+                           current.message) ELSE
+                    $(  TEST type.command(current.message, header, @open.files)
+                        THEN
+                          get.next.header(header, 50)
+                        ELSE writes("****** no more messages*N")
+                        last.typed.message := current.message
+                    $)
+                    ENDCASE
+                CASE 7:     // close
+                    close.command(@open.files)
+                    ENDCASE
+                CASE 8:     // verify
+                    verify(message.state, current.message, header)
+                    ENDCASE
+                CASE 9:     // repeat
+                    repeat.command(mess.file)
+                    ENDCASE
+                CASE 10:    // rewind
+                    current.message:=rewind.input(mess.file, current.message)
+                    IF current.message=0 THEN last.typed.message := -1
+                    ENDCASE
+                CASE 11:    // quit
+                    getarg("goodbye")
+                    quiting := TRUE
+                    ENDCASE
+                CASE 12:    // windup
+                    quiting := do.deletes(message.state, mess.file, backup.file)
+                    ENDCASE
+                CASE 13:    // help
+                    find.help(commands)
+                    ENDCASE
+                DEFAULT:
+                    writes("strange command code! quitting")
+                    quiting := TRUE
+            $)
+        $)
+        close.all.files(@open.files)
+        tidyup()
+    $)
+    UNLESS message.state=0 THEN freevec(message.state)
+$)
+
+AND rewind.input(mess.file, current.message) = VALOF
+
+$(  LET new.in=findinput(mess.file)
+    TEST new.in=0 THEN writef("Can't open %S for input*N",mess.file) ELSE
+    $(  LET savein=input()
+        selectinput(mess.stream)
+        endread()
+        mess.stream := new.in
+        selectinput(savein)
+        current.message := 0
+    $)
+    RESULTIS current.message
+$)
+
+AND init.messages(mess.file, message.state) = VALOF
+
+$(  LET current = rewind.input(mess.file, 42)
+    TEST message.state=0 THEN writes("Not enough memory*N") ELSE
+    FOR i=0 TO max.messages/bitsperword DO message.state!i := 0
+    RESULTIS message.state~=0 & current~=42
+$)
+
+AND tidyup() BE
+
+$(  UNLESS mess.stream = 0 THEN
+    $(  LET savein=input()
+        selectinput(mess.stream)
+        endread()
+        selectinput(savein)
+    $)
+$)
+//
+//                     Message  Deletion  Bit  Map
+//
+AND will.delete.message(message.state, current.message) =
+    (current.message>max.messages -> FALSE,
+     0~=((message.state!(current.message/(8*bytesperword)) >>
+         (current.message REM (8*bytesperword))) & 1))
+
+AND mark.message.delete(message.state, current.message, deleted) BE
+
+$(  LET index = (current.message/(8*bytesperword))
+    LET mask  = 1 << (current.message REM (8*bytesperword))
+    TEST deleted=yes THEN
+        message.state!index := message.state!index | mask
+    ELSE
+        message.state!index := message.state!index & ~mask
+$)
+//
+//                  File    List    Procedures
+//
+
+//LET rename.file(file1, file2) = VALOF      // replaced by back.up.file
+//$(  LET ans = (0~=renameobj(file1, file2))
+//    UNLESS ans THEN
+//    $(  LET r2 = result2
+//        writef("Failed to rename *"%S*" as *"%S*" - ", file1, file2)
+//        fault(r2)
+//        result2 := r2
+//    $)
+//    RESULTIS ans
+//$)
+
+AND enter.file(at.file, stream, filename) = VALOF
+
+$(  LET ans=(at.file~=0)
+    IF ans THEN
+    $(  LET new.entry = getvec(2+filename%0/bytesperword)
+        TEST new.entry=0 THEN ans:=FALSE ELSE
+        $(  new.entry!1 := stream
+            FOR i=0 TO filename%0 DO (new.entry+2)%i := filename%i
+            new.entry!0 := !at.file
+            !at.file   := new.entry
+        $)
+    $)
+    RESULTIS ans
+$)
+
+AND close.file(at.file) = VALOF
+$(  LET ans=(!at.file~=0)
+    IF ans THEN
+    $(  LET deleted=!at.file
+        LET saveout = output()
+        selectoutput(deleted!1)
+        endwrite()
+        selectoutput(saveout)
+        !at.file := !!at.file
+        freevec(deleted)
+    $)
+    RESULTIS ans
+$)
+
+AND find.file(filename, at.filelist) = VALOF
+$(  LET p=at.filelist
+    LET n=100  // safty limit
+    WHILE !p~=0 & n>0 & 0~=compstring(filename, !p+2) DO
+    $(  p:=!p
+        n:=n-1
+    $)
+    RESULTIS (n>0 & !p~=0 -> p, 0)
+$)
+
+AND close.all.files(at.filelist) BE
+    WHILE !at.filelist~=0 DO close.file(at.filelist)
+
+AND close(filename, at.filelist) BE
+$(  LET p = find.file(filename, at.filelist)
+    TEST p=0 THEN writef("%S is not open*N", filename) ELSE close.file(p)
+$)
+
+AND my.findoutput(filename, at.filelist) = VALOF
+$(  LET p=find.file(filename, at.filelist)
+    LET ans=0
+    TEST p=0 THEN
+    $(  ans:=findoutput(filename)
+        IF ans~=0 & ~enter.file(at.filelist, ans, filename) THEN
+        $(  LET saveout=output()
+            selectoutput(ans)
+            endwrite()
+            selectoutput(saveout)
+            writef("Can't enter %S into file list*N",filename)
+            ans := 0
+        $)
+    $) ELSE ans := (!p)!1
+    RESULTIS ans
+$)
+//
+//                    Editor  Commands
+//
+AND getarg(arg.string) = VALOF
+$(  // uses the globals 'item.space' and 'item.size' as space
+    // for "rdargs" string.  Returns TRUE if call is successfull
+    LET rc = (0~=rdargs(arg.string, item.space, item.size))
+    IF ~rc THEN writes("Syntax error*N")
+    RESULTIS rc
+$)
+
+AND nowrch(ch) BE RETURN
+
+AND next.message(current.message, outstream) = VALOF
+$(  LET none.found = TRUE
+    LET ch=?
+    LET savein=input()
+    LET mywrch = (outstream=no.output -> nowrch, wrch)
+    LET saveout = output()
+    UNLESS outstream=no.output THEN selectoutput(outstream)
+    selectinput(mess.stream)
+    ch:=rdch()
+    WHILE none.found & ch~=endstreamch DO
+    $(  IF ch='+' THEN
+        $(  ch:=rdch()
+            none.found := (ch~='+')
+            IF none.found THEN mywrch('+')
+        $)
+        IF none.found THEN
+        $(  $(rpt
+                mywrch(ch)
+                ch:=rdch()
+            $)rpt REPEATUNTIL ch='*N' | ch=0 | ch=endstreamch
+            mywrch('*N')
+        $)
+        UNLESS ch=endstreamch THEN ch:=rdch()
+    $)
+    UNLESS none.found THEN
+    IF current.message = max.messages THEN
+    $(  writes("Too many messages!")
+        none.found := TRUE
+    $)
+    selectinput(savein)
+    selectoutput(saveout)
+    RESULTIS ~none.found
+$)
+
+AND get.next.header(message.buff, message.size) BE
+
+$(  LET bytes = bytesperword*message.size-1
+    LET ch=?
+    LET i=1
+    LET savein=input()
+    selectinput(mess.stream)
+    ch:=rdch()
+    WHILE ch~='*N' & ch\=0 & ch~=endstreamch DO
+    $(  UNLESS i>bytes THEN
+        $(  message.buff%i := ch
+            i:=i+1
+        $)
+        ch:=rdch()
+    $)
+    message.buff%0 := i-1
+    selectinput(savein)
+$)
+
+AND type(current.message, header) = VALOF
+
+$(  LET ans = ?
+    TEST current.message=0 | header%0 = 0 THEN
+    $(  writes("No current message*N")
+        ans:=next.message(current.message, output())
+    $) ELSE
+    $(  writef("++ %S*N", header)
+        ans := next.message(current.message, output())
+        IF \ans THEN header%0 := 0
+    $)
+    RESULTIS ans
+$)
+
+AND type.command(current.message, header, at.filelist) = VALOF
+
+$(  LET ans=TRUE
+    IF getarg("to") THEN
+    TEST item.space!0=0 THEN ans:=type(current.message, header) ELSE
+    $(  LET new.out = my.findoutput(item.space!0, at.filelist)
+        TEST new.out=0 THEN
+        writef("Can't open %S for output*N", item.space!0) ELSE
+        $(  LET saveout = output()
+            selectoutput(new.out)
+            ans := type(current.message, header)
+            selectoutput(saveout)
+        $)
+    $)
+    RESULTIS ans
+$)
+
+AND close.command(at.filelist) BE
+    IF getarg("file/a") THEN close(item.space!0, at.filelist)
+
+AND verify(message.state, current.message, header) = VALOF
+
+$(  LET ans = TRUE
+    TEST current.message=0 | header%0 = 0 THEN
+    $(  writes("No current message*N")
+        ans := FALSE
+    $) ELSE
+    writef("Message %I2 %C %S*N", current.message,
+           (will.delete.message(message.state, current.message) ->
+                                                    '**', '*S'), header)
+    RESULTIS ans
+$)
+
+AND summarise.file(mess.state, mess.file, this.message, last.message) BE
+
+$(  LET new.in = findinput(mess.file)
+    TEST new.in=0 THEN
+    writef("MESSAGE: can't open '%S' for reading!*N", mess.file) ELSE
+    $(  LET savein = input()
+        LET save.mess = mess.stream
+        LET current.message = 0
+        mess.stream := new.in
+        TEST ~next.message(current.message, no.output) THEN
+        writes("Message file is empty*N") ELSE
+        $(  LET any.deleted = FALSE
+            $(rpt
+                LET deleteit = will.delete.message(mess.state, current.message)
+                LET heading = VEC 50
+                current.message := current.message+1
+                get.next.header(heading, 50)
+                TEST current.message<this.message THEN writes("| ") ELSE
+                TEST current.message=this.message &
+                     last.message=this.message THEN
+                writes("V ") ELSE writes("  ")
+                verify(mess.state, current.message, heading)
+                any.deleted := any.deleted | deleteit
+            $)rpt REPEATUNTIL ~next.message(current.message, no.output)
+            IF any.deleted THEN
+            writef("*N** - message will be deleted on wind up*N")
+        $)
+        selectinput(mess.stream)
+        endread()
+        mess.stream := save.mess
+        selectinput(savein)
+    $)
+$)
+
+AND send.message() BE
+$(  IF getarg("User/a,From,About") THEN
+    callseg("SYS:C.SEND", item.space!0, item.space!1, 0, item.space!2)
+$)
+
+AND recieve.message() BE
+$(  IF getarg("User/a,to,Opt") THEN
+    callseg("SYS:C.MESSAGE", item.space!0, item.space!1, item.space!2)
+$)
+
+AND find.help(commands) BE
+
+$(  TEST rdargs(",,,,,,,,,,", item.space+3, item.size-3)=0 THEN
+    writes("too many args for HELP*N") ELSE
+    TEST (item.space+3)!0 = 0 THEN
+    $(  writef("Commands are:*N")
+        writes(commands)
+        newline()
+        writef("Use HELP <args> for further information*N")
+    $) ELSE
+    $(  item.space!0 := 12
+        item.space!1 := "MAIL"
+        item.space!2 := "EDITOR"
+        callseg("SYS:C.HELP", item.space, 0, 0, 0)
+    $)
+$)
+
+AND repeat.command() BE
+
+$(  STATIC $(  repeats=0  $)
+
+    IF getarg("times") THEN
+    IF item.space!0=0 | VALOF
+    $(  LET ans = string.to.number(item.space!0)
+        UNLESS ans THEN
+        writef("'%S' is not a valid repeat count*N",item.space!0)
+        RESULTIS ans
+    $) THEN
+    $(  LET repeat.count = (item.space=0 -> 0, result2)
+        TEST testflags(1) | testflags(2) THEN
+        $(  writes("****** BREAK*N")
+            repeats:=0
+        $) ELSE
+        $(  IF repeats=0 THEN repeats:=repeat.count
+            repeats := repeats-1
+            UNLESS repeats=0 THEN WHILE unrdch() DO LOOP
+        $)
+        prompting := (repeats=0)
+    $)
+$)
+
+AND do.deletes(mess.state, mess.file, backup.file) = VALOF
+
+$(  LET ans = FALSE
+    IF getarg("file") THEN
+    IF rewind.input(mess.file, 1)=0 THEN
+    $(  LET temp.file = backup.file
+        LET out = findoutput(temp.file)
+        TEST out=0 THEN writef("Cannot open *"%S*" for output*N",temp.file) ELSE
+        $(  LET saveout = output()
+            LET header = VEC 50
+            LET savein = input()
+            LET included = ?
+            LET to.file = (item.space!0=0 -> mess.file, item.space!0)
+            LET current.message = 0
+            LET any.written = FALSE
+            ans := TRUE
+            selectoutput(out)
+            IF next.message(current.message, no.output) THEN
+            $(rpt
+                current.message := current.message+1
+                included := ~will.delete.message(mess.state, current.message)
+                IF included THEN
+                $(  any.written := TRUE
+                    get.next.header(header, 50)
+                $)
+            $)rpt REPEATUNTIL (included ->
+                               ~type(current.message, header),
+                               ~next.message(current.message, no.output))
+            endwrite()
+            selectoutput(saveout)
+
+            selectinput(mess.stream)
+            endread()            // must be closed before the rename !
+            mess.stream := 0
+            selectinput(savein)
+
+            TEST NOT any.written THEN
+            $(  deleteobj(temp.file)
+                deleteobj(to.file)
+            $)
+            ELSE
+            $(  UNLESS back.up.file(temp.file, to.file) DO
+                $(  mess.stream := findinput(mess.file)   // (open it again)
+                    ans := FALSE
+                $)
+            $)
+        $)
+    $)
+    RESULTIS ans
+$)
+
+AND ask(prompt, item, item.size) = VALOF
+
+// request line with prompt 'prompt', put first string on reply
+// line in 'item' (which has size 'item.size' words).
+
+$(  LET needs.prompt = (unrdch() -> rdch()='*N', TRUE)
+    LET eof = FALSE
+    LET rc=?
+    $(  IF needs.prompt & prompting THEN writef("%S *E",prompt)
+    $) REPEATUNTIL VALOF
+    $(  rc := rditem(item, item.size)
+        needs.prompt := FALSE
+        IF rc=0 THEN
+        $(  LET ch=rdch()
+            needs.prompt := (ch='*N')
+            eof:=(endstreamch=ch)
+        $)
+        IF (rc<0 | rc=2) & ~eof THEN getarg("illegal item! nothing")
+        IF rc<0 | rc=2 THEN writes("illegal item*N")
+        RESULTIS rc=1 | eof
+    $)
+    UNLESS rc=1 THEN writes("End Of File*N")
+    RESULTIS ~eof
+$)
+
+

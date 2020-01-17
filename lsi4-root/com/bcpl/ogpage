@@ -1,0 +1,433 @@
+/*****************************************************************************
+**                (C) Copyright 1985  TRIPOS Research Group                 **
+**               University of Cambridge Computer Laboratory                **
+******************************************************************************
+
+                 ######   #######     ####     ######   ######## 
+                ########  ########   ######   ########  ######## 
+                ##        ##    ##  ##    ##  ##        ##       
+                ##  ####  #######   ########  ##  ####  ######   
+                ##    ##  ##        ##    ##  ##    ##  ##       
+                ##    ##  ##        ##    ##  ##    ##  ##       
+                ########  ##        ##    ##  ########  ######## 
+                 ######   ##        ##    ##   ######   ######## 
+
+******************************************************************************
+**      Author:   Nick Ody                                 June 1985        **
+*****************************************************************************/
+
+//   This program acts as a filter for GCODE, to allow particular pages
+//to be printed out.  It simply scans the FROM file skipping and counting
+//FORMFEED characters and outputting any ".request" directives encountered
+//on the way (which are text surrounded by CTRL-S characters).
+
+//   Modifications
+//
+// 04-Jul-85 NJO  Bug fixes:  end-of-stream caused loop when reading page
+//                spec.  Spurious error message at end-of-file if last page
+//                is included in output.  Check introduced for duplicate
+//                pages in page spec.
+// 27-Nov-85 NJO  Small bug fixed in argument prompting.  Code superseded
+//                by new version using New GCODE.  This version will be
+//                relegated to OGPAGE!
+
+SECTION "gpage"
+
+GET "libhdr"
+
+MANIFEST
+$( request.delim     = #X13       // CTRL-S
+
+   NIL               = 0
+
+   page.link         = 0          // page descriptor
+   page.number       = 1
+$)
+
+GLOBAL
+$( sysprint          : ug           // for messages
+   page.list         : ug + 1       // list of page descriptors
+   curr.page         : ug + 2
+   level.exit        : ug + 3
+   label.exit        : ug + 4
+   trace             : ug + 5       // print diagnostic info if set
+   last.page         : ug + 6       // set iff last page of output document
+$)
+
+LET start() BE
+
+$( LET from.stream = 0
+   LET to.stream   = 0
+   LET sysin       = input()
+   LET chars       = 0
+   LET rc          = 16
+   LET prompt      = TRUE
+
+   sysprint       := output()
+   page.list      := NIL
+   curr.page      := 0
+   level.exit     := level()
+   label.exit     := exit
+
+   $( LET argstr = "FROM/A,TO/A,PAGES/K,TRACE/S"
+      LET argv   = VEC 80/bytesperword
+
+      IF rdargs(argstr, argv, 80/bytesperword) = 0 THEN
+         error("Args unsuitable for string %S", argstr)
+
+      from.stream := findinput(argv!0)
+
+      IF from.stream = 0 THEN
+         error("Can't open FROM stream %S", argv!0)
+
+      to.stream := findoutput(argv!1)
+
+      IF to.stream = 0 THEN
+         error("Can't open TO stream %S", argv!1)
+
+      trace := argv!3
+
+      IF argv!2 ~= 0 THEN
+      $( UNLESS decode.page.spec(argv!2) DO
+            error("Bad page spec *"%S*"", argv!2)
+
+         prompt := FALSE
+      $)
+   $)
+
+   IF prompt THEN
+   $( writes("Specify pages required - terminate by *"/***", H for help*N*N")
+
+      WHILE TRUE DO
+      $( LET argv = VEC 40/bytesperword
+
+         writes("Page(s): *E")
+
+         IF rdargs("PAGES", argv, 40/bytesperword) = 0 THEN
+         $( IF rdch() = endstreamch THEN   // check for end-of-stream
+               BREAK                       // treat as valid terminator
+
+            unrdch()
+
+            LOOP
+         $)
+
+         IF argv!0 = 0 THEN
+            LOOP
+
+         IF ((argv!0)%1 = 'H') | ((argv!0)%1 = 'h') THEN
+         $( writes("Give a list of numbers separated by commas.*N*
+              *A range may be given as a pair of numbers separated by *'-*'*N")
+            LOOP
+         $)
+
+         IF (compstring(argv!0, "/**") = 0) THEN
+            BREAK
+
+         IF (compstring(argv!0, "q") = 0) THEN
+            error("Abandoned")
+
+         IF testflags(1) THEN
+            error("BREAK")
+
+         UNLESS decode.page.spec(argv!0) DO
+         $( writes("Bad page spec*N")
+            LOOP
+         $)
+      $)
+   $)
+
+   IF trace THEN
+      print.page.list()
+
+   last.page := (page.list = NIL)
+
+   IF last.page THEN
+      writes("Warning:  no page(s) specified!*N")
+
+   selectinput(from.stream)
+   selectoutput(to.stream)
+
+   read.page(TRUE)
+
+   $( LET page.desc = page.list
+
+      UNTIL last.page DO
+      $( LET next = page.link!page.desc
+         LET num  = page.number!page.desc
+
+         UNTIL curr.page = num DO
+            read.page(FALSE)
+
+         last.page := (next = NIL)
+
+         read.page(TRUE)
+
+         page.desc := next
+      $)
+   $)
+
+   rc := 0
+
+exit:
+
+   IF from.stream ~= 0 THEN
+   $( selectinput(from.stream)
+      endread()
+   $)
+
+   IF to.stream ~= 0 THEN
+   $( selectoutput(to.stream)
+      endwrite()
+   $)
+
+   UNTIL page.list = NIL DO
+   $( LET next = page.link!page.list
+
+      freevec(page.list)
+
+      page.list := next
+   $)
+
+   stop(rc)
+$)
+
+AND error(msg, arg1, arg2) BE
+
+$( selectoutput(sysprint)
+
+   writes("GPage: ")
+   writef(msg, arg1, arg2)
+   newline()
+
+   longjump(level.exit, label.exit)
+$)
+
+AND read.page(copy.to.output) BE
+
+//   Read up to a FORMFEED from the input stream.  If the parameter is
+//TRUE then copy it all to the output.  Otherwise copy only data delimited
+//by CTRL-S characters.
+
+$( LET char          = rdch()
+   LET in.delim.sect = FALSE
+
+   IF testflags(8) | trace THEN
+   $( LET out = output()
+
+      selectoutput(sysprint)
+
+      writef("GPage: %S page %N*N", copy.to.output -> "copying", "skipping",
+                                                                    curr.page)
+      selectoutput(out)
+   $)
+
+   WHILE TRUE DO
+   $( IF testflags(1) THEN
+         error("BREAK on page %N", curr.page)
+
+      IF (char = '*P') | (char = endstreamch) THEN   // end of page
+      $( IF in.delim.sect THEN
+            error("end-of-page in CTRL-S delim section on page %N", curr.page)
+
+         IF last.page THEN             // end of document - don't write *P
+            BREAK
+
+         IF char = endstreamch THEN    // error except on last page
+            error("Unexpected EOF in page %N", curr.page)
+      $)
+
+      TEST (char = request.delim) THEN
+      $( wrch(char)              // make sure the delimiter is always written
+         in.delim.sect := NOT in.delim.sect
+      $)
+      ELSE
+      $( IF copy.to.output | in.delim.sect THEN
+            wrch(char)
+      $)
+
+      IF char = '*P' THEN
+         BREAK
+
+      char := rdch()
+   $)
+
+   curr.page := curr.page + 1
+$)
+
+AND decode.page.spec(string) = VALOF
+
+//   Read the given string and decode it into a series of page descriptors.
+//It should consist of a list of numbers separated by commas.  Items are
+//numbers or pairs of form <number>-<number> indicating a range.
+//
+//   The parser is a finite state machine with states:
+//
+//      0 - Looking for the first number
+//      1 - Reading the first number
+//      2 - Looking for the second number
+//      3 - Reading the second number
+
+$( LET num1    = ?
+   LET num2    = ?
+   LET state   = 0
+   LET len     = string%0
+
+   FOR pos = 1 TO len + 1 DO
+   $( LET char = pos > len -> -1, string%pos   // put a flag on the end!
+
+      IF trace THEN
+         writef("Pos %N, char *'%C*' state %N*N", pos, char, state)
+
+      SWITCHON char INTO
+      $( DEFAULT:
+         writef("Bad character *'%C*' (#X%X2) in page spec*N", char, char)
+         RESULTIS FALSE
+
+         CASE '0':
+         CASE '1':
+         CASE '2':
+         CASE '3':
+         CASE '4':
+         CASE '5':
+         CASE '6':
+         CASE '7':
+         CASE '8':
+         CASE '9':
+         SWITCHON state INTO
+         $( CASE 0:
+            num1  := char - '0'
+            state := 1
+            ENDCASE
+
+            CASE 1:
+            num1 := num1*10 + char - '0'
+            ENDCASE
+
+            CASE 2:
+            num2  := char - '0'
+            state := 3
+            ENDCASE
+
+            CASE 3:
+            num2 := num2*10 + char - '0'
+            ENDCASE
+         $)
+         ENDCASE
+
+         CASE '-':
+         SWITCHON state INTO
+         $( CASE 0:
+            writes("Number missing before *'-*'*N")
+            RESULTIS FALSE
+
+            CASE 1:
+            state := 2
+            ENDCASE
+
+            CASE 2:
+            writes("Only two numbers allowed in range spec*N")
+            RESULTIS FALSE
+         $)
+         ENDCASE
+
+         CASE -1:         // end of string
+         SWITCHON state INTO
+         $( CASE 0:
+            CASE 2:
+            writes("Number missing at end-of-line*N")
+            RESULTIS FALSE
+
+            CASE 1:
+            insert.page.desc(num1)
+            RESULTIS TRUE
+
+            CASE 3:
+            IF num1 > num2 THEN
+            $( writes("Negative range!*N")
+               RESULTIS FALSE
+            $)
+            insert.page.range(num1, num2)
+            RESULTIS TRUE
+         $)
+         ENDCASE
+
+         CASE ',':
+         SWITCHON state INTO
+         $( CASE 0:
+            CASE 2:
+            writes("Number missing before *',*'*N")
+            RESULTIS FALSE
+
+            CASE 1:
+            insert.page.desc(num1)
+            state := 0
+            ENDCASE
+
+            CASE 3:
+            IF num1 > num2 THEN
+            $( writes("Negative range!*N")
+               RESULTIS FALSE
+            $)
+            insert.page.range(num1, num2)
+            state := 0
+            ENDCASE
+         $)
+         ENDCASE
+
+         CASE '*S':       // ignore spaces
+         ENDCASE
+      $)
+   $)
+$)
+
+AND insert.page.desc(number) BE
+
+$( LET desc = page.list
+   LET prev = @page.list - page.link
+   LET new  = getvec(page.number)
+
+   IF new = 0 THEN
+      error("Failed to get store for page descriptor")
+
+   UNTIL (desc = NIL) | (page.number!desc > number) DO
+   $( IF page.number!desc = number THEN    // duplicate!
+      $( writef("Warning: page %N specified again - ignored*N", number)
+         freevec(new)
+         RETURN
+      $)
+
+      prev := desc
+      desc := page.link!prev
+   $)
+
+   page.link!new   := desc
+   page.link!prev  := new
+   page.number!new := number
+$)
+
+AND insert.page.range(min, max) BE
+
+$( FOR i = min TO max DO
+      insert.page.desc(i)
+$)
+
+AND print.page.list() BE
+
+$( LET desc = page.list
+
+   writes("Pages to be printed:")
+
+   IF desc = NIL THEN
+      writes(" None")
+
+   UNTIL desc = NIL DO
+   $( writef(" %N", page.number!desc)
+
+      desc := page.link!desc
+   $)
+
+   newline()
+$)
+
+

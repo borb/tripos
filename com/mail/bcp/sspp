@@ -1,0 +1,67 @@
+SECTION "SSP"
+
+GET "libhdr"
+GET "CLIHDR"                            // CLI.commandname
+GET "ringhdr"
+GET "sys:ring.bcpl.ssplib"
+
+MANIFEST
+    $(
+    maxlen        = 121               // Chars in longest message
+    $)
+
+
+LET start() BE
+$(  MANIFEST
+    $(  A.service       = 0
+        A.station       = 1
+        A.port          = 2
+        A.func          = 3
+    $)
+    LET nsvec     = VEC 3
+    LET tx.block  = VEC 4
+    LET len       = 0
+    LET rx.block  = VEC 3
+    LET rc         = 20
+    LET argv    = VEC 80
+    LET argv.s  = "service,station,port,func"
+
+    IF rdargs(argv.s, argv, 80)=0
+    $(  WRITEF("%s: bad args for '%s'*N", cli.commandname, argv.s)
+        STOP(20)
+    $)
+
+    IF argv!A.service   THEN lookup.name(argv!A.service, nsvec)
+    IF argv!A.station   THEN nsvec!nsv.machine.id := stringval(argv!A.station)
+    IF argv!A.port      THEN nsvec!nsv.port := stringval(argv!A.port)
+    IF argv!A.func      THEN nsvec!nsv.func := stringval(argv!A.func)
+
+
+    TEST ssp(0, tx.block, 4, rx.block, 4, nsvec,
+                                        nsvec!nsv.func,
+                                        nsvec!nsv.machine.id,
+                                        nsvec!nsv.port
+            )
+    THEN rc := 0 // Successful completion if we drop through label
+    ELSE
+    $(  LET r2    = result2
+        WRITEF("Failed ... %N ... ", r2)
+        fault(r2)
+    $)
+    stop(rc)
+$)
+
+AND stringval(s) = VALOF
+$(  || converts a string to a number
+    LET val = 0
+
+    FOR j = 1 TO s%0
+    $(  UNLESS '0' <= s%j <= '9'
+        DO writef("Invalid char *'%C*' in number*N", s%j) <> stop(20)
+        val := val*10 + s%j - '0'
+    $)
+
+    RESULTIS val
+$)
+
+

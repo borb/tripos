@@ -1,0 +1,147 @@
+SECTION "LCG6"
+
+GET "LCGHDR"
+
+LET cgstatics() BE
+// Generate all STATIC (length 1) items
+$( LET d = @ dlist
+   UNTIL !d = 0
+   $( LET data = !d
+      LET k = h2 ! data >> 14
+      TEST k = d.iteml | k = d.itemn
+      $( LET l = h2 ! data & #X3FFF
+         cglab(l, 1)
+         TEST k = d.itemn code(h3 ! data, 0)
+         ELSE             code(0, h3 ! data)
+         IF ! data = 0 THEN dliste := d
+         !d := !data
+         rtnblk(data)
+      $)
+      ELSE d := data
+   $)
+$)
+
+
+AND cgdatablks() BE
+// Generate all multi-word items. i.e. Strings, tables and label vectors
+$( LET d = dlist
+   UNTIL d = 0 DO
+   $( LET k, l = h2 ! d >> 14, h2 ! d & #X3FFF
+      LET n    = h3 ! d
+      labv ! l := stvp
+      FOR j = -1 TO -n BY -1 DO TEST k = d.blkl
+      THEN code(0, d ! j)
+      ELSE code(d ! j, 0)
+      d := h1 ! d
+   $)
+$)
+
+
+AND cgglobal(n) BE
+  $( cgstatics()
+     chkrefs(200)
+     cgerefs()
+     cgdatablks()
+     code(0, 0)
+     FOR i = 1 TO n DO $( code(rdgn(), 0); code(labv!rdl(), 0) $)
+     code(maxgn, 0)
+     IF n=0
+     $( CGERROR(0, "Code cannot be reached"); maxgn := 0 $)
+  $)
+
+
+AND cgdata(l, k, n) BE
+  $( LET p = getblk()
+     LET d = k = s.iteml -> d.iteml, d.itemn
+     h2 ! p, h3 ! p := (d << 14) + l, n
+     !dliste := p
+     dliste := p
+  $)
+
+
+AND cgstring(n) BE
+  $( LET l, w = nextparam(), n << 8
+     LET b    = getdatablk(l, s.itemn)
+     loadt(k.lvlab, l)
+     $( IF n \= 0 THEN w := w | rdn()
+        putdatablkitem(b, w)
+        IF n <= 1 THEN RETURN
+        n, w := n - 2, rdn() << 8
+     $) REPEAT
+  $)
+
+
+AND cgdatawords(labno) BE
+  $( LET type = rdn()
+     LET dl   = type = s.iteml
+     LET b, n = ?, ?
+
+     IF type \= s.itemn & NOT dl THEN
+       $( op := type; getdatablk(labno, s.itemn); RETURN $)
+
+     n := dl -> rdl(), rdn()
+     op := rdn()
+     UNLESS op = type $( cgdata(labno, type, n); RETURN $)
+
+     b := getdatablk(labno, type)
+
+     putdatablkitem(b, n)
+
+     $( n := dl -> rdl(), rdn()
+        putdatablkitem(b, n)
+        op := rdn()
+     $) REPEATWHILE op = type
+  $)
+
+
+AND getdatablk(label, type) = VALOF
+  $( LET d = type = s.iteml -> d.blkl, d.blkn
+     dp := dp - 3
+     checkspace()
+     dp ! 0, dp ! 2 := 0, 0
+     dp ! 1 := (d << 14) + label
+     ! dliste := dp
+     dliste   := dp
+     RESULTIS dp
+  $)
+
+
+AND putdatablkitem(b, n) BE
+  $( dp := dp - 1
+     checkspace()
+     ! dp := n
+     b ! 2 := b ! 2 + 1
+  $)
+
+
+
+AND cgerefs() BE        // Satisifies all remaining extended references.
+UNTIL ereflist = 0 DO
+$( LET n = h3 ! ereflist
+   $( LET p = geteref(n)
+      IF p = 0 THEN BREAK
+      fillineref(p, stvp)
+   $) REPEAT
+   code(n, 0)
+$)
+
+
+AND setrtok(r, k) = (reg.n!r=k & reg.k!r=k.numb) -> r, VALOF
+  // Can load byte in range -256 to +255.
+$( TEST -256 <= k <= -1 THEN geni(f.lbni,r,k & #XFF)
+   ELSE TEST 0 <= k <= 255 THEN geni(f.lbpi,r,k)
+        ELSE gens(f.l,r,mref(k.numb,k))
+   setinfo(r,k.numb,k)
+   RESULTIS r
+$)
+
+AND getblk() = VALOF
+$(  LET p = freelist
+    TEST p=0 $( dp := dp-3; checkspace(); p := dp $)  ELSE freelist:=h1!freelist
+    !p := 0
+    RESULTIS p
+$)
+
+AND rtnblk(p) BE $(  !p := freelist; freelist := p $)
+
+

@@ -1,0 +1,15 @@
+SECTION "XBlib"
+
+// word and byte access routines for PDP11
+
+GET "libhdr"
+
+LET get2bytes(v, offset) = v!offset
+
+LET put2bytes(v, offset, data) BE v!offset := data
+
+LET byteget(v, offset) = v%(offset NEQV 1)
+
+LET byteput(v, offset, data) BE v%(offset NEQV 1) := data
+
+

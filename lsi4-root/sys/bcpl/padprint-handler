@@ -1,0 +1,503 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+ #######     ####    ######    #######   #######   ########  ##    ##  ######## 
+ ########   ######   #######   ########  ########  ########  ###   ##  ######## 
+ ##    ##  ##    ##  ##    ##  ##    ##  ##    ##     ##     ####  ##     ##    
+ #######   ########  ##    ##  #######   ########     ##     ## ## ##     ##    
+ ##        ##    ##  ##    ##  ##        #######      ##     ##  ####     ##    
+ ##        ##    ##  ##    ##  ##        ##  ##       ##     ##  ####     ##    
+ ##        ##    ##  #######   ##        ##   ##   ########  ##   ###     ##    
+ ##        ##    ##  ######    ##        ##    ##  ########  ##    ##     ##
+
+      ##    ##    ####    ##    ##  ######    ##        ########  #######  
+      ##    ##   ######   ###   ##  #######   ##        ########  ######## 
+      ##    ##  ##    ##  ####  ##  ##    ##  ##        ##        ##    ## 
+      ########  ########  ## ## ##  ##    ##  ##        ######    ######## 
+      ##    ##  ##    ##  ##  ####  ##    ##  ##        ##        #######  
+      ##    ##  ##    ##  ##  ####  ##    ##  ##        ##        ##  ##   
+      ##    ##  ##    ##  ##   ###  #######   ########  ########  ##   ##  
+      ##    ##  ##    ##  ##    ##  ######    ########  ########  ##    ## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   31/10/84             *
+\*****************************************************************************/
+
+
+
+SECTION "PADPRINT: HANDLER"
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "BCPL.SSPLIB"
+GET "BCPL.BSPLIB"
+GET "BCPL.RINGMAP"
+
+
+
+GLOBAL
+$(
+    pktlist    :  ug + 0
+    sysout     :  ug + 1
+    broken     :  ug + 2
+    nlcount    :  ug + 3
+$)
+
+
+
+MANIFEST
+$(
+    b.resultlength   =  40
+    w.resultlength   =  b.resultlength / bytesperword
+
+    bytesperpuid     =  8
+    wordsperpuid     =  bytesperpuid / bytesperword
+    offset.tuid      =  1
+    offset.tpuid     =  offset.tuid    +  wordsperpuid
+    offset.authy     =  offset.tpuid   +  wordsperpuid
+    offset.puid      =  offset.authy   +  wordsperpuid
+
+    act.paddeplete   =  1000
+    act.padendwrite  =  1001
+
+    bytebuffersize   =  1000
+    buffersize       =  bytebuffersize/bytesperword
+
+    NIL              =  0
+$)
+
+
+
+LET start( pkt )  BE
+$(
+//  Main routine of the PADPRINT handler.  Before we send the initialisation
+//  packet back, we should open the padprint service bytestream, and send
+//  the header information down it.
+
+    LET scb     =  pkt!pkt.arg1
+    LET route   =  pkt!pkt.arg2
+    LET bs.out  =  0
+    LET bs.in   =  0
+
+    initio()
+
+    pktlist  :=  NIL
+    broken   :=  FALSE  
+    nlcount  :=  0
+
+    bs.out   :=  findoutput( "authbsp:padprint-cs" )
+    bs.in    :=  result2
+    sysout   :=  findoutput( "**" )
+
+    selectoutput( sysout )
+
+    TEST  bs.out = 0  THEN
+
+        //  Cannot open the byte stream, so this isn't much good to us
+        //  really.  Send the packet back with the relevant return code.
+        
+        returnpkt( pkt, 0, bs.in )
+
+    ELSE
+    $(
+        //  We have successfully opened the stream, and hence we should
+        //  write the relevant guff down it before we hand it to the user.
+
+        LET userid  =  VEC w.resultlength
+        LET mcname  =  VEC w.resultlength
+
+        LET myname  =  rootnode!rtn.info!rtninfo.ring!ri.myname
+        LET length  =  myname % 0
+
+        IF  length > 5  THEN  length  :=  5
+
+        FOR  i = 1  TO  length  DO  mcname % i  :=  capitalch( myname % i )
+        
+        mcname % 0  :=  length
+
+        UNLESS  lookupuserid( userid )  DO
+        $(
+            //  Cannot find the real userid, but no worry, since we can 
+            //  use "METRO" instead.
+            
+            userid  :=  "METRO"
+            
+            writef( "****** PADPRINT:  Using userid *"%S*"*N", userid )
+        $)
+            
+        IF  route % 0  =  0  THEN
+        
+            //  No route has been specified, so default to LOCAL, which 
+            //  means the reception printers.
+            
+            route  :=  "LOCAL"
+
+        //  Write the first line down the stream, and then construct the
+        //  scb to be given to the user.
+
+        selectoutput( bs.out )
+        
+        writef( "NETWORK(%S,F=0,IN=CAMB/CL#%S,OUT=CAMB/%S,RUN=CAMB,NID=%S)*C",
+                 userid, mcname, route, userid )
+
+        //  Having written that card, we can construct the scb to be given
+        //  to the user.
+        
+        scb!scb.type  :=  taskid
+        scb!scb.id    :=  id.outscb
+        scb!scb.buf   :=  getbuffer()
+
+        TEST  scb!scb.buf = 0  THEN
+        
+            //  Not enough room for the buffer, so return an error code
+            //  to the user.
+            
+            returnpkt( pkt, 0, result2 )
+            
+        ELSE
+        $(
+            //  Ready for the big moment.  We can update the relevant
+            //  fields in the SCB, and away we go.
+            
+            scb!scb.func1  :=  0
+            scb!scb.func2  :=  pad.deplete
+            scb!scb.func3  :=  pad.endwrite
+            
+            scb!scb.pos    :=  0
+            scb!scb.end    :=  bytebuffersize
+            
+            returnpkt( pkt, scb, 0  )
+            
+            $(  //  Now, we can enter the main loop, waiting for requests to us.
+                //  The only valid requests are:
+                //
+                //      act.paddeplete
+                //      act.padendwrite
+
+                pkt  :=  nextpkt()
+                
+                SWITCHON  pkt!pkt.type  INTO
+                $(
+                    CASE act.paddeplete  :  paddeplete( pkt )   ;  LOOP
+                    CASE act.padendwrite :  padendwrite( pkt )  ;  BREAK
+                    
+                    DEFAULT              :  qpkt( pkt )
+                $)
+            $)
+            REPEAT
+
+            //  When we drop out of that loop, we should "push" the output
+            //  down the stream, and wait for the "ack" to come back.  First,
+            //  flush any pending newlines.
+            
+            flushnewlines()
+            
+            wrch( #X0E )
+            bsp.forceout( bs.out )
+            
+            selectinput( bs.in )
+            selectoutput( sysout )
+            
+            $(  //  Repeat loop to wait for an "ACK" character.  If one
+                //  doesn't come, then put out a warning message.
+                
+                LET ch  =  rdch()
+                
+                IF  ch = endstreamch  THEN  
+                $(
+                    writes( "****** PADPRINT:  ACK expected but not received*N" )
+                    
+                    BREAK
+                $)
+
+                IF  ch = emptybuffch  THEN  LOOP
+                IF  ch = #X06         THEN  BREAK    //  Ack
+                
+                writef( "****** PADPRINT:  Spurious ACK:  #X%X2*N", ch )
+            $)
+            REPEAT
+        $)
+    $)
+
+    UNLESS  bs.out = 0  DO  endstream( bs.out )
+
+    endstream( sysout )
+
+    endtask( tcb!tcb.seglist!3 )
+$)
+
+
+
+AND paddeplete( pkt )  BE
+$(
+//  Deplete all the characters in the SCB.  We have to be careful with
+//  control characters here ...
+
+    LET scb     =  pkt!pkt.arg1
+    LET buffer  =  scb!scb.buf
+    LET pos     =  scb!scb.pos
+
+    scb!scb.pos  :=  0
+    scb!scb.buf  :=  getbuffer()
+    
+    returnpkt( pkt, TRUE, 0 )
+    
+    flushbuffer( buffer, pos )
+$)
+
+
+
+AND flushbuffer( buffer, pos )  BE
+$(
+//  Flush the characters in the buffer, and then free the buffer afterwards.
+
+    UNLESS  broken  DO
+    $(
+        //  No point in writing stuff down the stream if it has been broken
+        //  by the other end.
+
+        FOR  i = 0  TO  pos-1  DO
+        $(
+            LET ch  =  buffer % i
+            
+            TEST  ch < '*S'  THEN
+    
+                //  This is a control character, and hence should be checked.
+                //  Newline characters present a problem, because they need to
+                //  be preceded by carriage returns.  Page throws also present
+                //  a problem, especially if preceded by newline.
+                
+                SWITCHON  ch  INTO
+                $(
+                    CASE '*P' :  //  Since we are putting out a page throw, we
+                                 //  can afford to ignore preceding newlines.
+
+                                 wrch( '*C' )
+                                 wrch( '*P' )
+                                 
+                                 nlcount  :=  0
+                                 ENDCASE
+
+
+                    CASE '*C' :  //  This can do no harm, even if there are
+                                 //  a bunch of newlines already stacked.
+                                 
+                                 wrch( '*C' )
+                                 ENDCASE
+
+
+                    CASE '*T' :  //  Tabs are not expanded at the other end, so
+                                 //  no point in sending them.  Translate into
+                                 //  "space"
+                                 
+                                 flushnewlines()
+                                 wrch( '*S' )
+                                 ENDCASE
+
+
+                    CASE '*N' :  //  This just increments the "newline" count
+                                 //  which will be looked at later.
+                                 
+                                 nlcount  :=  nlcount + 1
+                                 ENDCASE
+    
+    
+                    DEFAULT   :  //  This is a control character, which we
+                                 //  cannot send, since it will not be 
+                                 //  accepted.  Send an escape sequence
+                                 //  instead.
+
+                                 flushnewlines()
+                                 writef( "@X%X2", ch )
+                                 ENDCASE
+                $)
+    
+            ELSE  
+            $(
+                //  This is a common or garden character, and hence we should
+                //  first flush any pending newlines, and then write the
+                //  character out.
+
+                flushnewlines()
+                wrch( ch )
+            $)
+        $)
+    $)
+
+    freevec( buffer )
+
+    //  Look to see if the byte stream has been broken on us, and if it has,
+    //  give a message to the user.
+
+    IF  NOT broken  &  bsp.test.reset( output() )  THEN
+    $(
+        LET out  =  output()
+        
+        selectoutput( sysout )
+        writes( "****** PADPRINT:  Byte stream broken*N" )
+        selectoutput( out )
+        
+        broken  :=  TRUE
+    $)
+$)
+
+
+
+AND flushnewlines()  BE  IF  nlcount > 0  THEN
+$(
+//  There are pending newlines.  Send a carriage return, followed by as many
+//  line feeds as necessary to make up the line count.
+
+    wrch( '*C' )
+
+    FOR  i = 1  TO  nlcount  DO  wrch( '*N' )
+
+    nlcount  :=  0
+$)
+
+ 
+            
+AND padendwrite( pkt )  BE
+$(
+//  Close the stream down.  First flush any characters which were lurking,
+//  and then free the buffer associated with the SCB.
+
+    LET scb     =  pkt!pkt.arg1
+    LET buffer  =  scb!scb.buf
+    LET pos     =  scb!scb.pos
+
+    returnpkt( pkt, TRUE, 0 )
+
+    flushbuffer( buffer, pos )
+$)
+
+
+
+AND pad.deplete( scb )  =  
+    sendpkt( notinuse, ABS scb!scb.type, act.paddeplete, 0, 0, scb )
+
+
+
+AND pad.endwrite( scb )  =  
+    sendpkt( notinuse, ABS scb!scb.type, act.padendwrite, 0, 0, scb )
+
+
+
+AND getbuffer()  =  VALOF
+$(
+    LET buffer  =  getvec( buffersize )
+
+    IF  buffer = 0  THEN  abort( error.getvecfailure )
+
+    RESULTIS  buffer
+$)
+
+
+
+AND lookupuserid( result )  =  VALOF
+$(
+    LET uid      =  rootnode!rtn.info!rtninfo.ring!ri.uidset + offset.puid
+    LET puid     =  VEC wordsperpuid * 2
+    LET rc       =  0
+
+    //  Unpack the PUID of the updating personage!  We look
+    //  this up using the MAP service, to give us the initials of
+    //  the person concerned.
+
+    puid % 0  :=  bytesperpuid * 2
+
+    FOR  i = 0  TO  bytesperpuid-1  DO
+    $(
+        LET offset  =  i * 2
+        LET byte    =  uid % i
+        LET hb      =  (byte >> 4)  &  #X0F
+        LET lb      =  (byte     )  &  #X0F
+
+        puid % (offset + 1)  :=  hexchar( hb )
+        puid % (offset + 2)  :=  hexchar( lb )
+    $)
+
+    RESULTIS  ringmap( puid, "PUID", "CS", result, b.resultlength )
+$)
+
+
+
+AND hexchar( value )  =  (0 <= value <= 9)  ->  value + '0',
+                                                value + 'A' - 10
+
+
+
+AND pktwait( id, pkt )  =  VALOF
+$(
+//  Wait for the packet "pkt", which should be arriving from task "id".
+//  Any other packets which arrive in the meantime are queued onto "pktlist",
+//  and dequeued when requested.
+
+    LET p  =  lookinpktqueue( pkt )
+
+    UNLESS  p = NIL  DO  RESULTIS  p
+
+    //  If it was not in the packet queue, then we must wait until the
+    //  packet arrives.
+
+    $(  //  Loop to wait for packets
+
+        p  :=  taskwait()
+
+        IF  p = pkt  THEN  RESULTIS  p
+
+        //  Oh, boring!  This was STILL not the one wanted, so queue it,
+        //  and wait some more.
+
+        addtopktqueue( p )
+    $)
+    REPEAT  //  Until the correct packet arrives.
+$)
+
+
+
+AND lookinpktqueue( pkt )  =  VALOF
+$(
+    LET ptr  =  @pktlist
+
+    UNTIL  !ptr = NIL  DO
+    $(
+        IF  !ptr = pkt  THEN
+        $(
+            //  This is our packet.  Dequeue it, and send it back again.
+
+            LET packet  =  !ptr
+
+            !ptr     :=  !packet
+            !packet  :=  notinuse
+
+            RESULTIS  packet
+        $)
+
+        //  Otherwise, we carry on down the chain, looking as we go
+
+        ptr  :=  !ptr
+    $)
+
+    RESULTIS  NIL
+$)
+
+
+
+AND addtopktqueue( pkt )  BE
+$(
+    !pkt     :=  pktlist
+    pktlist  :=  pkt
+$)
+
+
+
+AND nextpkt()  =  pktlist = NIL  ->  taskwait(),  lookinpktqueue( pktlist )
+
+

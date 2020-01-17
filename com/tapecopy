@@ -1,0 +1,416 @@
+//******************************************************************************
+//*                                                                            *
+//*    TAPECOPY              Program to copy a Tape-Server tape to disc, and   *
+//*                          then copy it back to a different tape.  It is     *
+//*                          assumed that the tape to be copied is a TRIPOS    *
+//*                          tape, i.e. AL with 800 byte blocks.  The copy is  *
+//*                          an exact physical copy of the tape, purely for    *
+//*                          safety.  The TO tape is over-written completely.  *
+//*                                                                            *
+//******************************************************************************
+//*    I. D. Wilson          Last Modified   -   IDW   -   02/08/82            *
+//******************************************************************************
+
+
+SECTION "TAPECOPY"
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET ":idw.nova.tapehdr-globals"
+GET ":idw.nova.tapehdr-manifests"
+
+
+GLOBAL
+$(
+    veclist            :  ug + 0
+    vtstream.control   :  ug + 1
+    vtstream.data      :  ug + 2
+    mounted            :  ug + 3
+    sysout             :  ug + 4
+$)
+
+
+MANIFEST
+$(
+    byte.blocksize     =  800
+    tape.blocksize     =  byte.blocksize / bytespertapeword
+    word.blocksize     =  byte.blocksize / bytesperword
+$)
+
+
+
+LET start()  BE
+$(
+//  First, open the streams we are going to use for the virtual tape on disc,
+//  and then mount the tape.  We then copy the tape to disc, storing the data
+//  in the VIRTUAL-TAPE file, and information on it in T:VIRTUAL-TAPE.
+
+    LET vtfile.control  =  "T:VIRTUAL-TAPE"
+    LET vtfile.data     =  ":OTHERPACKS.PACK5.VIRTUAL-TAPE"
+    LET label           =  0
+    LET block           =  0
+    LET files           =  0
+
+    veclist           :=  0
+    mounted           :=  FALSE
+    sysout            :=  output()
+
+    vtstream.control  :=  findoutput( vtfile.control )
+    vtstream.data     :=  findoutput( vtfile.data )
+
+    IF  vtstream.control = 0  THEN  error( "Cannot open *"%S*"", vtfile.control )
+    IF  vtstream.data    = 0  THEN  error( "Cannot open *"%S*"", vtfile.data )
+
+    label  :=  gvec( word.labelsize )
+    block  :=  gvec( word.blocksize )
+
+    //  Now, say hello, and mount the tape.
+
+    writes( "TAPECOPY  Version 1.04*N" )
+
+    mounttape( FALSE )
+    rewindtape()
+
+    //  And start the copying.  First, the volume label.
+
+    UNLESS  readtapeblock( label, tape.labelsize )  DO  error( "Cannot read VOLUME label" )
+
+    selectoutput( vtstream.data )
+    writewords( label, word.labelsize )
+
+    selectoutput( sysout )
+
+    writes( "*N****** Copying from Tape to Disc*N*N" )
+
+    $(  //  Loop to read individual files.
+        //  Files are of the format:
+        //
+        //      [HDR]  <tm>  [ 800 byte DATA ]*  <tm>  [EOF]  <tm>
+
+        LET blocks  =  0
+
+        UNLESS  readtapeblock( label, tape.labelsize )  DO  BREAK   //  End of Tape.
+
+        files  :=  files + 1
+        writef( "    File %I4:  *E", files )
+
+        selectoutput( vtstream.data )
+        writewords( label, word.labelsize )
+
+        checktapeeof()
+
+        WHILE  readtapeblock( block, tape.blocksize )  DO
+        $(
+            writewords( block, word.blocksize )
+
+            blocks  :=  blocks + 1
+        $)
+
+        //  We have read the file, now read the trailer label, and
+        //  store it.
+
+        UNLESS  readtapeblock( label, tape.labelsize )  DO  error( "Cannot read TRAILER label" )
+
+        writewords( label, word.labelsize )
+
+        checktapeeof()
+
+        //  Now write out the number of blocks information to the work file,
+        //  and print a message to the console to tell them we are still
+        //  listening.
+
+        selectoutput( vtstream.control )
+        writef( "%N*N", blocks )
+
+        selectoutput( sysout )
+        writef( "%I4 block%S*N", blocks, (blocks = 1 -> "", "s") )
+    $)
+    REPEAT
+
+    //  Now close the virtual tape streams, and mount the new tape.
+
+    writes( "*N****** End Of Tape  -  Rewinding... *E" )
+    rewindtape()
+    writes( "*N*N" )
+
+    endstream( vtstream.control )
+    endstream( vtstream.data )
+
+    vtstream.control  :=  findinput( vtfile.control )
+    vtstream.data     :=  findinput( vtfile.data )
+
+    IF  vtstream.control = 0  THEN  error( "Cannot open *"%S*"", vtstream.control )
+    IF  vtstream.data    = 0  THEN  error( "Cannot open *"%S*"", vtstream.data )
+
+    writes( "****** Mount the destination tape into drive...  *E" )
+
+    UNTIL  (tape.status() & status.ready) = 0  DO  delay( tickspersecond )
+
+    writes( "*N*N" )
+
+    mounttape( TRUE )
+
+    //  Now copy the Volume label
+
+    selectinput( vtstream.data )
+    readwords( label, word.labelsize )
+    writetapeblock( label, tape.labelsize )
+
+    //  Now for each of the files, copy the header label, data, and trailer
+    //  label.
+
+    writes( "****** Copying from Disc to Tape*N*N" )
+
+    FOR  i = 1  TO  files  DO
+    $(
+        LET blocks  =  0
+
+        writef( "    File %I4:  *E", i )
+
+        readwords( label, word.labelsize )
+        writetapeblock( label, tape.labelsize )
+        writetapemark()
+
+        selectinput( vtstream.control )
+        blocks  :=  readn()
+
+        selectinput( vtstream.data )
+
+        FOR  i = 1  TO  blocks  DO
+        $(
+            readwords( block, word.blocksize )
+            writetapeblock( block, tape.blocksize )
+        $)
+
+        writetapemark()
+
+        readwords( label, word.labelsize )
+        writetapeblock( label, tape.labelsize )
+        writetapemark()
+
+        writef( "%I4 block%S*N", blocks, (blocks = 1  ->  "", "s") )
+    $)
+
+    writetapemark()
+
+    writes( "*N****** End Of Tape  -  Rewinding... *E" )
+    rewindtape()
+    writes( "*N*N" )
+
+    endstream( vtstream.control )
+    endstream( vtstream.data )
+
+    vtstream.control  :=  0
+    vtstream.data     :=  0
+
+    fvec( label )
+    fvec( block )
+
+    deleteobj( vtfile.control )
+    deleteobj( vtfile.data )
+
+    dismounttape()
+
+    writes( "****** TAPECOPY complete  -  Dismount tape from drive*N" )
+
+    fvectors()
+$)
+
+
+
+AND mounttape( checkring )  BE
+$(
+    LET tape.error  =  error.noerror
+    LET ready       =  FALSE
+
+    UNTIL  tape.mount()  DO
+    $(
+        LET error  =  result2
+
+        UNLESS  error = tape.error  DO
+        $(
+            tape.error  :=  error
+            writes( "****** Waiting for tape drive:  " )
+            fault( tape.error )
+        $)
+
+        delay( tickspersecond )
+
+        IF  testflags( #B0001 )  THEN  error( "BREAK" )
+    $)
+
+    mounted  :=  TRUE
+
+    //  Now wait for the drive to be ready.
+
+    ready  :=  (tape.status()  &  status.ready) \= 0
+
+    UNLESS  ready  DO
+    $(
+        writes( "****** Waiting  -  drive is not ready*N" )
+
+        UNTIL  ready  DO
+        $(
+            ready  :=  (tape.status()  &  status.ready) \= 0
+
+            IF  testflags( #B0001 )  THEN  error( "BREAK" )
+
+            delay( tickspersecond )
+        $)
+
+        writes( "****** Drive now ready*N" )
+    $)
+
+    //  Check to see that the tape is not write protected...
+
+    IF  checkring  THEN
+        IF  (tape.status() & status.wrprotect) \= 0  THEN
+            error( "Tape is write protected" )
+$)
+
+
+
+AND rewindtape()  BE
+    UNLESS  tape.rewind()  DO
+        error( "Failed to rewind tape (Rc %N)", result2 )
+
+
+
+AND dismounttape()  BE
+    UNLESS  tape.dismount()  DO
+        error( "Failed to dismount tape (Rc %N)", result2 )
+
+
+
+AND readtapeblock( buffer, size )  =
+    tape.read( buffer, size )
+
+
+
+AND writetapeblock( buffer, size )  BE
+    UNLESS  tape.write( buffer, size )  DO
+        error( "Failed to write block to tape (Rc %N)", result2 )
+
+
+
+AND writetapemark()  BE
+    UNLESS  tape.writeeof()  DO
+        error( "Failed to write tape mark (Rc %N)", result2 )
+
+
+
+AND checktapeeof()  BE
+$(
+    LET buffer  =  VEC (8 * bytespertapeword) / bytesperword
+    LET rc      =  readtapeblock( buffer, 8 )
+    LET r2      =  result2
+
+    UNLESS  NOT rc  &  r2 = error.eof  DO
+        error( "Failed to check tape EOF" )
+$)
+
+
+
+AND error( format, arg1, arg2, arg3 )  BE
+$(
+    selectoutput( sysout )
+
+    writes( "****** TAPECOPY Error:  " )
+    writef( format, arg1, arg2, arg3 )
+    newline()
+
+    UNLESS  vtstream.control = 0  DO  endstream( vtstream.control )
+    UNLESS  vtstream.data    = 0  DO  endstream( vtstream.data )
+
+    IF  mounted  THEN  tape.dismount()
+
+    fvectors()
+
+    stop( 20 )
+$)
+
+
+
+AND gvec( vecsize )  =  VALOF
+$(
+//  Add a new vector to the list of those "got" already.
+
+    LET node   =  getvec( 2 )
+    LET space  =  getvec( vecsize )
+
+    TEST  node = 0  |  space = 0  THEN
+    $(
+        //  Cannot get either the main space, or the node space.
+        //  Free whichever one was successful, and flag an error.
+
+        UNLESS  node   = 0  DO  freevec( node )
+        UNLESS  space  = 0  DO  freevec( space )
+
+        error( "Cannot get vector of size %U5", vecsize )
+    $)
+    ELSE
+    $(
+        //  We have got the vector successfully, so add it to the
+        //  chain of allocated vectors.
+
+        node!0  :=  veclist
+        node!1  :=  space
+        veclist :=  node
+
+        RESULTIS  space
+    $)
+$)
+
+
+
+AND fvec( vector )  BE
+$(
+//  Free the vector pointed to by "vector".  Look in the allocated space chain
+//  to find this vector, and when found, de-allocate the space.
+
+    LET node  =  veclist
+    LET ptr   =  @veclist
+
+    UNTIL  node = 0  DO
+    $(
+        IF  node!1 = vector  THEN
+        $(
+            //  We have found the vector to deallocate.  Remove this node from
+            //  the list, and deallocate the space involved.
+
+            !ptr   :=  node!0
+
+             freevec( vector )
+             freevec( node )
+
+             RETURN
+        $)
+
+        ptr   :=  node
+        node  :=  node!0
+    $)
+
+    error( "Cannot free vector %N", vector )
+$)
+
+
+
+AND fvectors()  BE
+$(
+//  Free all the vectors pointed to by the list "veclist".
+
+    UNTIL veclist = 0  DO
+    $(
+        LET nlist  =  veclist!0
+        LET space  =  veclist!1
+
+        freevec( space )
+        freevec( veclist  )
+
+        veclist  :=  nlist
+    $)
+$)
+
+

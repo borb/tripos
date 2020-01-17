@@ -1,0 +1,45 @@
+$$MANIFESTS := TRUE
+GET "HEADER"
+GET "CLIHDR"            // cli.commandname
+GET "MANHDR"            // Action.<>
+GET "bcpl.uidset"
+GET "bcpl.puidoffile"
+
+MANIFEST
+$(      v.to    = 0
+        v.file  = v.to          + 1
+        v.subj  = v.file        + 1
+        v.immed = v.subj        + 1
+        v.cc    = v.immed       + 1
+        v.bcc   = v.cc          + 1
+        v.reply = v.bcc         + 1
+        v.bits  = v.reply       + 1
+$)
+
+STATIC $( k=?; ms.user.break.level=?; ms.user.break.link=? $)
+
+GET "bcpl.ssplib"
+LET wto.mc() BE RETURN
+GET "bcp.z80send"
+
+LET start (mode, v) = VALOF
+$(  LET uid     = uidset()
+    LET file    = VEC 7/BYTESPERWORD
+    UNLESS mode = 2 & uid ~= 0 RESULTIS FALSE
+
+    ms.user.break.level, ms.user.break.link := level(), link
+
+    UNLESS v!V.file=0 | (v!V.file)%0 = 0
+    $(  UNLESS puidoffile(v!v.file, 0, file)
+        $( WRITEF("Failed to find file's PUID*N"); RESULTIS FALSE $)
+        v!v.file := file
+    $)
+    RESULTIS z80send(0, uid+tuid.offset, uid+puid.offset,
+                        v!v.to, v!v.subj, v!v.file, 0, v!v.immed, v!v.cc,
+                        v!v.bcc, 0, v!v.reply, 0, v!v.bits, -1)
+link:
+    WRITEF("****** BREAK. %S abandoned*N", cli.commandname)
+    RESULTIS FALSE
+$)
+
+

@@ -1,0 +1,70 @@
+//******************************************************************************
+//*                                                                            *
+//*    NOTIFY-SERVICE     Program to take a message from a remote machine,     *
+//*                       and print it out on the console.  To be used for     *
+//*                       those machines which do not have WTO-xxxx names in   *
+//*                       the name server.                                     *
+//*                                                                            *
+//******************************************************************************
+//*    I. D. Wilson       Last Modified   -   IDW   -   10/02/82               *
+//******************************************************************************
+
+
+SECTION "NOTIFY-SERVICE"
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+
+
+MANIFEST
+$(
+    txlength          =  3
+    args              =  bb.ssp.args * bytesperringword
+    ringwordsperword  =  bytesperword / bytesperringword
+$)
+
+
+LET start( pkt )  BE
+$(
+    LET block     =  pkt!rhpkt.buff
+    LET source    =  pkt!rhpkt.station
+    LET rhid      =  pkt!pkt.arg5
+    LET port      =  get2bytes( block, bb.ssp.replyport )
+    LET txbuff    =  VEC txlength/ringwordsperword
+    LET special   =  (block % args  &  #X80) \= 0
+    LET length    =  (block % args  &  #X7F)
+
+    qpkt( pkt )
+
+    put2bytes( txbuff, bb.ssp.type,      code.ssprep )
+    put2bytes( txbuff, bb.ssp.replyport, 0 )
+    put2bytes( txbuff, bb.ssp.rc,        0 )
+
+    sendpkt( notinuse, rhid, act.tx, 0, 0, txbuff, txlength, source, port )
+
+    //  Now print out the message to the console...
+
+    initio()
+
+    selectoutput( findoutput( "**" ) )
+
+    UNLESS  special  DO
+    $(
+        writes( "******FROM " )
+        write.machine.name( source )
+        writes( " - " )
+    $)
+
+    FOR  i = 1  TO  length  DO  wrch( block % (args+i) )
+
+    newline()
+    endwrite()
+
+    freevec( block )
+
+    endtask( tcb!tcb.seglist!3 )
+$)
+
+

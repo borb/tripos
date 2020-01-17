@@ -1,0 +1,35 @@
+// (C) Copyright 1979 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "ENDCLI"
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "IOHDR"
+
+LET START() BE
+ $( UNLESS cli.interactive DO
+       error("ENDCLI is only legal in interactive mode*N")
+
+    //  Fix by IDW:  18/03/87
+    //
+    //  After the amazing BJK addition to BLIB (emptybuffch), "endcli" in
+    //  its old state no longer worked, since "end = 0" is now no longer
+    //  an indication of end of stream.  The fix for this is to clobber
+    //  the "replenish" function as well (yuck).
+
+    cli.standardinput!scb.pos    :=  0     //  Empty buffer
+    cli.standardinput!scb.end    :=  -2    //  New EOF marker
+    cli.standardinput!scb.func1  :=  0     //  Ensure that replenish will fail
+
+    cli.background               :=  TRUE
+
+    writef("CLI task %N ending*N", taskid)
+ $)
+
+
+AND error(f, a) BE
+ $( writef(f, a); stop(20) $)
+
+

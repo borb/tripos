@@ -1,0 +1,914 @@
+/***********************************************************************
+**             (C) Copyright 1980  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+                  ######   ########    ####    #######
+                 ########  ########   ######   ########
+                 ##           ##     ##    ##  ##    ##
+                 #######      ##     ########  ########
+                       ##     ##     ##    ##  #######
+                       ##     ##     ##    ##  ##  ##
+                 ########     ##     ##    ##  ##   ##
+                  ######      ##     ##    ##  ##    ##
+
+************************************************************************
+**  Authors:    Brian Knight & Gray Girling         January 1980      **
+***********************************************************************/
+
+
+// This command connects the local console to a CLI
+// in the specified machine, using BSP and RATS.
+// **** Coroutine version ****
+
+// CGG - 21.06.83 Minor modification to run on 68000s.  Changed to use
+//                new VTP + do reverse connection, also modified to use
+//                TSBSP opens.  Monitor added.
+// NJO - 11.12.84 Note about abolition of TSBSPLIB added.  Must be converted
+//                to use CR82LIB before it can be recompiled.
+
+
+GET "libhdr"
+GET "clihdr"
+GET "iohdr"
+GET "ringhdr"
+
+
+
+
+GLOBAL
+    $(
+    input.bs               : ug + 0
+    output.bs              : ug + 1
+    cons.in                : ug + 2
+    cons.out               : ug + 3
+    read.co.finished       : ug + 4
+    write.co.finished      : ug + 5
+    brk.co.finished        : ug + 6
+    control.seq.len        : ug + 7
+    bad.input              : ug + 8
+    bad.output             : ug + 9
+    ctrl.input.allowed     : ug + 10
+    old.input.task         : ug + 11
+    reverse.connected      : ug + 12
+    star.ended             : ug + 13
+    call.string            : ug + 14
+    ignore.mon.streams     : ug + 15
+    mon.in                 : ug + 16
+    mon.out                : ug + 17
+    finished.cleanly       : ug + 18
+    bsp.forceout           : ug + 20
+    bsp.test.reset         : ug + 21
+    bsp.openack            : ug + 22
+    bsp.make.ts.connection : ug + 23
+    bsp.read.ts.parms      : ug + 24
+    bsp.reset              : ug + 25
+    ssp                    : ug + 26
+    u.svc.nm               : ug + 27
+    $)
+
+
+.
+
+SECTION "Star"
+
+GET ""
+GET "uidhdr"         // for manifests in TSBSP
+GET "bcpl.ssplib"    // (For TSBSP)
+GET "bcpl.u-svc-nm"  // For forming Project Universe type names!
+
+// GET "bcpl.bsplib"    // For bsp.forceout()
+// GET "bcpl.tsbsplib"  // For TSBSP opens!
+
+****  It is necessary to replace the above two libraries with the following
+      in order to compile it, as TSBSPLIB has been abolished.  This
+      will require alteration of some parameters to some routines.
+
+GET "bcpl.tsparm"
+GET "bcpl.cr82lib"
+
+.
+
+SECTION "Star-cmd"
+
+GET ""
+
+MANIFEST
+    $(
+    // VDU concentrator control bytes
+
+    control.resetmine  = 130 // I admit causing a reset
+    
+    control.eoil       = 150 // End of input line
+    control.cancelled  = 151 // Current line cancelled
+
+    control.notrans    = 153 // Don't translate next byte
+    control.special    = 156 // Address next char to VTP interface only
+
+    control.eool       = 200 // End of output line
+    control.in.request = 201 // Request for input line
+    control.inreq.term = 202 // End of input request
+    control.bell       = 203 // Ring virtual bell
+
+
+    ctrl.b             = #002
+    ctrl.c             = #003
+    ctrl.s             =   19
+    bell               = #007
+
+    mode.normal        = 1   // read star monitor character as normal
+    mode.hex           = 2   // read star monitor character as a hex number
+    mode.control       = 3   // read star monitor character as a control char
+    
+    in.co.stacksize    = 300
+    out.co.stacksize   = 300
+    brk.co.stacksize   = 300
+
+    max.mcname.chars    = 30 // Longest service name allowed
+    max.call.string     = 10 // longest monitor calling sequence allowed
+    $)
+
+
+LET start(pkt) BE
+$(  LET found.bsp = FALSE
+    LET rc = 0
+
+    reverse.connected := (pkt \= 0)
+
+    TEST reverse.connected
+    THEN found.bsp := init.from.open(pkt)
+    ELSE found.bsp := init.from.command()
+
+    // If FOUND.BSP is true here the globals INPUT.BS and OUTPUT.BS
+    // will have been initialized to the remote machine's VTP stream
+
+    IF found.bsp THEN rc := emulate.terminal("**!")
+
+    clearup.session(found.bsp, rc)
+$)
+
+
+
+AND emulate.terminal(escape.str) = VALOF
+$(  LET in.co         = ?
+    LET out.co        = ?
+    LET brk.co        = ?
+    LET in.co.pkt     = ?
+    LET out.co.pkt    = ?
+    LET brk.co.pkt    = ?
+    LET blib.pktwait  = pktwait
+    LET found.bsp     = ?
+    LET rc            = 0
+    LET savein        = input()
+    LET saveout       = output()
+    LET string        = VEC max.call.string/bytesperword
+//  LET mon.in        = ?
+//  LET mon.out       = ?
+    testflags(1)      // reset all break flags (B)
+    testflags(2)      // reset all break flags (C)
+    testflags(4)      // reset all break flags (D)
+    testflags(8)      // reset all break flags (E)
+    read.co.finished := FALSE
+    write.co.finished:= FALSE
+    brk.co.finished  := FALSE
+    bad.input        := FALSE
+    bad.output       := FALSE
+    finished.cleanly := FALSE
+    control.seq.len  := 0
+    ctrl.input.allowed := FALSE
+    ignore.mon.streams := FALSE
+    star.ended       := FALSE
+    call.string      := string
+
+    call.string%0 := (max.call.string > escape.str%0+1 ->
+                      escape.str%0+1, max.call.string)
+    FOR i=1 TO call.string%0-1 DO call.string%i := escape.str%i
+    call.string%(call.string%0) := '*N'
+
+    // set up the console streams
+    cons.in          := findinput("**")
+    cons.out         := findoutput("**")
+
+    // Make the input and output coroutines
+    in.co  := createco(read,   in.co.stacksize)
+    out.co := createco(write,  out.co.stacksize)
+    brk.co := createco(brkmon, brk.co.stacksize)
+
+    TEST in.co=0 | out.co=0 | brk.co=0 THEN
+    $(  fault(result2)
+        deleteco(in.co); deleteco(out.co); deleteco(brk.co)
+        rc := 20
+    $) ELSE
+
+    $(  // writef("CONS.IN = %N*NCONS.OUT = %N*N", cons.in, cons.out)
+
+        // Install coroutine pktwait function
+        pktwait    := copktwait
+
+        // Wake up coroutines
+        selectinput(cons.in); selectoutput(output.bs)
+        mon.in := input()
+        mon.out := output()
+        in.co.pkt  := callco(in.co)
+        selectinput(cons.in); selectoutput(output.bs)
+        brk.co.pkt := callco(brk.co)
+        selectinput(input.bs); selectoutput(cons.out)
+        out.co.pkt := callco(out.co)
+
+        UNTIL read.co.finished & write.co.finished & brk.co.finished DO
+        $(  LET pkt = taskwait()
+
+            TEST pkt=brk.co.pkt THEN
+            $(  selectinput(cons.in)
+                selectoutput(output.bs)
+                brk.co.pkt := callco(brk.co, pkt)
+            $) ELSE
+            TEST pkt=out.co.pkt THEN
+            $(  selectoutput(cons.out)
+                UNLESS read.co.finished THEN selectinput(input.bs)
+                out.co.pkt := callco(out.co, pkt)
+            $) ELSE
+            IF pkt=in.co.pkt THEN
+            $(  UNLESS ignore.mon.streams THEN selectinput(mon.in)
+                IF (mon.out\=output.bs | NOT read.co.finished) &
+                   NOT ignore.mon.streams THEN
+                    selectoutput(mon.out)
+                in.co.pkt := callco(in.co, pkt)
+//              mon.in := input()
+//              mon.out := output()
+            $)
+
+        $)
+
+        // Finished
+        pktwait := blib.pktwait
+        deleteco(in.co); deleteco(out.co); deleteco(brk.co)
+
+        // Close byte stream
+        UNLESS finished.cleanly THEN
+        $(  selectinput(input.bs)
+            endread()   // doesn't try a FORCEOUT first!
+        $)
+
+        selectoutput(cons.out)
+        IF bad.output THEN
+            msg("Couldn't fulfil input request!*N")
+
+        msg("%Sinished*N",
+               (reverse.connected->"Reverse connection f","F"))
+
+//      writef("CONS.IN = %N*NCONS.OUT = %N*N", cons.in, cons.out)
+    $)
+
+    IF cons.in\=0 THEN
+    $(  selectinput(cons.in)
+        endread()
+    $)
+
+    IF cons.out\=0 THEN
+    $(  selectoutput(cons.out)
+        endwrite()
+    $)
+
+    IF savein\=0 THEN selectinput(savein)
+    IF saveout\=0 THEN selectoutput(saveout)
+
+    RESULTIS rc
+$)
+
+
+AND copktwait(dest, pkt) = cowait(pkt)
+
+
+AND read() BE
+$(  LET ch='*N'
+    $(rpt  
+        // Body of coroutine which reads console input
+        // and sends it down the byte stream.
+        
+        WHILE ch\='*N' | call.string%0=0 DO    
+        $(  ch := rdch()
+            TEST (ch='*N' | ch='*E') & testflags(8) THEN
+                star.monitor(TRUE) ELSE vtpch(ch)
+        $)
+    
+        WHILE ch='*N' & call.string%0>0 DO
+        $(  LET pos = 1
+            ch := rdch()
+            
+            WHILE (ch='*N' | ch='*E') & testflags(8) DO
+            $(  star.monitor(TRUE)
+                ch := rdch()
+            $)
+    
+            WHILE ch=call.string%pos & pos<call.string%0 DO
+            $(  pos := pos+1
+                ch := rdch()
+            $)
+    
+            TEST ch=call.string%pos THEN star.monitor(FALSE) ELSE
+            $(  FOR i=1 TO pos-1 DO vtpch(call.string%i)
+                vtpch(ch)
+                // Note: halts coroutine under the appropriate circumstances!!
+            $)
+
+        $)
+        
+    $)rpt REPEAT
+$)
+
+
+
+AND vtpch(ch) BE
+$(  TEST ch=endstreamch | star.ended | write.co.finished | bad.output
+    THEN
+      $(
+      IF ch=endstreamch & NOT write.co.finished THEN
+        $( wrvtp.control(control.eoil, 2)
+           wrch(2) // end of line reason = end of file
+        $)
+      finished.cleanly := NOT write.co.finished
+      IF finished.cleanly THEN endwrite()
+      read.co.finished := TRUE
+      cowait(0) // end command
+      $)
+    ELSE
+    TEST ch < 32 THEN // deal with control characters:
+        TEST ch='*E' | ch='*N' | ch='*C' THEN
+            $(
+            wrvtp.control(control.eoil, 2)
+            wrch(ch)
+            bsp.forceout()
+            $)
+        ELSE bad.input := TRUE
+    ELSE vtp.wrch(ch)
+$)
+
+
+
+AND brkmon() BE
+$(  WHILE NOT read.co.finished DO
+    $(  // Transfer breaks
+        IF testflags(1) THEN UNLESS read.co.finished THEN wrvtp.special(ctrl.b)
+        IF testflags(2) THEN UNLESS read.co.finished THEN wrvtp.special(ctrl.c)
+        IF testflags(4) THEN star.ended := TRUE
+        delay(tickspersecond/2)
+    $)
+    brk.co.finished := TRUE
+    cowait(0)  // end coroutine
+$)
+
+
+
+AND wrvtp.control(ch, len) BE
+$(  wrch(#X80)        // ignore next char or just NULL !
+    wrch(#X80 | len)  // length of control sequence
+    wrch(ch)
+$)
+
+
+
+AND wrvtp.special(ch) BE
+$(  wrvtp.control(control.special, 2)
+    wrch(ch)
+    bsp.forceout()
+$)
+
+
+
+AND vtp.wrch(ch) BE
+   TEST ch < 32 THEN
+       TEST ctrl.input.allowed THEN
+       $(  wrch(ch)
+           wrvtp.control(control.eoil, 2)
+           wrch(3)              // control char typed
+           bsp.forceout()       // send it straight away
+       $) ELSE bad.input := TRUE
+   ELSE wrch(ch)
+
+
+
+
+AND write() BE
+    $(
+    // This is the main routine of the coroutine which
+    // receives and displays lines output by the
+    // CLI in the remote machine.
+    // Wait for a line of output to arrive from the
+    // other machine, and send it to the console.
+    LET ch = vtp.rdch()
+
+    IF ch = endstreamch THEN
+    $(  // Byte streams have gone away - either because read.co
+        // closed them, or because other end did.
+        write.co.finished := TRUE
+        cowait(0)
+    $)
+
+    IF bsp.test.reset(output.bs) THEN msg("Reset received*N")
+
+    IF bad.input THEN
+      $( wrch(bell)
+         bad.input := FALSE
+      $)
+
+    IF ch=control.in.request
+    THEN
+      $( // Throw away input request
+         ch := cautious.rdch()  // max. no of characters to be read
+         ch := cautious.rdch()  // line request type
+         // no.reflect := ((ch & #X01)\=0)
+         bad.output := ((ch & #X06)\=0)
+         ctrl.input.allowed := ((ch & #X08)\=0)
+         ch := cautious.rdch() REPEATUNTIL
+             ch=control.inreq.term | ch=endstreamch
+         LOOP
+      $)
+
+
+    IF ch = control.eool THEN LOOP
+
+    IF ch = control.bell THEN ch := bell
+
+    IF ch > 127
+    THEN $( msg("Control %N*N", ch)
+            ignore.control.seq()
+            LOOP // Discard other controls
+         $)
+
+    wrch(ch)
+    $) REPEAT
+
+
+
+AND vtp.rdch() = VALOF
+$(  LET ch=cautious.rdch()
+    LET null.control = ?
+
+    $(rpt
+        null.control := FALSE
+        IF ch\=endstreamch THEN
+        IF (ch & #X80)\=0 THEN
+        $(  control.seq.len := ch & #X7F
+            IF control.seq.len=0 THEN null.control := TRUE
+            ch := cautious.rdch()
+        $)
+    $)rpt REPEATUNTIL NOT null.control
+
+    RESULTIS ch
+$)
+
+
+
+AND ignore.control.seq() BE FOR i=1 TO control.seq.len-1 DO cautious.rdch()
+
+
+
+AND cautious.rdch() = (read.co.finished -> endstreamch, rdch())
+
+
+
+//
+//                   STAR   Monitor   Program
+// 
+
+
+
+
+AND star.monitor(control) BE
+$(  LET vtp = output()
+    LET cons = input()
+    LET new.cons.out = findoutput("**")
+    LET new.cons.in = findinput("**")
+    LET prompt = "Star> "
+    LET continue = ?
+    LET mode = ?
+    LET ch = ?
+    mon.in := new.cons.in
+    selectinput(new.cons.in)
+    mon.out := new.cons.out
+    selectoutput(new.cons.out)
+    $(rpt
+        writef("%S*E", prompt)
+        mode := mode.normal
+        continue := TRUE
+        ch := get.cmd(0)
+        TEST ch=endstreamch THEN ch:='S' ELSE // ensure ENDSTREAMCH exits
+        IF ch='*N' THEN ch:=endstreamch
+        TEST ch='X' THEN mode := mode.hex ELSE
+        IF ch='C' THEN mode := mode.control
+        IF mode\=mode.normal THEN ch := get.cmd(ch)
+        TEST ch='Q' THEN
+        $(  star.ended := TRUE
+            continue := FALSE
+        $) ELSE
+        TEST ch='H' | ch='?' THEN
+        $(  LET mc.name = rootnode ! rtn.info ! rtninfo.ring ! ri.myname
+            IF mc.name=0 THEN mc.name := "<unknown machine>"
+            writes("Commands are:*N")
+            writes("   q        - quit STAR*N")
+            writes("   s        - re-select VTP stream (exit monitor)*N")
+            writes("   b        - reset VPT BSP (send a BREAK)*N")
+            writes("   z        - end line with END-OF-FILE indication*N")
+            writes("   e  <str> - change escape-to-monitor string*N")
+            writes("   i  <ch>  - send character to VTP interface*N")
+            writes("   ci <ch>  - send control character to VTP interface*N")
+            writes("   xi <hex> - send hex character to VTP interface*N")
+            writes("   u  <ch>  - send uninterpreted character*N")
+            writes("   cu <ch>  - send uninterpreted control character*N")
+            writes("   xu <hex> - send uninterpreted hex character*N")
+            writef("This is task %N on *"%S*" ", taskid, mc.name)
+            TEST call.string%0=0 THEN writes("- no escape string set*N") ELSE
+            writef("- escape string: %S", call.string)
+        $) ELSE
+        TEST ch='S' THEN continue:=FALSE ELSE
+        TEST ch='E' THEN
+        $(  LET n=1
+            ch := get.ch(ch)
+            TEST ch=endstreamch THEN call.string%0 := 0 ELSE
+            $(  $(rpt
+                    call.string%n := ch
+                    ch := rdch()
+                    n := n+1
+                $)rpt REPEATUNTIL ch='*N' | ch='*E' | ch=endstreamch |
+                                  n>=max.call.string
+                IF ch=endstreamch | n>=max.call.string THEN ch := '*N'
+                call.string%n := ch
+                call.string%0 := n
+            $)
+        $) ELSE
+        TEST ch='B' THEN
+        $(  mon.out := vtp
+            selectoutput(vtp)
+            bsp.reset(vtp)
+            wrvtp.control(control.resetmine, 1)
+            bsp.forceout()
+            mon.out := new.cons.out
+            selectoutput(new.cons.out)
+            continue := FALSE
+        $) ELSE
+        TEST ch='Z' THEN
+        $(  mon.out := vtp
+            selectoutput(vtp)
+            wrvtp.control(control.eoil, 2)
+            wrch(2) // end of line reason = end of file!
+            mon.out := new.cons.out
+            selectoutput(new.cons.out)
+            continue := FALSE
+        $) ELSE
+        TEST ch='I' THEN
+        $(  ch := get.arg.char(ch, mode)
+            UNLESS ch=endstreamch THEN
+            $(  mon.out := vtp
+                selectoutput(vtp)
+                wrvtp.special(ch)
+                mon.out := new.cons.out
+                selectoutput(new.cons.out)
+                continue := FALSE
+            $)
+        $) ELSE
+        TEST ch='U' THEN
+        $(  ch := get.arg.char(ch, mode)
+            UNLESS ch=endstreamch THEN
+            $(  mon.out := vtp
+                selectoutput(vtp)
+                wrvtp.control(control.notrans, 2)
+                wrch(ch)
+                mon.out := new.cons.out
+                selectoutput(new.cons.out)
+            $)
+        $) ELSE
+        UNLESS ch=endstreamch THEN msg("Unknown monitor command - '%C'*N", ch)
+        WHILE ch\=endstreamch DO ch := get.cmd(ch)
+    $)rpt REPEATUNTIL NOT continue
+
+    ignore.mon.streams := TRUE
+    selectoutput(new.cons.out)
+    endwrite()
+    selectinput(new.cons.in)
+    endread()
+    mon.out := vtp
+    mon.in  := cons
+    ignore.mon.streams := FALSE
+
+    selectoutput(vtp)
+    selectinput(cons)
+$)
+
+
+
+AND get.arg.char(lastch, mode) = VALOF
+$(  LET chval = endstreamch
+    LET ch = get.ch(ch)
+    TEST ch=endstreamch THEN msg("Argument character missing*N") ELSE
+    TEST mode=mode.control THEN chval := ch & 31 ELSE
+    TEST mode=mode.hex THEN
+    $(  chval := hex.val(ch)
+        UNLESS chval=endstreamch THEN
+        $(  chval := chval << 4
+            ch := get.cmd(ch)
+            TEST ch=endstreamch THEN
+            $(  msg("Hexadecimal character missing*N")
+                chval := endstreamch
+            $) ELSE
+            $(  ch := hex.val(ch)
+                TEST ch=endstreamch THEN chval := ch ELSE
+                    chval := chval | ch
+            $)
+        $)
+    $) ELSE chval := ch
+    RESULTIS chval
+$)
+
+
+
+AND get.cmd(ch) = VALOF
+$(  ch := get.ch(ch)
+    IF 'a'<=ch<='z' THEN ch := ch+'A'-'a'
+    RESULTIS ch
+$)
+
+
+
+AND get.ch(ch) = VALOF
+TEST ch=0 THEN
+$(  ch := rdch() REPEATUNTIL ch\='*S'
+    IF ch='*E' | ch='*C' THEN ch := '*N'
+    RESULTIS ch
+$) ELSE
+$(  IF ch='*N' | ch='*E' | ch='*C' THEN ch := endstreamch
+    IF ch\=endstreamch THEN ch := rdch()
+    WHILE ch='*S' DO ch := rdch()
+    IF ch='*N' | ch='*E' | ch='*C' THEN ch := endstreamch
+    RESULTIS ch
+$)
+
+
+
+AND hex.val(ch) = VALOF
+$(  TEST 'a'<=ch<='f' THEN ch := ch-'a'+10 ELSE
+    TEST 'A'<=ch<='F' THEN ch := ch-'A'+10 ELSE
+    TEST '0'<=ch<='9' THEN ch := ch-'0' ELSE
+    $(  msg("Illegal hexadecimal digit*N")
+        ch := endstreamch
+    $)
+    RESULTIS ch
+$)
+    
+
+
+
+AND mon.check(eol.string) = VALOF
+// this procedure produces the characters in EOL.STRING if '*N' is read
+// from RDCH.  It keeps a static variable EOL.POS to remember where in the
+// EOL string it has got to.
+$(  STATIC $( eol.pos = 0 $)
+    LET ch = ?
+    IF eol.pos >= eol.string%0 THEN eol.pos := 0
+    TEST eol.pos=0 THEN
+    $(  ch := rdch()
+        IF ch='*N' & eol.string%0>0 THEN
+        $(  ch := eol.string%1
+            eol.pos := 1
+        $)
+    $) ELSE
+    $(  eol.pos := eol.pos+1
+        ch := eol.string%eol.pos
+    $)
+    RESULTIS ch
+$)
+
+
+
+
+//
+//                         Find Byte Stream Routines
+//
+
+
+
+
+AND init.from.command() = VALOF
+    $(
+    LET rdargs.string = "Machine,Service/K,Text/K,Quality/K,*
+                        *NOTAUTH/S,MINADDR/S"
+    LET argv          = VEC 30
+    LET nsvec         = VEC 3
+    LET mcname        = VEC max.mcname.chars/bytesperword
+    LET auth          = ?
+    LET rc            = 20
+
+    TEST rdargs(rdargs.string, argv, 30) = 0 THEN
+        writef("Bad args for key string *"%S*"*N", rdargs.string) ELSE
+
+    TEST (argv!0\=0) = (argv!1\=0) THEN
+        writef("Either a machine name OR a service name must be given*N") ELSE
+
+    $(  auth := (argv!4 = 0)  // Use AUTHBSP unless NOTAUTH specified
+        mcname%0 := 0         // make called service null string to start
+
+        TEST argv!0\=0 THEN
+        $(  mcname%0 := max.mcname.chars
+            IF u.svc.nm(mcname, argv!0, "RATS") THEN rc := 0
+        $)
+        ELSE
+        $(  mcname%0 := 0
+            IF concat(mcname, max.mcname.chars, argv!1     ) THEN rc := 0
+        $)
+
+        TEST rc\=0 THEN
+            writef("Service name is too long (more than %N chars)*N",
+                   max.mcname.chars) ELSE
+
+        $(  LET info = rootnode!rtn.info!rtninfo.ring
+            LET calling.addr = VEC max.mcname.chars
+            LET internal.addr = "X"
+            LET terminal.name = info!ri.loaders.name
+            LET uidset = 0
+            LET user = info!ri.uidset
+
+            calling.addr%0 := 0
+            internal.addr%1 := (consoletask > 9 -> 'A'-10, '0')+consoletask
+            concat(calling.addr, max.mcname.chars, internal.addr)
+  
+            IF terminal.name \= 0 & argv!5=0 THEN
+            $(  concat(calling.addr, max.mcname.chars, "@")
+                concat(calling.addr, max.mcname.chars, terminal.name)
+            $)
+
+            IF auth THEN
+                TEST user=0 THEN
+                    msg("no one logged on *
+                           *- authentication not used*N")  ELSE uidset:=user+1
+
+            IF NOT bsp.make.ts.connection(mcname, calling.addr,
+                                  (argv!3=0 -> "", argv!3),
+                                  (argv!2=0 -> "", argv!2),
+                                  uidset, @input.bs, @output.bs) THEN
+
+            $(  LET r2=result2
+                writef("Failed to open TSBSP connection to *"%S*": ", mcname)
+                fault(r2)
+                result2 := r2
+                rc := 20
+            $)
+
+        $)
+    $)
+
+    IF rc\=0 THEN stop(rc)
+
+    RESULTIS rc=0
+$)
+
+
+
+AND concat(vect, size, string) = VALOF
+$(  LET n = vect%0
+    LET ok = (n+1+string%0 <= size)
+    IF ok THEN
+    $(  FOR i=1 TO string%0 DO vect%(i+n) := string%i
+        vect%0 := n+string%0
+    $)
+    RESULTIS ok
+$)
+
+
+
+AND init.from.open(arg.pkt) = VALOF
+$(  LET block            = arg.pkt  ! rhpkt.buff
+    LET size             = arg.pkt  ! rhpkt.size
+    LET rhtaskid         = arg.pkt  ! pkt.arg5
+    LET machine.id       = arg.pkt  ! rhpkt.station
+    LET machine.name     = revtrace(arg.pkt)
+    LET revtrace.rc      = result2
+    LET success          = TRUE
+    LET authentic        = ?  // Whether authenticated open received
+    LET puid             = VEC 3
+
+    qpkt(arg.pkt)
+    input.bs, output.bs := 0, 0
+    initio()
+
+    // See if this is an authenticated open block.
+
+//  authentic := bsp.check.auth(block, size)
+
+//  TEST authentic
+//  THEN FOR i=0 TO 3 DO puid!i := [block+3+1+num.bsp.parms+1] ! i // Copy puid
+//  ELSE rc     := result2 // Zero for normal open, non-zero for dud auth open
+
+    IF success THEN
+    $(  LET text = VEC 40/bytesperword
+        selectoutput(findoutput("**"))
+
+        msg("Reverse connection established to task %N from *"%S",
+                taskid, machine.name)
+
+        TEST bsp.read.ts.parms(block, size, 16, 2, text, 40) THEN
+            writef("/%S*"*N", text) ELSE
+        $(  LET r2 = result2
+            writes("*"*N")
+            msg("Calling address unavailable - ")
+            result2 := r2
+            fault(result2)
+        $)
+
+        IF revtrace.rc \= 0 THEN
+        $(  msg("Reverse trace to caller unsuccessful - ")
+            fault(revtrace.rc)
+        $)
+
+        TEST bsp.read.ts.parms(block, size, 16, 1, text, 40) THEN
+            IF text%0>0 THEN msg("Connection addressed to *"%S*"*N", text)
+        ELSE
+        $(  msg("Called address unavailable - ")
+            fault(result2)
+        $)
+
+        TEST bsp.read.ts.parms(block, size, 16, 3, text, 40) THEN
+            IF text%0>0 THEN msg("Connection quality is *"%S*"*N", text)
+        ELSE
+        $(  msg("Connection quality unavailable - ")
+            fault(result2)
+        $)
+
+        IF bsp.read.ts.parms(block, size, 16, 4, text, 40) THEN
+        IF text%0>0 THEN msg("Connect text *"%S*"*N", text)
+
+        success := bsp.openack(block, size, machine.id, @input.bs, @output.bs)
+
+        TEST success THEN
+
+        $(  // The byte streams are now open, and the OPENACK has been sent.
+            old.input.task := change.default.input(taskid)
+        $) ELSE
+        $(  msg("Reply to OPEN unsuccessful - ")
+            fault(result2)
+        $)
+
+        endwrite()
+    $)
+
+    RESULTIS success
+$)
+
+
+
+AND revtrace(connection.pkt) = VALOF
+// returns a pointer to a string giving the name of the caller of this
+// ring service (where CONNECTION.PKT is the startup packet delivered to
+// the new task).  If there was an error in communication or in the SSP
+// to REVTRACE the string returned will have zero length.
+$(  LET tx.block    = VEC bb.ssp.args+2
+    LET rx.block    = VEC bb.ssp.args+10
+    LET mcname      = TABLE 0,0,0,0,0, 0,0,0,0,0
+    LET nsvec       = VEC 3
+    LET block       = connection.pkt ! rhpkt.buff
+    LET machine.id  = connection.pkt ! rhpkt.station
+    LET reply.port  = get2bytes(block, bb.ssp.replyport)
+
+    mcname%0 := 0
+    put2bytes(tx.block, bb.ssp.args+0, machine.id)
+    put2bytes(tx.block, bb.ssp.args+1, reply.port)
+
+    IF ssp("REVTRACE", tx.block, bb.ssp.args+2,
+                       rx.block, bb.ssp.args+10, nsvec) THEN
+
+    $(  LET size = byteget(rx.block, bb.ssp.args*2)
+        IF size > 10*bytesperword THEN size := 10*bytesperword
+        FOR i=1 TO size DO mcname%i := byteget(rx.block, bb.ssp.args*2+i)
+        mcname%0 := size
+        result2 := 0
+    $)
+
+    RESULTIS mcname
+$)
+
+
+
+AND clearup.session(success, rc) BE
+    TEST reverse.connected THEN
+    $(  IF success THEN change.default.input(old.input.task)
+        endtask(tcb ! tcb.seglist ! 3)
+    $) ELSE
+    IF rc\=0 THEN stop(rc)
+
+
+
+AND change.default.input(task) =
+    // changes the default input task to that given by TASK and
+    // returns the task which formely took default input
+    sendpkt(notinuse, consoletask, act.set.currentinputtask,
+            0, 0, task, TRUE)
+
+
+
+AND msg(message, a1, a2, a3, a4, a5) BE
+$(  LET r2 = result2
+    writes("****** STAR: ")
+    writef(message, a1, a2, a3, a4, a5)
+    result2 := r2
+$)
+
+

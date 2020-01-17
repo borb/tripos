@@ -1,0 +1,151 @@
+**********************************************************
+*                                                        *
+* This is the LP device driver for the LSI4/30           *
+*                                                        *
+**********************************************************
+
+* Device control block symbols
+
+D:LINK  EQU     0       link to device driver
+D:ID    EQU     1       device id
+D:WKQ   EQU     2       work queue
+D:STRT  EQU     3       start routine
+D:STOP  EQU     4       stop routine
+D:INT   EQU     5       interrupt routine
+D:DAFC  EQU     6       device address
+D:IVEC  EQU     7       interrupt vector
+
+* Packet symbols
+
+P:LINK  EQU     0       link to next pkt
+P:ID    EQU     1       device or task id
+P:TYPE  EQU     2       type or action
+P:RES1  EQU     3       result
+P:RES2  EQU     4       result 2
+P:A1    EQU     5       argument 1
+
+* Rootnode
+
+CRNTSK  EQU     :0B       current task TCB
+DEVMVP  EQU     :15       ptr to MOVPKT
+DEVINT  EQU     :16       ptr to INTENT
+DEVRET  EQU     :17       ptr to INTRET
+
+        REL    0
+
+        DATA   INIT     initialisation routine
+        DATA   UNIN     uninitialisation routine
+
+* Initialisation routine.
+*  A holds the device id
+*  Y           DCB
+*  A,X,Y,K,L must be preserved
+
+INIT    DATA   0
+        CEA    START,Q          fill in rest of the DCB
+        COPY   Q,D:STRT(Y)
+        CEA    STOP,Q
+        COPY   Q,D:STOP(Y)
+        CEA    INT,Q
+        COPY   Q,D:INT(Y)
+        COPY   Y,Q
+        COPY   D:IVEC(Y),Y      get interrupt vector
+        COPY   Q,7(Y)           plant the DCB
+        COPY    Q,Y
+        COPY    D:DAFC(Y),Q
+        ADD     DAOB,Q
+        COPY    D:IVEC(Y),Y     Get interrupt vector again
+        COPY    Q,0(Y)          Plant auto IO instruction
+        COPY    7(Y),Y          Restore DCB
+        JMP    *INIT
+
+* Uninitialisation routine.
+*  A holds the DCB
+*  Y           DCB
+*  A,X,Y,K,L must be preserved
+
+UNIN    DATA   0
+        JMP    *UNIN            return
+
+* Device start routine.
+*  Y holds the DCB
+*  X,Y,K,L must be preserved
+*  A must be non zero on exit
+
+START   DATA   0
+        COPY   Y,DCB            Save the DCB
+        COPY   D:DAFC(Y),Q
+        COPY   D:WKQ(Y),Y
+        COPY   P:TYPE(Y),A      See what action to take
+        CSK    A,A:END
+        JMP    START1
+        JMP    START1           Normal output
+        COPY   P:A1(Y),A        Get data
+        JLT    A,NOOUT          Ignore it if negative
+        XNX    Q
+        OUT    A,:00            Force data output
+NOOUT   COPY   DEOBC,A          End of block interrupt start
+        JMP    START2
+*
+*  Normal action
+*
+START1  CEA    P:A1(Y),A        Address of data
+        COPY   DCB,Y
+        COPY   D:IVEC(Y),Y      Interrupt vector address
+        SHIFT  A,LO,1           Make byte address
+        COPY   A,2(Y)           Buffer address in auto io
+        COPY   =-1,A
+        JF     OV,$+2
+        RBIT   15,A             Set APX for top half of memory
+        COPY   A,1(Y)
+        COPY   DSTRTC,A         Output start command
+START2  XNX    Q
+        OUT    A,:01            start picoprocessor
+        COPY   DCB,Y
+        JMP    *START
+
+* Device stop routine.
+*  Y holds the DCB
+*  X,Y,K,L must be preserved
+
+STOP    DATA   0
+        COPY   DSTOPC,A         get the command word
+        COPY   D:DAFC(Y),Q      get device address
+        XNX    Q
+        OUT    A,:01            issue reset command
+        JMP    *STOP
+
+* Device interrupt routine.
+*  Y holds the DCB
+*  K,L must be preserved
+
+INT     COPY   D:IVEC(Y),X      Get interrupt vector
+        COPY   1(X),Q           Get byte count
+        RBIT   15,Q             Ignore address bit
+        COPY   D:WKQ(Y),X       Get head packet
+        COPY   Q,P:RES1(X)      Set RES1
+        COPY   P:LINK(X),Q      Unlink packet
+        COPY   Q,D:WKQ(Y)
+        COPY   D:DAFC(Y),A      Get device code
+        XNX    A
+        IN     :01,A            Get status
+        COPY   A,P:RES2(X)      Put status in packet
+INT2    COPY   D:WKQ(Y),A       Check work queue
+        JEQ    A,$+2            Branch if empty
+INT3    JST    *D:STRT(Y)       Restart device
+        COPY   D:ID(Y),A        device id for MOVPKT
+        COPY   X,Y              pkt
+        COPY   CRNTSK,Q         TCB
+        JST    *DEVMVP          send the pkt back
+        JMP    *DEVINT
+
+DCB     DATA   0
+DSTRTC  DATA   :0612
+DEOBC   DATA   :06F0
+DSTOPC  DATA   :0100
+DAOB    AOB    :00
+A:END   DATA   1007
+
+        END
+
+

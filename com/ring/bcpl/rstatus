@@ -1,0 +1,110 @@
+/***********************************************************************
+**             (C) Copyright 1980  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+  #######    ######   ########    ####    ########  ##    ##   ######
+  ########  ########  ########   ######   ########  ##    ##  ########
+  ##    ##  ##           ##     ##    ##     ##     ##    ##  ##
+  ########  #######      ##     ########     ##     ##    ##  #######
+  #######         ##     ##     ##    ##     ##     ##    ##        ##
+  ##  ##          ##     ##     ##    ##     ##     ##    ##        ##
+  ##   ##   ########     ##     ##    ##     ##     ########  ########
+  ##    ##   ######      ##     ##    ##     ##      ######    ######
+
+************************************************************************
+**    Author:   Brian Knight                       February 1980      **
+***********************************************************************/
+
+
+// Program to print out the names of all ring stations currently
+// switched on, and how they reacted to a basic block sent to them.
+//
+// A basic block is sent to every station with address from 1 to 254,
+// and the name printed for those which produce transmission return
+// codes other than 'ignored'.
+// [Station 0 is the error logger; sending to it will cause it to log
+// false errors.  Station 255 should not exist, as no-one would be
+// able to select it exclusively for reception].
+
+SECTION "RSTATUS"
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+
+GLOBAL
+    $(
+    real.wrch  : ug
+    col.pos    : ug + 1
+    my.wrch    : ug + 2
+    $)
+
+MANIFEST
+    $(
+    ncols       = 3
+    $)
+
+LET start() BE
+    $(
+    LET r = ?
+    LET rhtaskid = rootnode ! rtn.info ! rtninfo.ring ! ri.rhtaskid
+    LET block = TABLE 1234,0,0,0,0
+    LET port = 4095
+    LET n.stations      = 0
+    LET colnum          = 1
+    LET breakcondition  = FALSE
+
+    IF rhtaskid=0
+    THEN
+      $(
+      writes("ring handler not loaded*n")
+      stop(20)
+      $)
+
+    real.wrch := wrch
+    wrch      := my.wrch
+
+    FOR destination=1 TO 254
+    DO $(
+       IF testflags(1)
+       THEN $( breakcondition := TRUE; BREAK $)
+
+       r := sendpkt(notinuse,rhtaskid,act.tx,
+            0,0,block,5,destination,port)
+
+       UNLESS r = txst.ignored | r = txst.ring.error
+       THEN
+         $(
+         n.stations     := n.stations + 1
+         col.pos        := 0
+         write.machine.name(destination)
+         writes(": ")
+         FOR i=col.pos TO 12 DO wrch(' ')
+         writes(r = txst.accepted->     "accepted",
+                r = txst.bad.dest->     "bad address",
+                r = txst.unsel.in.blk ->"u/s in blk",
+                r = txst.unsel.hdr ->   "unselected",
+                r = txst.busy ->        "busy",
+                                        "???")
+
+         TEST colnum = ncols
+         THEN $( newline(); colnum := 1 $)
+         ELSE $( FOR i=col.pos TO 26 DO wrch(' '); colnum := colnum+1 $)
+         $)
+      $)
+    UNLESS colnum=ncols THEN newline()
+
+    TEST breakcondition
+    THEN writes("******BREAK*n")
+    ELSE writef("*n%n stations switched on*n", n.stations)
+    $)
+
+
+AND my.wrch(c) BE
+    $(
+    col.pos := col.pos + 1
+    real.wrch(c)
+    $)
+
+

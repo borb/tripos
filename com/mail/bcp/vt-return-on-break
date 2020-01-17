@@ -1,0 +1,21 @@
+            SWITCHON key.ch INTO
+            $(
+              CASE 'B':
+              CASE 'C':
+              CASE 'D':
+              CASE 'E':
+                   // Set a break flag (ctrl/B to ctrl/D break) in the
+                   // current task.
+                   setflags(current.task, 1 << (key.ch - 'B') )
+
+              CASE 'N':
+                   reading.break.key    := FALSE
+                   outflags     := outflags | flag.input.request.to.send
+                   IF key.ch='B' UNLESS read.pkt.queue=0
+                   $(   outflags := outflags & ~ flag.message.to.print
+                        RESULTIS CUR.ABANDON
+                   $)
+                   BREAK // No action - ignore break
+            $)
+
+

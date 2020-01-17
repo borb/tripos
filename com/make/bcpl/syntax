@@ -1,0 +1,1480 @@
+/*****************************************************************************\
+*                        Olivetti Research Laboratory                         *
+*******************************************************************************
+
+
+            ######   #      #  ##    ##  ########    ####    #      # 
+           ########  ##    ##  ###   ##  ########   ######   ##    ## 
+           ##         ##  ##   ####  ##     ##     ##    ##   ##  ##  
+           #######     ####    ## ## ##     ##     ########     ##    
+                 ##     ##     ##  ####     ##     ##    ##    #  #   
+                 ##     ##     ##  ####     ##     ##    ##   ##  ##  
+           ########     ##     ##   ###     ##     ##    ##  ##    ## 
+            ######      ##     ##    ##     ##     ##    ##  #      # 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   15/05/87             *
+\*****************************************************************************/
+
+
+
+SECTION "SYNTAX"
+
+
+
+GET "MAKEHDR"
+
+
+
+LET definetagtable()  BE
+$(
+//  Set up the hash table, and initialise all the entries in it.
+
+    tagtable  :=  getstore( tagtablesize )
+
+    FOR  i = 0  TO  tagtablesize-1  DO  tagtable!i  :=  NIL
+$)
+
+
+
+AND definecommands()  BE
+$(
+//  Set up the list of commands which we are prepared to recognise.
+
+    commandlist  :=  NIL
+
+    definecommand( ".INCLUDE", c.include )
+    definecommand( ".IMPORT", c.import )
+    definecommand( ".PREFIXES", c.prefixes )
+    definecommand( ".SUFFIXES", c.suffixes )
+    definecommand( ".IGNORE", c.ignore )
+$)
+
+
+
+AND definecommand( name, type )  BE
+$(
+//  Add an entry into the command list for this name and type pair.
+
+    LET entry  =  getstore( cl.size )
+
+    entry!cl.link  :=  commandlist
+    entry!cl.name  :=  lookuptag( name )
+    entry!cl.type  :=  type
+
+    commandlist    :=  entry
+$)
+
+
+
+AND parsefile( file )  =  VALOF
+$(
+//  Parse a "make" input file, returning when the file is exhausted.
+
+    LET stream   =  findinput( file )
+    LET success  =  TRUE
+
+    TEST  stream = 0  THEN
+    $(
+        //  We have failed to open the source file, and so we should complain
+        //  bitterly about it.
+
+        message( "Failed to open source file *"%S*"", file )
+
+        success  :=  FALSE
+    $)
+    ELSE
+    $(
+        //  Otherwise, we have opened the file, and so we should parse it.
+        //  The parameters of the current file are saved, so that we can
+        //  restore them at the end.
+
+        LET oldin    =  input()
+        LET oldfile  =  filename
+        LET oldline  =  linenumber
+        LET oldlev   =  errorlevel
+        LET oldlab   =  errorlabel
+        LET oldch    =  ch
+        
+        LET scb      =  getscb()
+        
+        scb!scb.link   :=  NIL
+        scb!scb.id     :=  id.inscb
+        scb!scb.type   :=  taskid
+        scb!scb.pos    :=  0
+        scb!scb.end    :=  0
+        scb!scb.buf    :=  scb+scb.arg2+1
+        scb!scb.func1  :=  make.replenish
+        scb!scb.func2  :=  0
+        scb!scb.func3  :=  0
+        scb!scb.arg1   :=  stream
+        scb!scb.arg2   :=  NIL
+
+        selectinput( scb )
+
+        filename    :=  file
+        linenumber  :=  1
+
+        errorlevel  :=  level()
+        errorlabel  :=  label
+        
+        //  Start the ball rolling by reading the first character from the
+        //  file.  
+
+        ch  :=  rdch()
+        
+        skiplayout()
+        
+        UNTIL  ch = endstreamch  DO
+        $(
+            //  Parse the current file, looking for the rules which make up the
+            //  commands.
+            
+            LET taglist  =  0
+            
+            IF  testflags( #B0011 )  THEN  error( "BREAK" )
+            IF  testflags( #B1000 )  THEN  message( "Reading source file" )
+
+            taglist  :=  readtaglist()
+            
+            //  Make sure that we have in fact read a taglist, since if we
+            //  haven't, we should complain about it.
+            
+            IF  taglist = NIL  THEN
+
+                //  We do not have any tags, so there is some sort of syntax
+                //  error here.
+                
+                error( "Unexpected *"%C*"", ch )
+                
+            //  Otherwise we are OK, so we should check for one of the valid
+            //  terminators we are expecting.
+            
+            IF  testfor( ch.assign )  THEN
+            $(
+                //  This is a macro assignment, so we should add these macro 
+                //  variables to the list for this node.
+                
+                LET line  =  readline() 
+                
+                UNTIL  taglist = NIL  DO
+                $(
+                    //  Pick up the current tag, and add it to the list for
+                    //  this node.
+                    
+                    LET link  =  taglist!tl.link
+                    LET tag   =  taglist!tl.tag
+                    
+                    addmacro( tag, line )
+                    
+                    freetagitem( taglist )
+                    
+                    taglist  :=  link
+                $)
+                
+                skiplayout()
+                
+                LOOP
+            $)
+            
+            //  The only other valid possibility is that this taglist is
+            //  the start of a rule.
+            
+            IF  testfor( ch.depend )  THEN
+            $(
+                //  This is the character which separates the things which
+                //  have to be made and the things which they depend on.
+                
+                LET deplist  =  readtaglist()
+                LET rule     =  newrule( taglist, deplist )
+                
+                //  We have read the dependency list, so we should make up
+                //  the rest of the rule.  Look to see whether we have the
+                //  first command on the same line as the dependencies.
+                
+                TEST  testfor( ch.command )  THEN
+                $(
+                    //  We have found a command separator, so we should
+                    //  read the rest of the line as a command, and add it
+                    //  to the rule.
+                    
+                    addcommand( rule, readline() )
+                    
+                    ch  :=  rdch()
+                $)
+                ELSE
+                
+                    //  The only other valid item here is end of line.  We
+                    //  should check for that, and complain if we don't
+                    //  find it.
+
+                    UNLESS  testfor( '*N' )  DO  
+                        error( "Unexpected *"%C*"", ch )
+                       
+                //  We are now in a state to read the commands associated with
+                //  this rule.
+                
+                WHILE  ch = '*T'  DO
+                $(  
+                    //  Repeat loop to read lines which begin with the "tab"
+                    //  character, which are all part of this rule.
+                    
+                    addcommand( rule, readline() )
+                    
+                    ch  :=  rdch()
+                $)
+                
+                //  When we drop out of here, we have built up the entire
+                //  rule, so we should add this rule to the current node,
+                //  and then go back for more.  We should extract those
+                //  dependencies which were declared within the body of the
+                //  commands.
+                
+                UNTIL  scb!scb.arg2 = NIL  DO
+                $(
+                    LET item  =  scb!scb.arg2
+                    
+                    scb!scb.arg2       :=  item!tl.link
+
+                    item!tl.link       :=  rule!rule.depends
+                    rule!rule.depends  :=  item
+                $)
+                
+                addrule( rule )
+                
+                skiplayout()
+                
+                //  Having parsed this item, we should look to see whether
+                //  we are dealing with an object which must be handled
+                //  on the fly.
+                
+                UNTIL  taglist = NIL  DO
+                $(
+                    LET command  =  lookupcommand( taglist!tl.tag )
+                    
+                    //  If this is a known command, we should handle those
+                    //  which are special.
+                        
+                    LET function  =  command = c.include   ->  doinclude,
+                                     command = c.import    ->  doimport,
+                                     command = c.prefixes  ->  doprefix,
+                                     command = c.suffixes  ->  dosuffix,
+                                     command = c.ignore    ->  doignore,
+                                                               NIL
+
+                    //  If we have a function to call, then we should
+                    //  call it for each of the items on the dependency
+                    //  list.
+                        
+                    UNLESS  function = NIL  DO  
+                        applyfunction( function, deplist )
+                        
+                    //  Move on to the next item in the list, in case it is
+                    //  relevant to us.
+                    
+                    taglist  :=  taglist!tl.link
+                $)
+                
+                LOOP
+            $)
+            
+            //  If it isn't one of those characters, then we have a syntax
+            //  error here.
+            
+            error( "*"%C*" or *"%C*" missing", ch.assign, ch.depend )
+        $)
+
+        GOTO  endoffile
+
+        //  Error recovery point.  We come here when some sort of syntax error
+        //  has been found in the file.  We immediately set the "success" flag
+        //  to "false", and then join the common code to restore the previous
+        //  state.
+
+    label:
+
+        success  :=  FALSE
+
+        //  Normal end of file point.  When we reach end of file, we close
+        //  the stream down, and restore all the parameters of the previous
+        //  file.
+
+    endoffile:
+
+        freescb( scb )
+
+        endstream( stream )
+
+        selectinput( oldin )
+
+        filename    :=  oldfile
+        linenumber  :=  oldline
+        errorlevel  :=  oldlev
+        errorlabel  :=  oldlab
+        ch          :=  oldch
+    $)
+
+    RESULTIS  success
+$)
+
+
+
+AND handleassign( parameter )  =  VALOF
+$(
+//  Look to see whether this is the user setting a macro parameter from the
+//  command line.
+
+    IF  findchar( parameter, ch.assign )  THEN
+    $(
+        //  This is, indeed, an assignment, so we should create a buffer to 
+        //  hold this tag, and then call the syntax analyser to parse it.
+        
+        LET length   =  parameter % 0
+        LET taglist  =  0
+        
+        LET oldin    =  input()
+        LET oldfile  =  filename
+        LET oldline  =  linenumber
+        LET oldlev   =  errorlevel
+        LET oldlab   =  errorlabel
+        LET oldch    =  ch
+        
+        LET scb      =  getscb()
+        LET buffer   =  scb + scb.arg2 + 1
+        
+        scb!scb.link   :=  NIL
+        scb!scb.id     :=  id.inscb
+        scb!scb.type   :=  taskid
+        scb!scb.pos    :=  0
+        scb!scb.end    :=  length + 1
+        scb!scb.buf    :=  buffer
+        scb!scb.func1  :=  0
+        scb!scb.func2  :=  0
+        scb!scb.func3  :=  0
+        scb!scb.arg1   :=  NIL
+        scb!scb.arg2   :=  NIL
+        
+        FOR  i = 1  TO  length  DO  buffer % (i - 1)  :=  parameter % i
+        
+        buffer % length  :=  '*N'
+
+        selectinput( scb )
+
+        filename    :=  "[parameter]"
+        linenumber  :=  1
+
+        errorlevel  :=  level()
+        errorlabel  :=  label
+        
+        //  We are now in a state to read this pseudo file which we have
+        //  created.
+        
+        ch       :=  rdch()
+        
+        skiplayout()
+            
+        taglist  :=  readtaglist()
+            
+        //  Make sure that we have in fact read a taglist, since if we
+        //  haven't, we should complain about it.
+            
+        IF  taglist = NIL  THEN
+
+            //  We do not have any tags, so there is some sort of syntax
+            //  error here.
+                
+            error( "Unexpected *"%C*"", ch )
+                
+        //  Otherwise we are OK, so we should check for one of the valid
+        //  terminators we are expecting.
+            
+        IF  testfor( ch.assign )  THEN
+        $(
+            //  This is a macro assignment, so we should add these macro 
+            //  variables to the list for this node.
+                
+            LET line  =  readline() 
+                
+            UNTIL  taglist = NIL  DO
+            $(
+                //  Pick up the current tag, and add it to the list for
+                //  this node.
+                    
+                LET link  =  taglist!tl.link
+                LET tag   =  taglist!tl.tag
+                    
+                addmacro( tag, line )
+                
+                freetagitem( taglist )
+                    
+                taglist  :=  link
+            $)
+                
+            skiplayout()
+        $)
+        
+        UNLESS  ch = endstreamch  DO  error( "Unexpected *"%C*"", ch )
+        
+        //  Clear up after this little excursion, and put the world back
+        //  to the state it was in before we did anything.
+        
+        selectinput( oldin )
+
+        filename    :=  oldfile
+        linenumber  :=  oldline
+        errorlevel  :=  oldlev
+        errorlabel  :=  oldlab
+        ch          :=  oldch
+        
+        freescb( scb )
+
+        RESULTIS  TRUE
+
+
+        //  Error return point.  If we come here, then we tidy up as before,
+        //  but return to the error handler of the previous level.
+        
+    label:
+    
+        selectinput( oldin )
+
+        filename    :=  oldfile
+        linenumber  :=  oldline
+        errorlevel  :=  oldlev
+        errorlabel  :=  oldlab
+        ch          :=  oldch
+        
+        freescb( scb )
+
+        longjump( errorlevel, errorlabel )
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND findchar( string, char )  =  VALOF
+$(
+//  Scan the string looking for the character given.
+
+    FOR  i = 1  TO  string % 0  DO
+        IF  string % i  =  char  THEN
+            RESULTIS  TRUE
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND applyfunction( function, list )  BE
+$(
+//  Apply the function given to each of the tags in the list.
+
+    TEST  list = NIL  THEN  function( NIL )
+    ELSE
+
+    UNTIL  list = NIL  DO
+    $(
+        function( list!tl.tag )
+
+        list  :=  list!tl.link
+    $)
+$)
+
+
+
+AND lookupcommand( tag )  =  VALOF
+$(
+//  Scan the command table so see if the tag given matches up to one of the
+//  commands we are expecting.
+
+    LET list  =  commandlist
+
+    UNTIL  list = NIL  DO
+    $(
+        IF  list!cl.name = tag  THEN  RESULTIS  list!cl.type
+
+        list  :=  list!cl.link
+    $)
+
+    RESULTIS  c.unknown
+$)
+
+
+
+AND make.replenish( scb )  =  VALOF
+$(
+//  Go to the real input stream, and get the next line from the input stream.
+//  We remove escaped characters and comments, and join lines which should
+//  be concatenated.
+
+    LET buffer  =  scb!scb.buf
+    LET length  =  0
+    LET eof     =  0
+    
+    LET dpos    =  0
+    LET dfound  =  FALSE
+    
+    LET oldlev  =  errorlevel
+    LET oldlab  =  errorlabel
+    LET oldch   =  ch
+
+    errorlevel  :=  level()
+    errorlabel  :=  label
+    
+    selectinput( scb!scb.arg1 )
+    
+    //  Read the first character of the line, since from now on we will
+    //  always be one character ahead.
+
+    ch  :=  rdch()
+        
+    $(  //  Look to see if this is the end of the line or the end of the
+        //  file.
+        
+        IF  ch = '*N'         THEN  BREAK
+        IF  ch = endstreamch  THEN  BREAK
+        
+        //  Look to see whether this is an escaped character.  If so, then we 
+        //  must put it into the output buffer without interpretation.
+        
+        IF  testfor( ch.escape )  THEN
+        $(
+            //  Escaped character.  Everything is simple here apart from an
+            //  escaped newline, which causes multiple blank characters to
+            //  be compressed.
+            
+            TEST  testfor( '*N' )  THEN
+            $(
+                //  Escaped newline character, so concatenate the lines, and
+                //  merge any blank characters.
+                
+                linenumber  :=  linenumber + 1
+                
+                WHILE  ch = '*S'  |  ch = '*T'  DO  ch  :=  rdch()  
+                
+                length  :=  addchar( buffer, length, '*S' )
+            $)
+            ELSE
+            $(
+                //  Not a newline, so add this character to the output buffer,
+                //  and then grab another character.
+                
+                length  :=  addchar( buffer, length, ch )
+                ch      :=  rdch()
+            $)
+            
+            LOOP
+        $)
+
+        //  This may be a comment character, which means that this is the
+        //  end of the line anyway.  We should skip the rest of the input
+        //  line.
+        
+        IF  testfor( ch.comment )  THEN
+        $(
+            UNTIL  ch = '*N'  |  ch = endstreamch  DO  ch  :=  rdch()
+            
+            //  If we have hit end of file, or this is a comment following a
+            //  command, then this is the end of the line.  Otherwise, skip
+            //  onto the next line.
+            
+            IF  ch = endstreamch  |  length > 0  THEN  BREAK
+            
+            //  Otherwise, increment the line number, and go round one more
+            //  time.
+            
+            linenumber  :=  linenumber + 1
+            ch          :=  rdch()
+            
+            LOOP
+        $)
+
+        //  Look to see if this is a macro call, which must be expanded by
+        //  us into the output buffer.
+        
+        IF  testfor( ch.macro )  THEN
+        $(
+            //  We have three possibilities here.  Assuming that the macro
+            //  character is '$', the macro brackets are '()' and the
+            //  file brackets are '[]', these are:
+            //  
+            //      a)  $(name)
+            //      b)  $[name]       (followed by blank or text)
+            //      c)  $c            (c is a special character)
+            //      d)  $c            (c is a tag character)
+            
+            LET tag    =  0
+            LET value  =  0
+            LET sep    =  FALSE
+            
+            TEST  testfor( ch.mbra )  THEN
+            $(
+                //  Macro bracket.  Read a tag, and check for the closing
+                //  bracket.
+                
+                tag  :=  checktag()
+                
+                checkfor( ch.mket, "*"%C*" missing", ch.mket )
+            $)
+            ELSE
+            
+            TEST  testfor( ch.fbra )  THEN
+            $(
+                //  File macro bracket.  This is the same as before, except
+                //  that we may have to add a separator character in as
+                //  well.
+                
+                tag  :=  checktag()
+                sep  :=  TRUE
+                
+                checkfor( ch.fket, "*"%C*" missing", ch.fket )
+            $)
+            ELSE
+            
+            TEST  specialchar( ch )  THEN
+            $(
+                //  This is one of the special characters, so we should put
+                //  the character back in the file, along with a flag so that
+                //  it can be recognized later.
+                
+                length  :=  addchar( buffer, length, ch.special )
+                length  :=  addchar( buffer, length, ch )
+
+                ch      :=  rdch()
+                
+                LOOP
+            $)
+            ELSE
+            $(
+                //  This is a single character tag, which we should look up
+                //  now.  We construct a temporary string of length 1 to
+                //  hold this pseudo variable name.
+                
+                LET name  =  VEC 1/bytesperword
+                
+                UNLESS  tagch( ch )  DO
+                    error( "Unexpected *"%C*"", ch.macro )
+                
+                name % 0  :=  1
+                name % 1  :=  ch
+                
+                tag       :=  lookuptag( name )
+                ch        :=  rdch()
+            $)
+        
+            //  We now have a tag which we should look up in the macro
+            //  list for this node.  Note that the result of a macro lookup
+            //  is a ROPE.
+            
+            value  :=  lookupmacro( tag )
+            
+            UNLESS  value = NIL  DO
+            $(
+                //  We have a value to substitute, so we should perform this
+                //  substitution now.  If "sep" is set, then we must add a
+                //  separator character if this is necessary.
+                
+                length  :=  addrope( buffer, length, value )
+                
+                IF  sep  THEN
+                    UNLESS  isassignment( value )  DO
+                        length  :=  addchar( buffer, length, '.' )
+            $)
+            
+            LOOP
+        $)
+
+        //  Look to see if we have found an implicit declaration for a file
+        //  which we should add to the dependency list.
+        
+        IF  testfor( ch.dbra )  THEN
+        $(
+            //  Beginning of a dependency bracket.  Make sure we are not
+            //  already handling one, and then remember where this position
+            //  is.
+            
+            IF  dfound  THEN  error( "*"%C*" missing before *"%C*"", ch.dket, ch.dbra )
+            
+            dfound  :=  TRUE
+            dpos    :=  length
+            
+            LOOP
+        $)
+        
+        IF  testfor( ch.dket )  THEN
+        $(
+            //  End of a dependency bracket.  Make sure that we are 
+            //  already handling one, and then add the bracketed string to
+            //  the dependency list.
+            
+            LET dbuff  =  VEC string.words
+            LET dlen   =  0
+            LET ditem  =  0
+
+            UNLESS  dfound  DO  error( "Unexpected *"%C*"", ch.dket )
+            
+            dfound  :=  FALSE
+            
+            //  Now, split the string up into its relevant components, adding
+            //  them to the dependency list as we go.
+
+            UNTIL  dpos = length  DO
+            $(
+                LET dch  =  buffer % dpos
+
+                dpos  :=  dpos + 1
+
+                TEST  tagch( dch )  THEN
+                $(
+                    //  Look to make sure that the string is not too long, and
+                    //  complain if it is.
+            
+                    IF  dlen = string.bytes  THEN
+                        error( "Implicit dependency too long" )
+
+                    dlen          :=  dlen + 1
+                    dbuff % dlen  :=  dch
+                $)
+                ELSE
+                $(
+                    //  End of a string, so assuming that we have a tag to deal
+                    //  with, we should add it to the implicit dependency list.
+                   
+                    UNLESS  dlen = 0  DO
+                    $(
+                        dbuff % 0      :=  dlen
+                        ditem          :=  gettagitem( lookuptag( dbuff ) )
+            
+                        ditem!tl.link  :=  scb!scb.arg2
+                        scb!scb.arg2   :=  ditem
+                    $)
+                   
+                    dlen  :=  0
+                $)
+            $)
+            
+            //  When we drop out of that loop, is it likely that we still have
+            //  a dependency item to deal with.
+
+            UNLESS  dlen = 0  DO
+            $(
+                dbuff % 0      :=  dlen
+                ditem          :=  gettagitem( lookuptag( dbuff ) )
+            
+                ditem!tl.link  :=  scb!scb.arg2
+                scb!scb.arg2   :=  ditem
+            $)
+                   
+            LOOP
+        $)
+        
+        //  If it isn't one of those exciting possibilities, then we assume
+        //  that it is a boring bog standard character.
+        
+        length  :=  addchar( buffer, length, ch )
+        ch      :=  rdch()
+    $)
+    REPEAT
+
+    //  If we drop out of that loop, then we have succeeded in reading the
+    //  file, and replenishing the buffer.  We should look to see if we
+    //  have hit end of file, and if so, return this information back to
+    //  the caller.
+    
+    eof  :=  ch = endstreamch  &  length = 0
+    
+    UNLESS  eof  DO  length  :=  addchar( buffer, length, '*N' )
+    
+    IF  ch = '*N'  THEN  linenumber  :=  linenumber + 1
+    
+    selectinput( scb )
+    
+    scb!scb.pos  :=  0
+    scb!scb.end  :=  length
+
+    ch           :=  oldch
+    errorlevel   :=  oldlev
+    errorlabel   :=  oldlab
+    
+    result2      :=  0
+    
+    RESULTIS  NOT eof
+
+
+    //  Error case.  We come here if the input line was too long.  Restore the
+    //  previous state, and enter the error handler of the previous level.
+
+label:
+
+    selectinput( scb )
+    
+    ch          :=  oldch
+    errorlevel  :=  oldlev
+    errorlabel  :=  oldlab
+    
+    longjump( errorlevel, errorlabel )
+$)
+
+
+
+AND specialchar( char )  =  char = ch.all     |  char = ch.destination  |
+                            char = ch.source  |  char = ch.stem
+
+
+
+AND doimport( directory )  BE  UNLESS  directory = NIL  DO
+$(
+//  Handle the ".IMPORT" directive.  We have been given the name of a
+//  directory which it is assumed contains a "Makefile" description of
+//  how to make things in that directory.  Before looking further, look
+//  to see if this directory has already been imported, and if so, there
+//  is no need to read it again.
+
+    LET node  =  lookupnode( directory )
+    
+    IF  node = NIL  THEN
+    $(
+        //  This node does not exist, so we should obtain a lock on the
+        //  directory, and then attempt to parse the Makefile.
+        
+        LET lock  =  locatedir( directory )
+        
+        TEST  lock = 0  THEN
+            error( "Failed to find .IMPORT directory *"%S*"", directory )
+            
+        ELSE
+        $(
+            //  We have found the directory, so we should add a node with this
+            //  lock and name.
+            
+            LET oldnode  =  currentnode
+            LET olddir   =  currentdir
+            LET ok       =  0
+            
+            node         :=  addnode( directory, lock )
+            currentnode  :=  node
+            currentdir   :=  lock
+
+            ok           :=  parsefile( defaultmakefile )
+            currentnode  :=  oldnode
+            currentdir   :=  olddir
+            
+            UNLESS  ok  DO
+                error( "Invalid .IMPORT directory *"%S*"", directory )
+        $)
+    $)
+
+    //  When we come here, we should update the current node with the fact
+    //  that it has imported the new node.
+    
+    addimport( node )
+$)
+
+
+
+AND doinclude( file )  BE  UNLESS  file = NIL  DO
+
+//  Handle the ".INCLUDE" directive.  
+
+    UNLESS  parsefile( file )  DO
+        error( "Invalid .INCLUDE file *"%S*"", file )
+
+
+
+AND doprefix( prefix )  BE  
+$(
+//  Add this prefix to the prefix list.  If the prefix is "NIL", then we should
+//  free the prefix list.
+
+    LET lv.prefixes  =  currentnode + node.prefixes
+
+    TEST  prefix = NIL  THEN
+    $(
+        //  No arguments, so clear the prefix chain.
+        
+        LET prefixes  =  !lv.prefixes
+        
+        UNTIL  prefixes = NIL  DO
+        $(
+            LET link  =  prefixes!tl.link
+            
+            freetagitem( prefixes )
+            
+            prefixes  :=  link
+        $)
+        
+        !lv.prefixes  :=  NIL
+    $)
+    ELSE
+    $(
+        //  We have a prefix given, so we should add this to the end of the
+        //  prefix list.
+
+        LET item  =  gettagitem( prefix )
+        
+        UNTIL  !lv.prefixes = NIL  DO  lv.prefixes  :=  !lv.prefixes + tl.link
+
+        item!tl.link  :=  NIL
+        !lv.prefixes  :=  item
+    $)
+$)
+
+
+
+AND dosuffix( suffix )  BE  
+$(
+//  Add this suffix to the suffix list.  If the suffix is "NIL", then we should
+//  free the suffix list.
+
+    LET lv.suffixes  =  currentnode + node.suffixes
+
+    TEST  suffix = NIL  THEN
+    $(
+        //  No arguments, so clear the suffix chain.
+        
+        LET suffixes  =  !lv.suffixes
+        
+        UNTIL  suffixes = NIL  DO
+        $(
+            LET link  =  suffixes!tl.link
+            
+            freetagitem( suffixes )
+            
+            suffixes  :=  link
+        $)
+        
+        !lv.suffixes  :=  NIL
+    $)
+    ELSE
+    $(
+        //  We have a suffix given, so we should add this to the end of the
+        //  suffix list.
+
+        LET item  =  gettagitem( suffix )
+        
+        UNTIL  !lv.suffixes = NIL  DO  lv.suffixes  :=  !lv.suffixes + tl.link
+
+        item!tl.link  :=  NIL
+        !lv.suffixes  :=  item
+    $)
+$)
+
+
+
+AND doignore( item )  BE  currentnode!node.faillevel  :=  maxint
+
+
+
+AND addnode( name, lock )  =  VALOF
+$(
+//  Allocate the store to contain the details of a new node, and add this
+//  node to the node list.
+
+    LET node      =  getstore( node.size )
+    LET tag       =  lookuptag( name )
+    
+    LET macros    =  defaultnode = NIL  ->  NIL,  defaultnode!node.macros
+    LET rules     =  defaultnode = NIL  ->  NIL,  defaultnode!node.rules
+    LET prefixes  =  defaultnode = NIL  ->  NIL,  defaultnode!node.prefixes
+    LET suffixes  =  defaultnode = NIL  ->  NIL,  defaultnode!node.suffixes
+    
+    node!node.link       :=  nodelist
+    node!node.tag        :=  tag
+    node!node.lock       :=  lock
+    node!node.imports    :=  NIL
+    node!node.macros     :=  macros
+    node!node.rules      :=  rules
+    node!node.prefixes   :=  prefixes
+    node!node.suffixes   :=  suffixes
+    node!node.faillevel  :=  faillevel
+    node!node.files      :=  NIL
+    node!node.dates      :=  NIL
+
+    RESULTIS  node
+$)
+
+
+
+AND addimport( node )  BE
+$(
+//  Add the fact that the node given has been imported.  The current node
+//  is the one updated.
+
+    LET import  =  getstore( import.size )
+    
+    import!import.link        :=  currentnode!node.imports
+    import!import.node        :=  node
+    
+    currentnode!node.imports  :=  import
+$)
+
+
+
+AND lookupnode( name )  =  VALOF
+$(
+//  Scan the node list, looking for a node which matches the name given.
+
+    LET node  =  nodelist
+    LET tag   =  lookuptag( name )
+
+    UNTIL  node = NIL  DO
+    $(
+        IF  tag = node!node.tag  THEN  RESULTIS  node
+
+        node  :=  node!node.link
+    $)
+
+    RESULTIS  NIL
+$)
+
+
+
+AND checktag()  =  VALOF
+$(
+//  Read the next item, and ensure that it is a tag.
+
+    UNLESS  tagch( ch )  DO  error( "Tag expected" )
+
+    RESULTIS  readtag()
+$)
+
+
+
+AND readtag()  =  VALOF
+$(
+//  This is a tag item, and so we should read it into a buffer, and then
+//  add it to the tag data structure.
+
+    LET buffer  =  VEC string.words
+    LET length  =  0
+
+    WHILE  tagch( ch )  DO
+    $(
+        IF  length > string.bytes  THEN  error( "Tag name too long" )
+
+        length           :=  length + 1
+        buffer % length  :=  ch
+        ch               :=  rdch()
+    $)
+
+    buffer % 0  :=  length
+
+    RESULTIS  lookuptag( buffer )
+$)
+
+
+
+AND tagch( char )  =  'A' <= char <= 'Z'  |
+                      'a' <= char <= 'z'  |
+                      '0' <= char <= '9'  |
+                      char = '.'  |  char = ':'  |  char = '-'
+
+
+
+AND lookuptag( name )  =  VALOF
+$(
+//  Scan the tag hash table for this name, and return a permanently allocated
+//  piece of store for it.
+
+    LET hash   =  hashvalue( name )
+    LET entry  =  tagtable!hash
+
+    UNTIL  entry = NIL  DO
+    $(
+        //  Scan this list, looking for a previously defined tag entry.
+
+        LET hashname  =  entry!he.name
+
+        IF  compare( name, hashname )  THEN  RESULTIS  hashname
+
+        entry  :=  entry!he.link
+    $)
+
+    //  If we drop through here, then we have failed to find the entry we want,
+    //  and so we should add a new entry to the hash table.
+
+    entry           :=  getstore( he.size )
+    name            :=  copystring( name )
+
+    entry!he.link   :=  tagtable!hash
+    entry!he.name   :=  name
+    tagtable!hash   :=  entry
+
+    RESULTIS  name
+$)
+
+
+
+AND copystring( string )  =  VALOF
+$(
+//  Make a copy of the given string in heap memory.
+
+    LET length  =  string % 0
+    LET store   =  getstore( length/bytesperword )
+
+    FOR  i = 0  TO  length  DO  store % i  :=  string % i
+
+    RESULTIS  store
+$)
+
+
+
+AND hashvalue( name )  =  VALOF
+$(
+//  Return the hash value of the name given.
+
+    LET hash  =  0
+
+    FOR  i = 0  TO  name % 0  DO  hash  :=  (hash << 1)  +  name % i
+
+    RESULTIS  (ABS hash)  REM  tagtablesize
+$)
+
+
+
+AND compare( s1, s2 )  =  VALOF
+$(
+//  Compare two strings, and return a boolean only if they are exactly
+//  equal.
+
+    LET l1  =  s1 % 0
+    LET l2  =  s2 % 0
+
+    UNLESS  l1 = l2  DO  RESULTIS  FALSE
+    
+    FOR  i = 1  TO  l1  DO
+        UNLESS  s1 % i  =  s2 % i  DO
+            RESULTIS  FALSE
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND checkfor( char, msg, arg1, arg2, arg3, arg4 )  BE
+
+//  Make sure that the current character is the one expected, otherwise
+//  throw out an error message.
+
+    UNLESS  testfor( char )  DO  
+        error( msg, arg1, arg2, arg4, arg4 )
+
+
+
+AND testfor( char )  =  VALOF
+$(
+//  Look to see whether the next character to be read is the character given.
+
+    TEST  ch = char  THEN
+    $(
+        ch  :=  rdch()
+
+        RESULTIS  TRUE
+    $)
+    ELSE  RESULTIS  FALSE
+$)
+
+
+
+AND getscb()  =  VALOF
+$(
+//  Allocate a new stream control block to be used for parsing a make
+//  file.
+
+    TEST  freescbs = NIL  THEN  RESULTIS  getchunk( scb.arg2 + 1 + buff.words )
+    ELSE
+    $(
+        LET scb  =  freescbs
+        
+        freescbs  :=  scb!scb.link
+        
+        RESULTIS  scb
+    $)
+$)
+
+
+
+AND gettagitem( tag )  =  VALOF
+$(
+//  Allocate a new tag item.
+
+    LET item  =  0
+
+    TEST  freetagitems = NIL  THEN  item  :=  getstore( tl.size )
+    ELSE
+    $(
+        item          :=  freetagitems
+        freetagitems  :=  item!tl.link
+    $)
+
+    item!tl.tag  :=  tag
+    
+    RESULTIS  item
+$)
+
+
+
+AND freescb( scb )  BE
+$(
+//  Add this SCB buffer to the free chain.
+
+    scb!scb.link  :=  freescbs
+    freescbs      :=  scb
+$)
+
+
+
+AND freetagitem( item )  BE
+$(
+//  Add this tag item to the free chain.
+
+    item!tl.link  :=  freetagitems
+    freetagitems  :=  item
+$)
+
+
+
+AND skiplayout()  BE
+
+//  Skip blanks and newlines, waiting for the first real character.
+
+    WHILE  ch = '*S'  |  ch = '*T'  |  ch = '*N'  DO
+        ch  :=  rdch()
+
+
+
+AND skipblanks()  BE
+
+//  Skip blanks waiting for the first real character or a newline.
+
+    WHILE  ch = '*S'  |  ch = '*T'  DO
+        ch  :=  rdch()
+
+
+
+AND readtaglist()  =  VALOF
+$(
+//  Read as many tags as possible, and add them to a list.
+
+    LET list   =  NIL
+    LET liste  =  @list
+
+    skipblanks()
+
+    WHILE  tagch( ch )  DO
+    $(
+        LET item  =  gettagitem( readtag() )
+        
+        item!tl.link  :=  NIL
+        !liste        :=  item
+        liste         :=  item + tl.link
+        
+        skipblanks()
+    $)
+
+    RESULTIS  list
+$)
+
+
+
+AND readline()  =  VALOF
+$(
+//  Skip blanks, and then read the rest of the line, turning it into a
+//  rope.  We use ropes rather than strings since concatenated lines can
+//  get amazingly long!
+
+    LET rope  =  rope.getrope()
+
+    skipblanks()
+
+    UNTIL  ch = '*N'  |  ch = endstreamch  DO
+    $(
+        rope.addbyte( rope, ch )
+
+        ch  :=  rdch()
+    $)
+
+    RESULTIS  rope
+$)
+
+
+
+AND addmacro( tag, value )  BE
+$(
+//  Add this macro tag to the current node.
+
+    LET macro  =  getstore( macro.size )
+    
+    macro!macro.link         :=  currentnode!node.macros
+    macro!macro.tag          :=  tag
+    macro!macro.value        :=  value
+
+    currentnode!node.macros  :=  macro
+
+    IF  printing  THEN
+    $(
+        //  Write out the macro assignment.  We must be careful here since the
+        //  macro name (always short) is held as a STRING, whereas the macro
+        //  value (which may be large) is held as a ROPE.
+
+        writef( "%S = ", tag )
+
+        rope.write( value )
+
+        writes( "*N*N" )
+    $)
+$)
+
+
+
+AND lookupmacro( tag )  =  VALOF
+$(
+//  Scan the current macro list looking for the entry for this tag.
+
+    LET macro  =  currentnode!node.macros
+
+    UNTIL  macro = NIL  DO
+    $(
+        IF  macro!macro.tag = tag  THEN  RESULTIS  macro!macro.value
+        
+        macro  :=  macro!macro.link
+    $)
+
+    RESULTIS  NIL
+$)
+
+
+
+AND addrope( buffer, length, rope )  =  VALOF
+$(
+//  Add the characters of this rope to the buffer given.  Not a terribly
+//  efficient way of doing it, but efficiency is not really an issue here.
+
+    LET rlen  =  rope.length( rope )
+
+    FOR  i = 0  TO  rlen-1  DO
+        length  :=  addchar( buffer, length, rope.getbyte( rope, i ) )
+
+    RESULTIS  length
+$)
+
+
+
+AND addchar( buffer, length, char )  =  VALOF
+$(
+//  Add this character to the buffer, checking the length as we go.
+
+    IF  length = buff.bytes  THEN  error( "Input line >%N characters", buff.bytes )
+    
+    //  We have not run off the end of the buffer yet, so we should put this
+    //  character in the buffer and return.
+
+    buffer % length  :=  char
+
+    RESULTIS  length + 1
+$)
+
+
+
+AND isassignment( name )  =  VALOF
+$(
+//  Return a boolean saying whether this name is an assignment or not.
+
+    LET length  =  name % 0
+
+    TEST  length = 0
+        THEN  RESULTIS  TRUE
+        ELSE  RESULTIS  name % length  =  ':'
+$)
+
+
+
+AND newrule( tags, depends )  =  VALOF
+$(
+//  Allocate some store for a new rule.
+
+    LET rule  =  getstore( rule.size )
+
+    rule!rule.tags      :=  tags
+    rule!rule.depends   :=  depends
+    rule!rule.commands  :=  NIL
+    rule!rule.queue     :=  rule+rule.commands
+
+    IF  printing  THEN
+    $(
+        writelist( tags )
+        writef( "%C  ", ch.depend )
+        writelist( depends )
+        newline()
+    $)
+
+    RESULTIS  rule
+$)
+
+
+
+AND addrule( rule )  BE
+$(
+//  Add this rule given to the list of rules for this node.
+
+    IF  printing  THEN  newline()
+
+    rule!rule.link          :=  currentnode!node.rules
+    currentnode!node.rules  :=  rule
+$)
+
+
+
+AND addcommand( rule, line )  =  VALOF
+$(
+//  Allocate a new command item, and add it to the end of the command
+//  queue.
+
+    LET command  =  getstore( command.size )
+    LET queue    =  rule!rule.queue
+
+    IF  printing  THEN  
+    $(
+        //  Add this line to the list of commands for this node.  The line,
+        //  which may be quite long, is stored as a ROPE.
+
+        LET length  =  rope.length( line )
+        
+        wrch( '>' )
+        
+        FOR  i = 0  TO  length-1  DO
+        $(
+            LET char  =  rope.getbyte( line, i )
+            
+            wrch( char = ch.special  ->  ch.macro,  char )
+        $)
+        
+        newline()
+    $)
+        
+    command!command.link  :=  NIL
+    command!command.line  :=  line
+
+    !queue           :=  command
+    rule!rule.queue  :=  command+command.link
+$)
+
+
+
+AND writelist( list )  BE
+
+//  Write out the list given.
+
+    UNTIL  list = NIL  DO
+    $(
+        writes( list!tl.tag )
+            
+        list  :=  list!tl.link
+        
+        UNLESS  list = NIL  DO  wrch( '*S' )
+    $)
+
+

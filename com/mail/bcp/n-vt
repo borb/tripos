@@ -1,0 +1,1730 @@
+/***********************************************************************
+**             (C) Copyright 1980  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+  #######   ##    ##  ##    ##  ########  ##    ##    ####    ##    ##
+  ########  ###  ###  ##    ##  ########  ##    ##   ######   ###   ##
+  ##    ##  ########  ##    ##     ##     ##    ##  ##    ##  ####  ##
+  ########  ## ## ##  ##    ##     ##     ########  ########  ## ## ##
+  #######   ##    ##  ##    ##     ##     ##    ##  ##    ##  ##  ####
+  ##  ##    ##    ##   ##  ##      ##     ##    ##  ##    ##  ##  ####
+  ##   ##   ##    ##    ####       ##     ##    ##  ##    ##  ##   ###
+  ##    ##  ##    ##     ##        ##     ##    ##  ##    ##  ##    ##
+
+************************************************************************
+**    Author:   Brian Knight                      September 1980      **
+***********************************************************************/
+
+
+// This program replaces the console handler in the TRIPOS systems
+// on machines whose only peripheral is the Ring, and which are loaded
+// by the Resource Manager.
+//
+// It provides both terminal handling and session management functions.
+// When no virtual terminal is connected, output lines are discarded.
+//
+// Connection of a virtual terminal is done by sending an "ACT.CONNECT"
+// packet to this task, containing the stream ids of the byte streams.
+//
+// Modifications:
+//  15 Jan 1981 by BJK: Support for control code 156 & issuing of
+//                      virtual bells for unwanted control chars.
+//  25 Jan 1981 by BJK: Refreshing of Ring Authentication UIDsets while
+//                      a user is connected, and deletion of them at
+//                      the end of a session.
+//  13 Feb 1981 by BJK: Response "***-" to VTP BREAK (=BS RESET)
+//   8 Jun 1981 by BJK: Removal of facility which allowed disconnection
+//                      of the virtual terminal without giving the
+//                      machine back to RM.
+//                      Tidies to Single Char Mode.
+//   9 Jun 1981 by BJK: Message warning that RM time allocation has expired.
+//                      Removal of checks on RM's clock speed (for RMINFO).
+//  10 Jun 1981 by BJK: Addition of ACT.START.RM.REFRESH packet type
+//                      to turn on refreshing without handing over byte streams.
+//  15 Jul 1981 by BJK: Test for 'non-fatal' RCs from RM
+//  16 Jul 1981 by BJK: X after VTP break creates an eXtra CLI task.
+//   3 Nov 1981 by BJK: Altered to remove word length dependencies.
+//  24 Nov 1981 by BJK: Parity bit stripped on all data chars output.
+//  26 Nov 1981 by BJK: A new CLI created after ***-X starts with a
+//                      copy of the HOME: directory as current directory.
+//   1 Dec 1981 by BJK: Single character input handling rationalized and
+//                      buffering installed.
+//  17 Apr 1982 by  MY: Support for ACT.HOW.MUCH.INPUT and ACT.READ.BUFFER
+//                      implemented for Single Char Mode.
+//  22 Apr 1982 by BJK: Machine released by call of 'info' RMSSP with
+//                      timeout of zero (rather than special 'free' function).
+//                      Released machine put into dynamic stop to halt further
+//                      activity.
+//                      VTP 'ignore next byte' control code implemented
+//  20 May 1982 by BJK: ACT.READ made to work properly in SC mode.
+//                      Clearing of buffers on BS RESET improved.
+//                      '*E', '*N' no longer force BS transmission if
+//                      they occur in the middle of user buffers.
+//                      ACT.xxxx manifests moved to IOHDR.
+//  30 Jun 1982 by BJK: Refresh functions and header moved into separate files.
+//                      Result for unknown packet type tidied.
+//                      Entries included for setting and reading terminal
+//                        info vector (Act.set.termvec and Act.read.termvec).
+//                      Input tabs passed on (not expanded to spaces).
+//                      Incompatible change to ACT.READ.BUFFER: Chars returned
+//                        in buff%0 (not buff%1) onwards.
+//                      ACT.SET.CURRENTINPUTTASK implemented.
+//                      Bug fixed in SC mode circular buffer - it used not
+//                        to detect "buffer full" until at least one char read.
+//  15 Jul 1982 by BJK: Further step towards new VTP: all control sequences
+//                        issued are prefixed by the "ignore next byte" code
+//                        and a VTP length code.
+//  15 Sep 1982 by BJK: The new CLI created by "break X" has the same root
+//                        stack size, global vector size, and command stack
+//                        size as CLI task 1.
+//  21 Sep 1982 by BJK: VTP.RDCH mended to cope with VTP with length byte in
+//                        end of line code after reading break key.
+//  27 Sep 1982 by BJK: Act.Read.Buffer altered again!  RES1 is now always the
+//                        actual number of chars returned, RES2 normally zero,
+//                        but -1 if stream ended or mode changed.
+//  30 Jun 1983 by BJK: VTP upgrade: length bytes interpreted properly.
+//                        ACT.RETURN.READ.PACKETS implemented.
+//  13 Jan 1984 by BJK: CLI.INIT improved to cope with libraries which
+//                        define START. Also, the priority of the new CLI
+//                        is chosen in a loop of increasing priority, to
+//                        increase the chance that ***-X will work when an
+//                        earlier CLI is in a CPU loop.
+
+SECTION "RMVTHAND"
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "RINGHDR"
+GET "TERMHDR"
+GET ":SYS.RESMAN.RMVTHANDHDR"
+GET "CLIHDR"
+GET "MANHDR"
+
+
+
+
+LET start(parm.pkt) BE
+    $(
+    LET ibuf                = VEC (input.buffer.upb + 1) / bytesperword
+    LET read.co.pkt         = 0 // Packets that the coroutines
+    LET write.co.pkt        = ? // are currently waiting for
+    LET clock.co.pkt        = ?
+
+    // Finished with parameter packet...send back...
+    qpkt(parm.pkt)
+
+    initio()
+
+
+    // Create all the coroutines
+
+    write.co := createco(handleoutput,  write.co.stacksize)
+    read.co  := createco(handleinput,   read.co.stacksize)
+    clock.co := createco(clock,         clock.co.stacksize)
+
+    // Initialise states, etc...
+
+    input.buffer                := ibuf
+    read.pkt.queue              := 0
+    write.pkt.queue             := 0
+    input.line.queue            := 0
+    line.ended                  := FALSE
+    stream.ended                := FALSE
+    shared.output               := TRUE
+    outflags                    := 0
+    rm.refreshes.wanted         := FALSE // Wait until first connection
+                                         // or ACT.START.RM.REFRESH packet
+    free.machine                := TRUE
+    byte.streams.gone           := TRUE
+    reset.denial.to.send        := FALSE
+    reset.has.occurred          := FALSE
+    reading.break.key           := FALSE
+    seconds.since.last.io       := 0
+    new.mail.announced          := TRUE // Assume already announced at logon
+    bytes.left.in.control.seq   := 0
+
+    set.single.char.input.mode()
+
+    // Clear globals used to hold console info
+
+    FOR i=ug TO ffg-1 DO (@globsize)!i := 0
+
+    // Replace BLIB pktwait
+    blib.pktwait := pktwait
+    pktwait      := copktwait
+
+
+    // Initialise coroutines
+    // READ.CO will be called when the first ACT.CONNECT packet arrives.
+    // (It must not be called before there is a byte stream).
+
+    write.co.pkt := callco(write.co)
+    clock.co.pkt := callco(clock.co)
+
+//*****************************************************************************
+//                            Main loop - no exit                             *
+//*****************************************************************************
+
+    WHILE TRUE
+    DO $(
+       LET pkt          = ?
+       LET sender       = ?
+       // Activate the write coroutine if there is something special
+       // to output and it is not already busy.
+
+       IF outflags \= 0 & write.co.pkt=0 THEN write.co.pkt := callco(write.co)
+
+       pkt      := taskwait()
+       sender   := pkt ! pkt.id
+
+       // Test for byte stream reset.
+
+       IF (NOT byte.streams.gone) &  bsp.test.reset(cis)
+       THEN
+         $(
+         reset.has.occurred             := TRUE
+         reset.denial.to.send           := TRUE
+
+         // A new input request must be sent; this is not done
+         // until it is known who issued the reset, as the form
+         // of input request issued depends on whether or not
+         // there is a break key letter to be read.  The flag
+         // is set in VTP.RDCH().
+         $)
+
+       // Is the packet expected by one of the coroutines?
+
+       IF pkt=read.co.pkt  THEN $( read.co.pkt  := callco(read.co, pkt); LOOP $)
+       IF pkt=write.co.pkt THEN $( write.co.pkt := callco(write.co,pkt); LOOP $)
+       IF pkt=clock.co.pkt THEN $( clock.co.pkt := callco(clock.co,pkt); LOOP $)
+
+       // No - see what type it is
+
+       SWITCHON pkt ! pkt.type
+       INTO
+         $(
+         DEFAULT:  returnpkt(pkt, FALSE, Error.ActionNotKnown)  // Unknown type
+                   ENDCASE
+
+         CASE act.connect:
+              // Connect this task to a virtual terminal.
+              // This packet type is an error if it is already connected.
+
+              TEST byte.streams.gone
+              THEN
+                $(
+                byte.streams.gone       := FALSE
+                rm.refreshes.wanted     := TRUE
+                outflags                := outflags | flag.input.request.to.send
+                input.bs                := pkt ! pkt.arg1
+                output.bs               := pkt ! pkt.arg2
+                current.task            := pkt ! pkt.arg3
+                machine.id              := pkt ! pkt.arg4
+                terminal.number         := pkt ! pkt.arg5
+                output.bs ! scb.type    := ABS (output.bs ! scb.type) // Force non-interactive stream
+
+                returnpkt(pkt, 0, 0)
+
+                selectinput(input.bs)
+                selectoutput(output.bs)
+
+                // Set up a dummy blank input line to provoke a prompt
+
+                $(
+                LET qp          = findpkt(@read.pkt.queue, current.task)
+
+                IF !qp \= 0
+                THEN
+                  $(
+                  LET buff        = getvec(buf.data.size)
+                  LET qb          = ?
+                  buff ! buf.task        := current.task
+                  buff ! buf.end         := 1   // One character
+                  (buff + buf.data.size)%0 := '*n'
+                  qb := add.to.queue(@input.line.queue, buff)
+                  transmit(qp, qb)
+                  $)
+                $)
+
+                // Prod both the coroutines:
+                //  - to get the input coroutine into RDCH
+                //  - to get the output coroutine to start any pending output
+
+                IF read.co.pkt=0  THEN read.co.pkt     := callco(read.co)
+                IF write.co.pkt=0 THEN write.co.pkt    := callco(write.co)
+                $)
+              ELSE returnpkt(pkt, machine.id, terminal.number) // Already connected
+
+              LOOP
+
+
+         CASE act.disconnect:
+              // Disconnect the virtual terminal from this handler, by
+              // closing the byte streams and letting the input
+              // coroutine do the rest.
+
+              outflags := outflags | flag.disconnection.pending
+
+              // ARG1 is TRUE iff the machine should be given back to the
+              // resource manager.  The facility for disconnection without
+              // handing back has been removed (as a matter of policy - June 81)
+              // so this argument is ignored.
+
+              free.machine              := TRUE
+//              free.machine              := pkt ! pkt.arg1
+              IF write.co.pkt = 0 THEN write.co.pkt := callco(write.co)
+
+              IF read.co.pkt=0 & byte.streams.gone
+              THEN read.co.pkt := callco(read.co) // Causes "FREE" SSP
+              returnpkt(pkt, TRUE, 0)
+              LOOP
+
+
+         CASE act.sc.mode:
+              // Set or unset single character input mode according
+              // to the value of ARG1.
+
+              current.task              := pkt ! pkt.id  // Becomes owner of terminal
+
+              IF pkt!pkt.arg1 = in.single.char.input.mode               //PB
+              THEN returnpkt(pkt, TRUE, 0) <>   LOOP                    //PB
+              // The byte streams must be reset in order to get the
+              // new line request to the terminal concentrator.
+
+              outflags := outflags | flag.reset.to.send
+
+              TEST pkt ! pkt.arg1
+              THEN
+                $( // Going into single char input mode
+                set.single.char.input.mode()
+                lose.pending.input() // remove any typed-ahead lines
+                $)
+              ELSE set.line.input.mode()
+
+              return.all.read.packets(current.task) // Clear all outstanding read packets for this task
+
+              // Activate write coroutine to send RESET etc.
+              IF write.co.pkt=0 THEN write.co.pkt := callco(write.co)
+
+              returnpkt(pkt, TRUE, 0)
+              LOOP
+
+
+
+         CASE act.findinput:
+              // Open a new input stream
+              pkt!pkt.arg1!scb.func1 := actread
+              pkt!pkt.arg1!scb.func3 := actendinput
+              returnpkt(pkt, -1, 0)
+              LOOP
+
+
+         CASE act.findoutput:
+              // Open a new output stream
+              pkt!pkt.arg1!scb.func2 := actwrite
+              pkt!pkt.arg1!scb.func3 := actendoutput
+              returnpkt(pkt, -1, 0)
+              LOOP
+
+
+         CASE act.endinput:
+         CASE act.endoutput:
+              // Close a stream: nothing to do
+              returnpkt(pkt, 0, 0)
+              LOOP
+
+
+         CASE act.sc.read:
+              $(
+              // Deliver one input character completely uninterpreted
+              // In line input mode this is illegal: ENDSTREAMCH is returned.
+              // In single character input mode we deliver the next character
+              // from the circular input buffer if there is one, otherwise
+              // append this packet to READ.PKT.QUEUE until one comes.
+
+              LET ch = ?
+
+              IF NOT in.single.char.input.mode
+              THEN $( returnpkt(pkt, endstreamch, 0); LOOP $) // Illegal call
+
+              ch := get.input.char() // get next char from circular buffer
+
+              TEST ch = endstreamch
+              THEN add.to.queue(@read.pkt.queue, pkt) // No character yet
+              ELSE returnpkt(pkt, ch, 0)              // Return the character
+
+              ENDCASE
+              $)
+
+
+         CASE act.read:
+              $(
+              // Return an input line for this task.
+              // In single character input mode send all characters
+              // currently buffered.
+
+              TEST in.single.char.input.mode
+              THEN
+                $(
+                // Return buffered chars (as a line) or queue the packet
+
+                TEST input.no.of.chars = 0
+                THEN add.to.queue(@read.pkt.queue, pkt) // No char yet
+                ELSE return.replenish.buffer (pkt)
+                $)
+              ELSE
+                $(
+                // Return a line or queue the request packet
+                LET qb = findpkt(@input.line.queue, pkt.taskid ! pkt)
+                LET qp = add.to.queue(@read.pkt.queue, pkt)
+
+                IF !qb \= 0 THEN transmit(qp,qb) // Line waiting
+                $)
+
+              ENDCASE
+              $)
+
+         CASE act.how.much.input:
+              // Return number of typed ahead chars
+              TEST in.single.char.input.mode
+              THEN returnpkt (pkt, input.no.of.chars, 0)
+              ELSE
+                $(
+                // Count up the number of characters in all pending lines
+                // for the requesting task. Do NOT include characters from
+                // the current line buffer, as the user cannot ask for
+                // them anyway (and they may be revoked).
+
+                LET count = 0
+                LET queue = input.line.queue
+                LET task  = pkt ! pkt.taskid
+
+                UNTIL queue = 0
+                DO $(
+                   IF queue ! buf.task = task
+                   THEN count := count + ABS (queue ! buf.end)
+                   queue := ! queue
+                   $)
+
+                returnpkt (pkt, count, 0)
+                $)
+
+              ENDCASE
+
+
+         CASE act.read.buffer:
+              // Return a buffer of characters
+              IF NOT in.single.char.input.mode
+              THEN $( returnpkt (pkt, 0, -1); LOOP $)   // Illegal call
+
+              $( LET buffer  = pkt ! pkt.bufarg
+                 LET max.req = pkt ! pkt.endarg
+                 LET min.req = pkt ! pkt.minarg
+
+                 TEST input.no.of.chars = 0
+                 THEN
+                   TEST min.req = 0                     // Easily satisfied?
+                   THEN returnpkt (pkt, 0, 0)
+                   ELSE add.to.queue (@read.pkt.queue, pkt) // no char yet
+                 ELSE
+                   $(
+                   LET real.no = max.req < input.no.of.chars ->
+                                                 max.req, input.no.of.chars
+                   FOR i = 0 TO real.no-1 DO buffer%i := get.input.char()
+                   returnpkt (pkt, real.no, 0)
+                   $)
+                 ENDCASE
+              $)
+
+
+         CASE act.write:
+         CASE act.sc.write:
+              // Write an output line
+              add.to.queue(@write.pkt.queue,pkt)
+
+              // Wake up write.co if not busy
+              IF write.co.pkt=0 THEN write.co.pkt := callco(write.co)
+              ENDCASE
+
+
+         CASE act.start.rm.refresh:
+              // Start operating RM's dead mans's handle.
+              rm.refreshes.wanted        := TRUE
+              returnpkt(pkt, TRUE, 0)
+              ENDCASE
+
+
+         CASE act.set.termvec:
+              // Set terminal info vector.
+              freevec(term.info.vec)  // Free old one (if any)
+              term.info.vec     := pkt ! pkt.arg1
+              returnpkt(pkt, TRUE, 0)
+              ENDCASE
+
+
+         CASE act.read.termvec:
+              // Read terminal info vector.
+              returnpkt(pkt, term.info.vec, 0)
+              ENDCASE
+
+
+         CASE act.set.currentinputtask:
+              $(
+              // Set task to which input is directed, and whether this task
+              // is the only one allowed to write output.
+
+              LET old.task      = current.task
+              LET old.shared    = shared.output
+
+              current.task      := pkt ! pkt.arg1
+              shared.output     := pkt ! pkt.arg2
+
+              returnpkt(pkt, old.task, old.shared) // Return old values
+              ENDCASE
+              $)
+
+
+         CASE act.return.read.packets:
+              $( // Return all outstanding read packets to the specified task or calling task.
+              LET arg1  = pkt ! pkt.arg1
+              return.all.read.packets(arg1=0 -> pkt!pkt.id, arg1)
+              returnpkt(pkt, TRUE, 0)
+              ENDCASE
+              $)
+         $)
+
+
+       $) // End of main loop
+
+    $) // End of START
+
+
+
+
+/*******************************************************************************
+*           I/O routines installed in stream control blocks                    *
+*******************************************************************************/
+
+
+AND actendinput(scb) = VALOF
+    $( // Called by ENDREAD()
+    flush.input(scb)
+    sendpkt(notinuse, ABS (scb!scb.type), act.endinput)
+    RESULTIS TRUE
+    $)
+
+AND flush.input(scb) BE
+    $(
+    IF scb.buf!scb \= -1 THEN freevec(scb.buf!scb - buf.data.size)
+    scb.buf ! scb := -1
+    $)
+
+AND actread(scb) = VALOF
+    $(
+    flush.input(scb)
+
+    // Check for @q typed previously
+    IF scb.arg1 ! scb = 0 THEN RESULTIS FALSE
+
+    scb.buf!scb := sendpkt(-1,-scb.type!scb, act.read)
+
+    // Check for @q typed now
+    IF result2 <= 0 THEN $( scb.arg1!scb := 0; result2 := -result2 $)
+
+    scb.end ! scb := result2
+    RESULTIS result2 > 0
+    $)
+
+AND actendoutput(scb) = VALOF
+    $( // Called by ENDWRITE
+    flush.output(scb)
+    sendpkt(notinuse, ABS (scb!scb.type), act.endoutput)
+    RESULTIS TRUE
+    $)
+
+AND flush.output(scb) BE
+    IF scb.buf ! scb \= -1
+    THEN sendpkt(-1,-scb.type!scb,act.write,?, ?, scb.buf!scb, scb.pos!scb)
+
+AND actwrite(scb) = VALOF
+    $(
+    // Get new buffer for next line
+    flush.output(scb)
+    scb.buf ! scb := getvec(console.line.words)
+    scb.end ! scb := console.line.chars
+    RESULTIS scb.buf ! scb \= 0
+    $)
+
+
+
+/*******************************************************************************
+*                         Input VTP Handling                                   *
+*******************************************************************************/
+
+// There are four 'read character' routines here, corresponding to the four
+// protocol levels:
+//
+// LOWLEVEL.RDCH        reads one character from the byte stream with no interpretation,
+//                      and updates the count of how many characters remain in
+//                      the current control sequence.
+//
+// READ.CHAR.OR.CONTROL filters out VTP length codes.
+//                      It is called only when RMVTHAND considers that it is
+//                      not reading a control sequence: if any bytes remain to
+//                      be read from the last control sequence they are
+//                      swallowed before proceeding.
+//                      If it reads a VTP length code (with length > 0) then
+//                      it records the fact that we are reading a control sequence
+//                      and its length, and returns the following control
+//                      byte specially marked.
+//
+// VTP.RDCH             filters out VTP control sequences.
+//                      It calls READ.CHAR.OR.CONTROL normally, and LOWLEVEL.RDCH
+//                      to read the bytes inside a control sequence.
+//
+// HIGHLEVEL.RDCH       filters out control codes directed at the terminal
+//                      handler itself. Any character it returns is a real
+//                      data character.
+
+AND lowlevel.rdch() = VALOF
+    $(
+    // Read one byte from the byte stream, and update the count of bytes
+    // remaining to be read in the current control sequence (if we are in one).
+    // Returns RESETCH if a byte stream reset occurs.
+
+    LET byte    = rdch()        // This is the only direct call of RDCH on
+                                // the input byte stream.
+
+    IF reset.has.occurred
+    THEN $( reset.has.occurred := FALSE; bytes.left.in.control.seq := 0; RESULTIS resetch $)
+
+    IF bytes.left.in.control.seq > 0
+    THEN bytes.left.in.control.seq := bytes.left.in.control.seq - 1
+
+    RESULTIS byte
+    $)
+
+
+AND read.char.or.control() = VALOF
+    $(
+    // Read a character or the first byte of a VTP control sequence.
+    // The trailing bytes of the last control sequence (if any) are
+    // swallowed before proceeding.
+    // If a byte with the top bit set is read, then the low 7 bits give
+    // the length of the control sequence and the next byte is a VTP
+    // control code. A control sequence of length 0 has to be treated specially,
+    // as no control byte follows it.
+    //
+    // The result is either a data character, or a VTP control byte
+    // with the VTP.CONTROL.MARKER bit set.
+
+    LET byte    = ?
+
+    // Swallow any remaining bytes of the last control sequence, and then
+    // read the next byte.
+
+    UNTIL bytes.left.in.control.seq = 0 DO lowlevel.rdch()
+    byte        := lowlevel.rdch()
+
+    // If a reset has occurred or the stream has closed, then pass the code straight up
+
+    IF byte=resetch | byte=endstreamch THEN RESULTIS byte
+
+    TEST (byte & control.length.code) \= 0
+    THEN
+      $( // This is a VTP length code byte
+      bytes.left.in.control.seq := byte & control.length.mask
+
+      IF bytes.left.in.control.seq=0 THEN LOOP // Special case - no control byte
+
+      // Return VTP control byte marked specially
+      RESULTIS lowlevel.rdch() | vtp.control.marker
+      $)
+    ELSE RESULTIS byte  // Data character
+    $) REPEAT   // Loop to dispose of length bytes with length=0
+
+
+AND vtp.rdch() = VALOF
+    $(
+    // Get the next input character, acting on any Virtual Terminal Protocol
+    // control codes
+
+    LET char                    = read.char.or.control()
+    seconds.since.last.io       := 0
+
+    // Has there been a RESET?
+
+    IF char = resetch
+    THEN
+      $(
+      // Set the flag READING.BREAK.KEY here although we have not yet
+      // determined who caused the reset.  This is because this flag
+      // has the side effect of stopping the output coroutine from
+      // printing any output lines while this coroutine is stuck
+      // in RDCH() waiting for the admission/denial byte.
+
+another.reset: // Jump here if a reset occurs while processing the last
+
+      reading.break.key := TRUE
+
+      char                      := read.char.or.control()
+
+      // The setting of the 'input request' flag is delayed until
+      // here as the form of input request required depends
+      // on who caused the reset (indicated by the flag READING.BREAK.KEY).
+
+      outflags  := outflags | flag.input.request.to.send
+
+      TEST char=(control.admit.reset | vtp.control.marker) |
+           char=(control.deny.reset  | vtp.control.marker)
+      THEN
+        $(
+        TEST char = (control.deny.reset | vtp.control.marker)
+        THEN
+          $( // Not a VTP break
+          reading.break.key  := FALSE
+          lose.pending.input()
+          $)
+        ELSE
+          $(
+          // This is a virtual terminal BREAK
+
+          outflags      := outflags | flag.3stars.minus.to.reflect
+//        reading.break.key     := TRUE already done above
+
+          // Read key letters until an acceptable one arrives
+
+            $( // This is a loop
+            LET key.ch  = ?
+
+            outflags    := outflags | flag.3stars.minus.to.reflect
+            key.ch      := capitalch( read.char.or.control[] ) // Cannot get a control sequence here
+
+            // Test for another reset while processing the first
+
+            IF key.ch = resetch THEN GOTO another.reset
+
+            // Swallow 'end of line' code & reason code
+
+            read.char.or.control()      // Gets 'end of line' code
+            lowlevel.rdch()             // Throw away the reason byte.
+
+            // Want to reflect a newline whether or not the key letter is liked
+
+            message     := "" // yes, a fudge using existing mechanisms
+            outflags    := outflags | flag.message.to.print
+
+            SWITCHON key.ch
+            INTO
+              $(
+              DEFAULT:  ENDCASE // No good - get another
+
+              CASE 'B':
+              CASE 'C':
+              CASE 'D':
+              CASE 'E':
+                   // Set a break flag (ctrl/B to ctrl/D break) in the
+                   // current task.
+
+                   setflags(current.task, 1 << (key.ch - 'B') )
+                   BREAK
+
+              CASE 'L': // Set Line rather than single character mode
+                   // Note no RESET needed, as no line request is outstanding
+
+                   set.line.input.mode()
+                   BREAK
+
+              CASE 'N': BREAK // No action - ignore break
+
+              CASE 'S':
+                   // Set single character mode.
+
+                   set.single.char.input.mode()
+                   BREAK
+
+$<SMALL       CASE 'X': // Create an eXtra CLI task
+                   // This must not be allowed until the logon checks have been passed
+                   IF rootnode!rtn.info!rtninfo.ring!ri.uidset = 0 THEN ENDCASE
+
+                   $(
+                   LET new.cli.task = make.new.cli()
+
+                   TEST new.cli.task = 0
+                   THEN ENDCASE // Which will send bell to signal error
+                   ELSE
+                     $(
+                     current.task        := new.cli.task
+                     set.line.input.mode()
+                     BREAK
+                     $)
+                   $)
+$>SMALL       $)
+
+            // Key no good: issue a bell, and a new prompt
+
+            outflags := outflags | flag.input.request.to.send |
+                                   flag.virtual.bell.pending
+            $) REPEAT
+
+          // End of reading break key letters
+
+          reading.break.key     := FALSE
+          outflags      := outflags | flag.input.request.to.send
+          $)
+
+        LOOP // Next char is the real one
+        $)
+      ELSE
+        $( // Not admission or denial of reset
+//      outflags := outflags | flag.message.to.print
+//      message := "****** Bad char after RESET"
+        LOOP // Until get admission or denial
+        $)
+      $)
+
+    // No reset has occurred.
+    // CHAR is either a VTP control code (marked as such), or it is
+    // a data character.
+
+    TEST (char & vtp.control.marker) = 0 | char=endstreamch
+    THEN RESULTIS char  // Normal data character or ENDSTREAMCH
+    ELSE
+      $( // A VTP control code.
+      SWITCHON char & #XFF      // Strip VTP control flag
+      INTO
+        $(
+        CASE control.eoil:
+             $( // End of input line
+             // Issue a read request to get next line sent
+//           IF (outflags & flag.input.request.to.send) \= 0
+//           THEN
+//             $(
+//             outflags := outflags | flag.message.to.print
+//             message  := "****** double setting of IR flag!"
+//             $)
+             outflags := outflags | flag.input.request.to.send
+
+             // Look at reason
+
+             IF NOT in.single.char.input.mode THEN line.ended   := TRUE
+             char       := lowlevel.rdch() // reason byte
+
+             SWITCHON char
+             INTO
+               $(
+               CASE eolcc.requestednum:
+                    // Requested number of chars typed.
+                    // Not logical end of line
+                    // No need to return in single char mode
+                    TEST in.single.char.input.mode THEN LOOP ELSE ENDCASE
+
+               CASE eolcc.logicaleos:
+                    // Logical end of stream
+                    stream.ended := TRUE
+                    IF input.write.ptr >= 0 THEN put.input.char('*n')
+                    ENDCASE
+
+               CASE eolcc.cr:           put.input.char('*C'); ENDCASE // CR without LF
+               CASE eolcc.escape:       put.input.char('*E'); ENDCASE // Leave cursor at line end
+
+               DEFAULT:                 // Treat unknown codes as newline.
+               CASE eolcc.noreason:     // Treat as newline.
+               CASE eolcc.newline:      put.input.char('*N'); ENDCASE
+               $)
+
+             // Longjump out of here because some of the cases
+             // do not return a character at all.
+             longjump(hi.level, not.escape) // Back to handleinput
+             $)
+
+        CASE control.cancelled: // Cancel current input line
+             input.write.ptr := -1
+
+             // Longjump out in case we were in the middle of
+             // a multi-character escape (ctrl/S or ctrl/T).
+             longjump(hi.level, hi.start)
+
+        CASE control.notrans:
+             // Pass the character on uninterpreted.
+             // A bit is set in the high byte to prevent any other level
+             // recognising it; this bit will be stripped when the character
+             // goes into the buffer.
+
+             RESULTIS lowlevel.rdch() | notrans.marker
+
+        CASE control.tab.padding:       LOOP            // Discard pseudo spaces
+        CASE control.tab.mark:          RESULTIS '*T'   // Return tab unexpanded
+
+        CASE control.nondata.char:
+             // The byte which follows is a character for interpretation
+             // here in the terminal handler, and should not be passed
+             // on in the data stream.
+             //
+             // To avoid the possibility of indefinite recursion
+             // (e.g. provoked by ctrl/S, ctrl/S, ctrl/S, ...) no
+             // action is taken on the character here.  Instead, it is
+             // returned with a flag bit set in its top byte, so that
+             // it will be treated specially in READCH().
+             //
+             // A new input request must be issued after reception of this code.
+             $(
+             LET spec.ch  = lowlevel.rdch()
+             outflags     := outflags | flag.input.request.to.send
+             RESULTIS spec.ch | nondata.char.marker
+             $)
+
+
+        DEFAULT:        LOOP          // Unknown control
+        $)      // End of SWITCHON
+      $)        // End of ELSE
+    $) REPEAT
+
+
+
+
+
+AND highlevel.rdch() = VALOF
+    $(
+    // Read one character, acting on any control character escapes directed at
+    // the virtual terminal handler itself.
+    // Note that the reading is done with VTP.RDCH: this avoids indefinite
+    // recursion if significant control characters should appear in the data
+    // following another significant control character.
+    //
+    // The character returned is a real data character, all protocol levels
+    // having been stripped off.
+    // Returns ENDSTREAMCH if there are no byte streams.
+
+    LET char    = ?
+
+    IF byte.streams.gone THEN RESULTIS endstreamch
+
+    char        := vtp.rdch()
+
+    IF (NOT in.single.char.input.mode) & ([char & nondata.char.marker] \= 0)
+    THEN
+      $(
+      // Test for special control characters
+      // Note that ENDSTREAMCH will cause execution of this branch,
+      // as it has the NONDATA.CHAR.MARKER bit set.
+
+      SWITCHON char
+      INTO
+        $(
+        // Check for B, C, D or E
+        //   CTRL/B      Set flag 1
+        //   CTRL/C      Set flag 2
+        //   CTRL/D      Set flag 4
+        //   CTRL/E      set flag 8
+
+        CASE char.ctrlb | nondata.char.marker:
+        CASE char.ctrlc | nondata.char.marker:
+        CASE char.ctrld | nondata.char.marker:
+        CASE char.ctrle | nondata.char.marker:
+             setflags(current.task, 1 << ([char & #XFF]-char.ctrlb))
+             LOOP
+
+        CASE char.ctrlf | nondata.char.marker:
+             // Free all typed-ahead input lines
+             lose.pending.input()
+             outflags := outflags | flag.at.f.to.reflect
+             LOOP
+
+        CASE char.ctrls | nondata.char.marker:
+             // Task selection sequence:
+             //   ctrl/S nn: Send input to task nn; allow output from all tasks
+
+             outflags := outflags | flag.at.s.to.reflect // Before reading digits
+             IF read.2.digits() THEN current.task := result2
+             shared.output := TRUE
+             LOOP
+
+        CASE char.ctrlt | nondata.char.marker:
+             // Task selection sequence:
+             //   ctrl/T nn: Send input to task nn; allow output from task nn only
+
+             outflags := outflags | flag.at.t.to.reflect // Before reading digits
+             IF read.2.digits() THEN current.task := result2
+             shared.output := FALSE
+             LOOP
+
+        DEFAULT:
+             // Request to interpret a control char whose meaning
+             // we don't know.  Indicate displeasure with a bell.
+             // ENDSTREAMCH will come here too.
+
+             UNLESS char = endstreamch
+             THEN
+               $(
+               outflags   := outflags | flag.virtual.bell.pending
+               LOOP
+               $)
+        $)
+
+      $)
+
+    // The character was not marked as 'not data', so can be passed on.
+    RESULTIS char
+    $) REPEAT
+
+
+
+
+AND lose.pending.input() BE
+    $( // Free all typed-ahead input lines
+    UNTIL input.line.queue=0
+    DO $(
+       LET line         = input.line.queue
+       input.line.queue := !line
+       freevec(line)
+       $)
+
+    clear.input.buffer()
+    $)
+
+
+
+AND read.2.digits() = VALOF
+    $( // Result TRUE if looks OK, FALSE otherwise.
+    // If the result is FALSE, then the flag requesting a virtual
+    // bell to be output is set.
+    // Number in result2.
+    LET i       = 2
+    LET n       = 0
+    LET val     = 0
+
+    WHILE i > 0
+    DO $(
+       LET c = vtp.rdch()
+       LET v = '0' <= c <= '9' -> c - '0', 100
+
+       TEST v < 10
+       THEN $( val := val*10 + v; i := i-1 $)
+       ELSE
+         $(
+         outflags       := outflags | flag.virtual.bell.pending
+         RESULTIS FALSE
+         $)
+       $)
+
+    result2 := val
+    RESULTIS TRUE
+    $)
+
+
+
+//*****************************************************************************
+//                 This is the main routine of READ.CO                        *
+//*****************************************************************************
+
+AND handleinput() BE
+    $(
+    // This forms the body of READ.CO
+    // It uses HIGHLEVEL.RDCH to read characters with the virtual terminal
+    // protocol filtered out.
+    // The flag LINE.ENDED will be set when a complete line arrives
+    // from the terminal, or when the input buffer is full.
+    //
+    // In line input mode, input lines are buffered in INPUT.BUFFER and
+    // complete lines stored on INPUT.LINE.QUEUE.
+    // In single character input mode, INPUT.BUFFER is used as a circular
+    // buffer for input characters.  Bell is reflected when the buffer is full.
+
+    hi.level              := level()
+    outflags := outflags | flag.input.request.to.send // For first line
+
+hi.start:
+    // Jump here after "line cancelled" code in case we were in a
+    // ctrl/S or ctrl/T escape sequence.
+
+    $( // Main loop
+    LET char         = highlevel.rdch()
+
+    IF char=endstreamch
+    THEN
+      $(
+      byte.streams.gone := TRUE
+
+      TEST free.machine
+      THEN
+        $(
+        // Give this machine back to the Resource Manager.
+        // Kill all the authentication UIDsets which it owned.
+        // (This must be done first, as there is no guarantee execution
+        // will continue after the machine is freed!)
+
+        // Kill all uidsets by refreshing them with timeout zero.
+        // (AOTMANAGER tests specially for this case).
+
+        refresh.all.uidsets(0)
+
+        rm.refreshes.wanted     := FALSE // In case ssp fails
+        rmssp.refresh(0)        // Free machine by setting RM timeout to 0
+
+        // In case RM or ancilla is down, put this machine into a dynamic stop
+        // to halt all other tasks
+
+        changepri(taskid, maxint)
+        $( LOOP $) REPEAT
+        $)
+      ELSE free.machine := TRUE
+
+      cowait(0)    // Wait for new streams
+      LOOP
+      $)
+
+
+    // A proper data character has arrived, so store it in the input buffer.
+    // This will set the LINE.ENDED flag in line input mode if the buffer
+    // becomes full.
+
+    put.input.char(char)
+
+not.escape:    // Jump here on the VTP 'line ended' control byte.
+
+    TEST in.single.char.input.mode
+    THEN
+      $(
+      // See if there is a packet waiting for this character
+      LET qp  = findpkt(@read.pkt.queue, current.task)
+      LET pkt = !qp
+
+      IF pkt \= 0
+      THEN
+        $(
+        LET type        = pkt ! pkt.type
+        !qp     := !pkt        // Dequeue packet
+        !pkt    := notinuse
+
+        TEST type = act.read.buffer
+        THEN
+          $(
+          LET buffer = pkt!pkt.bufarg;
+          buffer%0 := get.input.char() // Only one character to send
+          returnpkt(pkt, 1, 0)
+          $)
+        ELSE TEST type = act.sc.read
+             THEN returnpkt(pkt, get.input.char(), 0) // Send back single char
+             ELSE return.replenish.buffer(pkt)      // ACT.READ
+
+        LOOP
+        $)
+      $)
+    ELSE // Not in single char mode
+      IF line.ended
+      THEN
+        $(
+        LET buffer      = getvec(input.write.ptr/bytesperword + buf.data.size)
+        LET char.buffer = buffer + buf.data.size
+        line.ended     := FALSE
+
+        IF buffer \= 0
+        THEN
+          $(
+          LET qp = findpkt(@read.pkt.queue, current.task)
+          LET qb = add.to.queue(@input.line.queue, buffer)
+
+          buffer!buf.task := current.task
+          buffer!buf.end  := input.write.ptr + 1
+
+          FOR j=0 TO input.write.ptr DO char.buffer % j := input.buffer % j
+
+          IF stream.ended
+          THEN
+            $(
+            // Handle @Q typed at virtual terminal
+            stream.ended   := FALSE
+            buffer!buf.end := - buffer!buf.end
+            $)
+
+          IF !qp \= 0 THEN transmit(qp,qb)
+          input.write.ptr := -1
+          LOOP
+          $)
+
+        input.write.ptr:=input.write.ptr - 1 // Only happens if GETVEC fails
+        $)
+    $) REPEAT
+    $)
+
+
+
+//******************************************************************************
+//                    This is the main routine of WRITE.CO                     *
+//******************************************************************************
+
+AND handleoutput() BE
+    $( // Main body of write.co
+    LET q,p = ?,?
+
+    // Is there something special to output?
+
+    IF outflags \= 0
+    THEN
+      $(
+      IF (outflags & flag.virtual.bell.pending) \= 0
+      THEN
+        $( // Cause a bell to be issued at the real terminal
+        outflags        := outflags NEQV flag.virtual.bell.pending
+        write.vtp.control.code(1, control.virtual.bell)
+        LOOP
+        $)
+
+      // If ctrl/S typed then reflect "@S" (must be sent before input
+      // If ctrl/T typed then reflect "@T"  request for digits)
+      // If ctrl/F typed then reflect "@F"
+
+      IF (outflags & flag.at.s.to.reflect) \= 0
+      THEN $( reflect.at('S', flag.at.s.to.reflect); LOOP $)
+
+      IF (outflags & flag.at.t.to.reflect) \= 0
+      THEN $( reflect.at('T', flag.at.t.to.reflect); LOOP $)
+
+      IF (outflags & flag.at.f.to.reflect) \= 0
+      THEN $( reflect.at('F', flag.at.f.to.reflect); LOOP $)
+
+      // If the read coroutine needs an input request to be sent,
+      // then do it before any other output.
+
+      IF (outflags & flag.input.request.to.send) \= 0
+      THEN $( issue.input.request(); LOOP $)
+
+      // If a disconnection has been requested, then close the byte streams
+
+      IF (outflags & flag.disconnection.pending) \= 0
+      THEN
+        $(
+        outflags                := outflags NEQV flag.disconnection.pending
+        byte.streams.gone       := TRUE // To stop test for RESET
+        endwrite()
+
+        LOOP
+        $)
+
+      // Is there a byte stream reset to be sent
+      IF (outflags & flag.reset.to.send) \= 0
+      THEN
+        $(
+        outflags := outflags NEQV flag.reset.to.send
+        bsp.reset(cos)
+        LOOP
+        $)
+
+      IF (outflags & flag.message.to.print) \= 0
+      THEN
+        $( // Print the message in MESSAGE
+        outflags := outflags NEQV flag.message.to.print
+        mywrites(message)
+        write.end.of.output.line(eolcc.newline)
+        bsp.forceout()
+        LOOP
+        $)
+
+
+      IF (outflags & flag.3stars.minus.to.reflect) \= 0
+      THEN
+        $( // Respond to virtual terminal break
+
+        outflags        := outflags NEQV flag.3stars.minus.to.reflect
+        mywrites("******-")
+        write.end.of.output.line(eolcc.escape)
+        bsp.forceout()
+        LOOP
+        $)
+      $)
+
+
+
+    // All special stuff output; look for an ordinary output line
+
+    q := shared.output -> @write.pkt.queue, findpkt(@write.pkt.queue, current.task)
+    p := !q
+
+    IF p \= 0 & NOT reading.break.key // Stop output after '***-'
+    THEN // Output request!
+      $(
+      LET buf        = pkt.bufarg ! p
+      LET end        = pkt.endarg ! p
+      LET task       = pkt.taskid ! p
+      LET type       = pkt.type   ! p
+
+      !q := !p; !p := notinuse
+      seconds.since.last.io     := 0
+
+      // BUF is either a single character or a line buffer
+
+      TEST 0 <= buf < 256
+      THEN
+        $( // Single character
+        qpkt(p)  // Send back request packet
+        mywrch(buf)
+        write.end.of.output.line(eolcc.escape)
+        bsp.forceout()
+        LOOP
+        $)
+      ELSE
+        $(
+        TEST end>0
+        THEN
+          $( // There really is something to output
+          LET terminator        = buf % (end-1)
+          LET termcode          = terminator = '*N' -> eolcc.newline,
+                                  terminator = '*E' -> eolcc.escape,
+                                  terminator = '*C' -> eolcc.cr,
+                                                       eolcc.noreason
+
+          FOR i = 0 TO end-2 DO mywrch.noparity(buf % i)
+
+          // The request packet is no longer needed, so can be returned
+          // Note that usually at this point the characters written
+          // to the byte stream are still in the BLIB buffer.  Therefore,
+          // the packet is being returned BEFORE this coroutine gets
+          // suspended.
+
+          qpkt(p)
+
+
+          // Terminate output line if last char is a control char
+          // and if the packet type was ACT.WRITE rather than
+          // ACT.SC.WRITE
+
+          TEST type=act.write & terminator<' '
+          THEN write.end.of.output.line(termcode)
+          ELSE mywrch.noparity(terminator)
+
+          // Send SC mode buffers as logical lines
+
+          IF type=act.sc.write THEN write.end.of.output.line(eolcc.escape)
+          bsp.forceout()
+          $)
+        ELSE qpkt(p) // Nothing to output
+
+        // Packet type ACT.WRITE gives a buffer to be FREEVECed,
+        // while ACT.SC.WRITE gives a buffer which should not be freed.
+
+        IF type = act.write THEN freevec(buf)
+        $)
+
+      LOOP
+      $)
+
+    cowait(0) // Wait until there is a line to output
+    $) REPEAT
+
+
+
+
+
+AND findpkt(lv.queue,task) = VALOF
+    $(
+    UNTIL !lv.queue = 0 | pkt.taskid ! (!lv.queue) = task DO lv.queue := !lv.queue
+    RESULTIS lv.queue
+    $)
+
+
+AND add.to.queue(lv.q,item) = VALOF
+    $(
+    LET q = findpkt(lv.q,-1)
+    !q := item; !item := 0
+    RESULTIS q
+    $)
+
+
+AND transmit(lv.pq, lv.bq) BE
+    $( // Send off an input line packet
+    LET b               = !lv.bq
+    LET p               = !lv.pq
+    !lv.bq              := !b
+    !lv.pq              := !p
+    !p                  := notinuse
+    pkt.bufres ! p      := b + buf.data.size
+    pkt.endres ! p      := b ! buf.end
+    qpkt(p)
+    $)
+
+
+AND return.replenish.buffer(pkt) BE
+    $(
+    // Send back all outstanding input chars in buffer for REPLENISH
+    LET buff            = getvec(buf.data.size + input.no.of.chars/bytesperword)
+    LET charbuff        = buff + buf.data.size
+    LET nchars          = input.no.of.chars
+
+    IF buff = 0 THEN $( add.to.queue(@read.pkt.queue, pkt); RETURN $)
+
+    buff ! buf.task     := pkt ! pkt.id
+    buff ! buf.end      := nchars
+
+    FOR i=0 TO nchars-1 DO charbuff%i := get.input.char()
+
+    returnpkt(pkt, charbuff, nchars)
+    $)
+
+
+AND return.all.read.packets(task) BE
+    $( // Return all read packets belonging to TASK
+    LET qp      = findpkt(@read.pkt.queue, task)
+    LET pkt     = !qp
+    LET type    = ?
+
+    IF pkt=0 THEN RETURN // All sent back
+
+    type        := pkt ! pkt.type
+    !qp         := !pkt
+    !pkt        := notinuse
+
+    TEST type = act.sc.read
+    THEN returnpkt(pkt, endstreamch, 0)
+    ELSE TEST type = act.read
+         THEN return.replenish.buffer(pkt)      // Know input buffer empty
+         ELSE returnpkt(pkt, 0, -1)             // ACT.READ.BUFFER
+
+    $) REPEAT  // Until all packets sent back
+
+
+AND copktwait(dest,pkt) = cowait(pkt)   // Used to replace BLIB PKTWAIT
+
+
+
+AND set.single.char.input.mode() BE
+    $(
+    in.single.char.input.mode := TRUE
+    clear.input.buffer()
+    $)
+
+
+
+AND set.line.input.mode() BE
+    $(
+    in.single.char.input.mode := FALSE
+    clear.input.buffer()
+    $)
+
+
+
+AND clear.input.buffer() BE
+    $( // Empty normal/circular input buffer
+    input.write.ptr     := in.single.char.input.mode -> input.buffer.upb, -1
+    input.read.ptr      := input.buffer.upb // Applies to circ buffer only
+    input.no.of.chars   :=  0
+    $)
+
+
+
+AND put.input.char(c) BE
+    $(
+    // In line input mode this puts C at the next position in INPUT.BUFFER
+    // and sets the LINE.ENDED flag if the buffer is then full.
+    //
+    // In single character input mode LINE.BUFFER is used as a circular
+    // buffer.  If it fills up, then the character is ignored and a
+    // bell reflected.
+
+    TEST in.single.char.input.mode
+    THEN
+      $(
+      LET new.write.ptr = (input.write.ptr+1) REM (input.buffer.upb+1)
+
+      TEST new.write.ptr=input.read.ptr
+      THEN outflags := outflags | flag.virtual.bell.pending // Buffer full
+      ELSE
+        $(
+        input.buffer%new.write.ptr := c
+        input.write.ptr            := new.write.ptr
+        input.no.of.chars          := input.no.of.chars + 1
+        $)
+      $)
+    ELSE
+      $( // line input mode
+      input.write.ptr              := input.write.ptr+1
+      input.buffer%input.write.ptr := c
+      IF input.write.ptr >= input.buffer.upb THEN line.ended := TRUE
+      $)
+    $)
+
+
+
+AND get.input.char(c) = VALOF
+    $(
+    // This is called only in single character input mode.
+    // It returns the oldest character in the circular buffer INPUT.BUFFER,
+    // or ENDSTREAMCH if the buffer is empty.
+
+    IF input.read.ptr=input.write.ptr THEN RESULTIS endstreamch // Buffer empty
+
+    input.read.ptr      := (input.read.ptr+1) REM (input.buffer.upb+1)
+    input.no.of.chars   := input.no.of.chars - 1
+    RESULTIS input.buffer % input.read.ptr
+    $)
+
+
+AND issue.input.request() BE
+    $(
+    // Issue an input request
+
+    // The input request flag MUST be unset before anything
+    // is written to the byte stream, as it might be reset
+    // by the read coroutine while this one is suspended.
+
+    outflags := outflags & NOT flag.input.request.to.send
+
+    write.vtp.control.code(3, control.in.request)
+
+    // Form of input request depends on whether we are reading a break
+    // key (after "***-"); otherwise depends on whether we are in
+    // single char mode.
+
+    TEST reading.break.key
+    THEN
+      $(
+      mywrch(1)       // Character
+      mywrch(#B0010)  // Reflect, no interpretation
+      $)
+    ELSE TEST in.single.char.input.mode
+         THEN
+           $(
+           mywrch(input.buffer.upb)    // Max number of chars
+           mywrch(#B0111)              // Terminate input line when one char
+                                       // typed, but send all buffered chars
+                                       // if more;
+                                       // No interpretation; No reflection
+           $)
+         ELSE
+           $(
+           mywrch(input.buffer.upb)    // Max number of chars
+           mywrch(#B1000)              // Reflect, not binary, interpret escapes,
+                                       // mark control chars with code 156
+           $)
+
+    write.vtp.control.code(1, control.inreq.term)       // *** Abolish in final VTP ***
+    bsp.forceout() // Force transmission
+    $)
+
+
+AND write.vtp.control.code(length, code) BE
+    $( // Write out a VTP length byte followed by a VTP control code.
+    write.length.code(length)
+    mywrch(code)
+    $)
+
+
+AND write.length.code(length) BE
+    $( // Write out the length code that precedes a VTP control sequence.
+    mywrch(control.length.code + 0) // *** Abolish in final VTP ***
+    mywrch(control.length.code + length)
+    $)
+
+
+
+AND write.end.of.output.line(termination.reason) BE
+    $(
+    // Write out the VTP control sequence which ends an output line.
+    write.vtp.control.code(2, control.eool)  // End of output line
+    mywrch(termination.reason)
+    $)
+
+
+
+AND mywrch(c) BE
+    $(
+    // Write out C, preceded by a denial of causing RESET if required.
+
+    IF byte.streams.gone THEN RETURN   // Not connected to terminal
+
+    IF reset.denial.to.send
+    THEN
+      $(
+      reset.denial.to.send := FALSE // MUST be done first to avoid recursion
+      write.length.code(1)      // Cannot use WRITE.VTP.CONTROL here, as we
+      wrch(control.deny.reset)  // must use WRCH not MYWRCH.
+      $)
+
+    wrch(c)
+    $)
+
+
+AND mywrch.noparity(c) BE mywrch(c & #X7F) // Used for chars in user buffers
+
+
+
+AND mywrites(s) BE FOR i=1 TO s%0 DO mywrch.noparity(s%i)
+
+
+AND reflect.at(char, flag) BE
+    $(
+    // Reflect @S, @T or @F after unsetting the corresponding flag.
+
+    outflags := outflags NEQV flag
+
+    mywrch('@'); mywrch(char); write.end.of.output.line(eolcc.escape)
+    bsp.forceout()
+    $)
+
+
+AND bsp.forceout() BE
+    $(
+    // Send off current buffer to the BSP handler for transmission
+    // with the 'force transmission' bit set.
+    LET func    = ?
+
+    IF byte.streams.gone THEN RETURN // Nothing to talk to
+
+    func        := cos ! scb.func2
+    UNLESS cos ! scb.id = id.outscb THEN $( abort(187); RETURN $)
+    cos ! scb.force.tx := TRUE
+    UNLESS func=0 THEN func(cos)
+    cos ! scb.force.tx := FALSE
+    $)
+
+
+AND bsp.test.reset(scb) = VALOF
+    $(
+    // Returns TRUE if the byte stream pair associated with SCB
+    // has been RESET remotely, and clears the flag.
+    //
+    // SCB may be for either the input or output stream of the pair.
+    //
+    // After this function has returned TRUE, then the next character
+    // read will be the first sent by the other end after it caused
+    // a RESET.
+
+    LET bscb   = scb ! scb.bscb
+
+    IF bscb = 0 THEN RESULTIS FALSE // Byte streams gone
+    UNLESS bscb ! bscb.reset.remotely THEN RESULTIS FALSE // No RESET
+
+    // There has been a reset.
+    // Must unset the flag, adjust the input and output buffers,
+    // and return TRUE.
+      $(
+      LET outscb = bscb ! bscb.out.scb
+      LET inscb  = bscb ! bscb.in.scb
+
+      bscb ! bscb.reset.remotely := FALSE // Now we've seen it
+
+      // Throw away rest of input buffer
+
+      inscb ! scb.pos := inscb ! scb.end
+
+      // Unwrite anything in output buffer
+
+      outscb ! scb.pos := 0
+
+      RESULTIS TRUE
+      $)
+    $)
+
+
+
+AND bsp.reset(scb) BE
+    $(
+    // Cause a RESET on the byte stream pair associated with this scb.
+
+    LET bscb   = scb ! scb.bscb
+    LET inscb  = bscb ! bscb.in.scb
+    LET outscb = bscb ! bscb.out.scb
+
+    delay(tickspersecond)
+
+    // Throw away anything in either buffer
+
+    outscb ! scb.pos := 0
+    inscb  ! scb.pos := inscb ! scb.end
+
+    // Send a RESET
+
+    sendpkt(notinuse, ABS (scb ! scb.type), act.reset,
+            0, 0,
+            0, 0, 0, 0, 0, bscb)
+
+    delay(tickspersecond)
+    $)
+
+
+$<SMALL
+AND make.new.cli() = VALOF
+    $(
+    // Result is taskid, or zero if it fails
+
+    LET tasktab       = rootnode ! rtn.tasktab
+    LET res.cli.tcb   = tasktab ! task.cli
+    LET res.cli.gv    = res.cli.tcb ! tcb.gbase
+    LET cli.task      = ?
+    LET this.segment  = tcb ! tcb.seglist ! 3 // Code of RMVTHAND
+
+    FOR pri = 1001 TO 1050 // Choose higher priority than earlier CLIs
+    DO $(
+       cli.task := createtask(res.cli.tcb!tcb.seglist,
+                              res.cli.tcb!tcb.stsiz, pri)
+       IF cli.task \= 0 THEN BREAK // New task made
+       $)
+
+    IF cli.task=0 THEN RESULTIS 0 // Can't do it
+
+    // Must include CLI.INIT in segment list before start-up
+    // Sordid trick: zap the highest referenced global word
+    // at the end of this section so that the new cli gets the same
+    // size global vector as CLI task 1.
+
+    this.segment ! (this.segment!1) := res.cli.gv!0  // Number of globals
+    tasktab!cli.task!tcb.seglist!3  := this.segment
+
+    // Send a startup packet giving CONSOLETASK (= here!) and command
+    // stack size.
+    // Expect taskid or zero back in res1
+
+    RESULTIS sendpkt(notinuse, cli.task, ?, cli.task, ?, taskid,
+                     res.cli.gv!(@cli.defaultstack - @globsize) )
+    $)
+
+
+
+LET cli.init(pkt) = VALOF
+    $(
+    // Executed by a new cli when it starts
+    // Result is routine to be applied to RESULT2
+
+    LET machine.name  = rootnode!rtn.info!rtninfo.ring!ri.myname
+    LET pstring       = "-%n> "
+    LET len           = machine.name%0
+
+    initio()
+    currentdir              := copydir( locateobj("HOME:") ) // Usually user's dir
+    consoletask             := pkt ! pkt.arg1
+    cli.defaultstack        := pkt ! pkt.arg2
+    cli.standardinput       := findinput("**")
+    cli.standardoutput      := findoutput("**")
+
+//    IF cli.standardinput=0 | cli.standardoutput=0
+//    THEN
+//      $(
+//      returnpkt(pkt, 0, result2)
+//      result2  := taskid
+//      RESULTIS deletetask
+//      $)
+
+    cli.currentoutput       := cli.standardoutput
+    cli.currentinput        := cli.standardinput
+
+    selectinput(cli.currentinput); selectoutput(cli.currentoutput)
+
+    cli.background          := FALSE
+    cli.commanddir          := locatedir("SYS:C")
+    cli.faillevel           := cli.initialfaillevel
+    cli.module              := 0
+
+    FOR i=0 TO len DO cli.prompt%i := machine.name%i
+    FOR i=1 TO pstring%0 DO cli.prompt%(i+len) := pstring%i
+    cli.prompt%0 := len + pstring%0
+
+    tcb!tcb.seglist!3       := 0 // Hide this code
+    start := cli.undefglobval
+    globin(tcb!tcb.seglist!1)   // In case library segments define START
+    globin(tcb!tcb.seglist!2)
+    result2                 := pkt
+    RESULTIS qpkt
+    $)
+$>SMALL
+

@@ -1,0 +1,747 @@
+$$16BIT := $$LSI4TRIPOS
+$$32BIT := ~$$16BIT
+
+SECTION "IEX"
+
+GET "LIBHDR"
+GET "FILEHDR"
+GET "MANHDR"
+GET "BCPL.OBJINFO"
+
+//              CONVERTED TO USING OBJINFO .......
+//
+//      The filing system is not well parameterised.
+//
+//      The following assumptions are made about the various systems:
+//
+// 1)   All systems allocate in blocks except FS/FH5
+// 2)   No system except FS/FM has loops in it
+//
+//      FS.IMAGE
+//
+
+MANIFEST
+$(
+    Error.WrongAccess   = 5159
+    access.read=1;access.write=2;access.delete=4
+    argvupb             = 100/bytesperword
+    max.name.chars      = 100    // Longest filename
+    file.base           = dirent.size
+    size.exinfo         = dirent.size + file.header.size
+
+    posn.dir            = 37
+    posn.puid           = posn.dir - 9
+    posn.size           = posn.dir+3
+    posn.access         = posn.size+12
+    posn.date           = posn.access+4
+
+    // Directory info
+    exinfo.name         = dirent.name
+    exinfo.fskey        = dirent.fskey
+    exinfo.dirent.type  = dirent.type
+
+        // INTERACTIVE may be   -1 -> FULL      FALSE
+        //                       0 -> wait      TRUE
+        //                       1 -> do an EXALL
+    exall               = 1             // If INTERACTIVE = Exall ->
+
+    first.entry         = -99           // -> First call!
+
+    rc.windup           =  1
+    rc.broken           =  2
+
+    int.full.repeat     = -2
+    int.repeat          = -1
+    int.normal          =  0
+    int.next            = int.normal
+    int.restart         =  1
+    int.skip            =  2
+
+    rc.windup           =  1
+    op.del              =  1
+$)
+
+GLOBAL
+$(  exinfo              : ug
+    nodatesopt          : ug +  1
+    segment             : ug +  2
+    date                : ug +  3
+    total.dirs          : ug +  4
+    total.files         : ug +  5
+    totaldatav          : ug +  6
+    fhtask              : ug +  7
+    posn                : ug +  8
+    lock.chain          : ug +  9
+    devtype             : ug + 10
+//  Breakcondition      : ug +  8
+$)
+
+LET start() BE
+$(  LET argv            = VEC argvupb
+    LET rc              = 0
+    LET dirname         = ?
+    LET rdargs.string   = "dir,to/k,Titles/s,NoDates/s,Puid/s"
+    LET dummy1          = VEC size.exinfo
+    LET dummy2          = VEC 14
+    LET namevec         = 0
+    LET oldstr          = output()
+    LET dat.to.strings  = "sys:l.dat-to-strings"
+
+    lock.chain          := 0
+    total.dirs          := 0
+    total.files         := 0
+    totaldatav          := $<16BIT TABLE 0,0 $>16BIT $<32BIT 0 $>32BIT
+    exinfo              := dummy1
+    date                := dummy2
+    posn                := First.entry
+
+    IF rdargs(rdargs.string, argv, argvupb) = 0
+    $( writef("Bad arguments for key string '%s'*n", rdargs.string); stop(20) $)
+    segment             := loadseg(dat.to.strings)
+
+    UNLESS segment=0
+    $(  LET tempv = VEC 2
+        globin(segment)
+        datstamp(tempv)
+        start(tempv, date)
+    $)
+
+    namevec     := getvec(max.name.chars/bytesperword)
+    IF namevec=0 THEN $( writes("Run out of store*n"); rc := 20; GOTO exit $)
+
+    IF argv!1 \= 0
+    $( LET tostream  = findoutput(argv!1)
+       IF tostream=0 $( writef("Can't open %s for output*n",argv!1); GOTO exit $)
+       selectoutput(tostream)
+    $)
+
+    // NAMEVEC is used for building the full name of each object
+    // examined.  Start off by filling in the supplied directory
+    // name, or the null string if no directory was specified.
+
+    dirname := (argv!0=0) -> "", argv!0
+    FOR i=0 TO dirname%0 DO namevec%i := dirname%i
+
+    // The rest is done by recursion ....
+
+    rc := examine.dir(namevec, TRUE, argv!2, argv!3=0, argv!4~=0)
+
+    UNLESS rc=rc.Broken | total.files=0
+    $(
+$<16BIT writef("Total: %TK%u4 Directories     and %u4 Files using ",
+                                dirname, total.dirs, total.files)
+        write.32(totaldatav)
+        writes("bytes.*n")
+$>16BIT
+$<32BIT writef("Total: %TG%u3 Directories     and %u4 Files using%U8 Bytes.*N",
+                dirname, total.dirs, total.files, totaldatav)
+$>32BIT
+    $)
+
+exit:
+    // Tidy up and stop
+    freevec(namevec)
+    unloadseg(lock.chain)
+    unloadseg(segment)
+    IF oldstr \= output() THEN $( endwrite(); selectoutput(oldstr) $)
+    IF rc=rc.broken THEN writes("****** BREAK*n")
+
+    stop(rc)
+$)
+
+AND examine.dir(name, Interactive, only.Titles, dates, puid) = VALOF
+$(  // Examine the directory whose name is NAME.
+    // The vector NAME should be at least MAX.NAME.CHARS long, as it
+    // is used to build the names of objects below this directory.
+    // If NAME is the null string, the current directory is examined.
+
+    LET namelen         = name%0
+    LET rc              = 0
+    LET dir.lock        = 0
+    LET dellist         = 0
+    LET type.string     = "sys:c.scan"
+    LET more.entries    = FALSE
+    LET tot             = $<16BIT VEC 1 $>16BIT $<32BIT 0 $>32BIT
+    LET First           = (posn=first.entry)
+    LET dirs, files     = ?, ?
+    LET type            = ?
+    LET access          = ?
+    LET creation.day    = ?
+    LET is.file         = ?
+    LET newlen          = ?
+    LET allocate.in.bytes= ?
+    LET long.puid       = ?
+    LET titles          = ?
+
+    IF compstring(name, "")=0 & currentdir=0
+    THEN $( name%0 := 1; name%1 := ':' $) // Root directory
+
+    TEST compstring(name, "")=0
+    THEN dir.lock       := copydir(currentdir)
+    ELSE dir.lock       := locateobj(name)
+
+    IF dir.lock=0
+    $( LET r2 = result2
+       writef("Directory *"%s*" not found: ", name); fault(r2)
+       RESULTIS 0
+    $)
+
+    // Make the full directory name suitable for the addition of
+    // further components.
+//******************************************************************************
+//*******************   All this info is STATIC ********************************
+//******************************************************************************
+    fhtask      := dir.lock ! lock.task
+    discinfo.set()
+
+    allocate.in.bytes   := exinfo!discinfo.type = disctype.fs    |
+                           exinfo!discinfo.type = disctype.fm    |
+                           exinfo!discinfo.type = disctype.core  |
+                           exinfo!discinfo.type = disctype.fh5
+
+    long.puid           := exinfo!discinfo.type = disctype.fs |
+                           exinfo!discinfo.type = disctype.fm
+
+    devtype             := exinfo!discinfo.type
+//******************************************************************************
+    examine.object(dir.lock)
+    IF name%namelen ~= ':' & namelen > 0 & 
+       extract(objinfo.type, dir.lock, exinfo, devtype, @type)
+    THEN UNLESS type = Type.file
+         $( namelen := namelen+1; name%namelen := '.' $)
+
+Restart.dir:
+    dirs, files :=      0,0
+    $<16BIT tot!0, tot!1 := 0,0 $>16BIT
+    $<32BIT tot          := 0   $>32BIT
+    examine.object(dir.lock)
+    extract(objinfo.type, dir.lock, exinfo, devtype, @type)
+    is.file     := type = type.file
+
+    TEST is.file
+    $(
+      UNLESS FIRST WRITEF("<<---- File ---->>*N")
+      Titles := Only.titles
+//?      Entryinfo!exinfo.name := 0
+//?      entryinfo ! exinfo.dirent.type := type.file
+    $)
+    ELSE                // Object is a directory. Try to inspect the first entry
+    $(
+       more.entries     := exinfo.set(dir.lock)
+
+       UNLESS more.entries      GOTO exit
+       Titles   := only.Titles | more.entries ~= TRUE
+//        writef("Directory *"%s*" is empty*n", name)
+       UNLESS name%0 = 0 THEN newline()
+    $)
+
+    $( // Main loop for examining one directory
+        LET hdr.type    = ?
+        LET open.in.fs  = ?
+        open.in.fs      := extract(objinfo.type, dir.lock, exinfo,
+                        devtype, @hdr.type) -> hdr.type=0, FALSE
+
+        IF testflags(1) DO $( rc := rc.broken; BREAK $)
+
+        type            := exinfo!exinfo.dirent.type
+//?
+        UNLESS type = hdr.type | open.in.fs
+        THEN writes("****** TYPE MISMATCH IN NEXT ENTRY: SEEK ADVICE*N")
+
+        TEST Type \= Type.file
+        THEN dirs := dirs + 1
+        ELSE
+        $( LET bytes = VEC 1
+           files := files + 1
+           IF extract(objinfo.size, dir.lock, exinfo, devtype, bytes)
+           $<16BIT add.32(tot, bytes)                           $>16BIT
+           $<32BIT tot := tot+ ((bytes!0)<<16) + bytes!1        $>32BIT
+        $)
+
+Try.Again:
+        $( LET len      = byteget(exinfo+exinfo.name, 0)
+          newlen        := namelen+len
+          name%0        := newlen
+
+          FOR i=1 TO len
+          DO name%(namelen+i) := byteget(exinfo+exinfo.name, i)
+
+        $)
+
+        writef("%S ", name)
+        posn := newlen+1
+
+        UNLESS Titles
+        $( LET key = VEC 3
+           key!1 := 0
+           IF puid & extract(objinfo.key, dir.lock, exinfo, devtype, key)
+           TEST key!1 = 0
+           $( tab(posn.puid+4); WRITEF("%X4 ", key!0)
+              posn := posn+5
+           $)
+           ELSE
+           $( tab(posn.puid); WRITEF("%X4%X4 ", key!0, key!1)
+              posn := posn+9
+           $)
+           TEST type \= type.file
+           THEN $( tab(posn.dir); writes("dir"); posn := posn + 3 $)
+           ELSE
+           $(   LET bytes = VEC 1
+                IF extract(objinfo.size, dir.lock, exinfo, devtype, bytes)
+                $(
+$<16BIT             tab(posn.size-1)
+                    write.32(bytes)
+                    posn := posn + 7
+$>16BIT
+$<32BIT             LET val = ((bytes!0)<<16) + bytes!1
+                    LET small   = val < 10000
+                    tab(posn.size - (small-> 0,3))
+                    WRITEF(small -> "%I4 ", "%U7 ", val)
+                    posn := posn + (small -> 11, 14)
+$>32BIT
+                    writes(allocate.in.bytes -> "bytes ", "blocks")
+                $)
+           $)
+
+           // Write out the protection flags
+           $(   LET access.vec = VEC 4
+                IF extract(objinfo.access, dir.lock, exinfo, devtype, access.vec)
+                $(
+                   access  := access.vec!1
+
+                   tab(posn.access)
+                   TEST (access&access.read) \= 0   THEN wrch('R') ELSE wrch(' ')
+                   TEST (access&access.write) \= 0  THEN wrch('W') ELSE wrch(' ')
+                   TEST (access&access.delete) \= 0 THEN wrch('D') ELSE wrch (' ')
+                   posn := posn + 3
+                $)
+            $)
+
+           // The object may be open for writing in the fileserver
+           // in which case the header info will not be accessible.
+           // The file handler will return it as all zeros, so the
+           // header type field will be zero.
+
+           IF dates
+           $(   LET date.vec = VEC 2
+                IF segment ~= 0 &
+                extract(objinfo.date, dir.lock, exinfo, devtype, date.vec)
+                $(  start(date.vec, date)
+                    tab(posn.date)
+                    TEST open.in.fs
+                    THEN writes("**********  open  **********")
+                    ELSE IF date.vec!0  //& NOT nodatesopt
+                         THEN writef("%T9 %S", date, date+5)
+                    posn := posn + 19
+                $)
+           $)
+
+//        // Write out name of station which wrote the directory entry.
+//
+//        IF entryinfo ! exinfo.station \= 0
+//        THEN $( writes("  "); write.machine.name(entryinfo!exinfo.station) $)
+        $)
+
+        TEST Interactive=TRUE
+        THEN SWITCHON VALOF
+        $(SW.Interactive
+           LET ch = ?
+           LET set = TRUE
+           LET nullstring = ""
+           LET temp = VEC 10
+           WRITES(" ?*E")
+       $(Command.loop
+          LET leading.string = nullstring
+          ch := RDCH()
+          WHILE ch = '*S' DO ch := RDCH()
+          IF TESTFLAGS(1) $( rc := rc.broken; RESULTIS int.skip $)
+          SWITCHON capitalch(ch) INTO
+          $(SW.Command.loop
+             DEFAULT:
+             DEFALT:   WRITEF("See ?.  Unknown option - %C", ch)
+                       $( ch := RDCH(); WRCH(ch) $) REPEATUNTIL ch = '*N'
+                        RESULTIS int.repeat
+
+             CASE '?':  UNLESS matches.sub(nullstring, 0)  GOTO DEFALT
+   HELP:                WRITES(
+"DELete, EXALl, Examines, Full, Help, Lists, Previous, PROtect, Quits, Sse,*N*
+*TItles, Type, Windup, !,@ send rest of line to CLI, ** repeats, - negates*N")
+//              , *"x*" looks for substring x, *'x*' looks for pattern x
+                        RESULTIS int.repeat
+
+            CASE 'E':
+                        TEST matches.sub("XALL", 3)
+                        THEN TEST type \= type.file
+                             $( rc := examine.dir(name, EXALL, Only.Titles, dates, puid)
+                                name%0 := newlen
+                                RESULTIS (Rc=0) -> int.full.repeat, int.normal
+                             $)
+                             ELSE $( INTERACTIVE := EXALL; RESULTIS int.normal $)
+                        ELSE TEST matches.sub("XAMINE", 0)
+                             THEN TEST type \= type.file //NOT a directory
+                                  $(
+        IF long.puid
+        $( LET key = VEC 3
+           IF extract(objinfo.key, dir.lock, exinfo, devtype, key)
+       $( LET next = GETVEC(2)
+          LET this = key!0
+          LET this0= key!1
+          LET start= lock.chain
+
+          IF next = 0   $( WRITEF("Failed to get THREE words!*N"); GOTO exit $)
+          !next         := lock.chain
+          next!1        := this
+          next!2        := this0
+          lock.chain    := next
+          UNTIL start=0
+          $( IF this=start!1 & this0 = start!2
+             $( LET this = lock.chain
+                WRITEF("*N****** IEX: Cycle detected in directory ")
+                UNTIL this=0
+                $( WRITEF("%X4%X4:", this!2,this!1); this := !this $)
+                NEWLINE()
+                GOTO exit
+             $)
+             start := !start
+          $)
+       $)
+       $)
+     rc := examine.dir(name, Interactive, Only.Titles, dates, puid)
+                                     name%0 := newlen
+                                     exinfo.again(dir.lock, exinfo)
+//??****************************************************  How about RC.broken ??
+                                     RESULTIS (rc=0) -> int.full.repeat, int.normal
+                                  $)
+                                  ELSE
+                                  $( WRITEF("%S is not a directory !*N", name)
+                                     RESULTIS int.repeat
+                                  $)
+                             ELSE GOTO DEFALT
+
+             CASE 'W':  UNLESS matches.sub("INDUP", 0) GOTO DEFALT
+                        rc := rc.windup
+                        GOTO quit
+             CASE 'Q':  UNLESS matches.sub("UIT", 0) GOTO DEFALT
+quit:                   RESULTIS 3      //??????????????????????????????????
+
+             CASE 'F' : UNLESS matches.sub("ULL", 0) GOTO DEFALT
+                        Only.titles := ~set; RESULTIS (Only.Titles -> int.normal, int.full.repeat)
+
+             CASE 'H':  UNLESS matches.sub("ELP", 0) GOTO DEFALT
+                        leading.string := "help iex "
+                        GOTO given.leading.string
+             CASE 'S':  UNLESS matches.sub("SE", 0) GOTO DEFALT
+                        leading.string := "sse ^ "
+given.leading.string:   UNRDCH()
+
+             CASE '@':
+             CASE '!':
+                        $( LET V        = VEC 80/bytesperword
+                           LET l.p      = 1
+                           LET l.p.max  = leading.string%0
+
+                           FOR I = 0 TO 80
+                           $( ch := (l.p > l.p.max) -> RDCH(), VALOF
+                                        $( LET ch = leading.string%l.p
+                                           l.p := l.p+1
+                                           RESULTIS ch
+                                        $)
+                              TEST (ch='*N'|ch='*E'|ch=ENDSTREAMCH)
+                              THEN CALLSEG("SYS:L.SSE-CALL-CLI", V, 0, I)
+                               <>  RESULTIS int.full.repeat
+                              ELSE TEST ch='^'
+                                   $( FOR J = 1 TO name%0 DO V%(I+J-1) := name%J
+                                      I := I+name%0-1
+                                   $)
+                                   ELSE V%I := ch
+                           $)
+                           WRITEF("Line Too long ...*N")
+                        $)
+                        RESULTIS int.repeat
+
+/*
+             CASE 'K' : UNLESS matches(nullstring, TRUE) GOTO DEFALT
+                        disckeysopt := set
+                        IF set
+                        $( only.titles := FALSE
+                           RESULTIS int.restart
+                        $)
+                        RESULTIS int.normal
+
+             CASE '*'':
+             CASE '*"': Pattern.use := TRUE // on condition?
+                        match.type := set
+                        pattern%0 := ch='*"' -> 4, 1
+                        pattern%1 := '#'
+                        pattern%2 := '?'
+                        pattern%3 := '('
+                        $( LET c=RDCH()
+                           UNTIL c='*E' | c='*N' | c=ch | c=endstreamch
+                          pattern%(pattern%0),pattern%0,c:=c,pattern%0+1,RDCH()
+                           c := pattern%0
+                           pattern%c := ')'
+                           pattern%(c+1) := '#'
+                           pattern%(c+2) := '?'
+                           pattern%0 := c+(ch='*"' -> 2, -1)
+                           UNRDCH()
+                           c := RDCH() REPEATUNTIL c='*N' | c=endstreamch
+                        $)
+                        IF CmplPat(Pattern, V1) THEN RESULTIS int.normal
+                        WRITEF("*"%S*" is not a valid pattern*N",Pattern);
+                        Pattern.Use := FALSE
+                        RESULTIS int.repeat
+*/
+             CASE 'L': UNLESS matches.sub("IST", 0) GOTO DEFALT
+             CASE endstreamch: Interactive := FALSE; RESULTIS int.normal
+
+             CASE 'P': IF matches.sub("ROTECT", 2)
+                       $( LET task = devicetask(name)
+                          access := access.read |
+                                ( (~set) & (access.delete | access.write) )
+
+                          sendpkt(notinuse, task, action.setaccess, ?,?,
+                                result2,        // lock
+                                name,
+                                access
+                                   )
+                          RESULTIS int.full.repeat
+                       $)
+                       UNLESS matches.sub("REVIOUS", 0) GOTO DEFALT
+//                     UNLESS Exprev(Dir.lock) WRITEF("*NNo previous entry*N")
+                       WRITEF("*NPrevious not available at the moment*N")
+                       RESULTIS int.full.repeat
+
+             CASE 'T':
+                        IF matches.sub("ITLE", 1)
+                        $( only.titles := set
+                           RESULTIS set -> int.normal, int.full.repeat
+                        $)
+                        UNLESS matches.sub("YPE", 0) GOTO DEFALT
+                        $( LET ostart = ?
+                           UNRDCH()
+                           UNLESS type=Type.file
+                           $( WRITEF("%S is a Directory !*N", name)
+                              UNTIL RDCH()='*N' LOOP
+                              RESULTIS int.repeat
+                           $)
+                           ostart := start
+                           IF callseg(type.string,name,input())=0
+                           THEN $( WRITEF("%S failed for %S [%N]*N",
+                                      type.string,name,result2)
+                                  UNRDCH()
+                                  UNTIL RDCH()='*N' LOOP
+                               $)
+                           start := ostart
+                           RESULTIS int.repeat
+                       $)
+
+             CASE 'D': UNLESS matches.sub("ELETE", 2) GOTO DEFALT
+                       TEST set
+                       $( LET p = getvec(newlen/bytesperword+3)+2
+                          TEST p = 2
+                          WRITEF("Failed to get store [%N]*N",result2)
+                          ELSE
+                          $( FOR i = 0 TO (newlen/bytesperword)+1
+                             DO p!i := name!i
+                             p!(-1) := 0 //?
+                             p!(-2) := dellist
+                             dellist := p-2
+                          $)
+                          RESULTIS int.normal
+                       $)
+                       ELSE
+                       $( LET p = @dellist
+                          UNTIL !p = 0
+                          $( LET q = !p
+                             TEST compstring(q+2, name)=0
+                             $( !p := !q; freevec(q) $)
+                             ELSE p := q
+                       $) $) RESULTIS int.repeat
+
+             CASE '**': UNLESS matches.sub(nullstring, 0) GOTO DEFALT
+                        RESULTIS int.restart
+
+             CASE '*N': RESULTIS int.normal
+             CASE '-': set := ~set; LOOP
+          $)SW.Command.loop
+       $)Command.loop REPEAT
+       $)SW.Interactive INTO
+        $(
+           CASE int.full.repeat:exinfo.again(Dir.lock)
+           CASE int.repeat:     GOTO Try.Again
+                CASE int.restart:       GOTO Restart.dir
+                                                //      CASE 2: GOTO NEXT
+                CASE 3: BREAK
+        $)
+       ELSE Newline()
+        IF (INTERACTIVE = EXALL) & (Type \= Type.file)
+        THEN examine.dir(name, Interactive, Only.Titles, dates, puid)
+    next:
+
+        // Examine next entry
+
+        IF is.file THEN BREAK // No entries !
+
+        more.entries := exinfo.set(dir.lock)
+        Titles  := Only.titles | more.entries ~= TRUE
+
+     $) REPEATWHILE more.entries & (rc = 0)
+
+//    newline()
+     name%0 := namelen
+     IF name%(name%0) = '.' THEN name%0 := name%0 -1
+     UNLESS FIRST & (Total.dirs=0 | Total.files=0)
+     $(
+$<32BIT
+        Writef("%TM%u4 directories     and %u4 files using %U7 bytes.*N",
+                name, dirs, files, tot)
+$>32BIT
+$<16BIT
+        Writef("%TR%u4 directories     and %u4 files using ", name, dirs, files)
+        Write.32(tot)
+        writes("bytes.*N")
+$>16BIT
+        IF rc=0 NEWLINE()
+     $)
+     Total.dirs  := Total.dirs + dirs
+     Total.files := Total.files + files
+     $<16BIT add.32(totaldatav, tot)            $>16BIT
+     $<32BIT totaldatav := totaldatav+tot       $>32BIT
+
+   UNLESS dellist = 0
+   $( LET ch, all = ?, ?
+      WRITEF("Do you want to do the deletes for %S? *E",
+                                                name%0=0 -> "Current dir", name)
+      WHILE matches("?", TRUE)
+      DO WRITES("Y-> select, ALL -> delete all, else delete none *E")
+      all := matches("ALL",TRUE)
+      TEST all | capitalch(RDCH())='Y'
+      $( UNLESS all DO UNTIL RDCH()='*N' DO LOOP
+         UNTIL dellist = 0
+         $( UNLESS all DO WRITEF("Delete %S ? *E",dellist+2);
+            IF all | capitalch(RDCH())='Y'
+            $( LET res = deleteobj(dellist+2)
+               TEST (res=0)
+               $( fault(result2)
+                WRITEF("While deleting *"%S*"*N",dellist+2)
+               $)
+                ELSE TEST all
+                     THEN WRITEF("%S deleted*N",dellist+2)
+                     ELSE WRITES("Deleted*N")
+             $)
+             UNRDCH();
+             UNTIL RDCH()='*N' LOOP
+             $( LET next = !dellist
+                freevec(dellist);
+                dellist := next
+             $)
+         $)
+      $)
+      ELSE $( unloadseg(dellist); dellist := 0 $)
+      UNRDCH()
+      UNTIL RDCH()='*N' LOOP
+   $)
+exit:
+    Unloadseg(dellist)
+    $( LET v = lock.chain
+       UNLESS v=0 $( lock.chain := !lock.chain; FREEVEC(v) $)
+    $)
+
+    freeobj(dir.lock)
+
+    RESULTIS Rc
+$)
+
+AND discinfo.set() =
+    sendpkt(notinuse, fhtask, action.discinfo, ?, ?, exinfo)
+
+AND examine.object(lock) =
+    sendpkt(notinuse, fhtask, action.examineobject, ?, ?, lock, exinfo)
+
+AND exprev(lock) = FALSE
+/*
+VALOF   // True -> I did it!
+$( LET current = lock!lock.last.examined
+
+   FOR I = current-2 TO -1 BY -1
+   $( lock!lock.last.examined := I
+      sendpkt(notinuse, fhtask, action.examinenext, ?,?, lock, exinfo, FALSE)
+      UNLESS lock!lock.last.examined = current
+      $( exinfo.again(lock); RESULTIS TRUE $)
+   $)
+   RESULTIS FALSE
+$)
+*/
+
+AND exinfo.again(lock) = TRUE
+//VALOF $( lock!lock.last.examined :=lock!lock.last.examined-1; RESULTIS exinfo.set(lock) $)
+
+AND exinfo.set(lock) = VALOF
+FOR I = 1 TO 3
+$(  LET res = sendpkt(notinuse, fhtask, action.examinenext, ?, ?, lock, exinfo, TRUE)
+    UNLESS res
+        TEST result2 = Error.WrongAccess
+        THEN RESULTIS 1
+        ELSE IF result2 \= error.NoMoreEntries
+    $( writef("IEX failed %N because ", RESULT2); fault(result2); UNLESS I=3 LOOP $)
+    RESULTIS res
+$)
+
+$<16BIT
+AND write.32(numvec) BE
+$(  // Write out the 32 bit number in NUMVEC!0 and NUMVEC!1, in full
+    // is the number is less than 10000, otherwise as nK.
+    // The minimum field width is 5 characters.
+
+    LET ms.size   = numvec!0
+    LET ls.size   = numvec!1
+
+    TEST (ms.size=0) & (0 <= ls.size < 10000)
+    THEN writef("%u4 ", ls.size) // Small number
+    ELSE writef("%u4K", (ms.size << 6) | (ls.size >> 10))
+    posn := posn + 5
+$)
+
+AND add.32(a, b) BE
+$(  // a := a + b  where a and b are 32 bit numbers held in 2-word vectors.
+
+    LET a0      = a!0 + b!0
+    LET a1      = a!1
+    LET aa1     = a1 + b!1
+
+    IF (a1 < 0) & (aa1 > 0) THEN a0 := a0 + 1
+
+    a!0 := a0
+    a!1 := aa1
+$)
+$>16BIT
+
+AND Matches(String, Fullline) = VALOF
+$( FOR i = 1 to String%0
+   UNLESS capitalch(RDCH()) = string%i
+   $( FOR j = 1 to i DO UNRDCH()
+      RESULTIS FALSE
+   $)
+   IF RDCH() = '*N' THEN RESULTIS TRUE
+   UNRDCH(); IF (RDCH()='*S') & (~Fullline) RESULTIS TRUE
+   UNRDCH(); RESULTIS FALSE
+$)
+
+AND Matches.sub(String, Min) = VALOF
+$( LET ch = ?
+   LET n  = string%0+1
+   FOR i = 1 TO n
+   $( ch := capitalch(rdch())
+      UNLESS ch = string%i      $( n := i; BREAK $)
+   $)
+   TEST n > Min & ('A' > ch | ch > 'Z')
+   THEN RESULTIS TRUE
+   ELSE
+   $( FOR j = 1 to n DO UNRDCH()
+      RESULTIS FALSE
+   $)
+$)
+
+And tab(pos) BE FOR i = posn+1 TO pos DO $( WRCH(' '); Posn := posn + 1 $)
+
+

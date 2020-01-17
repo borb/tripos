@@ -1,0 +1,66 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "PROMPT"
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "CLIHDR"
+
+MANIFEST
+    $(
+    maxchars    = 30    // Max characters in prompt
+    $)
+
+LET start() BE // PROMPT [PROMPT] prompt [RING]
+  $( LET v = VEC 25
+
+     IF rdargs("PROMPT,RING/S",v,25) = 0 THEN
+       $( writes("Parameters no good for PROMPT*N")
+          RETURN
+       $)
+
+     IF v!0=0 THEN
+     $( TEST v!1=0    //The RING switch selects the standard ring prompt:
+                      //          MCNAME-n>       where n = task number.
+                      //The standard Tripos default is "> "
+        DO v!0 := "> "
+        OR
+        $( LET mcname   = rootnode ! rtn.info ! rtninfo.ring ! ri.myname
+           LET mclen    = mcname % 0
+           LET suffix   = "-%N> "
+           LET sufflen  = suffix%0
+           LET totallen = mclen+sufflen
+
+           // Check not too long (unlikely unless user has reset mc name)
+
+           IF totallen>maxchars THEN errortoolong()
+
+           FOR i = 1 TO mclen DO
+              cli.prompt % i := mcname % i
+
+           FOR i = 1 TO sufflen DO
+              cli.prompt % (mclen+i) := "-%N> " % i
+
+           cli.prompt % 0 := totallen
+
+           RETURN
+        $)
+     $)
+
+     // Check not too long
+
+     IF (v!0)%0 > maxchars THEN errortoolong()
+
+     FOR j = 0 TO (v!0) % 0 DO
+       cli.prompt % j := (v!0) % j
+  $)
+
+
+AND errortoolong() BE
+    $(
+    writef("Prompt is too long (%N characters maximum)*N", maxchars)
+    stop(20)
+    $)
+

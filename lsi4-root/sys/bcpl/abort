@@ -1,0 +1,36 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+
+SECTION "ABORT"
+
+GET "LIBHDR"
+
+LET start(pkt) = VALOF
+ $( LET mode = pkt!0
+    AND task = pkt!1
+    TEST mode=-1 THEN     // startup
+    $( rootnode!rtn.debtask := tcb
+       wrch := sawrch
+       qpkt(pkt)
+       hold(taskid)
+    $)
+    ELSE                 // standalone entry
+    $( LET res = 0
+       LET code = pkt!2
+       LET arg  = pkt!3
+       IF mode=1  DO    // abort
+       $( writef("*N!!T%N ABORT %N: %N ",task,code,arg)
+          IF code=0 DO task := arg
+       $)
+       SWITCHON capitalch(sardch()) INTO
+       $( CASE 'H':
+             res := task
+          CASE 'C':
+             newline()
+             RESULTIS res
+       $) REPEAT
+   $)
+ $)
+
+

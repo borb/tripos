@@ -1,0 +1,205 @@
+SECTION "FAULT"
+GET     "LIBHDR"
+GET     "IOHDR"
+GET     "MANHDR"
+GET     "CLIHDR"
+
+// Modifications:
+// 19 Apr 83 by BJK: Spelling improved.
+
+$<COMMAND
+LET start ( status, fault.no ) BE
+$(
+   LET co = createco ( faultco, 500 )
+
+   TEST co = 0 THEN faultco ( @status ) ELSE $( callco   ( co, @status )
+                                                deleteco ( co )
+                                             $)
+$)
+$>COMMAND
+
+$<BLIB
+LET fault ( fault.no ) BE
+$(
+   LET co = createco ( faultco, 500 )
+   LET fv = VEC 1
+
+   fv!0, fv!1 := -1, fault.no
+
+   TEST co = 0 THEN faultco ( fv ) ELSE $( callco   ( co, fv )
+                                           deleteco ( co )
+                                        $)
+$)
+$>BLIB
+
+AND faultco ( lvp ) BE
+$(
+   LET status   = lvp ! 0
+   LET file     = "sys:info.faults-table"
+   LET args     = ",,,,,,,,,"
+   LET argv     = VEC 25
+   LET errv     = VEC 40
+   LET command  = [ status = 0 ]
+   LET pos      = ?
+   LET f.stream = ?
+   LET n.args   = ?
+   LET arg.list = VEC 10
+   LET old.in   =  input ()
+   LET old.out  = output ()
+   LET found    = VEC 10
+   LET why      = FALSE
+
+   IF old.out = 0 THEN selectoutput ( findoutput ( "**" ) )
+
+$<COMMAND
+   TEST command
+        THEN $( IF rdargs ( args, argv, 25 ) = 0 THEN
+                $(
+                   writef ( "%S failed - bad arguments for *"%S*"*N",
+                                               cli.commandname, args  )
+                   stop   ( return.severe )
+                $)
+
+                FOR i = 0 TO 9 DO IF argv ! i \= 0 THEN
+                $(
+                   LET fault.no  = number ( argv ! i )
+                   LET duplicate = FALSE
+
+                   UNLESS result2 DO
+                   $(
+                      writef ( "%S: argument *"%S*" ignored*N",
+                                               cli.commandname, argv ! i )
+                      LOOP
+                   $)
+
+                   FOR i = 1 TO n.args DO
+                                IF arg.list ! i = fault.no THEN
+                                                           duplicate := TRUE
+
+                   UNLESS duplicate DO $(            n.args := n.args + 1
+                                          arg.list ! n.args := fault.no
+                                       $)
+                $)
+
+                IF n.args = 0 THEN $( arg.list ! 1 := cli.result2
+                                      n.args       := 1
+                                      why          := TRUE
+                                   $)
+             $)
+           ELSE $( n.args := 1 ; arg.list ! 1 := lvp ! 1 $)
+$>COMMAND
+$<BLIB
+   n.args       := 1
+   arg.list ! 1 := lvp ! 1
+$>BLIB
+
+   IF why & [ arg.list ! 1 = 0 ] THEN
+   $(
+      writes ( "The last command did not set a return code*N" )
+      RETURN
+   $)
+
+   IF why THEN writes ( "The last command failed because " )
+
+   f.stream := findinput ( file )
+
+   IF f.stream = 0 THEN
+   $(
+      TEST command &
+           NOT why THEN writef ( "Error file *"%S*" not available*N", file )
+                   ELSE writef ( "fault %N occurred*N", arg.list ! 1 )
+
+      IF old.out = 0 THEN endwrite ()
+
+      TEST command THEN stop ( return.severe ) ELSE RETURN
+   $)
+
+   selectinput ( f.stream )
+
+   FOR i = 1 TO n.args DO
+   $(
+      LET fault.no = arg.list ! i
+      LET hashent  = ?
+
+      pointto     ( fault.no & #X03FF )
+      readwords   ( @hashent, 1 )
+
+      pos := get2bytes ( @hashent, 0 )
+
+      UNTIL pos = 0 DO
+      $(
+         pointto ( pos )
+
+         IF readwords ( errv, 40 ) < 40 THEN $( pos := 0 ; LOOP $)
+
+         IF get2bytes ( errv, 1 ) = fault.no THEN
+         $(
+            FOR c = 1 TO getbyte(errv,6) DO wrch(getbyte(errv,6+c))
+
+            newline () ; found ! i := TRUE ; GOTO next.error
+         $)
+
+         pos := get2bytes ( errv, 0 )
+      $)
+
+      found ! i := FALSE
+
+      /**/ next.error : /**/
+   $)
+
+   endread () ; selectinput ( old.in )
+
+   FOR i = 1 TO n.args DO UNLESS found ! i DO
+   $(
+      TEST command &
+           NOT why THEN writef ( "No fault message for %N*N",  arg.list ! i )
+                   ELSE writef ( "fault %N (#X%X4) occurred*N", arg.list ! 1,
+                                                               arg.list ! 1 )
+   $)
+
+   IF old.out = 0 THEN endwrite ()
+$)
+
+AND pointto ( pos ) BE
+$(
+   LET pvec = VEC 2
+
+   pvec ! 0, pvec ! 1, pvec ! 2 := 0, pos * 2, 0
+
+   //  Note by IDW:  12-Feb-87
+   //    MFR needs boiling sometimes!  In the following code, he always called
+   //    "task.filehandler", even if the current input stream corresponded to
+   //    a different filing system!
+
+   sendpkt ( notinuse, ABS cis!scb.type, action.point, 0, 0, cis!scb.arg1, pvec )
+$)
+
+AND number ( str ) = VALOF
+$(
+   LET num = 0
+   LET rx  = 10
+   LET f   = 1
+   LET neg = FALSE
+
+   IF str % 1 = '#' THEN TEST [ str % 2 = 'X' ] |
+                              [ str % 2 = 'x' ] THEN $( f := 3 ; rx := 16 $)
+                         ELSE $( f := 2 ; rx := 8 $)
+
+   IF rx = 10 & [ str % 1 = '-' ] THEN $( neg := TRUE ; f := 2 $)
+
+   FOR c = f TO str % 0 DO
+   $(
+      LET ch = str % c
+
+      ch := [ '0' <= ch <= '9' ] -> ch - '0',
+            [ 'A' <= ch <= 'Z' ] -> ch - 'A' + 10,
+            [ 'a' <= ch <= 'z' ] -> ch - 'a' + 10, 999
+
+      TEST 0 <= ch <= rx THEN num := num * rx + ch
+                         ELSE $( result2 := FALSE ; RESULTIS 0 $)
+   $)
+
+   result2 := TRUE ; RESULTIS neg -> -num, +num
+$)
+
+

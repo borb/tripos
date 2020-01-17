@@ -1,0 +1,41 @@
+|| (C) Copyright 1979 Tripos Research Group
+||     University of Cambridge
+||     Computer Laboratory
+
+SECTION "NT-PNT"
+
+GET "libhdr"
+
+GET "manhdr"
+
+GET "iohdr"
+
+LET note (stream, vector) = note.point(stream, vector, action.note)
+AND point(stream, vector) = note.point(stream, vector, action.point)
+
+AND note.point(stream, vector, action) = VALOF
+$( LET stream.id = stream!scb.id
+   IF stream!scb.type=0 THEN RESULTIS -1
+   UNLESS stream.id=id.inscb | stream.id=id.outscb | stream.id=id.updscb DO
+   $( result2 := 123
+      RESULTIS 0
+   $)
+   RESULTIS sendpkt(-1, ABS stream!scb.type, action, ?, ?,
+                    stream!scb.arg1,     || file control block
+                    vector)              || note/point control block
+$)
+
+AND selectinput(scb) = VALOF
+$( UNLESS scb=0 | scb!scb.id=id.inscb | scb!scb.id=id.outscb |
+                                        scb!scb.id=id.updscb DO abort(186)
+   cis := scb; RESULTIS TRUE
+$)
+
+
+AND selectoutput(scb) = VALOF
+$( UNLESS scb=0 | scb!scb.id=id.inscb | scb!scb.id=id.outscb |
+                                        scb!scb.id=id.updscb DO abort(187)
+   cos := scb; RESULTIS TRUE
+$)
+
+

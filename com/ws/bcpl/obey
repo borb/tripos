@@ -1,0 +1,415 @@
+// Source file "obey" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+
+SECTION "OBEY"
+GET "libhdr"
+GET "wrshdr"
+
+LET edit.obey.main(c) BE $(
+  LET pagelen = ((text.bot.scr.line - text.top.scr.line)*3)/4
+  LET cur.op = t.insertmode -> cur.inschar, cur.replacechar
+  // the following mess allows ^QQ to form escape codes as single commands.
+  IF c <= 127 THEN c := form.escapecode(c) // allow system dependent hooks in
+  TEST c = narrow.flip.char THEN new.narrow.offset() ELSE
+  TEST c > 127 THEN edit.obey.escapecode(c) ELSE
+  SWITCHON c INTO $(
+  CASE 0      : ENDCASE  // ^@, no-op
+  DEFAULT :  l: // if t.wordwrap & filecol + 3 > xmax then
+                //   meta.string("^A^S^G^N^D^QD", '^')
+                IF ~t.marrel & filecol >= right.margin & t.wordwrap & ~browse THEN
+                  wrap(ins.ch.line, left.margin)
+  CASE ' ': ll: cur.op(c); cur.right(); ENDCASE
+  CASE '('    : IF t.bracket THEN text.forw.bra.search()
+                IF ~browse THEN GOTO l; ENDCASE
+  CASE ')'    : IF t.bracket THEN text.back.bra.search()
+                IF ~browse THEN GOTO l; ENDCASE
+  CASE ctl&'\': $( LET c = textspace%(textcur + filecol) // flip case
+                   LET c2 = 'A' <= c <= 'Z' -> c - 'A' + 'a',
+                            'a' <= c <= 'z' -> c - 'a' + 'A', c
+                   IF c ~= c2 THEN cur.replacechar(c2)
+                   cur.right() $); ENDCASE
+  CASE ctl&'_': block.endwordleft(); ENDCASE
+  CASE ctl&'B': paragraph.justify(); ENDCASE
+  CASE ctl&'U': message("** ** ** Interrupt - no command in progress*n")
+                sys.keywait(300); ENDCASE // no effect at top level
+  CASE ctl&'M': TEST processbufallowed & twid ~= 0 THEN
+                  send.line.to.process(totwid)
+                 ELSE
+                  carriage.return(ch.line); ENDCASE // V2.0 with margins etc
+//  case ctl&'M': test t.insertmode then ins.ch.line(ch.line) else cur.op('*n')
+//                cur.right(); endcase
+  CASE ctl&'N': ins.ch.line(ch.line); ENDCASE
+  CASE ctl&'S': TEST fileline = 0 & filecol = 0 THEN filetop.message()
+                ELSE cur.left(); ENDCASE
+  CASE ctl&'D': cur.right(); ENDCASE
+  CASE ctl&'X': // cur.down(); endcase
+                cur.vertical(cur.down); ENDCASE
+  CASE ctl&'E': TEST fileline = 0 THEN filetop.message()
+                // else cur.up(); endcase
+                ELSE cur.vertical(cur.up); ENDCASE
+  CASE ctl&'Z': $( LET prev = fileline
+                   cur.down()
+                   IF prev ~= fileline THEN $(
+                     text.top.vis.line := text.top.vis.line + 1
+                     scr.hardscroll.hint(-1, text.top.scr.line + 1,
+                       text.bot.scr.line) $) $); ENDCASE
+
+  CASE ctl&'W': TEST text.top.vis.line = 0 THEN filetop.message()
+                ELSE $(
+                  text.top.vis.line := text.top.vis.line - 1; cur.up()
+                  IF text.top.vis.line >= 0 THEN
+                    scr.hardscroll.hint(1, text.top.scr.line,
+                      text.bot.scr.line - 1) $)
+                ENDCASE
+  CASE ctl&'C': text.top.vis.line := text.top.vis.line + pagelen
+                FOR i = 1 TO pagelen DO cur.down(); ENDCASE
+  CASE ctl&'R': TEST text.top.vis.line = 0 & fileline < ymax THEN filetop.message()
+                ELSE $( 
+                  text.top.vis.line := text.top.vis.line - pagelen
+                  FOR i = 1 TO pagelen DO cur.up() $)
+                ENDCASE
+  CASE ctl&'A': block.wordleft(); ENDCASE
+  CASE ctl&'F': block.wordright(); ENDCASE
+  CASE ctl&'T': IF browsemode() THEN ENDCASE
+                block.delword(); ENDCASE
+  CASE ctl&'G': cur.del.check.ch.line(cur.delchar.backwards)
+                textpush(0); ENDCASE
+  CASE #X7F   : TEST filecol ~= 0 | fileline ~= 0 THEN $(
+                  LET ch = textspace%(textcur + filecol)
+                  cur.left()
+                  TEST t.insertmode | ch = ch.line | ch >= ch.lineend THEN
+                    cur.del.check.ch.line(cur.delchar)
+                  ELSE $(
+                    // If not at the end of a line in replace mode, replace with a space.
+                    LET ch2 = textspace%(textcur + filecol)
+                    IF ch2 ~= ch.line & ch2 < ch.lineend THEN
+                      cur.replacechar(' ') $)
+                  textpush(0) $)
+                ELSE filetop.message()
+                ENDCASE
+  CASE ctl&'V': t.insertmode := ~ t.insertmode; ENDCASE
+  CASE ctl&'L': find(3); ENDCASE
+  CASE ctl&'Y': IF browsemode() THEN ENDCASE
+                scr.hardscroll.hint(-1,
+                  text.top.scr.line + (fileline - text.top.vis.line) + 1,
+                  text.bot.scr.line)
+                text.delline(); ENDCASE
+  CASE ctl&'Q': edit.obey.quick(); ENDCASE  // menu and subcommands
+  CASE ctl&'K': edit.obey.block(); ENDCASE
+  CASE ctl&'O': edit.obey.onscreen(); ENDCASE
+  CASE ctl&'P': edit.obey.print(); ENDCASE
+  CASE ctl&'J': edit.obey.help(); ENDCASE
+  CASE ctl&'I': edit.obey.tab(t.tabindent); ENDCASE
+  CASE ctl&'H': IF textpop(yes) = ch.line THEN ins.ch.line(0); ENDCASE
+  CASE ctl&']': textditto(); cur.right(); ENDCASE    // WS extension feature
+  CASE ctl&'[': scr.jumbled(); ENDCASE           // redraw screen
+  CASE ctl&'^': edit.obey.swap()                 // split screen
+ $) $)
+
+AND filetop.message() BE $(
+  message(lines.rolled.past = 0 -> "  Top of the file*n",
+    "  Start of buffer - cannot rewind (big file)*n")
+  rptstop := yes
+  sys.keywait(200) $)
+
+AND ins.ch.line(eolchar) BE $( // attempt to do hardware scroll
+  // now global, August 1983
+  // eolchar could be a hard or soft CR
+  LET near.bot = text.bot.scr.line - screen.y.of.file.cur < 3
+  IF eolchar ~= 0 THEN cur.inschar(eolchar) // undelete *N uses this too
+  TEST near.bot THEN $( // scroll chars above up
+    text.top.vis.line := text.top.vis.line + 1
+    scr.hardscroll.hint(-1, text.top.scr.line + 1, screen.y.of.file.cur) $)
+  ELSE $(
+    scr.hardscroll.hint(1, screen.y.of.file.cur + (filecol = 0 -> 0, 1),
+       text.bot.scr.line - 1) $) $)
+
+AND cur.del.check.ch.line(delcharop) BE $( // delete char, and scroll if seems reasonable
+  LET ch = textspace%(textcur + filecol)
+//  cur.delchar()
+  delcharop() // different directions for DEL and ^G
+  IF ch = ch.line THEN
+    scr.hardscroll.hint(-1, screen.y.of.file.cur + 1, text.bot.scr.line) $)    
+
+AND quick.menu() BE $(
+  LET c = cmd.simple
+c(0,"-----------------------------Q U I C K   M E N U--------------------------------*n")
+c(0,"------Cursor  Movement------|--Delete--|----Miscellaneous-----|---Other Menus---*n")
+c(0,"           E screen top     |Y line  rt|F Find text in file   | (from Main only)*n")
+c(0,"  S line begin   D line end |DEL lin lf|A find And replace    |^J Help  ^K Block*n")
+c(0,"           X screen bot     |H   undel |I variable tab        |^Q Quick ^P CtlCh*n")
+c(0,"move to:--------------------|----------|Q Repeat command or   |^O Onscreen*n")
+c(0," R top of text     V last find or block|  key  until  space   |Space bar returns*n")
+c(0," C bottom of text  L line number       |  bar  or other key   |you to Main Menu.*n")
+IF helplevel < 3 THEN
+c(0,"--------------------------------------------------------------------------------*n") $)
+
+
+AND edit.obey.quick() BE $(
+  LET c = pop.up.menu(
+    "^Q - press a 'quick' command key*n",
+    "^Q - press a 'quick' command key      (or press ? for list of commands)*n",
+    "^Q - these are the available commands:*n",
+    quick.menu)
+//  if helplevel >= 2 then $(                  // V1.7.1 screen garbage fix
+//    text.update.info := text.update.info | 7 // V1.7.1 screen garbage fix
+//    text.update()                            // V1.7.1 screen garbage fix
+//    scr.dolineupdates() $)                   // V1.7.1 screen garbage fix
+//  scr.updateline(0, "*n", 1, cmdline)
+  IF 'A'<=c<='Z' | 'a'<=c<='z' THEN c := ctl&c
+  SWITCHON c INTO $( DEFAULT: message("  Not a ^Q command - ignored*n"); sys.keywait(450); ENDCASE
+    CASE ' ': ENDCASE // graceful exit
+    CASE ctl&'H': IF textpop(no) = ch.line THEN ins.ch.line(0); ENDCASE
+    CASE ctl&'I': edit.obey.tab(no); ENDCASE // variable tab
+    CASE ctl&'S': WHILE filecol ~= 0 DO cur.left(); ENDCASE
+    CASE ctl&'D': cur.endofline(); ENDCASE
+    CASE ctl&'E': WHILE fileline > text.top.vis.line & fileline > 0 DO cur.up(); ENDCASE
+    CASE ctl&'L': // move to absolute line
+                  // WS doesn't have this, but I think that it might be useful
+     $( LET menu() BE message("Move to absolute line in text:*n")
+        LET answ = cmd.query.numeric(menu, "Line number? ")
+        LET answ2 = result2
+        IF answ = (ctl&'U') | qbuf.line%0 = ch.line THEN $( 
+          message("  Command ignored*n"); sys.keywait(200); ENDCASE $)
+        message( "  Moving to line %N ...*N", answ2 )
+        cur.moveto(answ2 - (1 + lines.rolled.past), 0, 0)
+        ENDCASE $) // user thinks line 1 is top
+
+      CASE ctl&'X': cur.moveto(text.top.vis.line +
+                      (text.bot.scr.line - text.top.scr.line) - 1,
+                      0, "*n"); ENDCASE
+//    case ctl&'X': $( let i = 0; while fileline < text.top.vis.line +
+//                    (text.bot.scr.line - text.top.scr.line) - 1 & i < ymax do $(
+//                       cur.down(); i := i + 1 $) $);  endcase
+      CASE ctl&'C': cur.moveto(999999, 999,
+                      "  Moving to end of text ...*n"); ENDCASE
+//    case ctl&'C': $( let l, cnt = ?, 1
+//                     $( cnt := cnt + 1; if cnt = 50 then
+//                          message("  Moving to end of text ...*n")
+//                          if (cnt & 63) = 0 then $(
+//                            sys.keywaiting(); if checkint() then break $)
+//                        l := fileline; cur.down() $) repeatuntil l = fileline
+//                     cur.endofline() $); endcase
+    CASE ctl&'R': cur.moveto(0, 0, "  Moving to top of text ...*n"); ENDCASE
+//    case ctl&'R': $( let cnt = 1
+//                     while fileline ~= 0 do $(
+//                       cnt := cnt + 1; if cnt = 50 then
+//                          message("  Moving to top of text ...*n")
+//                       if (cnt & 63) = 0 then $(
+//                          sys.keywaiting(); if checkint() then break $)
+//                       cur.up() $) $)
+//                  while filecol > 0 do cur.left(); endcase
+    CASE ctl&'Q': scr.updateline(0, "^QQ - press key to be repeated*n",1, cmdline)
+                  scr.dolineupdates(); c := form.escapecode(sys.rdch())
+                  IF c = (ctl&'Q') | c=(ctl&'K') | c=(ctl&'O') | c=(ctl&'P') |
+                    c=(ctl&'J') THEN $( error("A menu cannot be repeated"); ENDCASE $)
+    CASE ctl&']':
+    CASE ctl&'Z': CASE ctl&'W': $( LET rate = - 1 // cheat for first time
+                  $( $( // dreadful mess to get PF key repeat right.
+                        // what if he goes ESC = ? ...ug, not sure right now
+                        LET lev = sys.inlevel()
+                        edit.obey.main(c)
+                        WHILE sys.keywaiting() & lev ~= sys.inlevel() DO
+                          edit.obey.main(sys.rdch()) $)
+                     text.update(); scr.dolineupdates(); sys.flushbuf()
+                     IF rate = -1 THEN $(
+                       scr.updateline(0, "Press 0-9 to vary speed, SPACE to stop*n", 1, cmdline)
+                       rate := 0 $)
+                     IF rptstop THEN BREAK
+                     IF sys.keywait(rate) THEN $(
+                       LET ch = sys.rdch()
+                       TEST '0'<=ch & ch <='9' THEN rate := 10*(ch+1-'0') ELSE BREAK $)
+                  $) REPEAT $); ENDCASE
+
+    CASE ctl&'V': TEST marker.y!13 < 0 THEN error("No previous find or block operation")
+                  ELSE cur.marker(13); ENDCASE
+    CASE ctl&'F': find(1); ENDCASE
+    CASE ctl&'A': find(2); ENDCASE
+    CASE ctl&'B':
+    CASE ctl&'K': c := c = (ctl&'B') -> '9' + 1, '9' + 2 // block markers
+    CASE '0': CASE '1': CASE '2': CASE '3': CASE '4': CASE '5': CASE '6':
+    CASE '7': CASE '8': CASE '9':
+      c := c - '0'
+      TEST marker.y!c < 0 THEN error("Marker %s has not been set*n", marker.name!c)
+      ELSE $( message( "  Moving to marker <%C> ...*N", "0123456789BK" % (c+1) )
+              cur.marker(c); marker.hidden!c := no
+              text.update.info := text.update.info | 7 $); ENDCASE
+    CASE ctl&'G': // ^QG = ^QT = ^QY seems logical,
+    CASE ctl&'T': //    though WS does not allow it...
+    CASE ctl&'Y': $( LET curhere, curend = filecol, ?
+                     IF browsemode() THEN ENDCASE
+                     cur.endofline(); curend := filecol
+                     filecol := curhere
+                     FOR i = curhere TO curend - 1 DO 
+                       cur.delchar.backwards() $) // so undeletion is nice
+                     textpush(0)
+                     ENDCASE
+    CASE #X7F: IF (~browsemode()) THEN $(
+                 WHILE filecol ~= 0 DO $( cur.left(); cur.delchar() $)
+                 textpush(0) $) // end of block for undeletion
+$) $)
+
+
+//and edit.obey.tab() be $(
+//  let cur.op = t.insertmode -> cur.inschar, cur.replacechar
+//  if browsemode() then return
+//  switchon tab.action into $(
+//    case 3: cur.op(ctl&'I'); cur.right(); endcase
+//    case 2: $( cur.op(' '); cur.right() $) repeatwhile (filecol & 7) ~= 0; endcase
+//    case 1: if fileline = 0 & filecol = 0 then endcase
+//            if filecol ~= 0 then $( ins.ch.line(); cur.right() $)
+//            $( textditto()
+//               if textspace%(textcur + filecol) ~= ' ' &
+//                  textspace%(textcur + filecol) ~= (ctl & 'I') then break
+//               cur.right() $) repeat; cur.delchar() $) $)
+
+AND edit.obey.tab(indent) BE IF ~browsemode() THEN $(
+  LET newline.done = no
+  LET col = filecol + 1
+  IF indent THEN $( // overwrites variable tabs
+    IF fileline = 0 & filecol = 0 THEN RETURN
+    IF filecol ~= 0 THEN $( ins.ch.line(ch.line); cur.right() $)
+    $( textditto()
+       IF textspace%(textcur + filecol) ~= ' ' &
+          textspace%(textcur + filecol) ~= (ctl & 'I') THEN BREAK
+       cur.right() $) REPEAT; cur.delchar(); RETURN $)
+ tryagain:
+  IF ~t.insertmode THEN GOTO replacemode
+  $( IF col > right.margin THEN GOTO nonefound
+     IF tabbuf%col = '!' THEN BREAK // ignore decimal tabs for now
+     col := col + 1 $) REPEAT
+ endofline: // from replacemode stuff
+  FOR i = filecol + 1 TO col DO $( cur.inschar(' '); cur.right() $)
+  RETURN // perfectly normal, have advanced to next tabstop
+ nonefound:
+  IF newline.done THEN RETURN
+  carriage.return(ch.line) // spaces over to left margin
+  newline.done := yes; GOTO tryagain
+ replacemode:
+  $( IF col > right.margin THEN GOTO nonefound
+     IF tabbuf%col = '!' THEN BREAK
+     col := col + 1 $) REPEAT
+  FOR i = filecol + 1 TO col DO $(
+    LET c = textspace%(textcur + filecol)
+    IF c = ch.line | c >= ch.lineend THEN GOTO endofline
+    cur.right() $) $)
+
+AND carriage.return(eolchar) BE IF ~browsemode() THEN $(
+  // what to do if CR is pressed.
+  // browsemode  -> forget it
+  // insertmode  -> insert a hard CR
+  //                if margins aren't relased,
+  //                  insert enough spaces to reach the left margin
+  // replacemode -> move to next line, or insert CR if at end of file
+  //                if margins aren't released,
+  //                  move over to left margin, or insert spaces if line too short
+  IF ~t.insertmode THEN GOTO replacemode
+  ins.ch.line(eolchar)
+  // At this point I remove trailing blanks from the line
+  WHILE filecol > 0 & textspace%(textcur + (filecol - 1)) = ' ' DO $(
+    cur.left(); cur.delchar() $)
+  cur.right()
+ insert.accross:
+  IF ~t.marrel THEN
+    FOR i = filecol + 1 TO left.margin DO $( cur.inschar(' '); cur.right() $)
+  RETURN
+ replacemode:
+  $( LET lin = fileline
+     cur.down()
+     TEST lin = fileline THEN $( // end of file
+       cur.endofline(); ins.ch.line(eolchar); cur.right() $)
+     ELSE filecol := 0 // move to beginning of line
+     IF ~t.marrel THEN
+       FOR i = 1 TO left.margin DO $(
+         LET ch = textspace%(textcur + filecol)
+         IF ch = ch.line | ch >= ch.lineend THEN GOTO insert.accross
+         cur.right() $) $) $)
+
+AND browsemode() = ~browse -> no, VALOF $(
+  error("Can't do that in BROWSE mode*n"); RESULTIS yes $)            
+
+AND justify.line() BE RETURN // nothing yet
+
+AND wrap(newline.op, left) = VALOF $(
+  // returns true if safe to continue paragraph justification
+  LET col  = filecol
+  LET col2 = filecol
+  $( LET ch = ?
+     col2 := col2 - 1; IF col2 <= left THEN RESULTIS no
+     ch := textspace%(textcur + col2)
+     IF (ch = ' ' | ch = ch.softspace) & col2 < right.margin THEN BREAK $) REPEAT
+  col2 := col2 + 2
+  FOR i = col2 TO col DO cur.left()
+  // I think that I will delete trailing spaces here.
+  IF kosher.files THEN
+    WHILE filecol > 0 & textspace%(textcur + (filecol - 1)) = ' ' DO $(
+      cur.left(); cur.delchar() $)
+  newline.op(kosher.files -> ch.line, ch.softline)
+  cur.right()
+  FOR i = 1 TO left.margin DO $(
+    cur.inschar(' '); cur.right() $)
+  FOR i = col2 TO col DO cur.right()
+  RESULTIS textspace%(textcur + filecol) ~= ch.eof $)
+
+AND paragraph.justify() BE $( // ^B command
+  LET left = filecol
+  LET lines = 0
+  LET lineend(c) = c = ch.line | (c >= ch.lineend & c ~= ch.eof)
+  LET fileend(c) = c = ch.eof
+  LET whitespace(c) = c = ' ' | c = (ctl & 'I')
+  LET paraend(c) = lineend(c) | VALOF
+    SWITCHON c INTO $( CASE '.': CASE ',': CASE ':': CASE ';':  CASE ch.eof:
+                       CASE '+': CASE '-': CASE '/': CASE '**': CASE '%':
+                       CASE ' ': CASE (ctl & 'I'):
+                       RESULTIS yes
+                       DEFAULT: RESULTIS no $)
+  IF browsemode() THEN RETURN
+  IF ~t.wordwrap THEN $(
+    error("^B: Please turn wordwrap on (^OW) before justifying paragraphs")
+    RETURN $)
+  WHILE lineend(textspace%(textcur + filecol)) DO cur.right()
+  $(
+     cur.endofline()
+     lines := lines + 1
+     WHILE filecol > right.margin DO $(
+       TEST wrap(cur.inschar, left) THEN cur.endofline() ELSE BREAK $)
+     left := left.margin
+     IF checkint() | fileend(textspace%(textcur + filecol)) THEN BREAK
+     cur.delchar() // concat the two lines
+     IF paraend(textspace%(textcur + filecol)) | lines > 15 THEN $(
+       cur.inschar(ch.line); BREAK $)
+     WHILE whitespace(textspace%(textcur + filecol)) DO cur.delchar()
+     cur.inschar(' ') $) REPEAT
+  textpush(0) $)
+
+// trying to get ^E and ^X to behave in a more intuitive way
+// they should move vertically on the screen if possible,
+// regardless of tab characters and so on
+
+AND screeninc(ch, pos) = VALOF $( // gives new value for pos
+                                  // pos is a screen pos starting at 0
+  ch := ch & #X7F // ignore top bit
+  RESULTIS ch >= 32 -> pos + 1, // normal
+           ch = (ctl&'I') -> (pos + 8) & -8, // tab - cause of all the fuss!!
+           2 $) // 2 is normal for a control character
+
+AND screenpos(filepos) = VALOF $(
+  LET pos = 0 // starting screen pos
+  FOR i = 0 TO filecol - 1 DO
+    pos := screeninc(textspace%(textcur + i), pos)
+  RESULTIS pos $)
+
+AND cur.vertical(cur.up.or.down) BE $(
+  LET dstpos = screenpos(filecol) // where we're trying to go
+  cur.up.or.down()
+  $( LET scrpos, filepos = 0, 0
+     $( IF scrpos >= dstpos THEN BREAK
+        IF eol(textspace%(textcur+filepos)) THEN BREAK
+        scrpos := screeninc(textspace%(textcur+filepos), scrpos)
+        filepos := filepos + 1 $) REPEAT
+     IF scrpos > dstpos + 4 THEN filepos := filepos - 1 // middle of tab
+     WHILE filepos < filecol DO cur.left()
+     WHILE filepos > filecol DO cur.right() $) $)
+
+

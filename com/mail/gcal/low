@@ -1,0 +1,142 @@
+.LIBRARY "A4"
+.LIBRARY "Notehdr"
+.tabset 9 17 25 33 41 49 57 65 74
+.
+.srgdoc "PB" "Mailserver Interface"
+.
+.section Introduction
+The mailserver supplies three services on the name MAIL,
+specified by the function code.
+They are test for new mail (1), send a mail item (2) and enquire about mail (3).
+An enquiry returns the fileserver puid of the user's mail directory, and clears
+the 'new mail' flag that is used by the test function.
+This interface may be replaced in the future by one which will return the
+information about the user's mail in the reply block.
+.section SSP format
+Each request is a SSP block, currently of upto 512 octets,
+with the following format:
+.sp
+.ensure 5
+.copy
+#0:     SSP header
+#6:     Transaction id
+#8:     user TUID under USERAUTH
+10:     user PUID
+18:     data
+.fill
+.Section Test (1)
+This functions simply tests whether any mail has arrived for the user since
+the last enquiry function call.
+Only the PUID part of the data is inspected - this may be changed if it is felt
+that authentication is neccessary.
+The result is a ring return code passed back in the first two octets of the
+reply data.
+Any result other than 0 means 'no new mail'.
+.Section Send (2)
+The Send entry has a set of key-value pairs indicating the data supplied.
+They occur in octet pairs, the first being the key, and the second being the
+value associated with that key.
+.ensure 12
+The key values are:
+.copy
+        #0      End of list
+        #1      Recipient list
+        #2      Subject string
+        #3      Tripos format file
+        #4      CAP format file [not available yet]
+        #5      Immediate text
+        #6      Carbon Copy list
+        #7      Blind Carbon Copy list
+        #8      Subsequent offsets are multiples of <n> instead of 2
+        #9      Reply list. String of users to receive replies.
+        10      [Forward information. Not available yet]
+        11      Bits to be set in the recipients directory (see below).
+.fill
+.sp
+The sender must supply 0, 1, one of 3,4 and 5,
+and may supply 2, 6 or 7 as desired.
+.sp
+Key 8 gives the grain size for pointers.
+Thus if a pointer n is given, it must start at octet (n*grainsize)-6 of the
+user data of the SSP block
+[This is simply n*grainsize for 6 octet SSP headers].
+.nl
+The value associated with keys 1 to 7 is a pointer to the start of the data
+item.
+These are absolute pointers, and not offsets from the previous item.
+Thus to access more than 255 octets of the SSP block, the pointer is not a octet
+offset, but some multiple of octets offset, given by the grain size.
+Thus with key 8 set to 2 [as it currently must be], 9 would represent a string
+starting at octet offset 18.
+All strings have a length octet followed by that many data octets.
+This implies that no string may be more than 255 octets long.
+Note that each item starts a multiple of the grain size.
+.sp
+.copy
+.ensure 7
+_Example
+6C00 1234 0002                          SSP header, send function
+0802 0106                               Grain size is 2, recipient list
+0508 0211                               immediate data, subject
+0B04 0000                               Public, end of key-value pairs
+02504200                                Recipient string 'PB'
+1054686520D665737361676520626F647900    Text string 'The message body'
+0C54657374696E67204D41494C00            Subject string 'Testing MAIL'
+.fill
+.section Enquire (3)
+This is experimental, and may at some later date be superceded by a more secure
+interface.
+A Zero return code indicates that the SSP reply block contains the Fileserver
+PUID of the user's mail directory.
+The format of the file is a chain of mail items, starting at octet 50 (decimal).
+.ensure 12
+Each entry has the following fields:
+.copy
+#0      Pointer to next entry           ~~#XFFFF -> end of chain
+#2      Two octets of flags             See below for meaning
+#4      Start of SENDER string          Offset from start of this entry
+#6      Start of SUBJECT string         0 -> no subject
+#8      Unigue message id
+14      Fileserver puid of TEXT file    0 -> no text file
+1C      Fileserver puid of HEADER file
+24      Version of this entry           [currently 1]
+26      Octets in text file
+28      Octets in header file
+        <strings>
+.fill
+.sp
+All offsets are in multiples of two octets.
+Each file is a stream of ASCII octets, starting at octet 50 (decimal),
+with the number of octets in the octet pair offset 4 and 5.
+[this may be extended to include 2 and 3 as well]
+.sp
+.ensure 5
+The two octets of flags indicate:
+.copy
+0001    Mail item has been deleted
+0002    Mail item has been typed
+0004    Mail item is Public (anyone is allowed to look at it)
+8000    This is NOT a mail item - Ignore it
+.fill
+.section Error codes
+The Error codes returned by MAIL are all explained by the WHY service.
+.copy
+.sp
+.ensure 4
+_Mail returncodes
+.sp
+~~#XDF3F        User not known to system                        Enquire
+~~#XDF3E        No new mail for user [ only data, not ssp rc]   Test
+~~#XDF3D        Mail operation already performed                Send
+.sp
+.ensure 6
+_Global returncodes
+.sp
+~~#XA003        Congsetion
+~~#XC002        Unknown Function
+~~#XC00B        Request too short
+~~#XDFD0        Invalid UID set
+~~#XB004        Can't contact FS, MAP or AOT
+.fill
+
+

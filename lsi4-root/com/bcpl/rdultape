@@ -1,0 +1,542 @@
+//******************************************************************************
+//*                                                                            *
+//*    RDULTAPE              Program to read an unlabelled tape.               *
+//*                                                                            *
+//******************************************************************************
+//*    I. D. Wilson          Last Modified   -   IDW   -   04/01/82            *
+//******************************************************************************
+
+
+SECTION "RDULTAPE"
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "p5:sys.tapeserver.bcpl.tapehdr-globals"
+GET "p5:sys.tapeserver.bcpl.tapehdr-manifests"
+
+
+GLOBAL
+$(
+    veclist      :  ug + 0
+    filesstream  :  ug + 1
+    sysout       :  ug + 2
+    interactive  :  ug + 3
+    mounted      :  ug + 4
+    discstream   :  ug + 5
+    readco       :  ug + 6
+    binary       :  ug + 7
+$)
+
+
+MANIFEST
+$(
+    a.files      =  0
+    a.lrecl      =  1
+    a.blksize    =  2
+    a.binary     =  3
+
+    s.eof        =  -1
+    s.ok         =  -2
+$)
+
+
+LET start()  BE
+$(
+//  Main routine of RDULTAPE.  It takes a file (by default the console),
+//  from which it reads a list of files to be put on the tape.  It reads the
+//  files from the tape sequentially.
+
+    LET args     =  "FILES,LRECL/A/K,BLKSIZE/A/K,BINARY/S"
+    LET argv     =  VEC 50
+    LET files    =  0
+    LET lrecl    =  0
+    LET blksize  =  0
+    LET recbuff  =  0
+    LET seq      =  0
+
+    veclist      :=  0
+    filesstream  :=  0
+    discstream   :=  0
+    readco       :=  0
+    sysout       :=  output()
+    mounted      :=  FALSE
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+        error( "Bad arguments for string *"%S*"", args )
+
+    files        :=  argv!a.files = 0  ->  "**", argv!a.files
+    filesstream  :=  findinput( files )
+
+    IF  filesstream = 0  THEN
+        error( "Cannot open *"%S*"", files )
+
+    lrecl    :=  argv!a.lrecl
+    blksize  :=  argv!a.blksize
+
+    binary   :=  argv!a.binary
+
+    lrecl    :=  convertnumber( lrecl )
+    blksize  :=  convertnumber( blksize )
+
+    //  If the default were taken, then we must fill in some numbers...
+
+    IF  lrecl = 0    THEN  error( "LRECL of zero is illegal" )
+    IF  blksize = 0  THEN  error( "BLKSIZE of zero is illegal" )
+
+    //  BLKSIZE  must be >= than LRECL, and also a multiple of it.
+    //  It must also be less than the maximum block size that can be
+    //  written to tape.  It must also be even.
+
+    IF  lrecl > blksize  THEN
+        error( "LRECL is greater than BLKSIZE" )
+
+    UNLESS  (blksize REM lrecl) = 0  DO
+        error( "BLKSIZE is not a multiple of LRECL" )
+
+    UNLESS  (blksize REM 2) = 0  DO
+        error( "BLKSIZE is not even" )
+
+    UNLESS  blksize < max.byte.blocksize  DO
+        error( "BLKSIZE is too large" )
+
+    //  We are now ready to start to read the files.  First try to mount the
+    //  tape.  If the tape is not mountable, stay in a loop, waiting for it.
+
+    writes( "RDULTAPE  Version 2.11*N" )
+
+    mounttape()
+
+    rewindtape()
+
+    //  Now, start taking input from the "files" stream.  If it is interactive,
+    //  we must put out a prompt.
+
+    recbuff  :=  gvec( lrecl / bytesperword )
+
+    readco   :=  createco( readblocks, 500 )
+
+    IF  readco = 0  THEN
+        error( "Cannot create the READ coroutine" )
+
+    callco( readco, blksize )
+    callco( readco, lrecl )
+
+    interactive  :=  compstring( files, "**" )  =  0
+
+    selectinput( filesstream )
+
+    $(  //  Loop to start writing the tape.
+
+        LET t.args  =  "CHARACTERFILE/A"
+        LET records =  0
+        LET t.argv  =  VEC 20
+        LET file    =  0
+        LET ch      =  0
+
+        IF  interactive  THEN  writes( "# *E" )
+
+        ch  :=  rdch()  REPEATWHILE  ch = '*S'  |  ch = '*T'
+
+        IF  ch = endstreamch  THEN  BREAK
+        IF  ch = '*N'         THEN  LOOP
+
+        unrdch()
+
+        UNLESS  rdargs( t.args, t.argv, 20 )  DO
+        $(
+            writef( "****** Bad arguments for *"%S*"*N", t.args )
+
+            LOOP
+        $)
+
+        file        :=  t.argv!0
+        discstream  :=  findoutput( file )
+
+        IF  discstream = 0  THEN
+        $(
+            writef( "****** Cannot open *"%S*":  ", file )
+            fault( result2 )
+
+            LOOP
+        $)
+
+        //  Now read the file from disc, and record it onto tape.
+
+        seq  :=  seq + 1
+
+        selectoutput( discstream )
+
+        UNTIL  callco( readco, recbuff ) = s.eof  DO
+        $(
+            records  :=  records + 1
+
+            writerec( recbuff, lrecl )
+        $)
+
+        endwrite()
+
+        discstream  :=  0
+
+        selectoutput( sysout )
+
+        writef( "%I3  %TZ  (Records: %N)*N", seq, file, records )
+    $)
+    REPEAT
+
+    //  Now tidy up after us.
+
+    deleteco( readco )
+    readco  :=  0
+
+    endstream( filesstream )
+    filesstream  :=  0
+
+    fvec( recbuff )
+
+    rewindtape()
+    dismounttape()
+
+    mounted  :=  FALSE
+
+    writes( "*N****** Dismount tape from drive*N" )
+
+    fvectors()
+$)
+
+
+
+AND readblocks( blksize )  BE
+$(
+//  Coroutine to handle the writing of tape blocks.
+
+    LET lrecl         =  cowait()
+    LET tape.blksize  =  blksize / bytespertapeword
+    LET word.blksize  =  blksize / bytesperword
+    LET block         =  gvec( word.blksize )
+    LET buffp         =  0
+    LET buffe         =  0
+    LET buffer        =  cowait()
+
+    $(  //  Loop to read tape blocks from the tape, and return them as records
+        //  to the input file.
+
+        //  Is there anything in the block buffer to read ?
+
+        IF  buffp = buffe  THEN
+        $(
+            buffe  :=  readtapeblock( block, tape.blksize ) * bytespertapeword
+            buffp  :=  0
+
+            //  If we have read a part record, then hopefully it will be an
+            //  integral number of file records.  If not, then throw out a
+            //  rhubarb.
+
+            UNLESS  buffe REM lrecl  =  0  DO
+            $(
+                selectoutput( sysout )
+
+                writef( "****** Tape block size %N not a multiple of LRECL=%N*N", buffe, lrecl )
+
+                buffe  :=  (buffe + lrecl) - (buffe REM lrecl)
+
+                selectoutput( discstream )
+            $)
+        $)
+
+        //  If the "buffe" pointer is zero, then this is the end of the file,
+        //  so we should return an indication of this.
+
+        buffer  :=  buffe = 0  ->  cowait( s.eof ),  VALOF
+
+        $(  //  If we are not at the end of file, we can return the next
+            //  record from the input stream.
+
+            FOR  i = 0  TO  lrecl-1  DO
+                buffer % i  :=  block % (buffp + i)
+
+            buffp  :=  buffp + lrecl
+
+            RESULTIS  cowait( s.ok )
+        $)
+    $)
+    REPEAT
+
+    fvec( block )
+$)
+
+
+
+AND writerec( buffer, size )  BE
+$(
+//  Write the buffer "buffer" to the current output stream.  Translate any
+//  strange characters to something non harmful.
+
+    LET length  =  0
+    LET warned  =  FALSE
+
+    //  If we are writing the file in binary, then we cannot do any translation
+    //  on it.
+
+    IF  binary  THEN
+    $(
+        FOR  i = 0  TO  size-1  DO  wrch( buffer % i )
+
+        RETURN
+    $)
+
+    //  First, strip any trailing spaces.
+
+    WHILE  (size > 0)  &  (buffer % (size-1) = '*S')  DO  size  :=  size - 1
+
+    UNTIL  length = size  DO
+    $(
+        //  Check to see whether the character is a bona-fide bog-standard
+        //  ASCII character.
+
+        LET ch  =  buffer % length
+
+        IF  badch( ch )  THEN
+        $(
+            UNLESS  warned  DO
+            $(
+                selectoutput( sysout )
+                writef( "****** Illegal non-text character #X%X2*N", ch )
+                selectoutput( discstream )
+
+                warned  :=  TRUE
+            $)
+
+            ch  :=  '?'
+        $)
+
+        wrch( ch )
+
+        length  :=  length + 1
+    $)
+
+    newline()
+$)
+
+
+
+
+AND badch( ch )  =  VALOF
+$(
+//  Returns true if the character is not a printable  member of the ascii
+//  character set.
+
+    LET c  =  ch & #X7F
+    LET w  =  ch >> 4
+    LET b  =  ch & #X0F
+
+    LET t  =  TABLE   #B0011111110000000,  // SI  to NUL
+                      #B0000100000000000,  // DLE to US
+                      #B1111111111111111,  // /   to SP
+                      #B1111111111111111,  // ?   to 0
+                      #B1111111111111111,  // O   to @
+                      #B1111111111111111,  // _   to P
+                      #B1111111111111111,  // o   to `
+                      #B0111111111111111   // DEL to p
+
+    RESULTIS  (((t!w >> b) & 1) = 0)   |   (ch \= c)
+$)
+
+
+
+AND convertnumber( string )  =  VALOF
+$(
+    LET number  =  0
+
+    FOR  i = 1  TO  string % 0  DO
+    $(
+        LET ch  =  string % i
+
+        UNLESS  '0' <= ch <= '9'  DO
+            error( "Bad numeric character *"%C*" in *"%S*"", ch, string )
+
+        number  :=  number * 10  +  ch  -  '0'
+    $)
+
+    RESULTIS  number
+$)
+
+
+
+AND error( format, arg1, arg2, arg3 )  BE
+$(
+    selectoutput( sysout )
+
+    writes( "****** RDULTAPE Error:  " )
+    writef( format, arg1, arg2, arg3 )
+    newline()
+
+    UNLESS  filesstream = 0  DO  endstream( filesstream )
+    UNLESS  discstream  = 0  DO  endstream( discstream )
+    UNLESS  readco      = 0  DO  deleteco( readco )
+
+    IF  mounted  THEN  tape.dismount()
+
+    fvectors()
+
+    stop( 20 )
+$)
+
+
+
+AND mounttape()  BE
+$(
+    LET tape.error  =  error.noerror
+    LET ready       =  FALSE
+
+    UNTIL  tape.mount()  DO
+    $(
+        LET error  =  result2
+
+        UNLESS  error = tape.error  DO
+        $(
+            tape.error  :=  error
+            writes( "****** Waiting for tape drive:  " )
+            fault( tape.error )
+        $)
+
+        delay( tickspersecond )
+
+        IF  testflags( #B0001 )  THEN  error( "BREAK" )
+    $)
+
+    UNLESS  tape.error = error.noerror  DO
+        writes( "****** Tape drive claimed*N*N" )
+
+    mounted  :=  TRUE
+
+    //  Now wait for the drive to be ready.
+
+    ready  :=  (tape.status()  &  status.ready) \= 0
+
+    UNLESS  ready  DO
+    $(
+        writes( "****** Waiting  -  drive is not ready*N" )
+
+        UNTIL  ready  DO
+        $(
+            ready  :=  (tape.status()  &  status.ready) \= 0
+
+            IF  testflags( #B0001 )  THEN  error( "BREAK" )
+
+            delay( tickspersecond )
+        $)
+
+        writes( "****** Drive now ready*N*N" )
+    $)
+$)
+
+
+
+AND rewindtape()  BE
+    UNLESS  tape.rewind()  DO
+        error( "Failed to rewind tape (Rc %N)", result2 )
+
+
+
+AND dismounttape()  BE
+    UNLESS  tape.dismount()  DO
+        error( "Failed to dismount tape (Rc %N)", result2 )
+
+
+
+AND readtapeblock( buffer, size )  =  VALOF
+$(
+    LET rc  =  tape.read( buffer, size )
+    LET r2  =  result2
+
+    TEST  rc              THEN  RESULTIS  r2  ELSE
+    TEST  r2 = error.eof  THEN  RESULTIS  0   ELSE
+
+          error( "Failed to read block from tape (Rc %N)", r2 )
+$)
+
+
+
+AND gvec( vecsize )  =  VALOF
+$(
+//  Add a new vector to the list of those "got" already.
+
+    LET node   =  getvec( 2 )
+    LET space  =  getvec( vecsize )
+
+    TEST  node = 0  |  space = 0  THEN
+    $(
+        //  Cannot get either the main space, or the node space.
+        //  Free whichever one was successful, and flag an error.
+
+        UNLESS  node   = 0  DO  freevec( node )
+        UNLESS  space  = 0  DO  freevec( space )
+
+        error( "Cannot get vector of size %U5", vecsize )
+    $)
+    ELSE
+    $(
+        //  We have got the vector successfully, so add it to the
+        //  chain of allocated vectors.
+
+        node!0  :=  veclist
+        node!1  :=  space
+        veclist :=  node
+
+        RESULTIS  space
+    $)
+$)
+
+
+
+AND fvec( vector )  BE
+$(
+//  Free the vector pointed to by "vector".  Look in the allocated space chain
+//  to find this vector, and when found, de-allocate the space.
+
+    LET node  =  veclist
+    LET ptr   =  @veclist
+
+    UNTIL  node = 0  DO
+    $(
+        IF  node!1 = vector  THEN
+        $(
+            //  We have found the vector to deallocate.  Remove this node from
+            //  the list, and deallocate the space involved.
+
+            !ptr   :=  node!0
+
+             freevec( vector )
+             freevec( node )
+
+             RETURN
+        $)
+
+        ptr   :=  node
+        node  :=  node!0
+    $)
+
+    error( "Cannot free vector %N", vector )
+$)
+
+
+
+AND fvectors()  BE
+$(
+//  Free all the vectors pointed to by the list "veclist".
+
+    UNTIL veclist = 0  DO
+    $(
+        LET nlist  =  veclist!0
+        LET space  =  veclist!1
+
+        freevec( space )
+        freevec( veclist  )
+
+        veclist  :=  nlist
+    $)
+$)
+
+

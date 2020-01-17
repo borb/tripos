@@ -1,0 +1,969 @@
+// Source file "sysdep" for WORCESTAR text editor.
+// Author W. R. Stoye   Copyright (c) January 1983, all rights reserved.
+// Do not alter without the author's explicit permission.
+// Version 2.0, May 1983
+// V 5 - process window stuff
+// V 5.1 - BBC stuff copied from 16032 version
+//         screen.mode = 9 -> Cifer, else BBC mode
+
+SECTION "WS"
+
+// Everything implementation, OS or terminal dependent belongs here.
+// by W.Stoye, February 1983, on TRIPOS for a Cifer 2632 terminal
+
+GET"libhdr"   // standard
+GET"wrshdr"   // mine
+GET"iohdr"    // for sending packets to and from the terminal handler
+GET"manhdr"   // manifests for setting file size
+GET"termhdr"  // for finding out the terminal type from TRIPOS
+GET"bcpl.readtermvec"   // routine 'readtermvec()'
+
+MANIFEST $( initxmax = 79; initymax = 23  $)
+// if there are varous screen modes, these had better indicate the biggest
+//global $( termtype : ug + 60 $)  // 1 for Cifer, 2 for BBC
+GLOBAL $( buf : ug + 61; bufptr : ug + 62 $) // output buffer
+MANIFEST $( bufsize = 100; keysize = 32 $)
+GLOBAL $( keybuf : ug + 63; keyinptr: ug + 64
+          keyoutptr : ug + 65 $) // keyboard buffer
+GLOBAL $( length.of.source : ug + 66 $)
+
+GLOBAL $( outptr.vec       : ug + 69 $) // for end-of-file kludge
+
+// Pipes have been removed, until I decide how to present them neatly
+MANIFEST $( escape80 = escape | #X80 $) // apparently necessary for TRIPOS
+
+// In order to generate unique names for numerous files,
+// it turns out that I need a vector of scb's of currently
+// open random files. This should be enough!
+// Also, temporary files are not closed until windup:
+// This allows you to reuse them on later files,
+// and saves time opening and closing useless files.
+GLOBAL $( scbnum : ug + 67
+          scbfree: ug + 68 $); MANIFEST $( scbsiz = 50 $)
+
+LET bbc.argbyte(c) BE $(
+  // the amazing *vdu rom chops args > 96 into two out of fear
+  TEST c < 16 THEN sys.wrch(#X60 | (c & #XF)) ELSE
+  TEST c < 96 THEN sys.wrch(c) ELSE $(
+    sys.wrch(#X70 | ((c >> 4) & #XF))
+    sys.wrch(#X60 | (c        & #XF)) $) $)
+
+LET decvt125.window(top, bot) BE $(
+  sys.wrch(escape80); sys.wrch('[')
+  IF top ~= 0 THEN sys.writen(top + 1)
+  IF top ~= 0 | bot ~= ymax THEN sys.wrch(';')
+  IF bot ~= ymax THEN sys.writen(bot + 1)
+  sys.wrch('r') $)
+
+AND sys.writes(s) BE FOR i = 1 TO s%0 DO sys.wrch(s%i)
+AND sys.writen(n) BE $( // used for DECVT125 terminal
+  LET savewrch = wrch; wrch := sys.wrch; writen(n); wrch := savewrch $)
+
+LET sys.init(v) BE $(   // NOT now called by scr.init
+  bufptr := 0; buf := v
+  xmax := initxmax; ymax := initymax
+  sendpkt(notinuse, consoletask, act.sc.mode, 0, 0, TRUE) $)
+
+LET sys.finish() BE $( // called by scr.finish
+  sys.nonhighlight()
+  TEST screen.mode = 9 THEN $( // Cifer
+    sys.wrch(escape80)
+    sys.wrch('J')    // clear screen
+    sys.wrch(escape80)
+    sys.wrch('^')
+    sys.wrch('O')    // alternate keypad turned off again
+    sys.wrch(escape80)
+    sys.wrch('^')
+    sys.wrch('`') $)  // unblank hardware cursor.
+  ELSE TEST screen.mode = 8 THEN $(       // DECVT125
+    decvt125.window(0, ymax)              // unset window
+    sys.wrch(escape80); sys.writes("[2J") // clear screen
+    sys.wrch(escape80); sys.writes("[H")  // home cursor
+    sys.wrch(escape80); sys.wrch('>') $)  // unset keypad mode
+  ELSE $( // BBC
+    sys.wrch(26)     // reset windows
+    sys.curpos(0, ymax)  // bottom left
+    sys.wrch(10)         // line feed
+    // make the cursor reappear
+    sys.wrch(23); bbc.argbyte(1); bbc.argbyte(1)
+    FOR i = 1 TO 7 DO bbc.argbyte(0)
+//    osbyte(4,0) // re-enable cursor editing
+//    osbyte(#xe5,0)  // re-enable escape key
+    $)
+  sys.flushbuf()
+  sendpkt(notinuse, consoletask, act.sc.mode, 0, 0, FALSE) $)
+
+//
+// Screen and terminal output
+//
+// Terminal dependent bits
+
+LET sys.videoinit() BE $(
+  // various system variables, some of which are mode dependent
+  o.highlightcur   := screen.mode ~= 7 & screen.mode ~= 8 // use hware cursor
+  o.highlightblock := screen.mode ~= 7 // mode 7 cannot highlight
+  screencornerallowed  := screen.mode < 8 -> 1, 0 // bot rh screen corner
+  o.colinc         := xmax < 79 -> 10, 25 // horizontal screen hop
+  narrow.flip.char := xmax < 79 -> (ctl & '\'), 256 // flip char enabled
+  TEST screen.mode = 9 THEN $(
+    // I clear the screen by steam, to preserve his text.
+    // bits of this might also be dependent on the terminal mode
+    sys.curpos(0, ymax)
+    FOR i = 0 TO 23 DO sys.wrch(ctl&'J')
+    sys.wrch(escape80); sys.wrch('L')                 // inv id highlight
+    sys.wrch(escape80); sys.wrch('X')                 // half intensity
+    sys.wrch(escape80); sys.wrch('^'); sys.wrch('N')  // alternate numeric pad
+    sys.wrch(escape80); sys.wrch('^'); sys.wrch('_')  // blank hardware cursor
+    sys.nonhighlight() $)
+  ELSE TEST screen.mode = 8 THEN $(
+    // DECVT125
+    // set the screen width, depending on what is requested
+    sys.wrch(escape80); sys.wrch('=') // set keypad application mode
+    sys.wrch(escape80); sys.writes(xmax = 79 -> "[?3l", "[?3h") $)
+  ELSE $(
+    // called by scr.init.
+//    osbyte(4,1)  // cursor movement keys now generate #x88 to #x8b
+//    osbyte(#xe5,1)  // escape key just generates #x1b
+    sys.wrch(22); bbc.argbyte(screen.mode) // set screen mode
+    sys.wrch(17); bbc.argbyte(7)
+    sys.wrch(17); bbc.argbyte(128)
+    // 25-march-85 - turn the flashing bbc cursor off
+    sys.wrch(23); bbc.argbyte(1); FOR i = 1 TO 8 DO bbc.argbyte(0) $) $)
+//    for i = 0 to 3 do
+//      sys.wrch((table // 22, 3,             // set mode 3 and clr screen
+//                     17, 7, 17, 128)!i) $) $)   // inverse video switched off
+
+LET scr.cleareol() = VALOF $( // clear to end of line
+  IF screen.mode ~= 9 THEN RESULTIS 0 // only know it for Cifer
+  $( LET a = "?^$"
+     a % 1 := escape80 // AAAAAAAAAGHHHHJ!!!!! rotten language, I hate it
+     RESULTIS a $) $) // but how else do I return a string?
+
+LET sys.curpos(x, y) BE $(
+  TEST screen.mode < 8 THEN $( // BBC
+    sys.wrch(31); bbc.argbyte(x); bbc.argbyte(y) $)
+  ELSE TEST screen.mode = 8 THEN $(
+    // DECVT125 starts at 1,1 in top left hand corner
+    sys.wrch(escape80); sys.wrch('['); sys.writen(y + 1);
+    sys.wrch(';'); sys.writen(x + 1); sys.wrch('H') $)
+  ELSE $( // Cifer
+    sys.wrch(escape80)
+    TEST x=0 & y=0 THEN sys.wrch('H') ELSE $(
+      sys.wrch('P'); sys.wrch(x | #X80); sys.wrch(y | #X80) $) $) $)
+
+LET sys.highlight() BE $(
+  TEST screen.mode < 8 THEN $(
+    sys.wrch(17); bbc.argbyte(0); sys.wrch(17); bbc.argbyte(128 + 7) $)
+  ELSE TEST screen.mode = 8 THEN $(
+    // DECVT125
+    sys.wrch(escape80); sys.writes("[7m") $)
+  ELSE $(
+    sys.wrch(escape80); sys.wrch('N') $) $)
+
+LET sys.nonhighlight() BE $(
+  TEST screen.mode < 8 THEN $(
+    sys.wrch(17); bbc.argbyte(1); sys.wrch(17); bbc.argbyte(128) $)
+  ELSE TEST screen.mode = 8 THEN $(
+    // DECVT125
+    sys.wrch(escape80); sys.writes("[0m") $)
+  ELSE $(
+    sys.wrch(escape80); sys.wrch('O') $) $)
+
+LET bbc.window(xmin, ymin, xmax, ymax) BE $(
+  sys.wrch(28); bbc.argbyte(xmin); bbc.argbyte(ymax)
+  bbc.argbyte(xmax); bbc.argbyte(ymin) $)
+
+LET sys.hardscroll(dirn, top, bot, clr, move, jumble) BE $(
+  // this is called as a hint
+  // I do what scrolling the terminal is capable of,
+  // and call clr, move and jumble to describe any lines of the screen
+  // that change.
+  TEST screen.mode < 8 THEN $( // BBC
+//    if dirn > 0 then $(
+//      bot := bot+1
+//      bbc.window(0, top, xmax, bot)
+//      sys.curpos(0, 0)
+//      for i = 1 to dirn do $(
+//        sys.wrch(11)
+//        jumble(top)
+//        for j = bot to top + 1 by - 1 do move(j - 1, j) $) $)
+//    if dirn < 0 then $(
+//      top := top-1
+//      bbc.window(0, top, xmax, bot)
+//      sys.curpos(0, bot-top)
+//      for i = 1 to -dirn do $(
+//        sys.wrch(10)
+//        jumble(bot)
+//        for j = top to bot - 1 do move(j + 1, j) $) $)
+//    sys.wrch(26) // Release the BBC window
+//         $)
+  IF dirn > 0 THEN $(
+    bot := bot+1
+    TEST bot - top >= ymax - 2 THEN $(
+      top := 0; bot := ymax $)
+     ELSE
+      bbc.window(0, top, xmax, bot)
+    sys.curpos(0, 0)
+    FOR i = 1 TO dirn DO $(
+      sys.wrch(11)
+//      jumble(top)
+      FOR j = bot TO top + 1 BY - 1 DO move(j - 1, j)
+//      jumble(top) $) $)
+      clr(top) $) $)
+  IF dirn < 0 THEN $(
+    top := top-1
+    TEST bot - top >= ymax - 2 THEN $(
+      top := 0; bot := ymax $)
+     ELSE
+      bbc.window(0, top, xmax, bot)
+    sys.curpos(0, bot-top)
+    FOR i = 1 TO -dirn DO $(
+      sys.wrch(10)
+//      jumble(bot)
+      FOR j = top TO bot - 1 DO move(j + 1, j)
+//      jumble(bot) $) $)
+      clr(bot) $) $)
+  sys.wrch(26) // Release the BBC window
+  RETURN
+       $)
+  ELSE TEST screen.mode = 8 THEN $( // DECVT125
+  IF dirn > 0 THEN $(
+    bot := bot+1
+    decvt125.window(top, bot)
+    sys.curpos(0, top)
+    FOR i = 1 TO dirn DO $(
+      sys.wrch(escape80); sys.wrch('M') // cursor up (reverse scroll)
+      FOR j = bot TO top + 1 BY - 1 DO move(j - 1, j)
+      clr(top) $) $)
+  IF dirn < 0 THEN $(
+    top := top-1
+    decvt125.window(top, bot)
+    sys.curpos(0, bot)
+    FOR i = 1 TO -dirn DO $(
+      sys.wrch(10) // line feed (force a scroll)
+      FOR j = top TO bot - 1 DO move(j + 1, j)
+      clr(bot) $) $)
+  // decvt125.window(0, ymax) // now done in videoinit
+  RETURN $)
+
+  ELSE $( // Cifer
+    // esc, P, 0, ymax, ctlJ         scroll down whole screen
+    // esc, ^, )                     del current line, those below move up
+    // esc, ^, .                     cur line and those below move down
+    // esc, ^, -                     insert char (not used yet)
+    // esc, ^, (                     del char    (not used yet)
+    // esc, ^, ', 01                 protect doublewidth chars
+    // esc, ^, ', 00                 protection off
+    // esc, e                        highlight is double width
+    // esc, i                        highlight is not double width
+    // Protection is needed to pursuade the beastie to scroll a portion
+    // of the screen.
+
+    // This whole routine is VERY badly written, involves too much block
+    // moving and is far too slow. Such is life.
+
+    IF dirn < 0 & dirn > -5 & (bot - top) + 1 >= ymax THEN $(
+      // worth scrolling whole screen
+      sys.curpos(0, ymax)
+      FOR i = 1 TO -dirn DO $(
+        sys.wrch(ctl&'J')
+        FOR i = 1 TO ymax DO move(i, i - 1)
+        clr(ymax) $); RETURN $)
+    // Insline, Delline take a long time on the Cifer,
+    // during which incoming chars are ignored.
+    $( LET cifer.insline(ybot, n, clr, move) BE $(
+         IF n + 3 >= ymax | n < 0 THEN RETURN
+//         if sys.inbuffer.too.full.for.delay(15) then return
+         sys.curpos(0, n)
+         FOR i = ybot - 1 TO n BY -1 DO move(i, i + 1)
+         clr(n)
+         sys.wrch(escape80); sys.wrch('^'); sys.wrch('.')
+         $) // no delay in short scroll mode
+       LET cifer.delline(ybot, n, clr, move) BE $(
+         IF n + 3 >= ymax | n < 0 THEN RETURN
+//         if sys.inbuffer.too.full.for.delay(15) then return
+         sys.curpos(0, n)
+         FOR i = n TO ybot - 1 DO move(i + 1, i)
+         clr(ymax)
+         sys.wrch(escape80); sys.wrch('^'); sys.wrch(')')
+         $) // no delay in short scroll mode
+       LET lolim = ymax
+       IF bot < (ymax - 3) & dirn ~= 0 & dirn <= 3 & dirn >= -3 THEN $(
+         lolim := bot + 1
+         IF dirn > 0 THEN lolim := lolim + dirn
+         sys.curpos(0, lolim)
+         sys.wrch(escape80); sys.wrch('E') // double width
+         sys.wrch(escape80); sys.wrch('N') // highlight on
+         sys.wrch(' ')                     // protected char
+         sys.wrch(escape80); sys.wrch('^');
+         sys.wrch('*''); sys.wrch(#X81)    // protect double width ON
+         jumble(lolim) // now lines below here won't scroll
+         sys.wrch(escape80); sys.wrch('I') // not double width
+       sys.wrch(escape80); sys.wrch('O') // not highlighted
+         $)
+       IF dirn < 0 & dirn > -3 THEN $(
+         sys.wrch(escape80); sys.wrch('8') // short scroll mode
+         FOR i = 1 TO -dirn DO $(
+           cifer.delline(lolim, top-1, clr, move)
+//           cifer.insline(lolim, bot, clr, move) $)
+           $)
+         sys.wrch(escape80); sys.wrch('7') $) // long scroll mode, default
+       IF dirn > 0 & dirn < 3 THEN $(
+         sys.wrch(escape80); sys.wrch('8')
+         FOR i = 1 TO dirn DO $(
+           cifer.insline(lolim, top, clr, move)
+//           cifer.delline(lolim, bot + 1, clr, move) $)
+           $)
+         sys.wrch(escape80); sys.wrch('7') $)
+       IF lolim ~= ymax THEN $( // cancel protection
+         sys.wrch(escape80); sys.wrch('^')
+         sys.wrch('*''); sys.wrch(#X80) $) // protection off
+       $) $)
+       sys.flushbuf() // could help Cifer?
+ $)
+
+//and sys.inbuffer.too.full.for.delay(n) = keysize - (
+//  (keyoutptr > keyinptr -> keyoutptr - keyinptr,
+//      keyoutptr - (keyinptr - keysize))) > 5 // play safe
+
+//
+// System dependent bits
+//
+
+LET sys.wrch(c) BE $(
+  buf%bufptr := c
+  bufptr := bufptr + 1
+  IF bufptr = bufsize THEN sys.flushbuf() $)
+
+LET sys.flushbuf() BE IF bufptr > 0 THEN $(
+    sendpkt(notinuse, consoletask, act.sc.write, 0, 0, buf, bufptr)
+    bufptr := 0 $)
+
+//
+// Keyboard input handling
+//
+
+LET sys.rdch() = VALOF $( $(
+  IF keyinptr ~= keyoutptr THEN $(
+    LET c = keybuf%keyoutptr
+    keyoutptr := (keyoutptr + 1) & (keysize - 1)
+    RESULTIS c $)
+  delay(2) // .02 seconds on TRIPOS - allows other tasks a look in, apparently
+  sys.keywaiting() $) REPEAT $)
+
+LET sys.killkbd() BE keyinptr := keyoutptr // for error or escape
+
+LET sys.keywaiting() = VALOF $(
+  LET v = VEC keysize / bytesperword
+  LET n = sendpkt(notinuse, consoletask, act.read.buffer, 0, 0, v,
+    (keyoutptr > keyinptr -> keyoutptr - keyinptr,
+      keyoutptr - (keyinptr - keysize)) - 3, 0)
+  LET r2 = result2
+  IF r2 = -1 THEN sys.fatalerror := yes
+  FOR i = 0 TO n - 1 DO $(
+    LET c = v%i
+    IF c = (ctl&'U') THEN interrupt := yes
+    keybuf%keyinptr := c
+    keyinptr := (keyinptr + 1) & (keysize - 1) $)
+  RESULTIS keyinptr ~= keyoutptr $)
+
+LET sys.keywait(t) = VALOF $(
+  FOR i = 0 TO t / 5 DO $( IF sys.keywaiting() THEN RESULTIS yes; delay(1) $)
+  RESULTIS no $)
+
+//
+// I/O handling for files etc.
+//
+
+LET sys.selectinput(a) = selectinput(a)
+LET sys.selectoutput(a) = selectoutput(a)
+LET sys.findinput(a) = findinput(a)
+// sys.findinput is also defined in section "PIPE"
+// however this is not included in the release version yet
+LET sys.findoutput(a) = findoutput(a)
+LET sys.endread() = endread()
+LET sys.endwrite() = endwrite()
+LET sys.filerdch() = rdch()
+LET sys.filewrch() = wrch()
+
+
+LET start() BE
+  TEST testflags(1) ~= 0 THEN writes("*N****BREAK - WS aborted*N") ELSE $(
+  LET badargs = no
+  LET v0 = getvec (keysize / bytesperword) // input buffer
+  LET v1 = getvec (bufsize/bytesperword)
+// v2 and v3 are for the screen map
+// remember that they must be adequate for the biggest screen mode possible
+// 'scr.init' now getvec's most of its own space
+  LET v2 = getvec ((initxmax + 80)/bytesperword)
+  LET v3 = getvec (6 * 35) // biggest poss ymax, mode 0 of BBC
+  LET v4 = getvec (250/bytesperword)
+  LET v4b= getvec (250/bytesperword) // new in V2.0 for tabbuf
+  LET v5 = getvec ((initxmax+1) / bytesperword)
+  LET vq1, vq2, vq3, vq4 = getvec(80/bytesperword), getvec(80/bytesperword),
+                           getvec(80/bytesperword), getvec(80/bytesperword)
+  LET vq5 = getvec(80/bytesperword)
+  LET vtextbuf, vtextsize = getvec(1000/bytesperword), ? // deletion buffer
+  LET v6 = getvec (5000)
+  LET v7 = getvec (100)
+  LET initstring = getvec(100/bytesperword)
+  LET args, filename = rdargs("from/a,to/k,0/s,1/s,2/s,3/s,*
+                              *browse/s,bbc/s,init/k,noinit/s,*
+                              *inits/k,find/k,line/k,cifer", v7, 100), ?
+//  writef("v0=%n v1=%n v2=%n v3=%n v4=%n v5=%n v6=%n*n", v0, v1, v2, v3, v4, v5, v6)
+  outptr.vec := getvec(15) // for end of file kludge
+  outptr.vec!0 := outptr.vec + 4  // vector for note-point
+  outptr.vec!2 := outptr.vec + 10 // char vector for last few chars
+  writes(GET "info:*"WORCESTAR 6.57, %D**n*"") // current date
+||    $( let oldo, oldi = output(), input()
+||       let o, i = findappend(":wrs.wrs.ws-log"), ?
+||       if o ~= 0 then i := findinput("info:%D %T %V %L %U*n")
+||       if o ~= 0 & i ~= 0 then $(
+||         selectoutput(o); selectinput(i)
+||         $( let c = rdch(); while c ~= endstreamch do $( wrch(c); c := rdch() $) $)
+||         endread(); endwrite(); selectinput(oldi); selectoutput(oldo) $) $)
+||    writes("Brand new version with process buffers! (see ^J**)*n")
+  IF v6 = 0 THEN $( writef("Not enough space.*n"); stop(8) $)
+  // try to get as much space as possible
+  vtextsize := 51000 // must be divisible by 4 for fileserver !!
+  $( vtextsize := vtextsize - 1000
+     textspace := getvec((4 + vtextsize)/bytesperword) $) REPEATUNTIL textspace ~= 0
+  IF vtextsize < 10000 THEN $( writef("Only %n bytes of textspace - need >= 10000*n",
+    vtextsize); stop(8) $)
+  freevec(v6)
+  otherbuf := getvec(50) // holds details of other buffer
+  scb.init() // set up scbnum and scbfree
+  otherbuf!0 := 0; otherbuf!1 := 0  // no space for other buffer got yet
+
+  IF args = 0 THEN $( writes("Bad arguments in call to editor -*n*
+                             *The name of the source file is all that is required*n")
+     badargs := TRUE; GOTO exiting $)
+  browse := v7!6 ~= 0
+  //  due to the split screen facility, the filename string must
+  //  be in a freevec'able vector.
+  //  filename := v7!0  // no good any more
+  filename := getvec(80/bytesperword)
+  formf(filename, 1, 79, "%s", v7!0); filename%0 := (v7!0)%0
+  formf(vq1, 0, 79, "%s", v7!0); vq1%formptr := ch.line // init qbuf.file
+
+  splitallowed := yes; t.split := no
+  processbufallowed := yes; twid := 0
+  IF processbufallowed THEN
+     processbufallowed := inittwids() // returns yes if initialised ok
+     // also repeated in 'text' whenever he tries
+//  striptabsandspaces := yes // NOT implemented yet...
+  highlight.split := yes    // split and ruler in inverse video
+//  tab.action := 1;
+  t.ruler := yes; t.bracket := yes
+  helplevel := 3
+  IF v7!2 ~= 0 THEN helplevel := 0
+  IF v7!3 ~= 0 THEN helplevel := 1
+  IF v7!4 ~= 0 THEN helplevel := 2
+  IF v7!5 ~= 0 THEN helplevel := 3
+  IF helplevel ~= 3 THEN writef("Initial help level is %n*n", helplevel)
+
+// New things to be initialised for V2.0 May 1983
+  narrow.screen.offset := 0
+  narrow.screen.before := no
+  narrow.flip.char     := 256 // ie not a legal char
+  screen.mode          :=
+    VALOF $( LET mode = 9 // 9 for Cifer, 3 for BBC mode 3 (default)
+                          // 8 for DECVT125
+             LET termvec = readtermvec() // TRIPOS system call
+//             if termvec ~= 0 & (termvec!term.number = term.bbc |
+//                                termvec!term.number = term.bbc32)
+//             then mode := 3                     //  = term.2632 for Cifer
+             IF termvec ~= 0 & termvec!term.number = term.bbc32 THEN mode := 0
+// 25-Feb-85, everyone seems to prefer mode 0 so..
+//             if termvec ~= 0 & termvec!term.number = term.bbc   then mode := 3
+             IF termvec ~= 0 & termvec!term.number = term.bbc   THEN mode := 0
+             IF termvec ~= 0 & termvec!term.number = term.decvt125 THEN mode := 8
+             IF v7!7 ~= 0 THEN mode := 3        // bbc/s
+             IF v7!13 ~= 0 THEN mode := 9       // cifer/s
+             RESULTIS mode $)
+  srcname.not.dstname  := v7!1 ~= 0
+  random.files         := yes // ie random files available.
+  kosher.files         := yes // ie don't put soft chars into text.
+
+  tabbuf               := v4b // holds tabstops
+  os.call.char         := '@' // ^K@ gets a cli; -1 if no os call possible
+  log.dat              := 0   // record of edits etc.
+
+  IF v7!1 ~= 0 THEN writef("Editing from *"%s*" to *"%s*"*n", v7!0, v7!1)
+  writef("Entering editor with %n bytes of textspace*n", vtextsize)
+  // questions need permenant input buffers
+  // as the previous answer can always be recalled.
+  qbuf.file := vq1 // initial value is src file name (guess)
+  qbuf.find := vq2; qbuf.find%0 := ch.line
+  qbuf.repl := vq3; qbuf.repl%0 := ch.line
+  qbuf.opt  := vq4; qbuf.opt %0 := ch.line
+  qbuf.line := vq5; qbuf.line%0 := ch.line
+
+  // initialise the Lisp system, include number of nodes requested
+  wspl(2000) // eventually this will be user settable
+  // Should there be some method of specifying it in the init file?
+  // Hmm, sounds like a kludge to me..
+
+  keybuf := v0; keyinptr := 0; keyoutptr := 0
+//  o.highlightcur := yes
+//  o.highlightblock := yes
+//  o.colinc := 25
+  rulerbuf := v4
+  statusbuf := v5
+  writef(screen.mode = 8 -> "DECVT125 Terminal*n",
+         screen.mode = 9 -> "Cifer Terminal*n",
+                            "BBC Computer*n")
+  sys.init(v1)
+  ymax := screen.mode = 0 -> 31, screen.mode = 3 -> 24, 23 // yukk!!!
+  scr.init(v2, v3)
+//  new.screen.mode(screen.mode) // calls scr.init again
+
+  //  Change by IDW:  20/05/87
+  //    In order to speed up disc activities, we use a larger blocksize
+  //    internally.  Beware the fact that WRS has bound in the shift factors
+  //    necessary to turn a block number into a byte address!
+
+  blcksize  :=  8192
+
+  process.inbuf := getvec(200 / bytesperword) // input lines from processes
+  text.dbufinit(vtextbuf, 1000)
+
+  // setting up the initstring
+  formptr := 1
+  TEST v7!10 ~= 0 THEN // inits/k in rdargs
+    formf(initstring, 1, 100, "%s", v7!10)
+  ELSE
+  TEST v7!11 ~= 0 THEN // f/k in rdargs
+    formf(initstring, 1, 100, "^QF%s^[", v7!11)
+  ELSE
+  IF v7!12 ~= 0 THEN // l/k in rdargs
+    formf(initstring, 1, 100, "^QL%s^[", v7!12)
+  initstring%0 := formptr - 1
+
+  TEST text.init(filename, textspace, vtextsize) THEN $(
+    IF v7!1 ~= 0 THEN $( // editing to different filename
+      formf(source.filename, 1, 79, "%s", v7!1)
+      source.filename%0 := (v7!1)%0 $)
+    main((v7!9 = 0 -> "HOME:ws-init", 0), v7!8, initstring) $)
+  ELSE freevec(filename)
+  freevec(process.inbuf)
+  scr.finish()
+  exiting:
+  wspl(4) // terminate PicoLisp system
+  IF ~badargs THEN $( sys.finish(); log.writef(0) $) // write out log
+  freevec(outptr.vec)
+  freevec(otherbuf)
+  freevec(textspace); freevec(vtextbuf)
+  freevec(vq1); freevec(vq2); freevec(vq3); freevec(vq4); freevec(vq5)
+  freevec(v0); freevec(v1); freevec(v2); freevec(v3)
+  freevec(v4); freevec(v4b)
+  freevec(v5); freevec(v7); freevec(initstring)
+  scb.finish() $) // done as late as possible to allow max. type-ahead
+                  // does boring closing of temporary files.
+
+// a suitable destination filename for interactive session output
+AND process.dstname() = "[Process Buffer]"
+
+// Stuff concerned with remembering what the textual names of the scbs
+// of temporary files are, and keeping spare ones.
+// local to this sction.
+
+AND scb.init() BE $(
+  scbnum := getvec(scbsiz); scbfree := getvec(scbsiz)
+//  pipenum := 1 // initialise pipe name generator
+  FOR i = 1 TO scbsiz - 1 DO $(
+    scbnum!i := 0; scbfree!i := no $) $)
+
+AND scb.finish() BE $(
+  FOR i = 1 TO scbsiz - 1 DO $(
+    LET num, free = scbnum!i, scbfree!i
+    IF num = 0 & free = no THEN LOOP    // boring, unused
+    IF num = -1 & free = no THEN LOOP   // unrenamed, leave alone
+    TEST num ~= 0 & free = yes THEN $(  // unclosed file
+      LET name = tempfilename(getvec(80/bytesperword), i)
+      LET i = input()
+//      writef("Deleting temporary file *"%s*"*n", name)
+      sys.selectinput(num); sys.endread(); sys.selectinput(i)
+      deleteobj(name)
+      freevec(name) $)
+    ELSE writef("Internal SCB error: i=%n scb=%n free=%n*n", i, num, free) $)
+  freevec(scbnum)
+  freevec(scbfree) $)
+
+AND tempfilename(answ, i) = VALOF $(
+  formf(answ, 1, 79, "T:WS-%n-%n", i, taskid); answ%0 := formptr - 1
+  RESULTIS answ $)
+
+AND uppercase(c) = c >= 'a' & c <= 'z' -> (c + ('A' - 'a')), c
+
+// And now the random access file stuff.
+// For a file to be edited, three random access files are needed:
+// src, dst and transitory.
+// these are read and written in blocks of 'blcksize' bytes,
+// or less if at the end of a file.
+
+LET sysrand.find(name, ty) = VALOF $(
+  // ty = 1 for source, 2 for dst and 3 for trans.
+  // uses stuff in 'status' section to form strings etc.
+  // sadly, I cannot tell if the source has an odd number of bytes.
+  // This means that I might have a dud byte at the end.
+  // The source file is serial access.
+  LET answ = ?
+  LET v = getvec(80/bytesperword)
+  LET n = -1 // small no to represent scb
+  IF ty = 1 THEN $(
+    // simple open of sequential file.
+    freevec(v)
+    // check for arseholes in area
+    IF name%0 >= 8 & uppercase(name%1) = 'T' &
+      name%2 = ':' & uppercase(name%3) = 'W' &
+      uppercase(name%4) = 'S' &
+      name%5 = '-' & name%6 >= '1' & name%6 <= '9' THEN $(
+        // error("Cannot edit temporary file name")
+        // I cannot call an error before the editor starts - buglet.
+        RESULTIS 0 $)
+    RESULTIS sys.findinput(name) $)
+  n := VALOF $( // get a small integer for the scb
+    FOR i = 1 TO scbsiz - 1 DO $(
+      IF scbnum!i ~= 0 & scbfree!i THEN RESULTIS i // reuse existing file
+      IF scbnum!i = 0  & (~scbfree!i) THEN RESULTIS i $)
+    error("Sysrand Absurdly Many Files Open!"); RESULTIS 0 $)
+  // all of this is so that when it comes to closing the file
+  // will will be able to figure out the textual name from the scb.
+  v := tempfilename(v, n)
+  IF formptr > 77 THEN $(
+    // error("Filename too long")
+    // I cannot call an error before the editor starts - buglet.
+    freevec(v); RESULTIS 0 $)
+  IF ty = 2 THEN deleteobj(v)
+  TEST ty = 1 | (~scbfree!n) THEN answ := findupdate(v) ELSE answ := scbnum!n
+  IF ty ~= 1 THEN scbfree!n := no
+  IF answ = 0 THEN error("Failed to open file *'%s*'", v)
+  IF ty ~= 1 & n ~= -1 THEN scbnum!n := answ
+  freevec(v); RESULTIS answ $)
+
+LET sysrand.mustfind(name, ty) = VALOF $(
+  // not global
+  // like the routine above, but NOT allowed to fail
+  // for open-by-need of temporary and destination files
+  LET a = ?
+// retry:
+  a := sysrand.find(name, ty)
+  IF a ~= 0 THEN RESULTIS a
+  error("Fatal error, failed to open temporary file - will try once more")
+  a := sysrand.find(name, ty)
+  IF a ~= 0 THEN RESULTIS a
+  error("Failed again, data lost - please exit immediately")
+  RESULTIS a $)
+//  goto retry $)
+
+LET sysrand.read(scb, wad, bad, blckno) = VALOF $(
+  LET ad = ?
+  LET v = VEC 2
+  LET answ = ?
+  LET i = input() // probably not necessary
+//  error("(i/o debug) read block %n of %s at textspace%%%n",
+//    blckno, nam(scb), bad)
+  selectinput(scb)
+  ad := wad + bad/bytesperword // bad promises to be a multiple of blcksize
+
+  //  Change by IDW:  20/05/87
+  //    Because the block size has been changed from 2K to 8K, we must change
+  //    the shift values.  Why couldn't WRS have manifests ?
+
+  v!0 := (blckno >> 3)             // ms 16 bits of byte address
+  v!1 := (blckno << 13) & #XFFFF   // ls 16 bits of byte address
+
+  UNLESS  point( scb, v )  DO  error( "POINT failed:  block %N", blckno )
+
+  answ := readwords(ad, blcksize/bytesperword)
+  selectinput(i)
+//  error("i/o - readwords yielded result=%n (words)", answ)
+
+// very naughty here - I am assuming that the only place where an
+// incomplete block is read is at the end of the source.
+  TEST answ < 0 THEN $(
+    LET tail = (length.of.source & (bytesperword - 1))
+    error("Readwords yields %n", answ)
+    answ := (-answ) * bytesperword
+    IF (answ & (bytesperword - 1)) ~= 0 THEN
+      answ := answ - bytesperword + tail $)
+  ELSE answ := answ * bytesperword
+  RESULTIS answ $)  // blocksize in bytes
+
+LET sysrand.write(scb, wad, bad, blckno, len) BE $(
+  // V2.0 - destination and transitory files are now created by need.
+  // they are given initial scbs of -2 and -3, we must check for that
+  // here and if they are found, we must open the files and update
+  // scb.dst or scb.trans accordingly. There must be NO error.
+
+  // V2.0 - the final output may appear in one big gollop,
+  // bigger than 'blcksize'.
+  // This may cause the whole operation to go a little faster.
+
+  // 28 July 1983 V4.03 another desparate attempt to fix the tail-of-file bug.
+  // outptr.vec!0 -> vector for 'point'
+  //           !1 -> number of chars to write
+  //           !2 -> byte vector of chars to write
+  // at close of file, the destination is reopened for output,
+  // and the last few bytes wrch'd - this will set the highwatermark of the file
+  // which resets its length, and thus the world is saved.
+  // AAAAAAAAAAAAAGGGHHH!!!    I object on principle, mutter...
+
+  //  Note by IDW:  20/05/87
+  //    I believe that the end of file bug has now been fixed by using the
+  //    "sethdr" primitive to reset the file size.  As a result, we always
+  //    deal with word objects at this point.
+
+  LET ad = wad + bad/bytesperword
+  LET v = outptr.vec!0
+  LET o = output()
+
+  //  Note by IDW:  20/05/87
+  //    We must round up the length of the operation given to us.
+
+  LET words  =  (len + bytesperword - 1)/bytesperword
+  LET bytes  =  words * bytesperword
+
+  IF scb = -2 | scb = -3 THEN $(
+    LET new.scb = sysrand.mustfind(source.filename, -scb)
+    IF new.scb = 0 THEN RETURN // fatal error - leave
+    TEST scb = -2 THEN scb.dst := new.scb ELSE scb.trans := new.scb
+    scb := new.scb $)
+
+  selectoutput(scb)
+
+||    switchon (len & 3) into $(
+||      case 1: wad%(bad + len + 2) := '*n'  // 'cos silly fileserver
+||      case 2: wad%(bad + len + 1) := '*n'
+||      case 3: wad%(bad + len    ) := '*n'
+||      case 0: endcase $)
+    
+  //  Change by IDW:  20/05/87
+  //    Because the block size has been changed from 2K to 8K, we must change
+  //    the shift values.  Why couldn't WRS have manifests ?
+
+  v!0 := (blckno >> 3)             // ms 16 bits of byte address
+  v!1 := (blckno << 13) & #XFFFF   // ls 16 bits of byte address
+
+  UNLESS  point( scb, v )  DO  error( "POINT failed:  block %N", blckno )
+
+  writewords(ad, words)
+
+  // now we do a split 32-bit add of len to the v vector
+  // this is not 32 or 16 bit dependent
+  v!1  :=  v!1  +  ((bytes)        &  #XFFFF)
+  v!0  :=  v!0  +  ((bytes >> 16)  &  #XFFFF)
+
+  //  Note by IDW:  20/05/87
+  //    Beware the random shift values again here ...
+
+  IF (v!1 & #XFFFF) < ((blckno << 13) & #XFFFF) THEN $( // carry
+    v!1 := v!1 & #XFFFF
+    v!0 := v!0 + 1 $)
+
+  //  Change by IDW:  20/05/87
+  //    The meaning of "outptr.vec!1" has been changed, so that it keeps a
+  //    note of the number of excess characters we have written, rather than
+  //    the number of extra characters left to write.
+
+  outptr.vec!1  :=  bytes - len
+
+||    // remember what the last few chars are
+||    (outptr.vec!2) % 0 := wad % (bad + len + 0 - tail)
+||    (outptr.vec!2) % 1 := wad % (bad + len + 1 - tail)
+||    (outptr.vec!2) % 2 := wad % (bad + len + 2 - tail)
+||    (outptr.vec!2) % 3 := wad % (bad + len + 3 - tail)
+
+  selectoutput(o) $)
+
+LET sys.renameobj(fromfile, tofile) = VALOF $(
+  // rename on TRIPOS fails accross packs
+  // if rename fails, try to copy instead.
+  LET ren = renameobj(fromfile, tofile)
+  IF ren = 0 THEN $( //ren := copyobj(fromfile, tofile) // doesn't exist
+    LET out, oldin, oldout = ?, input(), output()
+    message("  (unable to rename file, attempting copy)*N")
+    out := findoutput(tofile)
+    IF out ~= 0 THEN $(
+      selectoutput(out)
+      ren := findinput(fromfile)
+      IF ren ~= 0 THEN $(
+        selectinput(ren)
+        message("  (transferring)*N")
+        $( LET ch = rdch()
+           IF ch = endstreamch THEN BREAK
+           wrch(ch) $) REPEAT
+        message("  (done)*N")
+        log.writef("  Renaming '%s' as '%s' didn't work, had to copy*N",
+          fromfile, tofile)
+        endread()
+        selectinput(oldin) $)
+      endwrite()
+      selectoutput(oldout) $) $)
+  RESULTIS ren $)
+
+LET sysrand.end(name, srcscb, dstscb, transscb, ty) BE $(
+  // if ~random.files, there is no transitory file
+  // scb's of -2 and -3 indicate files that were never opened.
+  LET name.of.dst = getvec(80/bytesperword)
+  LET dst.n, trans.n = 0, 0
+  // the srcscb could be 0, ie no source file.
+  IF srcscb ~= 0 THEN $(
+    LET i = input()
+    selectinput(srcscb); endread(); selectinput(i) $)
+  IF dstscb = -2 & ty = 1 THEN dstscb := sysrand.mustfind(source.filename, 2)
+  IF dstscb = 0 THEN RETURN // fatal error, dispair
+  // Now we must figure out the textual names of the other guys.
+  FOR i = 1 TO scbsiz - 1 DO IF scbnum!i = dstscb THEN dst.n := i
+  FOR i = 1 TO scbsiz - 1 DO IF scbnum!i = transscb THEN trans.n := i
+  IF (scbfree!dst.n & dstscb ~= -2) |
+    (scbfree!trans.n & random.files & transscb ~= -3)
+   THEN
+    error("Internal scbfree (%n %n %n) (%n %n %n)",
+      scbnum!dst.n, scbfree!dst.n, dst.n, scbnum!trans.n, scbfree!trans.n,
+      trans.n)
+  IF (dst.n = 0 & dstscb ~= -2) |
+    (trans.n = 0 & random.files & transscb ~= -3)
+   THEN
+    error("Internal sysrand.end (%n,%n)", dst.n, trans.n)
+  name.of.dst   := tempfilename(name.of.dst, dst.n)
+  IF random.files & transscb ~= -3 THEN
+    scbfree!trans.n := yes // make file available for future use
+  TEST ty = 1 THEN $( // normal termination
+    LET answ, i = ?, input()
+    sys.selectinput(dstscb); sys.endread(); scbnum!dst.n := 0 // close dst file
+
+    // now we try to fix the newlines-at-end-of-file bug
+//    if outptr.vec!1 ~= 0 then $( // not a multiple of 4
+//       dstscb := findoutput(name.of.dst) // changed from findoutput 18th July 84
+//                 // findupdate goes task 5 abort 187: 16 (5th Sept 84)
+//                 // Mike is looking into it...
+//       if dstscb ~= 0 then $(
+//         let o = output()
+//         selectoutput(dstscb)
+//         point(dstscb, outptr.vec!0)
+// ////        error("point (%n=#X%X8, %n=#X%X8)",
+// ////          outptr.vec!0!0, outptr.vec!0!0, outptr.vec!0!1, outptr.vec!0!1)
+// ////        error("File %s, point(%n,%n)", name.of.dst, outptr.vec!0!0, outptr.vec!0!1)
+// ////        error("%n chars - %X2, %X2, %X2", outptr.vec!1,
+// ////          outptr.vec!2%0,
+// ////          outptr.vec!2%1,
+// ////          outptr.vec!2%2)
+//         for i = 1 to outptr.vec!1 do wrch((outptr.vec!2) % (i - 1))
+//         endwrite()
+//         selectoutput(o) $)
+// $)
+
+$(  //  Correct the length of the file.  We have written all the characters
+    //  to the file, but we may have to reduce the length.
+
+    LET task   =  devicetask(name.of.dst)
+    LET lock   =  result2
+    LET sizev  =  outptr.vec!0
+    LET datev  =  TABLE -1, -1, -1
+    
+    sizev!1  :=  sizev!1 - outptr.vec!1
+
+    UNLESS  sendpkt( notinuse, task, action.setheader, 0, 0,
+                     lock, name.of.dst, sizev, datev ) DO
+           error("SetHeader failed r2=%N*N",result2) $)
+//   $)
+
+    sys.selectinput(i)
+    IF srcscb ~= 0 THEN $(
+      answ := sys.renameobj(name, "T:EDIT-BACKUP")
+      IF answ = 0 & (~srcname.not.dstname) THEN $(
+        log.writef("  Renaming '%s' as 'T:EDIT-BACKUP' failed code %n*n",
+          name, result2)
+        error("Unable to rename old version of *"%s*" as *"T:EDIT-BACKUP*"", name) $) $)
+
+    //  Modification by IDW:  20-May-87
+    //    Only on special occasions is it necessary to save the output of
+    //    process buffers.  We assume, therefore, that if a user wants to
+    //    save the output, he can use ^KW to write it to a file.
+    
+    TEST  compstring( name, process.dstname() ) = 0  THEN
+
+        //  This is a process buffer, so we should not bother ourselves with
+        //  attempting to save it on disc.  The temporary file should be
+        //  deleted, though, otherwise we may leave stuff lying round on the
+        //  disc.
+        
+        deleteobj( name.of.dst )
+        
+    ELSE
+    $(
+        //  This is a real file, which we must attempt to rename.  If the
+        //  rename fails, then write a message to the log, so that the user
+        //  can recover the file later.
+
+        answ := sys.renameobj(name.of.dst, name)
+        IF answ = 0 THEN $(
+          log.writef("  Renaming '%s' as '%s' failed code %n*n",
+           name.of.dst, name, result2)
+          error("Unable to rename temporary work file as *"%s*"", name)
+          error("The result of your edit is in file *"%s*"", name.of.dst)
+          killmarkers(); initialise.toggles() // in the case of ^KS
+// This message seems to panic people, and I think that it is a bit
+// paranoid anyway. The file will not be reused and the edits are quite safe.
+//      if t.split then
+//        error("Please exit from the editor now or you may lose your edits")
+          scbnum!dst.n := -1 $)    // don't reuse this temporary name
+    $)  $)
+
+    ELSE // edit cancelled
+      IF dstscb ~= -2 THEN scbfree!dst.n := yes // dst and trans available for reuse
+    freevec(name.of.dst) $)
+
+// New stuff for V2.0, concerned with multimode screen.
+
+LET new.screen.mode(n) BE $(
+  LET newxmax = n!(TABLE 79, 39, 19, 79, 39, 19, 39, 39, 79, 79)
+  LET newymax = n!(TABLE 31, 31, 24, 24, 31, 24, 24, 24, 23, 23)
+  IF newxmax < 39 THEN $(
+    error("^O%n: legal modes: 0, 1, 3, 4, 6, 7 for BBC, 9 for Cifer", n)
+    RETURN $)
+
+  scr.finish() // needs old ymax value for freevecing screen
+  // DECVT125 ghastly hack - sorry world. ^O8 is a 80/132 toggle
+  IF screen.mode = 8 & n = 8 & xmax = 79 THEN $( // set 132 mode
+    newxmax := 131 $)
+  xmax := newxmax
+  ymax := newymax
+  screen.mode := n
+  scr.init(linmap, line.updated) // sets up new screen, calls videoinit
+
+  narrow.screen.offset := 0
+  IF xmax < 79 & (~narrow.screen.before) & helplevel >= 2 THEN $( // tell him
+    LET v = getvec(3 * 30)
+    cmd.init(v)
+    narrow.screen.before := yes
+    cmd.simple(0, "SCREEN MODE %n*n", screen.mode)
+    cmd.simple(0, "In the screen mode you have selected,*n")
+    cmd.simple(0, "the screen is less that 80 columns wide.*n")
+    cmd.simple(0, "Your text behaves as before, but menus*n")
+    cmd.simple(0, "may be difficult to read.*n")
+    cmd.simple(0, "Press ^\ to view the rest of any menu.*n")
+    cmd.simple(0, "^O3 will return you to 80 column mode.*n")
+    cmd.simple(0, "Press any key to continue editing.*n")
+    cmd.simple(0, "----------------------------------------*n")
+    message("*n")
+    sys.rdch(); cmd.finish(); freevec(v) $)
+
+  IF t.split THEN $(
+    scr.y.of.split := scr.y.of.split NEQV 1
+      // dreadful bodge - to tweak the split line and get it redrawn.
+    swapbufs()
+    text.update()
+    swapbufs() $)
+  text.update.info := text.update.info | 15
+  IF helplevel = 3 THEN print.main.menu() $)
+
+LET new.narrow.offset() BE $(
+  // request to change menu shift, ignore if inappropriate
+  IF xmax >= 79 THEN RETURN
+  narrow.screen.offset := narrow.screen.offset = 0 -> 41, 0
+  scr.redraw() $) // prods all screen lines
+
+

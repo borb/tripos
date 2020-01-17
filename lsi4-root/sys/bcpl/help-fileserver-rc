@@ -1,0 +1,104 @@
+// Code CALLSEGed by HELP FILESERVER RC nnnn.
+//  7 Apr 83 by BJK (adapted from CGG's code for HELP RC nnnn)
+// The main routine is called as a coroutine because HELP gobbles up so
+// much stack before calling us.
+
+GET "LIBHDR"
+GET "BCPL.gethex"
+GET "string-to-number"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+
+
+MANIFEST
+    $(
+    string.offset       = bb.ssp.args*2
+    reply.dibytes       = 50
+    co.stacksize        = 500
+    $)
+
+
+LET start(vect, n, all) = VALOF
+    $(
+    LET co = createco(fsrc.co, co.stacksize)
+
+    TEST co=0
+    THEN
+      $(
+      writes("Can't create coroutine for HELP FILESERVER RC*N")
+      RESULTIS FALSE
+      $)
+    ELSE
+      $(
+      LET res   = callco(co, @vect)
+      deleteco(co)
+      RESULTIS res
+      $)
+    $)
+
+
+
+AND fsrc.co(lv.args) = VALOF
+$(  // CALLSEG'd code for implementing HELP FILESERVER RC nnnn mmmm ...
+    LET vect            = lv.args!0
+    LET n               = lv.args!1
+    LET all             = lv.args!2
+    LET matched         = vect!0
+    LET arg             = (vect+1)
+    LET found.any       = FALSE
+
+    FOR i=0 TO n-1 DO
+    IF 0=((1<<i)&matched) THEN
+    $(  // only look at keys that have not yet been matched
+        LET dec.rc.valid = string.to.number(arg!i)
+        LET dec.rc = result2
+        LET hex.rc = ?
+        LET hex.rc.valid = ?
+        LET match = FALSE
+        IF arg!i%1='#' THEN
+        $(  LET back = (capitalch(arg!i%2)='X' -> 2, 1)
+            FOR ch=back+1 TO arg!i%0 DO arg!i%(ch-back) := arg!i%ch
+            arg!i%0 := arg!i%0-back
+        $)
+        hex.rc.valid := gethex(arg!i, @hex.rc, 1) & (arg!i%0 <= 4)
+        IF hex.rc.valid THEN IF get.fs.rc(hex.rc) THEN match:=TRUE
+        IF dec.rc.valid THEN IF get.fs.rc(dec.rc) THEN match:=TRUE
+
+        IF match THEN
+        $(  // set this key as having been matched in map in arg!0
+            arg!0 := arg!0 | (1<<i)
+            found.any := TRUE
+        $)
+    $)
+    result2 := found.any
+    RESULTIS result2
+$)
+
+
+AND get.fs.rc(rc) = VALOF
+    $(
+    // Result is TRUE iff an explanation of RC is found.
+    // Packserver is called to explain the code.
+
+    LET reply.vec       = VEC reply.dibytes*2 / bytesperword
+    LET tx.vec          = VEC 3
+
+    put2bytes(tx.vec, bb.ssp.arg1, rc)
+
+    UNLESS ssp("fs.why", tx.vec, 4, reply.vec, 64, 0)
+    THEN
+      $(
+      writef("Call to packserver failed (rc %X4)*N", result2)
+      RESULTIS FALSE
+      $)
+
+    writef("Fileserver rc #X%X4: ", rc)
+
+    FOR i=1 TO byteget(reply.vec, string.offset+0)
+    DO wrch( byteget[reply.vec, string.offset+i] )
+
+    newline()
+    RESULTIS TRUE
+    $)
+
+

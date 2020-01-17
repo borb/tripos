@@ -1,0 +1,2059 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+           ##    ##  ##    ##   ######               #####    ######
+           ###  ###  ##    ##  ########             #######  ########
+           ########  ##    ##  ##                  ##        ##
+           ## ## ##  ##    ##  #######             ##        #######
+           ##    ##  ##    ##        ##            ##              ##
+           ##    ##   ##  ##         ##            ##              ##
+           ##    ##    ####    ########             #######  ########
+           ##    ##     ##      ######               #####    ######
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   12/11/86             *
+\*****************************************************************************/
+
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "IOHDR"
+GET "MANHDR"
+
+
+
+GLOBAL
+$(
+    veclist          :  ug + 0
+    rc               :  ug + 1
+    sysin            :  ug + 2
+    sysout           :  ug + 3
+    bs.in            :  ug + 4
+    bs.out           :  ug + 5
+    jdparm           :  ug + 6
+    user             :  ug + 7
+    pw               :  ug + 8
+    jd               :  ug + 9
+    popt             :  ug + 10
+    dopt             :  ug + 11
+    blib.rdch        :  ug + 12
+    blib.unrdch      :  ug + 13
+    stringbuff       :  ug + 14
+    stringbuffb      :  ug + 15
+    stringbuffe      :  ug + 16
+    bserror          :  ug + 17
+    kbytecount       :  ug + 18
+    stream.submit    :  ug + 19
+    stream.status    :  ug + 20
+
+    //  Global routines
+
+    readstring       :  ug + 50
+    gvec             :  ug + 51
+    fvec             :  ug + 52
+    fvectors         :  ug + 53
+    setupdefaults    :  ug + 54
+    execute.status   :  ug + 55
+    calloverlay      :  ug + 56
+    moan             :  ug + 57
+    copystring       :  ug + 58
+    openstreams      :  ug + 59
+    closestreams     :  ug + 60
+    generatejob      :  ug + 61
+    sendfile         :  ug + 62
+    checkuser        :  ug + 63
+    checkpw          :  ug + 64
+    bsout            :  ug + 65
+    triposuser       :  ug + 66
+    execute.password :  ug + 67
+$)
+
+
+
+MANIFEST
+$(
+    jd.class         =  0
+    jd.cond          =  1
+    jd.copies        =  2
+    jd.deck800       =  3
+    jd.deck9         =  4
+    jd.disc          =  5
+    jd.dlm           =  6
+    jd.drive         =  7
+    jd.jobid         =  8
+    jd.lock          =  9
+    jd.maxrate       =  10
+    jd.msgclass      =  11
+    jd.msglevel      =  12
+    jd.notify        =  13
+    jd.page          =  14
+    jd.post          =  15
+    jd.printlimit    =  16
+    jd.printroute    =  17
+    jd.project       =  18
+    jd.punchlimit    =  19
+    jd.punchroute    =  20
+    jd.region        =  21
+    jd.restart       =  22
+    jd.tape800       =  23
+    jd.tape9         =  24
+    jd.title         =  25
+    jd.time          =  26
+    jd.turnround     =  27
+
+    maxjdparm        =  28
+
+    cs.submit        =  0
+    cs.print         =  1
+    cs.list          =  2
+    cs.input         =  3
+    cs.bininput      =  4
+    cs.fetch         =  5
+    cs.binfetch      =  6
+    cs.plot          =  7
+    cs.canonplot     =  8
+    cs.status        =  9
+    cs.examine       =  10
+    cs.collect       =  11
+    cs.pack          =  12
+    cs.unpack        =  13
+    cs.get           =  14
+    cs.binget        =  15
+    cs.mail          =  16
+    cs.password      =  17
+    cs.psplot        =  18
+
+    resultlength     =  30
+
+    NIL              =  -1
+$)
+
+.
+
+
+
+SECTION "MVS CS"
+
+
+
+GET ""
+
+
+
+LET start()  BE
+$(
+//  Main routine of the CS program.  The CS function required is given by the
+//  first item on the command line.  The functions available in this program
+//  are:
+//
+//      Submit
+//      Print
+//      List
+//      Input
+//      Bininput
+//      Fetch
+//      Binfetch
+//      Plot
+//      Canonplot
+//      Status
+//      Get
+//      Binget
+//      Mail
+//      Password
+//      PSplot
+//
+//  With the following being available as loaded modules:
+//
+//      Examine
+//      Collect
+//      Pack
+//      Unpack
+
+    LET commands  =  "SUBMIT,PRINT,LIST,INPUT,BININPUT,FETCH,BINFETCH,*
+                     *PLOT,CANONPLOT,STATUS,EXAMINE,COLLECT,PACK,UNPACK,GET,*
+                     *BINGET,MAIL,PASSWORD,PSPLOT"
+
+    LET command   =  0
+    LET sequence  =  0
+
+    stream.submit  :=  "bsp:submit-cs"
+    stream.status  :=  "bsp:status-cs"
+
+    veclist        :=  NIL
+    rc             :=  0
+    kbytecount     :=  0
+    bserror        :=  FALSE
+
+    sysin          :=  input()
+    sysout         :=  output()
+
+    command        :=  readstring()
+    sequence       :=  findarg( commands, command )
+
+    jdparm         :=  gvec( maxjdparm )
+
+    setupdefaults()
+
+    SWITCHON  sequence  INTO
+    $(
+        CASE cs.submit   :  execute.submit()
+                            ENDCASE
+
+
+        CASE cs.print    :
+        CASE cs.list     :  execute.print( sequence )
+                            ENDCASE
+
+
+        CASE cs.input    :
+        CASE cs.bininput :  execute.input( sequence )
+                            ENDCASE
+
+
+        CASE cs.fetch    :
+        CASE cs.binfetch :  execute.fetch( sequence )
+                            ENDCASE
+
+
+        CASE cs.get      :
+        CASE cs.binget   :  execute.get( sequence )
+                            ENDCASE
+
+
+        CASE cs.plot     :
+        CASE cs.canonplot:  
+        CASE cs.psplot   :  execute.plot( sequence )
+                            ENDCASE
+
+
+        CASE cs.status   :  execute.status()
+                            ENDCASE
+
+
+        CASE cs.mail     :  execute.mail()
+                            ENDCASE
+
+
+        CASE cs.password :  execute.password()
+                            ENDCASE
+
+
+        CASE cs.examine  :
+        CASE cs.collect  :
+        CASE cs.pack     :
+        CASE cs.unpack   :  rc  :=  calloverlay( command )
+                            ENDCASE
+
+
+        DEFAULT          :  helpinfo()
+                            ENDCASE
+    $)
+
+    fvectors()
+
+    stop( rc )
+$)
+
+
+
+AND helpinfo()  BE
+    writes( "The available functions are:*N*
+           *     SUBMIT       PRINT     LIST        INPUT*N*
+           *     BININPUT     FETCH     BINFETCH    PLOT*N*
+           *     CANONPLOT    STATUS    EXAMINE     COLLECT*N*
+           *     PACK         UNPACK    GET         BINGET*N*
+           *     MAIL         PASSWORD  PSPLOT*N" )
+
+
+
+
+AND execute.submit()  BE
+$(
+//  Execute a simple job submission.  Up to ten files are given to be
+//  submitted.  If we are given a userid and password, then we assume that
+//  a job description must be generated, and so we do that.  Otherwise, we
+//  assume that the first file in the list contains a user generated job
+//  description.
+
+    MANIFEST
+    $(
+        a.first  =  0
+        a.last   =  9
+        a.user   =  10
+        a.pw     =  11
+        a.jd     =  12
+    $)
+
+    LET args   =  "/A,,,,,,,,,,USER/K,PW/K,JD/K"
+    LET argv   =  VEC 50
+    LET nojob  =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        moan( "Bad arguments for *"%S*"", args )
+
+        RETURN
+    $)
+
+    //  If we drop through here, then we can assume that the parsing of the
+    //  command line was correct, and hence we can interpret it.  Check
+    //  that the arguments are meaningful...
+
+    user  :=  argv!a.user
+    pw    :=  argv!a.pw
+    jd    :=  argv!a.jd
+
+    IF  (user \= 0)  NEQV  (pw \= 0)  THEN
+    $(
+        //  Meaningless arguments.  We have been given a userid without a
+        //  password, or vice versa.
+
+        moan( "Must quote neither or both of USER/PW" )
+
+        RETURN
+    $)
+
+    //  The JD parameter is only valid when we are generating our own job
+    //  card, so check this next.
+
+    nojob  :=  (user = 0)  &  (pw = 0)
+
+    IF  (jd \= 0)  &  nojob  THEN
+    $(
+        //  Again, meaningless arguments.  We have been given a job
+        //  description, but no userid or password.
+
+        moan( "JD is only valid when USER/PW are quoted" )
+
+        RETURN
+    $)
+
+    jdparm!jd.title   :=  "Tripos Submit"
+    jdparm!jd.dlm     :=  "``"
+
+    UNLESS  user = 0  DO  jdparm!jd.notify  :=  copystring( user )
+
+    //  Ok.  We have finally managed to get somewhere.  The arguments are ok,
+    //  so we should plough on, and attempt to open the submission stream.
+
+    UNLESS  openstreams( stream.submit )  DO  RETURN
+    UNLESS  nojob                         DO  generatejob( user, pw, jd )
+
+    FOR  i = a.first  TO  a.last  DO
+    $(
+        //  Take each file in turn, and send it down the byte stream.
+
+        LET file    =  argv!i
+        LET stream  =  0
+
+        IF  bserror   THEN  BREAK
+        IF  file = 0  THEN  BREAK
+
+        stream  :=  findinput( file )
+
+        IF  stream = 0  THEN
+        $(
+            //  We have been unable to open this file.  Moan about it, and
+            //  go onto the next one.
+
+            moan( "Cannot open *"%S*"", file )
+
+            LOOP
+        $)
+
+        sendfile( stream )
+        endstream( stream )
+    $)
+
+    //  We drop through here when we have finished submitting the file, or
+    //  when a byte stream error occurred.
+
+    closestreams()
+$)
+
+
+
+AND execute.print( command )  BE
+$(
+//  Common code to implement the "CS LIST" and "CS PRINT" commands.
+
+    MANIFEST
+    $(
+        a.from   =  0
+        a.user   =  1
+        a.pw     =  2
+        a.to     =  3
+        a.jd     =  4
+        a.popt   =  5
+        a.dopt   =  6
+    $)
+
+    LET args    =  "FROM/A,USER,PW,TO/K,JD/K,POPT/K,DOPT/K"
+    LET argv    =  VEC 50
+
+    LET f.from  =  0
+    LET f.to    =  0
+    LET stream  =  0
+    LET name    =  command = cs.print  ->  "print", "list"
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        moan( "Bad arguments for *"%S*"", args )
+
+        RETURN
+    $)
+
+    //  If we drop through here, then the arguments are correct, and so
+    //  we should attempt to submit the job.
+
+    user    :=  argv!a.user
+    pw      :=  argv!a.pw
+    jd      :=  argv!a.jd
+    popt    :=  argv!a.popt
+    dopt    :=  argv!a.dopt
+
+    f.from  :=  argv!a.from
+    f.to    :=  argv!a.to
+
+    checkuser( @user )
+    checkpw( @pw )
+
+    jdparm!jd.title       :=  command = cs.print  ->  "Tripos Print",
+                                                      "Tripos List"
+
+    jdparm!jd.printlimit  :=  "20"
+    jdparm!jd.page        :=  "61"
+    jdparm!jd.notify      :=  copystring( user )
+
+    stream  :=  findinput( f.from )
+
+    IF  stream = 0  THEN
+    $(
+        //  We have been unable to open the Tripos file.  Print out a
+        //  rhubarb, and return.
+
+        moan( "Cannot open *"%S*"", f.from )
+
+        RETURN
+    $)
+
+    //  Now, submit the relevant job.
+
+    UNLESS  openstreams( stream.submit )  DO
+    $(
+        endstream( stream )
+
+        RETURN
+    $)
+
+    generatejob( user, pw, jd )
+
+    IF  f.to = 0  THEN  f.to  :=  "%sysouta"
+    IF  dopt = 0  THEN  dopt  :=  ""
+
+    bsout( "*"%call ring.linklib:derail( %qd=w/vba +++^n*
+           *to=&p/la ) cp<d ^1 +++^n", dopt )
+
+    bsout( "*"%^1 &p to=^2", name, f.to )
+
+    //  Now put out the print options string.  Depending on whether we are
+    //  executing the "print" or "list" command, we give different options.
+
+    bsout( " opt='l61" )
+
+    IF  command = cs.list  |  popt \= 0  THEN
+    $(
+        //  We should give some extra options, other than the default.
+
+        IF  command = cs.list  THEN
+        $(
+            //  If we are listing the file, then we may as well give the
+            //  title of the file we are printing out.
+
+            bsout( ",u,pn,title=*"*"^1*"*"", f.from )
+
+            UNLESS  popt = 0  DO  wrch( ',' )
+        $)
+
+        UNLESS  popt = 0  DO
+
+            //  This is a user print options string, which should override
+            //  the one we've given.
+
+            FOR  i = 1  TO  popt % 0  DO
+            $(
+                LET ch  =  popt % i
+
+                IF  ch = '*''  |  ch = '*"'  THEN  wrch( ch )
+
+                wrch( ch )
+            $)
+    $)
+
+    wrch( '*'' )
+
+    bsout( "*"^n*
+           *//D        DD    **^n*
+           *+++M^n" )
+
+    //  Having printed the commands, we should send the file itself.
+    //  The file is already opened...
+
+    sendfile( stream )
+    endstream( stream )
+
+    closestreams()
+$)
+
+
+
+AND execute.input( command )  BE
+$(
+//  Common code to implement the "CS INPUT" and "CS BININPUT" commands.
+
+    MANIFEST
+    $(
+        a.from   =  0
+        a.to     =  1
+        a.user   =  2
+        a.pw     =  3
+        a.jd     =  4
+        a.dopt   =  5
+    $)
+
+    LET args    =  "FROM/A,TO/A,USER,PW,JD/K,DOPT=IOPT/K"
+    LET argv    =  VEC 50
+
+    LET f.from  =  0
+    LET f.to    =  0
+    LET stream  =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        moan( "Bad arguments for *"%S*"", args )
+
+        RETURN
+    $)
+
+    //  If we drop through here, then the arguments are correct, and so
+    //  we should attempt to submit the job.
+
+    user    :=  argv!a.user
+    pw      :=  argv!a.pw
+    jd      :=  argv!a.jd
+    dopt    :=  argv!a.dopt
+
+    checkuser( @user )
+    checkpw( @pw )
+
+    f.from  :=  argv!a.from
+    f.to    :=  argv!a.to
+
+    jdparm!jd.title   :=  command = cs.input  ->  "Tripos Input",
+                                                  "Tripos Bininput"
+
+    jdparm!jd.notify  :=  copystring( user )
+
+    stream  :=  findinput( f.from )
+
+    IF  stream = 0  THEN
+    $(
+        //  We have been unable to open the Tripos file.  Print out a
+        //  rhubarb, and return.
+
+        moan( "Cannot open *"%S*"", f.from )
+
+        RETURN
+    $)
+
+    //  Now, submit the relevant job.
+
+    UNLESS  openstreams( stream.submit )  DO
+    $(
+        endstream( stream )
+
+        RETURN
+    $)
+
+    generatejob( user, pw, jd )
+
+    IF  dopt = 0  THEN  dopt  :=  ""
+
+    TEST  command = cs.input  THEN
+
+        //  We should translate the character codes, and do line imaging.
+        //  To do this, we call DERAIL.
+
+        bsout( "%call ring.linklib:derail( %qd=w/vba +++^n*
+               *to=^1 ) cf<d ^2^n*
+               *//D        DD    **^n*
+               *+++M^n", f.to, dopt )
+
+    ELSE
+
+        //  We should send this file without any changes.  To do this,
+        //  we call IMAGE.
+
+        bsout( "%call phx.userlink:#image( %qd=w sysprint=** %qd=fb +++^n*
+               *to=^1 ) pb,n,^2^n*
+               *//FROM     DD    **^n*
+               *+++M^n", f.to, dopt )
+
+    //  Having printed the commands, we should send the file itself.
+    //  The file is already opened...
+
+    sendfile( stream )
+    endstream( stream )
+
+    closestreams()
+$)
+
+
+
+AND execute.fetch( command )  BE
+$(
+//  Common code to implement the "CS FETCH" and "CS BINFETCH" commands.
+
+    MANIFEST
+    $(
+        a.from   =  0
+        a.user   =  1
+        a.pw     =  2
+        a.jd     =  3
+    $)
+
+    LET args    =  "FROM/A,USER,PW,JD/K"
+    LET argv    =  VEC 50
+
+    LET f.from  =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        moan( "Bad arguments for *"%S*"", args )
+
+        RETURN
+    $)
+
+    //  If we drop through here, then the arguments are correct, and so
+    //  we should attempt to submit the job.
+
+    user    :=  argv!a.user
+    pw      :=  argv!a.pw
+    jd      :=  argv!a.jd
+
+    checkuser( @user )
+    checkpw( @pw )
+
+    f.from  :=  argv!a.from
+
+    jdparm!jd.title       :=  command = cs.fetch  ->  "Tripos Fetch",
+                                                      "Tripos Binfetch"
+    jdparm!jd.punchlimit  :=  "25000"
+    jdparm!jd.notify      :=  copystring( user )
+
+    //  Now, submit the relevant job.
+
+    UNLESS  openstreams( stream.submit )  DO  RETURN
+
+    generatejob( user, pw, jd )
+
+    TEST  command = cs.fetch  THEN
+
+        //  We should translate the character codes, and do line imaging.
+        //  To do this, we call stream.
+
+        bsout( "%stream ^1 to=**v/route=cl#cap/fb opt=a,ne,pad=x0^n",
+                f.from )
+
+    ELSE
+
+        //  We should fetch this file without any changes.  To do this,
+        //  we call FILE.
+
+        bsout( "%file ^1 to=**v/route=cl#cap/fb opt=asis^n",
+                f.from )
+
+    //  Nothing else to do, so we can close down now.
+
+    closestreams()
+$)
+
+
+
+AND execute.get( command )  BE
+$(
+//  Command code to implement the CS GET and CS BINGET commands.
+
+    MANIFEST
+    $(
+        a.from   =  0
+        a.to     =  1
+        a.user   =  2
+        a.pw     =  3
+        a.jd     =  4
+    $)
+
+    LET args    =  "FROM/A,TO/A,USER,PW,JD/K"
+    LET argv    =  VEC 50
+
+    LET f.from  =  0
+    LET f.to    =  0
+
+    LET mcname  =  rootnode!rtn.info!rtninfo.ring!ri.myname
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        moan( "Bad arguments for *"%S*"", args )
+
+        RETURN
+    $)
+
+    //  If we drop through here, then the arguments are correct, and so
+    //  we should attempt to submit the job.
+
+    user    :=  argv!a.user
+    pw      :=  argv!a.pw
+    jd      :=  argv!a.jd
+
+    checkuser( @user )
+    checkpw( @pw )
+
+    f.from  :=  argv!a.from
+    f.to    :=  argv!a.to
+
+    jdparm!jd.title       :=  command = cs.get  ->  "Tripos Get",
+                                                    "Tripos Binget"
+    jdparm!jd.punchlimit  :=  "25000"
+    jdparm!jd.notify      :=  copystring( user )
+
+    //  Now, submit the relevant job.
+
+    UNLESS  openstreams( stream.submit )  DO  RETURN
+
+    generatejob( user, pw, jd )
+
+    TEST  command = cs.get
+
+        //  We should translate the character codes, and do line imaging.
+        //  To do this, we call stream.
+
+        bsout( "%stream %i%+^1 to=**v/route=cl#jenny/fb opt=a,ne,pad=x0^n*
+               *::FILE=R^2/^3!^3;^n*
+               *%^n",
+                f.from, mcname, f.to )
+
+    ELSE
+
+        //  We should fetch this file without any changes.  To do this,
+        //  we call FILE.
+
+        bsout( "%stream %i% to &hdr/fb opt=a,ne,pad=x0^n*
+               *::FILE=R^1/^2!^2;^n*
+               *%^n*
+               *%file &hdr+^3 to=**v/route=cl#jenny/fb opt=asis^n",
+                mcname, f.to, f.from )
+
+    //  Nothing else to do, so we can close down now.
+
+    closestreams()
+$)
+
+
+
+AND execute.plot( command )  BE
+$(
+//  Common code to implement the CS PLOT, CS CANONPLOT and CS PSPLOT commands.
+
+    MANIFEST
+    $(
+        a.from     =  0
+        a.user     =  1
+        a.pw       =  2
+        a.to       =  3
+        a.jd       =  4
+        a.dopt     =  5
+        a.pcopt    =  6
+        a.printer  =  7
+    $)
+
+    LET args     =  "FROM/A,USER,PW,TO/K,JD/K,DOPT/K,PCOPT/K,PRINTER/K"
+    LET argv     =  VEC 50
+
+    LET f.from   =  0
+    LET f.to     =  0
+    LET stream   =  0
+    LET pcopt    =  0
+    LET printer  =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        moan( "Bad arguments for *"%S*"", args )
+
+        RETURN
+    $)
+
+    //  If we drop through here, then the arguments are correct, and so
+    //  we should attempt to submit the job.
+
+    user     :=  argv!a.user
+    pw       :=  argv!a.pw
+    jd       :=  argv!a.jd
+    dopt     :=  argv!a.dopt
+    pcopt    :=  argv!a.pcopt
+    printer  :=  argv!a.printer
+
+    TEST  printer = 0  THEN
+
+        //  No "printer" parameter given.
+
+        IF  command = cs.psplot  THEN
+        $(
+            moan( "PRINTER parameter missing" )
+            
+            RETURN
+        $)
+
+    ELSE
+
+        //  Printer parameter given, but is it meaningful?
+
+        UNLESS  command = cs.psplot  DO
+        $(
+            moan( "PRINTER parameter *"%S*" ignored", printer )
+            
+            RETURN
+        $)
+
+    checkuser( @user )
+    checkpw( @pw )
+
+    jdparm!jd.title       :=  command = cs.plot       ->  "Tripos Plot",
+                              command = cs.canonplot  ->  "Tripos Canon Plot",
+                                                          "Tripos PS Plot"
+
+    jdparm!jd.punchlimit  :=  "25000"
+    jdparm!jd.notify      :=  copystring( user )
+
+    f.from  :=  argv!a.from
+    f.to    :=  argv!a.to
+    stream  :=  findinput( f.from )
+
+    IF  stream = 0  THEN
+    $(
+        //  We have been unable to open the Tripos file.  Print out a
+        //  rhubarb, and return.
+
+        moan( "Cannot open *"%S*"", f.from )
+
+        RETURN
+    $)
+
+    //  Now, submit the relevant job.
+
+    UNLESS  openstreams( stream.submit )  DO
+    $(
+        endstream( stream )
+
+        RETURN
+    $)
+
+    generatejob( user, pw, jd )
+
+    IF  dopt = 0   THEN  dopt   :=  ""
+    IF  pcopt = 0  THEN  pcopt  :=  ""
+
+    TEST  command = cs.plot  THEN
+
+        //  Standard plot on one of the service's plotters.
+
+        bsout( "*"%call ring.linklib:derail( to=&p/w/la ) cp<d ^1 +++^n*
+               **"%call ring.linklib:isview( %s=300 sysprint=** +++^n*
+               *from=&p to=&q/w/fb/la ) $0T100I$P +++^n*
+               **"%c %xcl:plotconv from=&q to=^2 ^3*"^n*
+               *//D        DD    **^n*
+               *+++M^n", dopt, (f.to = 0 -> "%plot", f.to), pcopt )
+
+    ELSE
+
+    TEST  command = cs.canonplot  THEN
+    $(
+        //  Like the simple plot, but this time VTRAN the output, and send it
+        //  to the canon printer using VERSATECOUT.
+
+        bsout( "*"%call ring.linklib:derail( to=&p/w/la ) cp<d ^1 +++^n*
+               **"%call ring.linklib:isview( %s=300 sysprint=** +++^n*
+               *from=&p to=&q/w/fb/la ) $0T100I$P +++^n*
+               **"%c %xcl:plotconv from=&q to=&r ^2 +++^n", dopt, pcopt )
+
+        bsout( "*"%vtran inplot=&r to=&s device=canon240 +++^n*
+               **"%versatecout &s to=^1*"^n*
+               *//D        DD    **^n*
+               *+++M^n", (f.to = 0 -> "%canon/route=cl#canon", f.to) )
+    $)
+
+    ELSE
+    $(
+        //  CS PSPLOT.  This is similar to the CANONPLOT, except that we
+        //  must add a further translation, this time to POSTSCRIPT.
+
+        bsout( "*"%call ring.linklib:derail( to=&p/w/la ) cp<d ^1 +++^n*
+               **"%call ring.linklib:isview( %s=300 sysprint=** +++^n*
+               *from=&p to=&q/w/fb/la ) $0T100I$P +++^n*
+               **"%c %xcl:plotconv from=&q to=&r ^2 +++^n", dopt, pcopt )
+
+        bsout( "*"%pltops from=&r to=&s +++^n*
+               **"%call ring.linklib:torspool( sysprint=** from=&s +++^n*
+               *%qd=w to=^1 ) ^2,ps +++^n*"^n*
+               *//D        DD    **^n*
+               *+++M^n", (f.to = 0 -> "**V/fb/route=cl#spool", f.to), printer )
+    $)
+
+
+    //  Having printed the commands, we should send the file itself.
+    //  The file is already opened...
+
+    sendfile( stream )
+    endstream( stream )
+
+    closestreams()
+$)
+
+
+
+AND execute.mail()  BE
+$(
+//  Command code to implement the CS MAIL command.
+
+    MANIFEST
+    $(
+        a.user   =  0
+        a.pw     =  1
+        a.jd     =  2
+    $)
+
+    LET args    =  "USER,PW,JD/K"
+    LET argv    =  VEC 50
+    LET tripos  =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        moan( "Bad arguments for *"%S*"", args )
+
+        RETURN
+    $)
+
+    //  If we drop through here, then the arguments are correct, and so
+    //  we should attempt to submit the job.
+
+    user    :=  argv!a.user
+    pw      :=  argv!a.pw
+    jd      :=  argv!a.jd
+
+    checkuser( @user )
+    checkpw( @pw )
+
+    jdparm!jd.title       :=  "Tripos Mail"
+    jdparm!jd.punchlimit  :=  "25000"
+    jdparm!jd.notify      :=  copystring( user )
+
+    //  Now, submit the relevant job.
+
+    UNLESS  openstreams( stream.submit )  DO  RETURN
+
+    generatejob( user, pw, jd )
+
+    //  Having got the person's phoenix userid, we must get his TRIPOS userid
+    //  as well, since this is where the mail will be sent.
+
+    triposuser( @tripos )
+
+    bsout( "setchar bra [ ket ]^n*
+           *setuplocal( exclusiv=.phxmail.work/mod )^n*
+           *%message opt=t rclevel=0^n*
+           *%if .phxmail.log is available then %message to=.phxmail.log/mod opt=r^n" )
+
+    bsout( "%message to=.phxmail.work/mod^n*
+           *%stream %H%+.phxmail.work/shr to=**v/route=cl#jenny/fb opt=a,ne,pad=x0^n*
+           *::MAIL=L^1@UK.AC.cam.cltripos;:VIA=CAMPHX;^n", tripos )
+
+    bsout( "Date: [%dayname], [%date] [%time] GMT^n*
+           *From: ^1 <^1@camphx>^n*
+           *To: ^2@UK.AC.cam.cltripos^n*
+           *Subject: Phoenix mail^n*
+           *Message-ID: <[%date] [%time]  ^1@camphx>^n*
+           *^n*
+           *%^n", user, tripos )
+
+    bsout( "%file $ to .phxmail.work/shr^n*
+           *%quit 0^n" )
+
+    //  Nothing else to do, so we can close down now.
+
+    closestreams()
+$)
+
+
+.
+
+
+
+SECTION "MVS CS 2"
+
+
+
+GET ""
+GET "BCPL.SSPLIB"
+GET "BCPL.BSPLIB"
+GET "BCPL.RINGMAP"
+GET "BCPL.MAPPUID"
+
+
+
+
+LET execute.status()  BE
+$(
+//  Execute the CS STATUS command.
+
+    MANIFEST
+    $(
+        a.jobname  =  0
+    $)
+
+    LET args   =  "JOBNAME"
+    LET argv   =  VEC 50
+    LET jname  =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        moan( "Bad arguments for string *"%S*"", args )
+
+        RETURN
+    $)
+
+    UNLESS  openstreams( stream.status )  DO  RETURN
+
+    //  Now write the argument given down the stream, and wait for the
+    //  result to come back.
+
+    jname  :=  argv!a.jobname
+
+    IF  jname = 0  THEN
+    $(
+        //  Prompt for the userid if necessary, and add on the JOBID field to
+        //  the end of the name.
+
+        LET jobid  =  jdparm!jd.jobid
+
+        checkuser( @jname )
+
+        jname  :=  concatenate( jname, jobid )
+    $)
+
+    bsout( "^1^n", jname )
+
+    bsp.forceout( bs.out )
+
+    selectoutput( sysout )
+
+    $(  //  Main repeat loop to wait for the characters to come from the
+        //  other end.
+
+        LET ch  =  rdch()
+
+        IF  bsp.test.reset( bs.in )  THEN
+        $(
+            //  Cooer.  We have been reset.  Not a lot we can do in that
+            //  case, other than finish.
+
+            writef( "*N******  Byte Stream Error*N*N" )
+
+            BREAK
+        $)
+
+        IF  ch = endstreamch  THEN  BREAK
+        IF  ch = emptybuffch  THEN  LOOP
+
+        wrch( ch )
+    $)
+    REPEAT
+
+    endread()
+
+    selectinput( sysin )
+$)
+
+
+
+AND execute.password()  BE
+$(
+//  Handle the CS PASSWORD command.  We prompt for the password, and when
+//  given, we write it to the file "home:cs-password".
+
+    MANIFEST
+    $(
+        a.pw   =   0
+    $)
+
+    LET args      =  "PW"
+    LET argv      =  VEC 50
+
+    LET pwfile    =  "HOME:CS-Password"
+    LET pwstream  =  0
+    LET pw        =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        //  Bar arguments, so moan, and return.
+
+        moan( "Bad arguments for *"%S*"", args )
+
+        RETURN
+    $)
+
+    pw  :=  argv!a.pw
+
+    //  Having got the password from the command line, we can delete the
+    //  password file if it previously existed, and then prompt the user
+    //  if he hasn't already given us a password.
+
+    deleteobj( pwfile )
+
+    checkpw( @pw )
+
+    //  If we have been given a null password, then just return.  Otherwise,
+    //  create the file with the password in it, and change its access matrix
+    //  so that general world cannot read it.
+
+    IF  pw % 0  =  0  THEN  RETURN
+
+    pwstream  :=  findoutput( pwfile )
+
+    IF  pwstream = 0  THEN
+    $(
+        moan( "Cannot open *"%S*"", pwfile )
+
+        RETURN
+    $)
+
+    selectoutput( pwstream )
+
+    FOR  i = 0       TO  pw % 0        DO  wrch( NOT (pw % i) )
+    FOR  i = pw % 0  TO  resultlength  DO  wrch( 0 )
+
+    endwrite()
+
+    selectoutput( sysout )
+
+    changeaccess( pwfile )
+$)
+
+
+
+AND changeaccess( file )  BE
+$(
+//  Change the access matrix of the file given to "/ADRW///".
+
+    GET "FILEHDR"
+
+    LET task    =  devicetask( file )
+    LET lock    =  result2
+
+    LET access  =  TABLE  matrix.A+matrix.D+matrix.R+matrix.W, 0, 0, 0
+
+    UNLESS  sendpkt( notinuse, task, action.alter, 0, 0, lock, file, access )  DO
+    $(
+        //  We have failed to change the access, and so we should print out
+        //  a message, and attempt to delete the file.
+
+        moan( "Cannot alter access matrix of *"%S*"", file )
+
+        deleteobj( file )
+    $)
+$)
+
+
+
+AND readstring()  =  VALOF
+$(
+    LET buffer  =  gvec( 256/bytesperword )
+    LET length  =  0
+    LET ch      =  rdch()
+
+    WHILE  ch = '*S'  |  ch = '*T'  DO  ch  :=  rdch()
+
+    UNTIL  ch = '*S'  |  ch = '*T'  |
+           ch = '*N'  |  ch = '*E'  |  ch = endstreamch  DO
+    $(
+        length           :=  length + 1
+        buffer % length  :=  ch
+        ch               :=  rdch()
+    $)
+
+    unrdch()
+
+    buffer % 0  :=  length
+
+    RESULTIS  buffer
+$)
+
+
+
+AND generatejob( user, pw, jd )  BE
+$(
+//  Generate a job card, and associated JECL.  When are IBM going to realise
+//  that their computers are used by Humans, not other machines??
+
+    UNLESS  jd = 0  DO  parsejd( jd )
+
+    //  Write the IBM job card...
+
+    bsout( "^u//^1^2  JOB  ,'^3',  ^r^4^n*
+           *^u//  USER=^1,PASSWORD=^5^[6,MSGCLASS=^6^]^[7,GROUP=P^7^],^n*
+           *^[8//  COND=^8,^n^]",
+
+           user,                  //  1
+           jdparm!jd.jobid,       //  2
+           jdparm!jd.post,        //  3
+           jdparm!jd.title,       //  4
+           pw,                    //  5
+           jdparm!jd.msgclass,    //  6
+           jdparm!jd.project,     //  7
+           jdparm!jd.cond )       //  8
+
+    bsout( "^u//  TIME=^1^[2,REGION=^2^]^[3,NOTIFY=^3^]^[4,CLASS=^4^]^[5,MSGLEVEL=^5^]^n",
+
+           jdparm!jd.time,        //  1
+           jdparm!jd.region,      //  2
+           jdparm!jd.notify,      //  3
+           jdparm!jd.class,       //  4
+           jdparm!jd.msglevel )   //  5
+
+    //  And the JECL...
+
+    bsout( "^u^[1/**ROUTE PRINT ^1^n^]*
+           *^[2/**ROUTE PUNCH ^2^n^]*
+           */**JOBPARM RESTART=^3^[4,LINES=^4^]^[5,CARDS=^5^]^[6,COPIES=^6^]^[7,LINECT=^7^]^n",
+
+           jdparm!jd.printroute,  //  1
+           jdparm!jd.punchroute,  //  2
+           jdparm!jd.restart,     //  3
+           jdparm!jd.printlimit,  //  4
+           jdparm!jd.punchlimit,  //  5
+           jdparm!jd.copies,      //  6
+           jdparm!jd.page )       //  7
+
+    //  And the Cambridge JECL...
+
+    bsout( "^[1/**JD DECK800=^1^n^]*
+           *^[2/**JD DECK9=^2^n^]*
+           *^[3/**JD DISC=(^3)^n^]*
+           *^[4/**JD DRIVE=^4^n^]*
+           *^[5/**JD LOCK='^5'^n^]*
+           *^[6/**JD MAXRATE=^6^n^]*
+           *^[7/**JD TAPE800=(^7)^n^]*
+           *^[8/**JD TAPE9=(^8)^n^]*
+           *^[9/**JD TURNROUND=(^9)^n^]",
+
+           jdparm!jd.deck800,     //  1
+           jdparm!jd.deck9,       //  2
+           jdparm!jd.disc,        //  3
+           jdparm!jd.drive,       //  4
+           jdparm!jd.lock,        //  5
+           jdparm!jd.maxrate,     //  6
+           jdparm!jd.tape800,     //  7
+           jdparm!jd.tape9,       //  8
+           jdparm!jd.turnround )  //  9
+
+    bsout( "^u//PHOENIX  EXEC  PHX^[1,REGION=^1^]^n",  jdparm!jd.region )
+
+    TEST  jdparm!jd.dlm = NIL
+
+        THEN  bsout( "//SYSIN    DD    **    UNGENERATED STATEMENT^n" )
+        ELSE  bsout( "//SYSIN    DD    DATA,DLM='^1'^n", jdparm!jd.dlm )
+
+    //  After sending all that rubbish, we had better check to see whether
+    //  the other end has reset the byte stream or not.
+
+    checkreset()
+$)
+
+
+
+AND setupdefaults()  BE
+$(
+//  Set up all the job description defaults.  The user can override any of
+//  these by using the "JD" keword on the command line.
+
+    jdparm!jd.class       :=  NIL
+    jdparm!jd.cond        :=  NIL
+    jdparm!jd.copies      :=  NIL
+    jdparm!jd.deck800     :=  NIL
+    jdparm!jd.deck9       :=  NIL
+    jdparm!jd.disc        :=  NIL
+    jdparm!jd.dlm         :=  NIL
+    jdparm!jd.drive       :=  NIL
+    jdparm!jd.jobid       :=  "R"
+    jdparm!jd.lock        :=  NIL
+    jdparm!jd.maxrate     :=  NIL
+    jdparm!jd.msgclass    :=  "X"
+    jdparm!jd.msglevel    :=  NIL
+    jdparm!jd.notify      :=  NIL
+    jdparm!jd.page        :=  NIL
+    jdparm!jd.post        :=  ""
+    jdparm!jd.printlimit  :=  NIL
+    jdparm!jd.printroute  :=  NIL
+    jdparm!jd.project     :=  NIL
+    jdparm!jd.punchlimit  :=  NIL
+    jdparm!jd.punchroute  :=  NIL
+    jdparm!jd.region      :=  NIL
+    jdparm!jd.restart     :=  "Y"
+    jdparm!jd.tape800     :=  NIL
+    jdparm!jd.tape9       :=  NIL
+    jdparm!jd.title       :=  NIL
+    jdparm!jd.time        :=  "(,10)"
+    jdparm!jd.turnround   :=  NIL
+$)
+
+
+
+AND parsejd( jdstring )  BE
+$(
+//  Given the job description string "jdstring", parse it, extracting out
+//  all the relevant information to override the defaults.
+
+    LET jdargs  =  "CLASS,COND,COPIES,DECK800,DECK9,DISC,DLM,DRIVE,JOBID,*
+                   *LOCK,MAXRATE,MSGCLASS,MSGLEVEL,NOTIFY,PAGE,POST,*
+                   *PRINTLIMIT,PRINTROUTE,PROJECT,PUNCHLIMIT,PUNCHROUTE,*
+                   *REGION,RESTART,TAPE800,TAPE9,TITLE,TIME,TURNROUND"
+
+    LET jdargv  =  VEC 100
+
+    //  First, select the string given to be a pseudo input stream, so that
+    //  we can use RDITEM on it.
+
+    stringinput( jdstring )
+
+    $(  //  Loop to read items from the JD line, and make sure that they
+        //  correspond to a correct keyword.
+
+        LET item  =  rditem( jdargv, 100 )
+        LET key   =  0
+
+        SWITCHON  item  INTO
+        $(
+            CASE  0 :  //  End of stream.  This is OK, since we are expecting
+                       //  it here.
+
+                       BREAK
+
+
+            CASE  1 :  //  Unquoted string.  This is exactly what we want, and
+                       //  so we can go on to the next stage.
+
+                       ENDCASE
+
+
+            DEFAULT :  //  Some sort of error in JD parameter string.
+
+                       moan( "Invalid JD parameters:  *"%S*"", jdstring )
+
+                       BREAK
+        $)
+
+        //  We we drop out of there, we have read a keyword.  We had better
+        //  make sure that this is a keyword which we understand.
+
+        key  :=  findarg( jdargs, jdargv )
+
+        IF  key < 0  THEN
+        $(
+            //  This is an unknown keyword, and hence an unknown JD parameter.
+
+            moan( "Unknown JD parameter:  *"%S*"", jdargv )
+
+            BREAK
+        $)
+
+        //  We know this JD parameter, so we had better read the next onw which
+        //  should be its argument.  We allow an "=" as well, just for good
+        //  measure.
+
+        item  :=  rditem( jdargv, 100 )
+
+        IF  item = -2  THEN  item  :=  rditem( jdargv, 100 )
+
+        SWITCHON  item  INTO
+        $(
+            CASE  1 :
+            CASE  2 :  //  Quoted or unquoted string.  This is exactly what we
+                       //  want, and so we can update the relevant JD
+                       //  parameter.
+
+                       ENDCASE
+
+
+            DEFAULT :  //  Some sort of error in JD parameter string.
+
+                       moan( "Invalid JD parameters:  *"%S*"", jdstring )
+
+                       BREAK
+        $)
+
+        //  If we drop through here, there there is nothing much more to be
+        //  said.  We can update the relevant parameter, and then go on for
+        //  more.
+
+        jdparm!key  :=  copystring( jdargv )
+    $)
+    REPEAT
+
+    endstringinput()
+$)
+
+
+
+AND sendfile( stream )  BE
+$(
+//  Push the bytes from the file represented by "stream" down the byte stream.
+//  A count is kept of how many bytes have been sent, and whether we have
+//  had any byte stream errors.
+
+    LET in  =  input()
+    LET ch  =  0
+
+    selectinput( stream )
+
+    ch  :=  rdch()
+
+    UNTIL  ch = endstreamch  |  bserror  DO
+    $(
+        //  Before sending the chunk of file, check to see if there have been
+        //  any console interruptions.  If there have, then deal with them.
+
+        IF  testflags( #B0001)  THEN
+        $(
+            //  User break.  Close this file, and return immediately.
+
+            moan( "BREAK" )
+
+            bserror  :=  TRUE
+
+            BREAK
+        $)
+
+        IF  testflags( #B1000 )  THEN
+
+            //  Investigative break.  Tell the user how much we have shipped
+            //  down the line.
+
+            print( "%NK bytes transferred", kbytecount )
+
+        //  Now send the next block of characters down the line.  We send them
+        //  in 1K byte units.  This is safe, since a byte stream becomes a
+        //  bottomless pit when broken.
+
+        FOR  i = 1  TO  1024  DO
+        $(
+            wrch( ch )
+
+            ch  :=  rdch()
+
+            IF  ch = endstreamch  THEN  BREAK
+        $)
+
+        kbytecount  :=  kbytecount + 1
+
+        checkreset()
+    $)
+
+    selectinput( in )
+$)
+
+
+
+AND openstreams( service )  =  VALOF
+$(
+//  Open the byte streams associated with the service whose name is "service".
+//  The result is a boolean, saying whether we have succeeded or not.
+
+    bs.out  :=  findoutput( service )
+    bs.in   :=  result2
+
+    IF  bs.out = 0  THEN
+    $(
+        moan( "Failed to open stream to *"%S*",  RC=%N", service, bs.in )
+
+        RESULTIS  FALSE
+    $)
+
+    //  Otherwise, the open succeeded, and we can select the service byte
+    //  streams.
+
+    selectoutput( bs.out )
+    selectinput( bs.in )
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND closestreams()  BE
+$(
+//  Cause the service byte stream to be closed.  This is done in one of two
+//  situations:
+//
+//       a)  We have discovered a byte stream reset, and hopefully there will
+//           be an error message waiting for us.
+//
+//       b)  We have finished sending the job, and hence can tell the other
+//           end this by sending them a "close request".
+
+    checkreset()
+
+    selectoutput( sysout )
+
+    TEST  bserror  THEN
+    $(
+        //  There has been some byte stream error before this, and hence no
+        //  job has been submitted.
+
+        writes( "*N******  Byte Stream Error*N*N" )
+
+        $(  //  Repeat loop to read the error message from the byte stream,
+            //  and print it out to the terminal.
+
+            LET ch  =  rdch()
+
+            IF  ch = endstreamch  THEN  BREAK
+            IF  ch = emptybuffch  THEN  LOOP
+
+            wrch( ch )
+        $)
+        REPEAT
+
+        newline()
+    $)
+    ELSE
+    $(
+        //  Send the close request, so that the phoenix end understands
+        //  that we have finished sending.
+
+        bsp.request.close( bs.out )
+
+        $(  //  Repeat loop to wait for the "reset" from the other end saying
+            //  that it has accepted the job, and then print out the message
+            //  returned by JES.
+
+            LET ch  =  rdch()
+
+            TEST  bsp.test.reset( bs.in )  THEN  writes( "*N******  Job Sent*N*N" )
+            ELSE
+            $(
+                //  This is a data character, and so we should be able to
+                //  print it out.
+
+                IF  ch = endstreamch  THEN  BREAK
+                IF  ch = emptybuffch  THEN  LOOP
+
+                wrch( ch )
+            $)
+        $)
+        REPEAT
+    $)
+
+    //  When we come here, there is nothing else to do with the byte stream,
+    //  and we can close it down.
+
+    endread()
+
+    selectinput( sysin )
+$)
+
+
+
+AND bsout( format, a1, a2, a3, a4, a5, a6, a7, a8, a9 )  BE
+$(
+//  Routine similar to "writef", but designed to handle conditional output.
+//  This has been cribbed entirely from MAJ!
+
+    LET vector      =  @a1 - 1
+    LET subscript   =  1
+    LET length      =  format % 0
+
+    LET uppercase   =  FALSE
+    LET outputting  =  TRUE
+
+    UNTIL  subscript > length  DO
+    $(
+        LET ch       =  format % subscript
+        LET element  =  0
+
+        subscript  :=  subscript + 1
+
+        TEST  ch = '^'  THEN
+        $(
+            //  This is the string escape character.  Look at the next
+            //  character, and see what it is...
+
+            ch         :=  format % subscript
+            subscript  :=  subscript + 1
+
+            SWITCHON  ch  INTO
+            $(
+                CASE '^' :  IF  outputting  THEN  wrch( '^' )
+                            ENDCASE
+
+
+                CASE 'n' :  IF  outputting  THEN  wrch( '*N' )
+                            ENDCASE
+
+
+                CASE 'u' :  uppercase  :=  TRUE
+                            ENDCASE
+
+
+                CASE 'r' :  uppercase  :=  FALSE
+                            ENDCASE
+
+
+                CASE '[' :  ch          :=  format % subscript
+                            subscript   :=  subscript + 1
+                            outputting  :=  vector!(ch - '0') \= NIL
+                            ENDCASE
+
+
+                CASE ']' :  outputting  :=  TRUE
+                            ENDCASE
+
+
+                CASE '1' :  CASE '2' :  CASE '3' :
+                CASE '4' :  CASE '5' :  CASE '6' :
+                CASE '7' :  CASE '8' :  CASE '9' :
+
+                            element  :=  vector!(ch - '0')
+
+                            IF  outputting  THEN
+                                FOR  i = 1  TO  element % 0  DO
+                                    wrch( uppercase -> capitalch( element % i ), element % i )
+
+                            ENDCASE
+
+
+                DEFAULT  :  LOOP
+            $)
+        $)
+        ELSE
+
+        //  Not a special character, so write it out without modification.
+
+        IF  outputting  THEN
+            wrch( uppercase  ->  capitalch( ch ), ch )
+    $)
+$)
+
+
+
+AND calloverlay( command )  =  VALOF
+$(
+//  This routine calls an overlay to implement something which is too
+//  complicated to do internally.
+
+    LET root    =  "sys:l.cs-"
+    LET lenr    =  root % 0
+    LET lenc    =  command % 0
+    LET length  =  lenr + lenc
+    LET buffer  =  gvec( length/bytesperword )
+
+    LET oldgv   =  gvec( globsize )
+    LET rcode   =  0
+
+    FOR  i = 1  TO  lenr  DO  buffer % i           :=  root % i
+    FOR  i = 1  TO  lenc  DO  buffer % (lenr + i)  :=  command % i
+
+    buffer % 0  :=  length
+
+    //  Having worked out the name of the file, we should call it.
+
+    FOR  i = ug  TO  globsize  DO  oldgv!i        :=  (@globsize)!i
+
+    rcode  :=  callseg( buffer )
+
+    FOR  i = ug  TO  globsize  DO  (@globsize)!i  :=  oldgv!i
+
+    fvec( buffer )
+    fvec( oldgv )
+
+    RESULTIS  rcode
+$)
+
+
+
+AND checkreset()  BE
+    IF  bsp.test.reset( bs.out )  THEN
+        bserror  :=  TRUE
+
+
+
+AND checkuser( lv.user )  BE
+$(
+    LET userstring  =  VEC resultlength/bytesperword
+
+    IF  !lv.user = 0  THEN
+    $(
+        //  We have not been given a userid, and so we must look up this guy's
+        //  userid in the Map service.
+
+        UNLESS  mappuid( "CS", userstring, resultlength )  DO
+            promptfor( "Userid", userstring, FALSE )
+
+        !lv.user  :=  copystring( frigstring( userstring, uppercase ) )
+    $)
+$)
+
+
+
+AND triposuser( lv.user )  BE
+$(
+    LET userstring  =  VEC resultlength/bytesperword
+
+    //  Look up this guy's TRIPOS userid in the map service.
+
+    UNLESS  mappuid( "PNAME", userstring, resultlength )  DO
+        promptfor( "Tripos Userid", userstring, FALSE )
+
+    !lv.user  :=  copystring( frigstring( userstring, lowercase ) )
+$)
+
+
+
+AND frigstring( string, function )  =  VALOF
+$(
+//  Make a string upper or lower case.
+
+    FOR  i = 1  TO  string % 0  DO
+        string % i  :=  function( string % i )
+
+    RESULTIS  string
+$)
+
+
+
+AND uppercase( ch )  =  'a' <= ch <= 'z'  ->  ch - 'a' + 'A',  ch
+
+
+
+AND lowercase( ch )  =  'A' <= ch <= 'Z'  ->  ch - 'A' + 'a',  ch
+
+
+
+AND checkpw( lv.pw )  BE
+$(
+    LET pwstring  =  VEC resultlength/bytesperword
+
+    IF  !lv.pw = 0  THEN
+    $(
+        //  We have not been given a password, and so we should look to see if
+        //  there is a "CS Password" file where we can find the password.  If
+        //  not, then we must prompt the console for one.
+
+        UNLESS  readpassword( pwstring, resultlength )  DO
+            promptfor( "Password", pwstring, TRUE )
+
+        !lv.pw  :=  copystring( pwstring )
+    $)
+$)
+
+
+
+AND readpassword( buffer, size )  =  VALOF
+$(
+//  Read the user's password from disc (if it is there).  The result is a
+//  boolean saying whether the operation succeeded.
+
+    LET oldin   =  input()
+    LET stream  =  findinput( "HOME:CS-Password" )
+
+    TEST  stream = 0  THEN  RESULTIS  FALSE
+    ELSE
+    $(
+        //  We have opened the stream, so we should read the password from the
+        //  file, decoding it as we go.
+
+        LET length  =  0
+        LET ch      =  0
+
+        selectinput( stream )
+
+        length  :=  (NOT rdch())  &  #XFF
+
+        UNLESS  length > size  DO
+        $(
+            //  All is OK, so we can fill in the string.
+
+            buffer % 0  :=  length
+
+            FOR  i = 1  TO  length  DO  buffer % i  :=  (NOT rdch())  &  #XFF
+        $)
+
+        endread()
+
+        selectinput( oldin )
+
+        //  The result now is simply an indication of whether the password was
+        //  too big or not.
+
+        RESULTIS  NOT (length > size)
+    $)
+$)
+
+
+
+AND promptfor( string, result, noreflect )  BE
+$(
+//  Prompt the console for something.
+
+    LET in      =  input()
+    LET out     =  output()
+    LET length  =  0
+    LET ch      =  0
+    LET ok      =  FALSE
+
+    selectinput( sysin )
+    selectoutput( sysout )
+
+    writef( "%S? *E", string )
+
+    IF  noreflect  THEN
+        sendpkt( notinuse, consoletask, act.non.reflect.mode, 0, 0, TRUE )
+
+    WHILE  length < resultlength  DO
+    $(
+        ch  :=  rdch()
+
+        IF  ch = '*N'  |  ch = '*E'  |  ch = endstreamch  THEN
+        $(
+            ok  :=  TRUE
+
+            BREAK
+        $)
+
+        length           :=  length + 1
+        result % length  :=  ch
+    $)
+
+    UNLESS  ok  DO
+    $(
+        UNTIL  ch = '*N'  |  ch = '*E'  |  ch = endstreamch  DO  ch  :=  rdch()
+
+        print( "String too long - truncated" )
+    $)
+
+    result % 0  :=  length
+
+    IF  noreflect  THEN
+        sendpkt( notinuse, consoletask, act.non.reflect.mode, 0, 0, FALSE )
+
+    selectinput( in )
+    selectoutput( out )
+$)
+
+
+
+AND gvec( vecsize )  =  VALOF
+$(
+//  Add a new vector to the list of those "got" already.
+
+    LET node   =  getvec( 2 )
+    LET space  =  getvec( vecsize )
+
+    TEST  node = 0  |  space = 0  THEN
+    $(
+        //  Cannot get either the main space, or the node space.
+        //  Free whichever one was successful, and flag an error.
+
+        UNLESS  node   = 0  DO  freevec( node )
+        UNLESS  space  = 0  DO  freevec( space )
+
+        abort( 9999 )
+    $)
+    ELSE
+    $(
+        //  We have got the vector successfully, so add it to the
+        //  chain of allocated vectors.
+
+        node!0  :=  veclist
+        node!1  :=  space
+        veclist :=  node
+
+        RESULTIS  space
+    $)
+$)
+
+
+
+AND fvec( vector )  BE
+$(
+//  Free the vector pointed to by "vector".  Look in the allocated space chain
+//  to find this vector, and when found, de-allocate the space.
+
+    LET node  =  veclist
+    LET ptr   =  @veclist
+
+    UNTIL  node = NIL  DO
+    $(
+        IF  node!1 = vector  THEN
+        $(
+            //  We have found the vector to deallocate.  Remove this node from
+            //  the list, and deallocate the space involved.
+
+            !ptr   :=  node!0
+
+             freevec( vector )
+             freevec( node )
+
+             RETURN
+        $)
+
+        ptr   :=  node
+        node  :=  node!0
+    $)
+
+    abort( 9999, vector )
+$)
+
+
+
+AND fvectors()  BE
+$(
+//  Free all the vectors pointed to by the list "veclist".
+
+    UNTIL veclist = NIL  DO
+    $(
+        LET nlist  =  veclist!0
+        LET space  =  veclist!1
+
+        freevec( space )
+        freevec( veclist  )
+
+        veclist  :=  nlist
+    $)
+$)
+
+
+
+AND stringinput( string )  BE
+$(
+    blib.rdch    :=  rdch
+    blib.unrdch  :=  unrdch
+
+    stringbuff   :=  copystring( string )
+    stringbuffb  :=  0
+    stringbuffe  :=  stringbuff % 0
+
+    rdch         :=  string.rdch
+    unrdch       :=  string.unrdch
+$)
+
+
+
+AND endstringinput()  BE
+$(
+    freestring( stringbuff )
+
+    rdch    :=  blib.rdch
+    unrdch  :=  blib.unrdch
+$)
+
+
+
+AND string.rdch()  =  VALOF
+$(
+    stringbuffb  :=  stringbuffb + 1
+
+    RESULTIS  stringbuffb > stringbuffe  ->  endstreamch,
+                                             stringbuff % stringbuffb
+$)
+
+
+
+AND string.unrdch()  =  VALOF
+$(
+    IF  stringbuffb = 0  THEN  RESULTIS  FALSE
+
+    stringbuffb  :=  stringbuffb - 1
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND copystring( string )  =  VALOF
+$(
+    LET length  =  string % 0
+    LET buffer  =  gvec( length / bytesperword )
+
+    IF  buffer = 0  THEN  abort( 9999 )
+
+    FOR  i = 0  TO  length  DO  buffer % i  :=  string % i
+
+    RESULTIS  buffer
+$)
+
+
+
+AND concatenate( string1, string2 )  =  VALOF
+$(
+//  Return the value of "string" joined to "string2".
+
+    LET l1      =  string1 % 0
+    LET l2      =  string2 % 0
+    LET total   =  l1 + l2
+
+    LET string  =  gvec( total/bytesperword )
+
+    FOR  i = 1  TO  l1  DO  string % i         :=  string1 % i
+    FOR  i = 1  TO  l2  DO  string % (l1 + i)  :=  string2 % i
+
+    string % 0  :=  total
+
+    RESULTIS  string
+$)
+
+
+
+AND freestring( string )  BE  fvec( string )
+
+
+
+AND moan( format, arg1, arg2 )  BE
+$(
+//  Error message.  Print out the error message to the output stream, and
+//  set the error return code.
+
+    print( format, arg1, arg2 )
+
+    rc  :=  20
+$)
+
+
+
+AND print( format, arg1, arg2 )  BE
+$(
+//  Print out a message to the standard output stream.
+
+    LET o  =  output()
+
+    selectoutput( sysout )
+
+    writes( "****** CS:  " )
+    writef( format, arg1, arg2 )
+    newline()
+
+    selectoutput( o )
+$)
+
+

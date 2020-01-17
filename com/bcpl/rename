@@ -1,0 +1,26 @@
+// (C) Copyright 1978 Tripos Research Group
+//     University of Cambridge
+//     Computer Laboratory
+//     Mod by MFR: check for FM rc=5170: object aliased
+
+SECTION "RENAME"
+GET     "LIBHDR"
+
+LET start() BE
+$( LET v = VEC 50
+   LET s = "FROM/A,TO=AS/A"
+   IF rdargs(s, v, 50)=0 THEN $( writef("Bad args for *"%S*"*N",s)
+                                 stop  (20)
+                              $)
+
+   UNLESS renameobj(v!0, v!1) DO
+   $( LET res2 = result2
+      TEST res2=5170
+           THEN writes("Unable to delete old entry, alias performed*N")
+           ELSE writef("Can't rename %s as %s*n", v!0, v!1)
+      result2 := res2
+      stop(20)
+   $)
+$)
+
+

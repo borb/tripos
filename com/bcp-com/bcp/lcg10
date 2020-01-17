@@ -1,0 +1,294 @@
+SECTION "LCG10"
+
+GET "LCGHDR"
+
+LET chkrefs(n) BE
+  $( IF countflag THEN insertcount()
+     UNTIL refinrange(krefv, n) DO dealwithkref(krefv)
+     IF skiplab=0 THEN RETURN
+     setlabel(skiplab)
+     unsetlabel()
+     skiplab := 0
+     incode := yes
+  $)
+
+AND setlabel(n) BE
+  $( // Try to remove JMP $+1's
+     IF ((krefp - krefv) >= 3) & NOT incode THEN
+       $( LET lk = krefp - 3
+          LET a, k = h1 !lk, h2 ! lk
+          a := a - (k = k.jlab -> 64, 128)
+          IF (a = stvp-1) & k \= k.numb & h3!lk = n THEN
+            $( stvp := stvp - 1; krefp := lk $)
+       $)
+     labv!n := stvp
+     $( LET p = getkref(k.lab, n)
+        IF p = 0 THEN BREAK
+        fillinrelref(p, stvp, 0, k.lab)
+     $) REPEAT
+     $( LET p = getkref(k.jlab, n)
+        IF p = 0 THEN BREAK
+        fillinrelref(p, stvp, 0, k.jlab)
+     $) REPEAT
+  $)
+
+AND unsetlabel() BE
+  $( labv ! paramnumber := -1; paramnumber := paramnumber + 1 $)
+
+
+AND dealwithkref(t) BE
+$( LET p, k, n, ind = h1 ! t, h2 ! t, h3 ! t, 0
+   krefp := krefp - 3
+   FOR q = t TO krefp - 1 DO q!0 := q!3
+
+   SWITCHON k INTO
+   $( CASE k.lab:       ind := m.i
+
+      CASE k.jlab:
+            $( LET a = getkcmp(k, n)
+               IF a \= 0 THEN
+                 $( fillinrelref(p, a, ind, k)
+                    RETURN
+                 $)
+             $)
+   $)
+
+   IF incode THEN
+   $( skiplab := nextparam()
+      addkref(k.lab, skiplab, 128)
+      code(f.jmp + m.rel, 0)
+      incode := no
+   $)
+
+   fillinrelref(p, stvp, ind, k)
+   addkcmp(k, n)
+
+   SWITCHON k INTO
+   $( CASE k.lab:
+            code(0, n)
+            ENDCASE
+
+          CASE k.numb:
+            code(n, 0)
+            ENDCASE
+
+          CASE k.jlab:
+            addkref(k.lab, n, 128)
+            code(f.jmp + m.rel, 0)
+
+   $)
+$)
+
+
+AND fillinrelref(p, a, bits, k) BE
+TEST k = k.jlab THEN $( p := p - 64; stv!p := stv!p + a - p + #X3F $)
+ELSE $( p := p -128; stv ! p := stv ! p + a - p + #X7F + bits $)
+
+
+AND fillineref(p, a) BE stv ! p := stv ! p + a - p - 1
+
+
+AND refinrange(p, n) = p = krefp                        -> yes,
+                       (p+3-krefp)<0 & h1!p+1>=h1!(p+3) -> refinrange(p+3,n+1),
+                                                           h1!p > stvp+n
+
+AND removerefsto(a, k, n) BE
+  $( LET bits = (k = k.lab -> m.i, 0)
+     a := a - (k = k.jlab -> 63, 127)
+     $( LET p = getkref(k, n)
+        IF p = 0 THEN BREAK
+        fillinrelref(p, a, bits, k)
+     $) REPEAT
+  $)
+
+
+AND gengoto(f.short, f.extended) BE
+  // Used for GOTO and calls.
+  $( LET k, n = h1 ! arg1, h2 ! arg1
+     SWITCHON k INTO
+
+       $( CASE k.lvloc: CASE k.lvlab:
+          CASE k.reg:   CASE k.lvglob:
+          CASE k.loc:
+            movetor(arg1, r.y)
+            gens(f.short, 0, m.y)
+            ENDCASE
+
+          CASE k.lab: // Relative indirect reference!
+            $( LET a, d = labv ! n, ?
+               chkrefs(1)
+               d := a - stvp
+               IF a >= 0 & (-127 <= d <= 128) THEN
+                 $( gens(f.short, 0, m.i+m.rel+#X80+d-1)
+                    ENDCASE
+                 $)
+               f.short := 0
+            $)
+
+          CASE k.numb: CASE k.abs:
+          CASE k.glob: CASE k.ry:
+            genm(f.short, f.extended, 0, k, n, m.i)
+       $)
+  $)
+
+
+AND movgtoy() BE
+  IF reg.k ! r.y \= k.lvglob | reg.n ! r.y \= 0 THEN
+    $( freereg(r.y)
+       genrr(f.lr, r.l, r.y)
+       setinfo(r.y, k.lvglob, 0)
+    $)
+
+
+AND genm(f.short, f.extended, r, k, n, mode) BE
+  // Generates memory reference instruction.
+  $( LET m = (k = k.abs -> 0, m.x)
+
+     SWITCHON k INTO
+
+       $( DEFAULT:
+            cgerror(0, "in GENM %N", k)
+            ENDCASE
+
+          CASE k.numb: CASE k.lab:
+            TEST f.short = 0 THEN gene(f.extended, r, m.rel + mode, eref(k,n))
+             ELSE gens(f.short, r, mode + mref(k,n))
+            ENDCASE
+
+          CASE k.glob:
+            movgtoy()
+
+          CASE k.ry:
+            m := m.y
+
+          CASE k.loc: CASE k.abs:
+            gensore(f.short, f.extended, r, mode + m, n)
+
+       $)
+  $)
+
+
+AND mref(k, n) = VALOF
+  TEST incode THEN
+    $( LET max, mode = 128, m.rel
+       chkrefs(1)
+       SWITCHON k INTO
+         $( CASE k.numb:
+              $( LET a = getkcmp(k, n)
+                 IF a \= 0 THEN
+                   RESULTIS reladdr(a)
+                 ENDCASE
+              $)
+
+            CASE k.jlab:
+              mode, max := 0, 64
+
+            CASE k.lab:
+              $( LET a = labv ! n
+                 IF a > 0 & (- max < (a-stvp) <= max) THEN
+                   TEST k = k.lab THEN
+                     RESULTIS reladdr(a)
+                    ELSE
+                     RESULTIS a - stvp + #X3F
+                 ENDCASE
+              $)
+
+         $)
+       addkref(k, n, max)
+       RESULTIS mode
+    $)
+   ELSE
+    RESULTIS 0
+
+AND reladdr(a) = m.rel + a - stvp + #X7F
+
+AND eref(k, n) = (NOT incode) -> 0, VALOF
+  // Extended ref to (K, N)
+  $( chkrefs(2)
+     TEST k = k.numb THEN
+       $( LET a = getkcmp(k, n)
+          TEST a \= 0 THEN RESULTIS a - stvp - 2
+           ELSE
+            $( LET p = getblk()
+               !p := ereflist
+               ereflist := p
+               h2 ! p := stvp + 1
+               h3 ! p := n
+            $)
+       $)
+      ELSE labref(- n, stvp + 1)
+
+     RESULTIS 0
+  $)
+
+
+AND addkcmp(k, n) BE
+  $( IF kcmpp = kcmpt THEN
+       $( removerefsto(h1!kcmpv, h2!kcmpv, h3!kcmpv)
+          kcmpp := kcmpp - 3
+          FOR p = kcmpv TO kcmpp-1 DO p!0 := p!3
+       $)
+     $( LET l = stvp + (k = k.jlab -> 63, 127)
+        LET c = kcmpp - 3
+        WHILE (c - kcmpv) >= 0 & l < h1 ! c DO
+          c := c - 3
+        c := c + 3
+        FOR k = kcmpp - 1 TO c BY -1 DO
+          k ! 3 := k ! 0
+        kcmpp := kcmpp + 3
+        h1 ! c, h2 ! c, h3 ! c := l, k, n
+     $)
+     IF k = k.numb THEN
+       $( $( LET p = getkref(k, n)
+             IF p = 0 THEN BREAK
+             fillinrelref(p, stvp, 0, k)
+          $) REPEAT
+          $( LET p = geteref(n)
+             IF p = 0 THEN BREAK
+             fillineref(p, stvp)
+          $) REPEAT
+       $)
+  $)
+
+AND getkcmp(k, n) = VALOF
+// returns address of recently compiled constant (K, N)
+$(  FOR p = kcmpp-3 TO kcmpv BY -3
+       IF h3!p=n & h2!p=k THEN RESULTIS h1 ! p - (k = k.jlab -> 63, 127)
+    RESULTIS 0
+$)
+
+AND addkref(k, n, max) BE
+  $( LET l = stvp + max
+     LET r = krefp - 3
+     IF krefp = kreft THEN cgerror(20, "in ADDKREF")
+     WHILE (r - krefv) >= 0 & l < h1 ! r DO r := r - 3
+     r := r + 3
+     FOR k = krefp - 1 TO r BY -1 DO k ! 3 := k ! 0
+     krefp := krefp + 3
+     h1 ! r, h2 ! r, h3 ! r := l, k, n
+  $)
+
+AND getkref(k, n) = VALOF
+// returns address of instruction making reference (K, N)
+// and removes item from KREFV
+$(  FOR p = krefv TO krefp-3 BY 3
+        IF h3!p=n & h2!p=k DO
+    $(  LET a = h1!p
+        krefp := krefp-3
+        FOR q = p TO krefp-1 DO q!0 := q!3
+        RESULTIS a
+    $)
+    RESULTIS 0
+$)
+
+AND geteref(n) = VALOF
+$( LET e = @ ereflist
+   UNTIL ! e = 0 DO
+   $( LET r = ! e
+      IF h3 ! r = n $( LET p = h2 ! r; !e := h1 ! r; rtnblk(r); RESULTIS p $)
+      e := r
+   $)
+   RESULTIS 0
+$)
+
+

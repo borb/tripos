@@ -1,0 +1,1113 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+                     ########   ######   #######   ##    ##
+                     ########  ########  ########  ###  ###
+                     ##        ##    ##  ##    ##  ########
+                     ######    ##    ##  ########  ## ## ##
+                     ##        ##    ##  #######   ##    ##
+                     ##        ##    ##  ##  ##    ##    ##
+                     ##        ########  ##   ##   ##    ##
+                     ##         ######   ##    ##  ##    ##
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   11/06/84             *
+\*****************************************************************************/
+
+
+
+SECTION "FORM"
+
+
+GET "LIBHDR"
+GET "bcpl.canonhdr"
+
+
+GLOBAL
+$(
+    veclist           :  ug + 0
+    user.orientation  :  ug + 1
+    user.x.origin     :  ug + 2
+    user.y.origin     :  ug + 3
+    ncolumns          :  ug + 4
+    nrows             :  ug + 5
+    colvec            :  ug + 6
+    rowvec            :  ug + 7
+    colheadsize       :  ug + 8
+    rowheadsize       :  ug + 9
+    columns           :  ug + 10
+    rows              :  ug + 11
+    colheadvec        :  ug + 12
+    rowheadvec        :  ug + 13
+    maxwidth          :  ug + 14
+    maxheight         :  ug + 15
+    sysin             :  ug + 16
+    sysout            :  ug + 17
+$)
+
+
+
+MANIFEST
+$(
+    node.link         =  0
+    node.size         =  1
+    node.name         =  2
+
+    nodesize          =  3
+
+    NIL               =  0
+$)
+
+
+
+LET start()  BE
+$(
+//  Program to take the specification of an arbitrary table, and plot it out
+//  on the CANON.
+
+    LET args        =  "FROM/A,TO/A"
+    LET argv        =  VEC 50
+    LET fromfile    =  0
+    LET tofile      =  0
+    LET fromstream  =  0
+    LET tostream    =  0
+    LET hlength     =  0
+    LET vlength     =  0
+    LET hfactor     =  0
+    LET wfactor     =  0
+
+    sysin   :=  input()
+    sysout  :=  output()
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        message( "****** Bad arguments for string *"%S*"*N", args )
+
+        stop( 20 )
+    $)
+
+    fromfile    :=  argv!0
+    tofile      :=  argv!1
+
+    fromstream  :=  findinput( fromfile )
+    tostream    :=  findoutput( tofile )
+
+    IF  fromstream = 0  |  tostream = 0  THEN
+    $(
+        TEST  fromstream = 0
+            THEN  message( "****** Cannot open FROM file *"%S*"*N", fromfile )
+            ELSE  endstream( fromstream )
+
+        TEST  tostream = 0
+            THEN  message( "****** Cannot open TO file *"%S*"*N", tofile )
+            ELSE  endstream( tostream )
+
+        stop( 20 )
+    $)
+
+    //  Having opened the I/O streams, we can get on with producing the
+    //  Table.  The input file should be in the following format.
+    //
+    //      ORIENTATION    [ UP | DOWN | LEFT | RIGHT ]
+    //      ORIGIN         X=n  Y=n
+    //      COLS           [ n | n@n ]*    HEADSIZE=n
+    //      ROWS           [ n | n@n ]*    HEADSIZE=n
+    //      COLHEADINGS    [ COL=n ]
+    //      ROWHEADINGS    [ ROW=n ]
+
+    veclist      :=  NIL
+
+    columns      :=  NIL
+    rows         :=  NIL
+
+    colheadsize  :=  0
+    rowheadsize  :=  0
+
+    UNLESS  readinputfile( fromstream )  DO
+    $(
+        endstream( fromstream )
+        endstream( tostream )
+
+        fvectors()
+
+        stop( 20 )
+    $)
+
+    endstream( fromstream )
+
+    //  Having read the input file, we can process the data which has been
+    //  read.
+
+    ncolumns    :=  countentries( columns )
+    nrows       :=  countentries( rows )
+
+    colvec      :=  gvec( ncolumns )   ;  colvec!0  :=  rowheadsize
+    rowvec      :=  gvec( nrows )      ;  rowvec!0  :=  colheadsize
+
+    colheadvec  :=  gvec( ncolumns )
+    rowheadvec  :=  gvec( nrows )
+
+    FOR  i = 1  TO  ncolumns  DO  colheadvec!i  :=  NIL
+    FOR  i = 1  TO  nrows     DO  rowheadvec!i  :=  NIL
+
+    setentries( colvec, colheadvec, columns )
+    setentries( rowvec, rowheadvec, rows )
+
+    hlength   :=  colvec!ncolumns
+    vlength   :=  rowvec!nrows
+
+    //  Now draw the grid which is the table.  The normal lines are easy, but
+    //  if there are column or row headings, then make a double line separator.
+
+    selectoutput( tostream )
+    canon.open( resolution.full )
+    canon.orientation( user.orientation )
+    canon.origin( user.x.origin, user.y.origin )
+
+    //  Draw the top of the box to enclose the table.
+
+    canon.moveto( 0, 0 )    ;    canon.vline( vlength )
+    canon.moveto( 0, 0 )    ;    canon.hline( hlength )
+
+    //  Now draw the heading separators (if any).
+
+    UNLESS  colvec!0 = 0  DO
+    $(
+        LET xoffset  =  colvec!0
+
+        canon.moveto( xoffset-4, 0 )    ;    canon.vline( vlength )
+        canon.moveto( xoffset, 0 )      ;    canon.vline( vlength )
+    $)
+
+    UNLESS  rowvec!0 = 0  DO
+    $(
+        LET yoffset  =  rowvec!0
+
+        canon.moveto( 0, yoffset-4 )    ;    canon.hline( hlength )
+        canon.moveto( 0, yoffset )      ;    canon.hline( hlength )
+    $)
+
+    //  Having drawn the top and left lines, along with the separators, we
+    //  can draw the rest of the lines in the box.
+
+    FOR  col = 1  TO  ncolumns  DO
+    $(
+        LET xoffset  =  colvec!col
+
+        canon.moveto( xoffset, 0 )
+        canon.vline( vlength )
+    $)
+
+    FOR  row = 1  TO  nrows  DO
+    $(
+        LET yoffset  =  rowvec!row
+
+        canon.moveto( 0, yoffset )
+        canon.hline( hlength )
+    $)
+
+    //  Now fill in the text we have been asked to put in the headings.
+    //  Column text is centred, Row text is left justified.
+
+    hfactor    :=  maxint
+    wfactor    :=  maxint
+    
+    maxheight  :=  0
+    maxwidth   :=  0
+
+    FOR  col = 1  TO  ncolumns  DO
+    $(
+        //  Calculate the height and width factors for the columns.
+
+        LET text  =  colheadvec!col
+
+        UNLESS  text = NIL  DO
+        $(
+            LET colstart   =  colvec!(col - 1)
+            LET colend     =  colvec!(col)
+            LET colheight  =  colheadsize
+            LET colwidth   =  colend - colstart
+            LET hfac       =  0
+            LET wfac       =  0
+            LET maxh       =  maxheight
+            LET maxw       =  maxwidth
+
+            maxheight  :=  0
+            maxwidth   :=  0
+
+            countheightwidth( text )
+
+            IF  maxheight = 0  |  maxwidth = 0  THEN  LOOP
+
+            hfac       :=  (colheight / maxheight)  /  charheight  -  1
+            wfac       :=  (colwidth  / maxwidth)   /  charwidth
+
+            IF  hfac < hfactor    THEN  hfactor    :=  hfac
+            IF  wfac < wfactor    THEN  wfactor    :=  wfac
+            
+            IF  maxh > maxheight  THEN  maxheight  :=  maxh
+            IF  maxw > maxwidth   THEN  maxwidth   :=  maxw
+        $)
+    $)
+
+    IF  hfactor > wfactor*3  THEN  hfactor  :=  wfactor*3
+    IF  wfactor > hfactor    THEN  wfactor  :=  hfactor
+
+    FOR  i = 1  TO  ncolumns  DO  writecolheading( i, hfactor, wfactor )
+
+    //  Now do the row headings.
+
+    hfactor    :=  maxint
+    wfactor    :=  maxint
+
+    maxheight  :=  0
+    maxwidth   :=  0
+
+    FOR  row = 1  TO  nrows  DO
+    $(
+        //  Calculate the height and width factors for the columns.
+
+        LET text  =  rowheadvec!row
+
+        UNLESS  text = NIL  DO
+        $(
+            LET rowstart   =  rowvec!(row - 1)
+            LET rowend     =  rowvec!(row)
+            LET rowheight  =  rowend - rowstart
+            LET rowwidth   =  rowheadsize
+            LET hfac       =  0
+            LET wfac       =  0
+            LET maxh       =  maxheight
+            LET maxw       =  maxwidth
+
+            maxheight  :=  0
+            maxwidth   :=  0
+
+            countheightwidth( text )
+
+            IF  maxheight = 0  |  maxwidth = 0  THEN  LOOP
+
+            hfac       :=  (rowheight / maxheight)  /  charheight  -  1
+            wfac       :=  (rowwidth  / maxwidth)   /  charwidth
+
+            IF  hfac < hfactor    THEN  hfactor    :=  hfac
+            IF  wfac < wfactor    THEN  wfactor    :=  wfac
+            
+            IF  maxh > maxheight  THEN  maxheight  :=  maxh
+            IF  maxw > maxwidth   THEN  maxwidth   :=  maxw
+        $)
+    $)
+
+    IF  hfactor > wfactor*3  THEN  hfactor  :=  wfactor*3
+    IF  wfactor > hfactor    THEN  wfactor  :=  hfactor
+
+    FOR  i = 1  TO  nrows  DO  writerowheading( i, hfactor, wfactor )
+
+    //  Close the package down, as we have finished.
+
+    canon.close()
+    endwrite()
+
+    fvectors()
+$)
+
+
+
+AND writecolheading( column, hfactor, wfactor )  BE
+$(
+    LET text       =  colheadvec!column
+    LET colstart   =  colvec!(column - 1)
+    LET colend     =  colvec!(column)
+    LET colheight  =  colheadsize
+    LET colwidth   =  colend - colstart
+
+    IF  text = NIL    THEN  RETURN
+    IF  text % 0 = 0  THEN  RETURN
+
+    IF  hfactor = 0  |  wfactor = 0  THEN
+    $(
+        message( "HEADING:  Column %N heading is too small for *"%S*"*N", column, text )
+
+        RETURN
+    $)
+
+    //  Otherwise, we can print the text.  Column headings are centred.
+
+    canon.heightfactor( hfactor )
+    canon.widthfactor( wfactor )
+
+    printbox( TRUE, text, colstart, 0, colwidth, colheight )
+$)
+
+
+
+AND writerowheading( row, hfactor, wfactor )  BE
+$(
+    LET text       =  rowheadvec!row
+    LET rowstart   =  rowvec!(row - 1)
+    LET rowend     =  rowvec!(row)
+    LET rowheight  =  rowend - rowstart
+    LET rowwidth   =  rowheadsize
+
+    IF  text = NIL    THEN  RETURN
+    IF  text % 0 = 0  THEN  RETURN
+
+    IF  hfactor = 0  |  wfactor = 0  THEN
+    $(
+        message( "HEADING:  Row  %N heading is too small for *"%S*"*N", row, text )
+
+        RETURN
+    $)
+
+    //  Otherwise, we can print the text.  Row headings are NOT centred.
+
+    canon.heightfactor( hfactor )
+    canon.widthfactor( wfactor )
+
+    printbox( FALSE, text, 0, rowstart, rowwidth, rowheight )
+$)
+
+
+
+AND printbox( centred, string, x, y, xsize, ysize )  BE
+$(
+//  Print the string "string" in the box which starts at "x, y", and is of
+//  size "xsize, ysize".
+
+    LET v      =  gvec( maxheight )
+    LET work   =  gvec( 256 / bytesperword )
+    LET lines  =  1
+    LET pos    =  splitstring( work, '\', string, 1 )
+    LET depth  =  0
+
+    FOR  i = 1  TO  maxheight  DO  v!i  :=  0
+
+    v!lines  :=  work
+    work     :=  gvec( 256 / bytesperword )
+
+    UNTIL  pos = 0  DO
+    $(
+        lines    :=  lines + 1
+        pos      :=  splitstring( work, '\', string, pos )
+        v!lines  :=  work
+        work     :=  gvec( 256 / bytesperword )
+    $)
+
+    //  We now have the string to be printed, and a count of the number of
+    //  lines to be put in this box.  We split the box up between them, and
+    //  put the lines in the middle.
+
+    depth  :=  ysize / lines
+
+    FOR  i = 1  TO  lines  DO
+    $(
+        LET string   =  v!i
+        LET length   =  string % 0
+
+        LET xcentre  =  ((xsize - (length * charsize.width)) / 2)
+        LET ycentre  =  ((i-1) * depth)  +  ((depth - charsize.height) / 2)
+
+        LET xleft    =  ((xsize - (maxwidth * charsize.width)) / 2)
+
+        LET xoffset  =  centred  ->  xcentre,  xleft
+        LET yoffset  =  ycentre
+
+        canon.moveto( x + xoffset, y + yoffset )
+        canon.writes( string )
+
+        fvec( string )
+    $)
+
+    fvec( work )
+    fvec( v )
+$)
+
+
+
+AND splitstring( prefix, ch, string, ptr )  =  VALOF
+$(
+    LET len  =  string % 0  -  ptr
+
+    FOR  i = 0  TO  255  DO
+    $(
+        prefix % 0  :=  i
+
+        IF i > len  RESULTIS  0
+
+        IF  string % [ptr+i] = ch  THEN  RESULTIS  ptr+i+1
+
+        prefix % [i+1]  :=  string % [ptr+i]
+    $)
+$)
+
+
+
+AND countheightwidth( text )  BE
+$(
+    LET max    =  text % 0
+    LET opos   =  1
+    LET pos    =  1
+    LET lines  =  1
+    LET width  =  0
+
+    UNTIL  pos > max  DO
+    $(
+        IF  text % pos  =  '\'  THEN
+        $(
+            LET w  =  pos - opos
+
+            IF  w > width  THEN  width  :=  w
+
+            lines  :=  lines + 1
+            opos   :=  pos + 1
+        $)
+
+        pos  :=  pos + 1
+    $)
+
+    IF  (pos - opos)  >  width  THEN  width      :=  (pos - opos)
+    IF  lines > maxheight       THEN  maxheight  :=  lines
+    IF  width > maxwidth        THEN  maxwidth   :=  width
+$)
+
+
+
+AND countentries( list )  =  VALOF
+$(
+    LET count  =  0
+
+    UNTIL  list = NIL  DO
+    $(
+        count  :=  count + 1
+        list   :=  list!node.link
+    $)
+
+    RESULTIS  count
+$)
+
+
+
+AND setentries( vector, headvector, list )  BE
+$(
+//  Convert the entries in the list to be in vector form.
+
+    LET bitsize  =  vector!0
+    LET offset   =  1
+
+    UNTIL  list = NIL  DO
+    $(
+        LET next  =  list!node.link
+        LET size  =  list!node.size
+        LET name  =  list!node.name
+
+        fvec( list )
+
+        UNLESS  name = NIL  DO  headvector!offset  :=  name
+
+        bitsize        :=  bitsize + size
+        vector!offset  :=  bitsize
+        offset         :=  offset + 1
+        list           :=  next
+    $)
+$)
+
+
+
+AND counttotal( vector, length )  =  VALOF
+$(
+    LET total  =  0
+
+    FOR  i = 0  TO  length  DO  total  :=  total  +  vector!i
+
+    RESULTIS  total
+$)
+
+
+
+AND readinputfile( instream )  =  VALOF
+$(
+    LET error  =  FALSE
+    LET sysin  =  input()
+
+    selectinput( instream )
+
+    error  :=  error  |  set.orientation()
+    error  :=  error  |  set.origin()
+    error  :=  error  |  set.cols()
+    error  :=  error  |  set.rows()
+    error  :=  error  |  set.headings()
+
+    selectinput( sysin )
+
+    RESULTIS  NOT error
+$)
+
+
+
+AND set.orientation()  =  VALOF
+$(
+    LET args  =  "ORIENTATION/A/S,UP/S,DOWN/S,LEFT/S,RIGHT/S"
+    LET argv  =  VEC 50
+    LET ok    =  rdargs( args, argv, 50 )
+
+    TEST  NOT ok  THEN
+    $(
+        message( "Bad syntax for string *"%S*"*N", args )
+
+        RESULTIS  TRUE
+    $)
+    ELSE
+    $(
+        //  Make sure that only one of up, down, left or right has been
+        //  specified.
+
+        LET total  =  0
+        LET type   =  0
+
+        FOR  i = 1  TO  4  DO
+            IF  argv!i  THEN
+            $(
+                type   :=  i
+                total  :=  total + 1
+            $)
+
+        UNLESS  total = 1  DO
+        $(
+            message( "ORIENTATION:  Must quote ONE of *"UP/DOWN/LEFT/RIGHT*"*N" )
+
+            RESULTIS  TRUE
+        $)
+
+        user.orientation  :=  type = 1  ->  orientation.up,
+                              type = 2  ->  orientation.down,
+                              type = 3  ->  orientation.left,
+                              type = 4  ->  orientation.right,  0
+
+        RESULTIS  FALSE
+    $)
+$)
+
+
+
+AND set.origin()  =  VALOF
+$(
+    LET args  =  "ORIGIN/A/S,X/A,Y/A"
+    LET argv  =  VEC 50
+    LET ok    =  rdargs( args, argv, 50 )
+
+    UNLESS  ok  DO
+    $(
+        message( "Bad syntax for *"%S*"*N", args )
+
+        RESULTIS  TRUE
+    $)
+
+    UNLESS  convertnumber( argv!1, @user.x.origin )  DO
+    $(
+        message( "ORIGIN:  Bad X number *"%S*"*N", argv!0 )
+
+        RESULTIS  TRUE
+    $)
+
+    UNLESS  convertnumber( argv!2, @user.y.origin )  DO
+    $(
+        message( "ORIGIN:  Bad Y number *"%S*"*N", argv!1 )
+
+        RESULTIS  TRUE
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND set.cols()  =  VALOF
+$(
+    LET args  =  "COLS/A/S,/A,HEADSIZE/K"
+    LET argv  =  VEC 50
+    LET ok    =  rdargs( args, argv, 50 )
+
+    UNLESS  ok  DO
+    $(
+        message( "Bad syntax for *"%S*"*N", args )
+
+        RESULTIS  TRUE
+    $)
+
+    UNLESS  setvalues( argv!1, @columns )  DO
+    $(
+        message( "COLS:  Bad column list *"%S*"*N", argv!1 )
+
+        RESULTIS  TRUE
+    $)
+
+    UNLESS  convertnumber( argv!2, @colheadsize )  DO
+    $(
+        message( "COLS:  Bad column head size *"%S*"*N", argv!2 )
+
+        RESULTIS  TRUE
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND set.rows()  =  VALOF
+$(
+    LET args  =  "ROWS/A/S,/A,HEADSIZE/K"
+    LET argv  =  VEC 50
+    LET ok    =  rdargs( args, argv, 50 )
+
+    UNLESS  ok  DO
+    $(
+        message( "Bad syntax for *"%S*"*N", args )
+
+        RESULTIS  TRUE
+    $)
+
+    UNLESS  setvalues( argv!1, @rows )  DO
+    $(
+        message( "ROWS:  Bad row list *"%S*"*N", argv!1 )
+
+        RESULTIS  TRUE
+    $)
+
+    UNLESS  convertnumber( argv!2, @rowheadsize )  DO
+    $(
+        message( "ROWS:  Bad row head size *"%S*"*N", argv!2 )
+
+        RESULTIS  TRUE
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND setvalues( string, ptr )  =  VALOF
+$(
+//  Read the string "string", which should consist of a series of numbers,
+//  optionally followed by repeat counts.  Add the entries to the list
+//  pointed to by "ptr".
+
+    LET stringp  =  1
+    LET stringl  =  string % 0
+
+    UNTIL  stringp > stringl  DO
+
+        //  Read each entry, one by one, adding nodes onto the end of the list
+        //  given to us.
+
+        UNLESS  addentry( string, @stringp, stringl, @ptr )  DO  RESULTIS  FALSE
+
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND addentry( string, stringptr, stringl, ptrptr )  =  VALOF
+$(
+    LET stringp  =  !stringptr
+    LET ptr      =  !ptrptr
+    LET ch       =  string % stringp
+    LET size     =  0
+    LET repeatc  =  0
+
+    UNLESS  '0' <= ch <= '9'  DO  RESULTIS  FALSE
+
+    UNTIL  stringp > stringl  DO
+    $(
+        ch       :=  string % stringp
+
+        UNLESS  '0' <= ch <= '9'  DO  BREAK
+
+        size     :=  size * 10  +  ch  -  '0'
+        stringp  :=  stringp + 1
+    $)
+
+    //  We drop out here with one of two things true.  Either we have run
+    //  off the end of the string, or we have hit a non numerical character.
+    //  If it is the latter, then look to see if we have found a repeat count,
+    //  and if so, read that as well.
+
+    IF  stringp > stringl  |  ch = ','  THEN
+    $(
+        LET node  =  gvec( nodesize )
+
+        node!node.link  :=  NIL
+        node!node.size  :=  size
+        node!node.name  :=  NIL
+
+        !stringptr      :=  ch = ','  ->  (stringp+1),  stringp
+        !ptr            :=  node
+        !ptrptr         :=  node
+
+        RESULTIS  TRUE
+    $)
+
+    //  Otherwise, this might be a repeat count, and so we should deal with
+    //  it.
+
+    UNLESS  ch = '@'  DO  RESULTIS  FALSE
+
+    repeatc  :=  size
+    size     :=  0
+    stringp  :=  stringp + 1
+
+    UNTIL  stringp > stringl  DO
+    $(
+        ch       :=  string % stringp
+
+        UNLESS  '0' <= ch <= '9'  DO  BREAK
+
+        size     :=  size * 10  +  ch  -  '0'
+        stringp  :=  stringp + 1
+    $)
+
+    //  Now, look to see if there is a ',' to strip, and if so strip it.
+
+    UNLESS  stringp > stringl  DO
+    $(
+        ch  :=  string % stringp
+
+        UNLESS  ch = ','  DO  RESULTIS  FALSE
+    $)
+
+    FOR  i = 1  TO  repeatc  DO
+    $(
+        LET node  =  gvec( nodesize )
+
+        node!node.link  :=  NIL
+        node!node.size  :=  size
+        node!node.name  :=  NIL
+
+        !ptr            :=  node
+        ptr             :=  node
+    $)
+
+    !stringptr  :=  ch = ','  ->  (stringp+1),  stringp
+    !ptrptr     :=  ptr
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND set.headings()  =  VALOF
+$(
+//  This routine deals with the heading information for the headings for
+//  rows and columns.  The syntax of this is:
+//
+//  COLHEADINGS  [ number ]
+//  ROWHEADINGS  [ number ]
+//
+//  Followed by an arbitrary number of lines which are:
+//
+//  *[ text ]
+
+    LET error  =  FALSE
+
+    $(  //  Outer loop, expecting to read the words "COLHEADINGS" or
+        //  "ROWHEADINGS".  Look at the first character on the line, and
+        //  decide what to do.
+
+        LET ch  =  rdch()
+
+        TEST  ch = endstreamch  THEN  RESULTIS  error
+        ELSE
+
+        TEST  ch = 'C'  |  ch = 'c'  THEN
+            error  :=  error  |  set.colheadings()
+        ELSE
+
+        TEST  ch = 'R'  |  ch = 'r'  THEN
+            error  :=  error  |  set.rowheadings()
+
+        ELSE
+        $(
+            //  Not a valid option.  Set error flag, and continue.
+
+            message( "Bad HEADING record:  *"" )
+
+            UNTIL  ch = '*N'  |  ch = endstreamch  DO
+            $(
+                message( "%C", ch )
+
+                ch  :=  rdch()
+            $)
+
+            message( "*"*N" )
+
+            error  :=  TRUE
+        $)
+    $)
+    REPEAT
+$)
+
+
+
+AND set.colheadings()  =  VALOF
+$(
+    LET args   =  "COLHEADINGS/A/S,COL"
+    LET argv   =  VEC 50
+    LET dummy  =  unrdch()
+    LET ok     =  rdargs( args, argv, 50 )
+    LET col    =  1
+
+    UNLESS  ok  DO
+    $(
+        message( "Bad syntax for *"%S*"*N", args )
+
+        RESULTIS  TRUE
+    $)
+
+    //  Ok.  We are now in the state of being able to read entries from
+    //  the input file.
+
+    UNLESS  argv!1 = 0  DO
+        UNLESS  convertnumber( argv!1, @col )  DO
+        $(
+            message( "COLHEADINGS:  Illegal COL *"%S*"*N", argv!1 )
+
+            RESULTIS  TRUE
+        $)
+
+    RESULTIS  readtext( columns, col )
+$)
+
+
+
+AND set.rowheadings()  =  VALOF
+$(
+    LET args   =  "ROWHEADINGS/A/S,ROW"
+    LET argv   =  VEC 50
+    LET dummy  =  unrdch()
+    LET ok     =  rdargs( args, argv, 50 )
+    LET row    =  1
+
+    UNLESS  ok  DO
+    $(
+        message( "Bad syntax for *"%S*"*N", args )
+
+        RESULTIS  TRUE
+    $)
+
+    //  Ok.  We are now in the state of being able to read entries from
+    //  the input file.
+
+    UNLESS  argv!1 = 0  DO
+        UNLESS  convertnumber( argv!1, @row )  DO
+        $(
+            message( "ROWHEADINGS:  Illegal ROW *"%S*"*N", argv!1 )
+
+            RESULTIS  TRUE
+        $)
+
+    RESULTIS  readtext( rows, row )
+$)
+
+
+
+AND readtext( list, offset )  =  VALOF
+$(
+//  Routine to read text of the form:
+//
+//  *[ text ]
+//
+//  and add it to the list "list", starting at offset "offset".
+
+    LET error  =  FALSE
+
+    IF  offset < 1  THEN
+    $(
+        message( "HEADING:  Offset %N too small*N", offset )
+
+        RESULTIS  TRUE
+    $)
+
+
+    $(  //  Loop to read lines of text.
+
+        LET ch      =  rdch()
+        LET string  =  0
+        LET length  =  0
+
+        UNLESS  ch = '**'  DO
+        $(
+            unrdch()
+
+            RESULTIS  error
+        $)
+
+        //  This is a text line.
+
+        string  :=  gvec( 256 / bytesperword )
+        ch      :=  rdch()
+
+        UNTIL  ch = '*N'  |  ch = endstreamch  DO
+        $(
+            length           :=  length + 1
+            string % length  :=  ch
+            ch               :=  rdch()
+        $)
+
+        string % 0  :=  length
+
+        error   :=  error  |  addstringtolist( list, string, offset )
+        offset  :=  offset + 1
+    $)
+    REPEAT
+$)
+
+
+
+AND addstringtolist( list, string, offset )  =  VALOF
+$(
+//  Look down the list "list", for entry at offset "offset".  Then insert
+//  the string in the entry.
+
+    FOR  i = 1  TO  offset-1  DO
+    $(
+        IF  list = NIL  THEN  BREAK
+
+        list  :=  list!node.link
+    $)
+
+    //  Check to see that we are not beyond the last entry...
+
+    IF  list = NIL  THEN
+    $(
+        message( "HEADING:  *"%S*"  Offset %N too large*N", string, offset )
+
+        fvec( string )
+
+        RESULTIS  TRUE
+    $)
+
+    //  Otherwise, we can add this to the list.
+
+    list!node.name  :=  string
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND convertnumber( string, ptr )  =  VALOF
+$(
+    LET number  =  0
+    LET length  =  string % 0
+
+    FOR  i = 1  TO  length  DO
+    $(
+        LET ch  =  string % i
+
+        UNLESS  '0' <= ch <= '9'  DO  RESULTIS  FALSE
+
+        number  :=  number * 10  +  ch  -  '0'
+    $)
+
+    !ptr  :=  number
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND gvec( vecsize )  =  VALOF
+$(
+//  Add a new vector to the list of those "got" already.
+
+    LET node   =  getvec( 2 )
+    LET space  =  getvec( vecsize )
+
+    TEST  node = 0  |  space = 0  THEN
+    $(
+        //  Cannot get either the main space, or the node space.
+        //  Free whichever one was successful, and flag an error.
+
+        UNLESS  node   = 0  DO  freevec( node )
+        UNLESS  space  = 0  DO  freevec( space )
+
+        abort( 9999 )
+    $)
+    ELSE
+    $(
+        //  We have got the vector successfully, so add it to the
+        //  chain of allocated vectors.
+
+        node!0  :=  veclist
+        node!1  :=  space
+        veclist :=  node
+
+        RESULTIS  space
+    $)
+$)
+
+
+
+AND fvec( vector )  BE
+$(
+//  Free the vector pointed to by "vector".  Look in the allocated space chain
+//  to find this vector, and when found, de-allocate the space.
+
+    LET node  =  veclist
+    LET ptr   =  @veclist
+
+    UNTIL  node = NIL  DO
+    $(
+        IF  node!1 = vector  THEN
+        $(
+            //  We have found the vector to deallocate.  Remove this node from
+            //  the list, and deallocate the space involved.
+
+            !ptr   :=  node!0
+
+             freevec( vector )
+             freevec( node )
+
+             RETURN
+        $)
+
+        ptr   :=  node
+        node  :=  node!0
+    $)
+
+    abort( 9999, vector )
+$)
+
+
+
+AND fvectors()  BE
+$(
+//  Free all the vectors pointed to by the list "veclist".
+
+    UNTIL veclist = NIL  DO
+    $(
+        LET nlist  =  veclist!0
+        LET space  =  veclist!1
+
+        freevec( space )
+        freevec( veclist  )
+
+        veclist  :=  nlist
+    $)
+$)
+
+
+
+AND message( format, arg1, arg2 )  BE
+$(
+    LET out  =  output()
+
+    selectoutput( sysout )
+    writef( format, arg1, arg2 )
+    selectoutput( out )
+$)
+
+

@@ -1,0 +1,269 @@
+SECTION "MCG3"
+
+GET "CG68HDR"
+MANIFEST
+$(      f.divsl         = #b0100110001000000
+        f.mulsl         = #b0100110000000000
+        f.secondsl      = #b0000100000000000
+$)
+
+// compiles code to deal with any pending op
+LET cgpendingop() BE
+$(1 LET pendop = pendingop
+    LET f, r = ?, ?
+
+    pendingop := s.none
+
+    SWITCHON pendop INTO
+    $(sw DEFAULT:cgerror(0, "BAD PNDOP %N",pendop)
+                 RETURN
+
+         CASE s.abs:
+                 TEST arg1!h1 = K.numb
+                 THEN arg1!h2 := ABS arg1!h2
+                 ELSE
+                 $( r := movetoanyr(arg1)
+                    loadt(k.numb, 0)
+                    f := cgcmp(f.bge)
+                    gen(f+2)       // BGE   *+4
+                    genr(f.neg, r) // NEG.L Dr
+                    lose1(k.reg, r)
+                    forgetr(r)
+                 $)
+                 RETURN
+
+         CASE s.neg:
+                 IF arg1!h1 = K.numb
+                 $( arg1!h2 := - (arg1!h2); RETURN $)
+
+         CASE s.not:
+                 IF arg1!h1 = K.numb
+                 $( arg1!h2 := NOT (arg1!h2); RETURN $)
+                 r := movetoanyr(arg1)
+                 genr((pendop=s.neg->f.neg,f.not), r)
+                 forgetr(r)
+         CASE s.none:
+                 RETURN
+
+
+         CASE s.eq:
+              TEST arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) = (arg1!h2) ); RETURN $)
+              ELSE GOTO gen.op
+
+         CASE s.ne:
+              TEST arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) ~= (arg1!h2) ); RETURN $)
+              ELSE GOTO gen.op
+
+         CASE s.ls:
+              TEST arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) < (arg1!h2) ); RETURN $)
+              ELSE GOTO gen.op
+
+         CASE s.gr:
+              TEST arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) > (arg1!h2) ); RETURN $)
+              ELSE GOTO gen.op
+
+         CASE s.le:
+              TEST arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) <= (arg1!h2) ); RETURN $)
+              ELSE GOTO gen.op
+
+         CASE s.ge:
+              IF arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) >= (arg1!h2) ); RETURN $)
+
+                 // comparisons are ARG2 <op> ARG1
+gen.op:       $( LET arg3 = arg2
+                 loadt(h1!arg1, h2!arg1)
+                 h1!arg2, h2!arg2 := h1!arg3, h2!arg3
+                 h1!arg3, h2!arg3 := k.numb, FALSE
+                 // select and initialise a register
+                 // for the result
+                 r := movetoanyr(arg3)
+                 f := cgcmp(compbfn(condbfn(pendop)))
+                 gen(f+2)       // Bcc   *+4
+                 genr(f.not, r) // NOT.L Dr
+                 forgetr(r)
+                 stack(ssp-2)
+                 RETURN
+              $)
+
+         CASE s.eqv:
+              IF   arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) EQV (arg1!h2) ); RETURN $)
+         CASE s.neqv:
+              IF   arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) NEQV (arg1!h2) ); RETURN $)
+
+                 cgdyadic(fns.eor, TRUE, FALSE)
+                 IF pendop=s.eqv DO
+                 $( // just in case its not already in
+                    // a register
+                    r := movetoanyr(arg2)
+                    genr(f.not, r)
+                    forgetr(r)
+                 $)
+                 ENDCASE
+
+         CASE s.minus:
+              TEST arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) - (arg1!h2) ); RETURN $)
+              ELSE cgdyadic(fns.sub, FALSE, FALSE)
+                 ENDCASE
+
+         CASE s.plus:
+              TEST arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) + (arg1!h2) ); RETURN $)
+              ELSE cgdyadic(fns.add, TRUE, FALSE)
+                 ENDCASE
+
+         CASE s.rem:
+              IF   arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) REM (arg1!h2) ); RETURN $)
+         CASE s.div:
+              IF   arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) / (arg1!h2) ); RETURN $)
+         CASE s.mult:
+              IF   arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) * (arg1!h2) ); RETURN $)
+
+                        // Can't get here if BOTH K.numb !!
+              IF pendop=s.mult & (arg2!h1 = k.numb)  swapargs()
+              IF arg1!h1 = k.numb & pendop ~= s.rem     //**********************
+              $(const
+                    LET n = arg1!h2
+                    LET a = ABS n
+                    IF (a & (a-1)) = 0
+                    $(power2
+                        TEST pendop = s.rem
+                        $(rem
+                            arg1!h2 := a-1
+                            IF a < 2
+                            $( CGERROR(0, "x REM %N is silly!", a)
+                                lose1(K.numb, 0)
+                                RETURN
+                            $)
+
+    //                  TEST a=2
+    //                  $(  LET r = movetoanyr(arg2)
+    //                      genTESTbit(f.btstkr, 1, r)
+    //                      ENDCASE
+    //                  $)
+
+                            cgdyadic(fns.and, TRUE, FALSE)
+                            IF n > 0                    ENDCASE
+                            r := movetoanyr(arg2)
+                        $)rem
+                        ELSE
+                        $(mul.div
+                            LET shift = -1
+                            IF a=0      // Boggle!!
+                            $(  TEST pendop=s.div
+                                $(  CGERROR(0, "Attempt to divide by zero")
+                                    lose1(arg2!h1, arg2!h2)
+                                $)
+                                ELSE lose1(K.numb, 0)
+                                RETURN
+                            $)
+                            UNTIL a=0 $( shift := shift+1; a := a >> 1 $)
+                            IF shift=0 & n > 0 $( lose1(arg2!h1, arg2!h2); RETURN $)
+                            r := movetoanyr(arg2)
+                            UNLESS shift=0
+                            TEST shift <= 8
+                            THEN genshkr((pendop=s.mult)->f.aslkr, f.asrkr, shift, r)
+                            ELSE
+                            $(  arg1 ! h2 := shift
+                                $(      LET s = movetoanyr(arg1)
+                                    genrr((pendop=s.mult)->f.aslrr, f.asrrr, s, r)
+                                $)
+                            $)
+                        $)mul.div
+                        IF n<0 genr(f.neg, r)
+                        forgetr(r)
+                        endcase
+                    $)power2
+                $)const
+
+                // IF stackchecking => new KLIB ........
+
+                IF (CGFLAG2 & cgf2.mdr) = 0     // not (R), so SLOW calls
+                $(mdr.globals
+                    LET k = ssp - 2
+                    LET gn = gn.mul
+                    IF pendop=s.div DO gn := gn.div
+                    IF pendop=s.rem DO gn := gn.rem
+                    store(0, k-1)
+                    movetor(arg1, r2)     // left operand
+                    movetor(arg2, r1)     // right operand
+                    loadt(k.numb, 4*k)    // stack frame size
+                    movetor(arg1, r0)
+                    loadt(k.glob, gn)     // MUL DIV or REM function
+                    movetoa(rb)
+                    genea(f.jsr, m.2s, 0) // call the function
+                    stack(k)              // reset the stack
+                    loadt(k.reg, r1)
+                    forgetall()
+                    RETURN
+                 $)mdr.globals
+
+                 TEST (CGFLAG2 & cgf2.68020) = 0
+                 $(68000
+                    movetor(arg2, r7)
+                    movetor(arg1, r6)
+                    genea(f.jsr, m.5s,
+                       (pendop=s.mult-> sr.mul, pendop=s.div-> sr.div, sr.rem))
+                    forgetr(r6); forgetr(r7)
+                    lose1(k.reg, (pendop=s.div  -> r7, r6))
+                 $)68000
+                 ELSE
+                 $(68020
+                    LET reg1 = movetoanyr(arg2)
+                    LET reg2 = movetoanyr(arg1)
+                    gen(((pendop=s.mult) -> f.mulsl, f.divsl) | reg2)
+                    gen(f.secondsl | (reg1 << 12) | (pendop=s.rem -> reg2,reg1))
+                    forgetr(reg1);
+                    if (pendop=s.rem) forgetr(reg2)
+                    lose1(k.reg, (pendop=s.rem  -> reg2, reg1))
+                 $)68020
+                 RETURN                 //      ENDCASE
+
+         CASE s.logor:
+              TEST arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) | (arg1!h2) ); RETURN $)
+              ELSE cgdyadic(fns.or, TRUE, FALSE)
+                 ENDCASE
+
+         CASE s.logand:
+              TEST arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) & (arg1!h2) ); RETURN $)
+              ELSE cgdyadic(fns.and, TRUE, FALSE)
+                 ENDCASE
+
+         CASE s.lshift:
+              IF   arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) << (arg1!h2) ); RETURN $)
+         CASE s.rshift:
+              IF   arg1!h1 = k.numb & arg2!h1 = K.numb
+              $( lose1(k.numb, (arg2!h2) >> (arg1!h2) ); RETURN $)
+
+                 r := movetoanyr(arg2)
+                 TEST h1!arg1=k.numb & 1<=h2!arg1<=8
+                 THEN genshkr((pendop=s.lshift ->
+                               f.lslkr,f.lsrkr), h2!arg1, r)
+                 ELSE $( LET s = movetoanyr(arg1)
+                         genrr((pendop=s.lshift ->
+                                f.lslrr, f.lsrrr), s, r)
+                      $)
+                 forgetr(r)
+                 ENDCASE
+
+    $)sw
+
+    stack(ssp-1)
+//debug    IF debug>6 DO dboutput(3)
+$)1
+
+

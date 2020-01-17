@@ -1,0 +1,391 @@
+//                               DIARY
+//                               -----
+
+//   This program prints out events read from an event list file when
+//they are due tomorrow or today, or are overdue.
+//
+//   Lines in the file have a Tripos date "DD-MMM-YY" followed by a
+//message associated with that date.
+
+//  Modifications
+//
+//  29-Jun-84 NJO  Check for the case of the day being friday and no explicit
+//            day specified, and print out Sunday's events too.
+//  30-Jul-84 NJO  INIT key causes execution of init program, incorporated
+//            as a section of this.
+//  03-aug-84 NJO  INIT mechanism modified:  The INIT section should be
+//            compiled separately and JOINed to this if required.  It is
+//            called via the first user global.  The default is a null proc.
+//  28-dec-84 NJO  Date string reading simplified so that it no longer locks
+//            out "Tuesday" etc. as a date spec.  This allows weekly events.
+//            "*" as first character inhibits message printing.  If the first
+//            characters of the message are in the form dd:dd, where d is a
+//            decimal digit, then this is taken as a time and, if the event
+//            is today then an alarm is set for that time.
+//  30-dec-84 NJO  Alarms set if INIT key given, rather than if no DATE
+//            key given.  Alarms for day of week mapped forward if date
+//            key given.
+//  21-jan-85 NJO  Sorts items into order before printing.
+
+SECTION "Diary"
+
+GET "libhdr"
+GET "bcpl.forkseg"
+
+GLOBAL
+
+$( init          : ug       // User supplied proc - must be UG
+
+   level.exit    : ug+1
+   exit          : ug+2
+   char          : ug+3
+   sysprint      : ug+4
+   string.to.dat : ug+5
+$)
+
+LET start() BE
+
+$( LET today        = rtn.days!rootnode
+   LET is.friday    = ?                 //Set if Friday and no explicit DATE
+   LET init.flag    = ?                 //Set from INIT switch parameter
+   LET line.no      = 1
+   LET rc           = 16                //Program return code: set 0 on success
+
+   LET seg          = 0                 //Loaded string-to-dat routine
+   LET eventlist    = 0                 //File descriptors
+   LET to.stream    = 0
+   LET sysin        = input()
+
+   LET overdue.anc  = 0                 //Anchors of chains of saved events
+   LET today.anc    = 0
+   LET tomorrow.anc = 0
+   LET sunday.anc   = 0
+
+   level.exit      := level()           //Initialise globals
+   char            := 0
+   sysprint        := output()
+
+   $( LET segname    = "sys:l.string-to-dat"
+      LET start.save = start
+
+      seg := loadseg(segname)           //Load the conversion routine
+
+      IF seg = 0 THEN
+         error("Failed to load %S", segname)
+
+      UNLESS globin(seg) DO             //Initialises START to entry point
+         error("GLOBIN failed")
+
+      string.to.dat := start            //Get entry point and restore START
+      start         := start.save
+   $)
+
+   $( LET datv = VEC 15
+
+      datstring(datv)
+
+      is.friday := compstring(datv+10, "friday") = 0
+   $)
+
+   $( LET argv       = VEC 30
+      LET rdargs.str = "FOR=DATE,ELIST=EVENTLIST/K,TO/K,INIT/S"
+
+      IF rdargs(rdargs.str, argv, 30) = 0 THEN
+         error("Bad args")
+
+      IF argv!0 ~= 0 THEN               //Should be a date - decode it
+      $( LET datv       = VEC 2
+
+         IF string.to.dat(datv, argv!0) = 0 THEN
+            error("Invalid date specified: *"%S*"", argv!0)
+
+         SWITCHON result2 INTO
+         $( CASE 0:
+            UNLESS datv!0 = today DO
+            $( is.friday := FALSE
+               today := datv!0
+            $)
+            ENDCASE
+
+            CASE 1:                    //Weekday given - map it to next week
+            TEST datv!0 + 7 = today
+            DO today := today + 7
+            OR today := datv!0 + 7
+
+            is.friday := FALSE
+            ENDCASE
+
+            DEFAULT:
+            error("Unexpected RESULT2 %N from STRING-TO-DAT", result2)
+         $)
+      $)
+
+      IF argv!1 = 0 THEN                //Fill in default EVENTLIST file
+         argv!1 := "home:eventlist"
+
+      eventlist := findinput(argv!1)
+
+      IF eventlist = 0 THEN
+         error("Can't open EVENTLIST file %S", argv!1)
+
+      IF argv!2 ~= 0 THEN               //TO file specified - open it
+      $( to.stream := findoutput(argv!2)
+
+         IF to.stream = 0 THEN
+            error("Can't open TO file %S", argv!2)
+
+         selectoutput(to.stream)
+      $)
+
+      init.flag := argv!3
+
+      IF init.flag THEN                 //Call session-initialisation code
+         init()
+   $)
+
+   selectinput(eventlist)
+
+   UNTIL char = endstreamch DO
+
+   $( LET datstring = VEC 9/bytesperword
+      LET datv      = VEC 2
+      LET date      = ?
+      LET no.print  = FALSE
+      LET msgbuf    = ?
+
+      read.datstring(datstring)
+
+      IF datstring%0 = 0 THEN            //Ignore empty lines completely
+         GOTO next.line
+
+      IF string.to.dat(datv, datstring) = 0 THEN
+      $( selectoutput(sysprint)
+         writef("Invalid date string *"%S*" in line %N*N", datstring, line.no)
+         IF to.stream ~= 0 THEN
+            selectoutput(to.stream)
+         GOTO next.line
+      $)
+
+      date := datv!0
+
+      IF result2 = 1 THEN                //Weekday specified - do funny things
+      $( LET offset = date - today
+                                         //This is REM which works for -ve nos
+         date := today + (offset < 0 -> 6 - ((ABS (offset+1)) REM 7),
+                                                                offset REM 7)
+      $)
+
+      IF compstring(datstring, "yesterday") = 0 THEN   //Pick up special cases
+         date := today - 1
+
+      IF compstring(datstring, "today") = 0 THEN
+         date := today
+
+      IF compstring(datstring, "tomorrow") = 0 THEN
+         date := today + 1
+
+      IF date > today+2 THEN             //Event is in the future - ignore
+         GOTO next.line
+
+      IF char = '**' THEN                //Non-printing line
+      $( IF date ~= today GOTO next.line
+
+         no.print := TRUE
+         char     := rdch()
+      $)
+
+      msgbuf := getvec(1 + 79/bytesperword)   // get buffer and read in msg
+
+      IF msgbuf = 0 THEN
+      $( writef("****** Failed to get buffer (R2 %N), line %N discarded*N",
+                                                           result2, line.no)
+         GOTO next.line
+      $)
+
+      $( LET count = 0
+
+         UNTIL (char = '*N') | (char = endstreamch) DO
+         $( IF count = 79 THEN
+            $( writef("****** Warning:  line %N truncated*N", line.no)
+               BREAK
+            $)
+
+            count              := count + 1
+            (msgbuf + 1)%count := char
+            char               := rdch()
+         $)
+
+         (msgbuf + 1)%0 := count
+      $)
+
+      IF (date = today) & init.flag THEN
+         check.for.time(msgbuf)
+
+      IF no.print THEN
+      $( freevec(msgbuf)
+         GOTO next.line
+      $)
+
+      SWITCHON date - today INTO
+      $( DEFAULT:
+         append(msgbuf, @overdue.anc)
+         ENDCASE
+
+         CASE 0:
+         append(msgbuf, @today.anc)
+         ENDCASE
+
+         CASE 1:
+         append(msgbuf, @tomorrow.anc)
+         ENDCASE
+
+         CASE 2:
+         UNLESS is.friday DO
+         $( freevec(msgbuf)
+            GOTO next.line
+         $)
+         append(msgbuf, @sunday.anc)
+         ENDCASE
+      $)
+
+next.line:
+
+      UNTIL (char = '*N') | (char = endstreamch) DO  //Discard message
+         char := rdch()
+
+      line.no := line.no+1
+   $)
+
+   print.msgs(overdue.anc,  "Overdue:  ")
+   print.msgs(today.anc,    "Today:    ")
+   print.msgs(tomorrow.anc, "Tomorrow: ")
+   print.msgs(sunday.anc,   "Sunday:   ")
+
+   rc := 0       //Success!
+
+exit:
+   IF seg ~= 0 THEN
+      unloadseg(seg)
+
+   IF eventlist ~= 0 THEN
+   $( selectinput(eventlist)
+      endread()
+   $)
+
+   IF to.stream ~= 0 THEN
+   $( selectoutput(to.stream)
+      endwrite()
+   $)
+
+   selectinput(sysin)
+   selectoutput(sysprint)
+
+   freelist(@overdue.anc)
+   freelist(@today.anc)
+   freelist(@tomorrow.anc)
+   freelist(@sunday.anc)
+
+   stop(rc)
+$)
+
+AND init() BE     // Default routine to be replaced by user-supplied section
+   RETURN
+
+AND error(message, arg1, arg2) BE
+
+$( selectoutput(sysprint)
+
+   writes("Diary: ")
+   writef(message, arg1, arg2)
+   newline()
+   longjump(level.exit, exit)
+$)
+
+AND append(item, lv.anchor) BE
+
+$( UNTIL !lv.anchor = 0 DO
+      lv.anchor := !lv.anchor
+
+   !lv.anchor := item
+   !item      := 0
+$)
+
+AND freelist(lv.anchor) BE
+
+$( LET entry = !lv.anchor
+
+   UNTIL entry = 0 DO
+   $( LET next = !entry
+
+      freevec(entry)
+
+      entry := next
+   $)
+
+   !lv.anchor := 0
+$)
+
+AND print.msgs(anchor, prefix) BE
+
+$( LET entry = anchor
+
+   UNTIL entry = 0 DO
+   $( writef("%S%S*N", prefix, entry+1)
+
+      entry := !entry
+   $)
+$)
+
+AND read.datstring(datstring) BE
+
+$( LET length = 0
+
+   WHILE TRUE DO
+   $( char := rdch()
+
+      IF (char = '*S') | (char = '*N') | (char = endstreamch) |
+                                                            (length >= 9) THEN
+      $( datstring%0 := length
+
+         WHILE char = '*S' DO   // skip spaces
+            char := rdch()
+
+         RETURN
+      $)
+
+      length           := length+1
+      datstring%length := char
+   $)
+
+   datstring%0 := 9
+$)
+
+AND check.for.time(msgbuf) BE
+
+// Reads up to 5 characters at the beginning of the given message
+// buffer.  If these correspond to a time specification (dd:dd)
+// then ALARM is CALLSEGed to generate an event at that time.
+
+$( LET valid      = TRUE
+   LET string.buf = VEC 5/bytesperword
+
+   IF (msgbuf + 1)%0 < 5 RETURN        // not long enough to contain time
+
+   FOR i = 1 TO 5 DO
+   $( LET ch = (msgbuf + 1)%i
+
+      UNLESS ((i = 3) -> (ch = ':'), ('0' <= ch <= '9')) DO
+         valid := FALSE
+
+      string.buf%i := ch
+      string.buf%0 := i
+   $)
+
+   UNLESS valid RETURN
+
+   UNLESS forkseg("sys:c.alarm", 50, 100, 250, string.buf, msgbuf+1) ~= 0 DO
+      writef("****** Failed to set ALARM at %S (R2 %N)", string.buf, result2)
+$)
+
+
+

@@ -1,0 +1,57 @@
+//******************************************************************************
+//*                                                                            *
+//*    TAPEINFO              Program to give the identity of the tape handler  *
+//*                          task, and print out the tape mounted if there is  *
+//*                          one.                                              *
+//*                                                                            *
+//******************************************************************************
+//*    I. D. Wilson          Last Modified   -   IDW   -   11/08/82            *
+//******************************************************************************
+
+
+SECTION "TAPEINFO"
+
+
+GET "LIBHDR"
+
+
+MANIFEST
+$(
+    act.volumeinfo      =  906
+$)
+
+
+LET start()  BE
+$(
+    LET args    =  "DEVICE"
+    LET argv    =  VEC 20
+    LET device  =  "MT:"
+    LET task    =  0
+    LET name    =  0
+
+    UNLESS  rdargs( args, argv, 20 )  DO
+    $(
+        writef( "****** Bad arguments for string *"%S*"*N", args )
+
+        stop( 20 )
+    $)
+
+    UNLESS  argv!0 = 0  DO  device  :=  argv!0
+
+    task  :=  devicetask( device )
+
+    TEST  task = 0  THEN  writef( "****** Device *"%S*" is not mounted*N", device )
+    ELSE
+    $(
+        writef( "Tape handler for %S is task %N, ", device, task )
+
+        name  :=  sendpkt( notinuse, task, act.volumeinfo )
+
+        TEST  name \= 0  THEN
+              writef( "volume mounted is *"%S*"*N", name )
+
+        ELSE  fault( result2 )
+    $)
+$)
+
+

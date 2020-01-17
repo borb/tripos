@@ -1,0 +1,336 @@
+SECTION "ZED4"
+
+GET "HDR"
+
+// renumber all lines in store
+LET renumber(n) BE
+ $( LET l = currentline
+    current := n
+    UNTIL l=0 DO
+    $( l!l.numb := n
+       UNLESS n=-1 DO n := n+1
+       l := l!l.next $)
+    UNLESS n=-1 DO currentinput!f.lc := n-1
+    l := currentline!l.prev
+    UNTIL l=0 DO
+    $( l!l.numb := -1
+       l := l!l.prev $)
+ $)
+
+
+// split the current line
+AND split(p) BE
+ $( LET l = freelines
+    freelines := l!l.next
+    l!l.prev := currentline
+    l!l.next := currentline!l.next
+    UNLESS currentline!l.next=0 DO
+       currentline!l.next!l.prev := l
+    currentline!l.next := l
+    nosubs := FALSE
+    l!l.len := linel-p
+    l!l.numb := current
+    l!l.cch := cch
+    FOR i = p+1 TO linel DO (l+l.buf)!(i-p) := linev!i
+    cch := '*N'
+    linel := p
+    exhausted := FALSE
+    putline()
+    currentline := l
+    getline()
+    IF currentline!l.next=0 DO
+       exhausted := currentinput!f.ex
+    current := -1
+    nosubs := FALSE
+    IF freelines=0 DO writeline()
+ $)
+
+
+// concatenate the next line
+AND concatenate() BE
+ $( LET l = 0
+    LET s = linel
+    LET p = pointer
+    nosubs := TRUE
+    nextline()
+    putline()
+    l := currentline
+    currentline := currentline!l.prev
+    getline()
+    FOR i = linel+1 TO s DO linev!i := '*S'
+    linel := s
+    subst(linel, linel, l+l.buf)
+    pointer := p
+    currentline!l.next := l!l.next
+    UNLESS l!l.next=0 DO
+       l!l.next!l.prev := currentline
+    l!l.next := freelines
+    freelines := l
+ $)
+
+
+// insert material before the current line
+AND insert() BE
+ $( LET v = VEC fmax
+    LET e = readfiletitle(v)
+    LET i = 0
+    LET l = currentline
+    LET p = pointer
+    LET s = nosubs
+    TEST e=0 THEN
+    $( UNTIL comm='*N' DO commrdch()
+       selectinput(edits)
+    $)
+    ELSE
+    $( i := findinput(v)
+       IF i=0 DO error(err.ff, v)
+       selectinput(i)
+    $)
+    nosubs := TRUE
+    putline()
+    current := -1
+
+    $( currentline := freelines
+       readline()
+       IF i=0 & linel=z.match!0 &
+          // Look for Precisely the string, in Upper or lower case
+          index(linev, 0, linel, z.match, 0-'P')=0 BREAK
+       IF linel=0 & cch=endstreamch BREAK
+       freelines := currentline!l.next
+       currentline!l.next := l
+       currentline!l.prev := l!l.prev
+       UNLESS l!l.prev=0 DO
+          l!l.prev!l.next := currentline
+       l!l.prev := currentline
+       IF oldestline=l DO oldestline := currentline
+       putline()
+       IF freelines=0 DO writeline()
+       IF testflags(1) DO
+       $( UNLESS i=0 DO endread()
+          currentline := l
+          getline()
+          error(err.brk)
+       $)
+    $) REPEAT
+
+    UNLESS i=0 DO endread()
+    currentline := l
+    getline()
+    nosubs := s
+    pointer := p
+ $)
+
+
+// read an input line
+AND readline() BE
+ $( linev := currentline+l.buf
+    linel := 0
+
+    $( cch := rdch()
+       IF cch<'*S' DO
+          IF cch='*E' | cch='*N' |
+             cch='*C' | cch='*P' BREAK
+       IF cch=endstreamch BREAK
+       linel := linel+1
+       UNLESS linel>maxlinel DO linev!linel := cch
+    $) REPEAT
+
+    IF truncate(linel) DO linel := maxlinel
+    UNLESS trailing DO
+       WHILE linel>pointer & linev!linel='*S' DO
+          linel := linel-1
+    nosubs := TRUE
+    expanded := FALSE
+ $)
+
+
+// write an output line
+AND writeline() BE
+ $( LET l = oldestline
+    LET v = oldestline+l.buf
+    IF l=currentline DO putline()
+    selectoutput(textout)
+    FOR p = 1 TO v!0 DO wrch(v!p)
+    UNLESS l!l.cch=endstreamch DO wrch(l!l.cch)
+    selectoutput(verout)
+    oldestline := l!l.next
+    UNLESS oldestline=0 DO oldestline!l.prev := 0
+    l!l.next := freelines
+    freelines := l
+ $)
+
+
+// set up a new current line
+AND getline() BE
+ $( linev := currentline+l.buf
+    linel := currentline!l.len
+    cch := currentline!l.cch
+    current := currentline!l.numb
+    nosubs := TRUE
+    expanded := FALSE
+ $)
+
+
+// store the current line
+AND putline() BE
+ $( pointer := 0
+    UNLESS quiet | nosubs DO ver('?', '*N')
+    compress()
+    UNLESS trailing DO
+       WHILE linel>0 & linev!linel='*S' DO
+          linel := linel-1
+    currentline!l.cch := cch
+    currentline!l.len := linel
+    currentline!l.numb := current
+ $)
+
+
+// move on to the next line
+AND nextline() BE
+ $( IF testflags(1) DO error(err.brk)
+    IF current>0 & current>=ceiling DO error(err.cr)
+    IF exhausted DO error(err.noin)
+    pointer := 0
+    UNLESS deleting DO putline()
+    TEST currentline!l.next=0 THEN
+    $( UNLESS deleting DO
+       $( freelines!l.prev := currentline
+          currentline!l.next := freelines
+          currentline := freelines
+          freelines := freelines!l.next
+          currentline!l.next := 0
+          IF freelines=0 DO writeline()
+       $)
+       current := currentinput!f.lc+1
+       selectinput(textin)
+       readline()
+       FOR i = 1 TO globcount DO changeglobal(i)
+       exhausted := cch=endstreamch
+       currentinput!f.lc := current
+       currentinput!f.ex := exhausted
+    $)
+    ELSE
+    $( currentline := currentline!l.next
+       getline()
+       IF currentline!l.next=0 DO
+          exhausted := currentinput!f.ex
+       IF deleting DO
+       $( LET p = currentline!l.prev
+          currentline!l.prev := p!l.prev
+          UNLESS p!l.prev=0 DO
+             p!l.prev!l.next := currentline
+          p!l.next := freelines
+          freelines := p
+          IF oldestline=p DO oldestline := currentline
+       $)
+    $)
+    IF exhausted & zerolevel\=0 DO error(err.noin)
+    unchanged := FALSE
+ $)
+
+
+//  move back to the previous line
+AND prevline() BE
+ $( IF currentline!l.prev=0 DO error(err.nopr)
+    putline()
+    currentline := currentline!l.prev
+    getline()
+    exhausted := FALSE
+    unchanged := FALSE
+ $)
+
+
+// move on to line N
+AND move(n) BE
+    UNLESS n=current DO
+    $( UNLESS deleting DO
+       $( LET l = currentline!l.prev
+          UNTIL l=0 DO
+          $( LET m = l!l.numb
+             UNLESS m=-1 DO
+             $( IF m=n DO
+                $( putline()
+                   currentline := l
+                   getline()
+                   exhausted := FALSE
+                   unchanged := FALSE
+                   RETURN
+                $)
+                IF m<n BREAK
+             $)
+             l := l!l.prev
+          $)
+       $)
+       UNTIL n=current DO
+       $( IF current>0 & current>=n DO
+             error(err.line, n)
+          IF exhausted & n=maxint DO
+          $( IF deleting DO linel := 0
+             BREAK
+          $)
+          nextline()
+       $)
+    $)
+
+
+// verify the current line
+AND ver(c, n) BE
+ $( TEST current=-1 THEN
+       writes("+++")
+    ELSE
+       writen(current)
+    wrch(exhausted -> '**', '.')
+    newline()
+    UNLESS linel=0 & (current=0 | exhausted) DO
+    $( verline(c)
+       UNLESS pointer=0 DO
+       $( FOR i = 1 TO pointer-1 DO wrch('*S')
+          wrch('>')
+          wrch(n)
+       $)
+    $)
+    unchanged, nosubs := TRUE, TRUE
+ $)
+
+
+// write out a verification line
+AND verline(c) BE
+ $( LET vch1(ch) =
+         #40<=ch< #177 -> ch,
+              ch ='*T' -> '*S',
+              ch<    0 -> '*S', '?'
+
+    AND vch2(ch) =
+         #40<=ch< #177 -> ch,
+              ch ='*T' -> '*S',
+              ch<    0 -> '*S', hex(ch>>4)
+
+    AND vch3(ch) =
+         #40<=ch< #100 -> '*S',
+        #100<=ch< #140 -> '-',
+        #140<=ch< #177 -> '*S',
+              ch ='*T' -> 'T',
+              ch<    0 -> '.', hex(ch&15)
+
+    AND hex(ch) =
+        ch>9 -> 'A'+ch-10, '0'+ch
+
+    AND wrl(vch) BE
+     $( LET l = linel
+        WHILE l>0 & vch(linev!l)='*S' DO l := l-1
+        FOR p = 1 TO l DO wrch(vch(linev!p))
+        newline()
+     $)
+
+    expand()
+    condense()
+    TEST c='!' THEN
+    $( wrl(vch2)
+       wrl(vch3)
+    $)
+    ELSE
+       wrl(vch1)
+ $)
+
+
+

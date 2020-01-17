@@ -1,0 +1,797 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+           #######   ########  ##    ##   ######   ########  ########
+           ########  ########  ###  ###  ########  ########  ########
+           ##    ##  ##        ########  ##    ##     ##     ##
+           ########  ######    ## ## ##  ##    ##     ##     ######
+           #######   ##        ##    ##  ##    ##     ##     ##
+           ##  ##    ##        ##    ##  ##    ##     ##     ##
+           ##   ##   ########  ##    ##  ########     ##     ########
+           ##    ##  ########  ##    ##   ######      ##     ########
+
+                ######    ########  #######   ##    ##   ######
+                #######   ########  ########  ##    ##  ########
+                ##    ##  ##        ##    ##  ##    ##  ##
+                ##    ##  ######    #######   ##    ##  ##  ####
+                ##    ##  ##        ##    ##  ##    ##  ##    ##
+                ##    ##  ##        ##    ##  ##    ##  ##    ##
+                #######   ########  ########  ########  ########
+                ######    ########  #######    ######    ######
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   10/07/84             *
+\*****************************************************************************/
+
+
+
+//  Version of DEBUG for use with disc dumps.
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+
+
+GLOBAL
+$(
+envtrace:ug+0
+writearg:ug+1
+isfun:ug+2
+deletebpt:ug+3
+lexp:ug+4
+rbexp:ug+5
+bexp:ug+6
+exp:ug+7
+adr:ug+8
+val:ug+9
+printadd:ug+11
+print:ug+12
+checkdig:ug+13
+checkaddr:ug+14
+cont:ug+15
+selectask:ug+16
+error:ug+17
+testbreak:ug+18
+rch:ug+19
+wch:ug+20
+
+rec:ug+21
+wwrch:ug+22
+save.rdch:ug+23
+save.wrch:ug+24
+
+add:ug+25
+tch:ug+26
+style:ug+27
+salev:ug+28
+lev:ug+29
+currtcb:ug+30
+globv:ug+31
+regs:ug+32
+vars:ug+33
+sptr:ug+34
+sbase:ug+35
+standalone:ug+36
+bpt:ug+37
+bpt.addr:ug+39
+bpt.instr:ug+40
+wrflag:ug+41
+lch:ug+42
+ch:ug+43
+rdflag:ug+44
+copyregs:ug+45
+getregs:ug+46
+putregs:ug+47
+
+memorylimit:ug+48
+currtask:ug+49
+dbpkt:ug+50
+cstackp:ug+51
+remoteread:ug+52
+cachepages:ug+53
+cacheaddresses:ug+54
+cacherobin:ug+55
+flushcache:ug+56
+dumpscb:ug+57
+$)
+
+
+MANIFEST
+$(
+g.sbase=12
+
+co.link=0
+co.caller=1
+co.stackend=2
+co.resumeptr=3
+co.function=4
+
+tcb.x=12
+
+libword=23456
+
+instr.bpt=#X1A01
+instr.entry=#XE27E
+
+cacheblocksize  =  #X80
+cacheblockmask  =  #X7F
+cacheentries    =  20
+$)
+.
+
+
+
+SECTION "REMOTE-DEBUG"
+
+
+
+GET ""
+
+
+
+LET remoteread( address )  =  VALOF
+$(
+//  Read a location from the remote machine.  First, look in the cache to see
+//  if the relevant entry is already there.  If not, then we must read it.
+
+    LET offset  =  address & cacheblockmask
+    LET base    =  address  -  offset
+
+    FOR  i = 1  TO  cacheentries  DO
+        IF  cacheaddresses!i = base  THEN
+            RESULTIS  cachepages!i!offset
+
+    //  If we drop through here, then the address was not in the cache.  We
+    //  should look to see if there are any null cache entries, and if so use
+    //  one.
+
+    FOR  i = 1  TO  cacheentries  DO
+        IF cacheaddresses!i = -1  THEN
+            RESULTIS  cacheread( i, base, offset )
+
+    //  Otherwise, we should throw out the next entry, and cycle round.
+
+    cacherobin  :=  cacherobin REM cacheentries  +  1
+
+    RESULTIS  cacheread( cacherobin, base, offset )
+$)
+
+
+
+AND cacheread( entry, address, offset )  =  VALOF
+$(
+    LET cachep      =  cachepages!entry
+    LET pointtable  =  VEC 2
+    LET oldinput    =  input()
+
+    pointtable!0  :=  (address >> 15)  &  #XFFFF
+    pointtable!1  :=  (address << 1)   &  #XFFFF
+    pointtable!2  :=  0
+
+    selectinput( dumpscb )
+
+    point( dumpscb, pointtable )
+    readwords( cachep, cacheblocksize )
+
+    selectinput( oldinput )
+
+    cacheaddresses!entry  :=  address
+
+    RESULTIS  cachep!offset
+$)
+
+
+
+AND flushcache()  BE
+$(
+    FOR  i = 1  TO  cacheentries  DO
+        cacheaddresses!i  :=  -1
+
+    cacherobin  :=  0
+$)
+
+
+
+AND start()  BE
+$(
+//  Main routine of the remote debugger.  Find out which machine we should
+//  be debugging, and look its address up in the name server.  Having found
+//  it, we should start debugging.
+
+    LET args      =  "DUMP/A"
+    LET argv      =  VEC 50
+
+    LET ca        =  VEC cacheentries
+    LET cp        =  VEC cacheentries
+
+    LET opened    =  FALSE
+    LET verified  =  FALSE
+    LET dump      =  0
+
+    UNLESS  rdargs( args, argv, 50 )  DO
+    $(
+        writef( "****** Bad arguments for string *"%S*"*N", args )
+
+        stop( 20 )
+    $)
+
+    dump            :=  argv!0
+    dumpscb         :=  findupdate( dump )
+
+    IF  dumpscb = 0  THEN
+    $(
+        writef( "****** Cannot open *"%S*"*N", dump )
+
+        stop( 20 )
+    $)
+
+    cacheaddresses  :=  ca
+    cachepages      :=  cp
+
+    FOR  i = 1  TO  cacheentries  DO
+    $(
+        LET page  =  getvec( cacheblocksize )
+
+        IF  page = 0  THEN
+        $(
+            writef( "****** Cannot allocate cache block of size %N*N", cacheblocksize )
+
+            FOR  j = 1  TO  i-1  DO  freevec( cachepages!j )
+
+            endstream( dumpscb )
+
+            stop( 20 )
+        $)
+
+        cachepages!i  :=  page
+    $)
+
+    flushcache()
+
+    lev          :=  level()
+    memorylimit  :=  remoteread( rootnode+rtn.memsize )
+
+    standalone   :=  FALSE
+
+    regs         :=  0
+    wwrch        :=  wrch
+    wrch         :=  wch
+    add          :=  0
+    tch          :=  0
+    style        :=  0
+    vars         :=  TABLE  0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+
+    selectask( 1 )
+
+    writes( "Remote Debug  Version 1.00*N" )
+    writef( "%NK Machine*N*N", memorylimit )
+    writes( "** " )
+
+    rch()
+
+    // REPEAT loop to get commands
+    $( LET v = 0
+       LET oldstyle = style
+
+       rdflag := FALSE
+       SWITCHON ch INTO
+
+       $( CASE 'A': CASE 'G': CASE 'L':
+          CASE 'R': CASE 'V': CASE 'W':
+          CASE 'Y':
+             add := lexp()
+             ENDCASE
+
+          CASE '0': CASE '1': CASE '2':
+          CASE '3': CASE '4': CASE '5':
+          CASE '6': CASE '7': CASE '8':
+          CASE '9': CASE '#': CASE '*'':
+          CASE '(': CASE '@':
+             tch := 0
+             add := bexp()
+             ENDCASE
+
+          CASE '+': CASE '-': CASE '**':
+          CASE '%':
+          CASE '?': CASE '|': CASE '&':
+          CASE '!':
+          CASE '<': CASE '>':
+             add := exp(val(add))
+             tch := 0
+             ENDCASE
+
+          CASE 'J':
+             add := val(add)>>2
+             GOTO ind
+
+          CASE 'I':
+             add := val(add)
+       ind:  tch := 'A'
+             GOTO pra
+
+          CASE 'N':
+             IF tch=0 DO error()
+             add := add+1
+       pra:  printadd(tch, add)
+||            CASE '/':
+||               IF tch=0 DO error()
+||               opened := TRUE
+          CASE '=':
+       ver:  print(val(add))
+             verified := TRUE
+             style := oldstyle
+          CASE '*E': CASE '*S':
+             rch()
+             LOOP
+
+          CASE '$':
+             rch()
+             style :=  ch
+             IF verified GOTO ver
+             GOTO nxt
+
+          CASE 'T':
+             IF tch=0 DO error()
+             FOR i=0 TO rbexp()-1 DO
+             $( IF i REM 5 = 0 DO printadd(tch, add+i)
+                print(val(add+i))
+                testbreak()
+             $)
+             newline()
+             ENDCASE
+
+||            CASE 'U':
+||               UNLESS opened DO error()
+||               !adr(add) := exp(rbexp())
+||               LOOP
+
+||            CASE 'P':
+||               rch()
+||               v := val(add)
+||               add := lexp()
+||               !adr(add) := v
+||               ENDCASE
+
+||            CASE 'X':
+||               UNLESS isfun(val(add)) DO error()
+||               add := val(add)(rbexp(),bexp(),bexp(),bexp())
+||               tch := 0
+||               ENDCASE
+
+||            CASE 'C': // continue execution (normal)
+||            CASE '.': // continue execution with trace bit set
+||               UNLESS standalone DO
+||               $( IF ch='C' DO
+||                  $( release(currtcb)
+||                     GOTO nxt
+||                  $)
+||                  error()
+||               $)
+||
+||               FOR i = 1 TO 9 DO  // plant break points in the code
+||               $( LET ba = bpt.addr!i
+||                  UNLESS ba=0 TEST ba=arg & mode>=2
+||                              THEN ch := '.'
+||                              ELSE pbytes(ba, 2, instr.bpt)
+||               $)
+||
+||               copyregs(putregs)
+||               standalone := FALSE
+||               rdch, wrch := save.rdch, save.wrch // Restore for task DEBUG
+||               RESULTIS ch='.'
+
+||            CASE 'H':
+||               TEST standalone
+||               THEN $( LET crntsk = rootnode!rtn.crntask
+||                       IF currtcb=crntsk & currtask<=0 DO error()
+||                       currtcb!tcb.state := currtcb!tcb.state | #B0010
+||                    $)
+||               ELSE hold(currtask)
+||               GOTO nxt
+
+          CASE 'S':
+||               copyregs(putregs)
+             selectask(rbexp())
+||               copyregs(getregs)
+             ENDCASE
+
+        //CASE 'Z':
+        //   #173104(?,#177406)  // reboot the system!!! PDP/11 magic
+        //   boot()              // this Series/1 magic is in MLIB
+
+||            CASE 'B':
+||            $( LET n = checkdig(rbexp())
+||               TEST n=0 THEN
+||               $( FOR i=1 TO 9 DO
+||                  $( LET ba=bpt.addr!i
+||                     UNLESS ba=0 DO
+||                     $( writef("*N%N %X6 ",i,ba)
+||                        IF isfun(ba) DO writearg(ba)
+||                     $)
+||                  $)
+||                  newline()
+||               $)
+||               ELSE
+||               $( v := val(add)
+||                  deletebpt(n)
+||                  IF v=0 ENDCASE
+||                  FOR i=1 TO 9 DO
+||                     IF bpt.addr!i=v DO deletebpt(i)
+||                  bpt.addr!n := v
+||                  bpt.instr!n := gbytes(v,2)
+||                  UNLESS standalone DO pbytes(v,2,instr.bpt)
+||               $)
+||               ENDCASE $)
+
+          CASE 'Q':
+                 UNTIL  ch = '*N'  |  ch = '*E'  |  ch = endstreamch  DO
+                     ch  :=  rdch()
+
+          CASE endstreamch:
+                 BREAK
+
+          DEFAULT:
+             writef("*NBad ch '%C' (=%X2)*N", ch, ch)
+             error()
+
+          CASE 'E':
+             envtrace( cont( currtcb + tcb.x ) )
+
+          CASE '*N':
+             IF  ch = '*N'  THEN
+             $(
+                 writes( "** " )
+
+                 flushcache()
+             $)
+
+nxt:         rch()
+       $)
+rec:   opened := FALSE
+       verified := FALSE
+
+    $) REPEAT
+
+    FOR  i = 1  TO  cacheentries  DO
+        freevec( cachepages!i )
+
+    endstream( dumpscb )
+$)
+
+.
+
+SECTION "REMOTE-DEBUG2"
+
+
+
+GET ""
+
+
+
+LET envtrace(p) BE 
+ $( LET nbase = 0
+    LET fsize = 6  // stack frame size
+    rch()
+    rdflag := FALSE
+    SWITCHON ch INTO
+    $( DEFAULT:
+          error()
+
+       CASE '*N':
+          RETURN
+
+       CASE '*E':CASE '*S':
+          LOOP
+
+       CASE 'S':
+          nbase := val(add)
+          GOTO newb
+
+       CASE 'L':
+          sptr := val(add)
+          GOTO newp
+
+       CASE 'N':
+ nxtb:    nbase := cont(sbase+co.cllr)  // select the parent cortn stk
+          UNLESS nbase=0 | nbase=-1 DO
+          $( writes("*N*NCalled from")
+             GOTO newb $)
+          nbase := sbase
+          nbase := cont(nbase) REPEATUNTIL
+             nbase=0 | cont(nbase+co.cllr)=0
+          GOTO newb
+
+       CASE 'T': CASE 'B':
+          nbase := cont(globv+g.sbase)
+ newb:    IF nbase=0 DO
+          $( writes("*N*NEnd of backtrace*N*N")
+             RETURN $)
+          sbase := nbase
+       CASE 'U':
+          newline(); newline()
+          nbase := cont(sbase+co.caller)
+          TEST nbase=-1 THEN
+             writes("Root stack")
+          ELSE
+          $( UNLESS nbase=0 DO writes("Active ")
+             writes("Coroutine")
+             writearg(cont(sbase+co.function))
+          $)
+          sptr :=
+               (sbase=cont(globv+g.sbase) -> p, cont(sbase+co.resumeptr))
+          GOTO newp
+
+ nxtp: CASE 'D':
+          IF sptr=sbase GOTO nxtb
+          fsize := cont(cont(sptr))
+          sptr := sptr-fsize
+       CASE 'V':
+ newp:    IF fsize>6 DO fsize := 6
+          newline()
+          TEST sptr=sbase THEN
+          $( LET send = cont(sbase+co.stackend)+50
+             LET shwm = send
+             WHILE cont(shwm)=0 DO shwm:=shwm-1
+             writef("Stack base %U5 end %U5 *
+                    *hwm %U5 ",sbase,send,shwm)
+          $)
+          ELSE
+          $( writearg( cont(sptr+1)-5 )
+             writef("%U2",sptr)
+             FOR i=2 TO fsize-1 DO
+                print(cont(sptr+i))
+          $)
+          IF fsize<1 DO error()
+          testbreak()
+          IF ch='B' GOTO nxtp
+    $)
+    wrch('E')
+ $) REPEAT
+
+
+AND writearg(n) BE  // in width 11
+$(
+   IF isfun(n) DO
+   $( 
+      writes( "  " )
+      writestring( n-4, 7 )
+      writes( "  " )
+      RETURN
+   $)
+
+   IF -10000<n<10000 DO
+   $( writef("  %I7  ", n)
+      RETURN
+   $)
+
+   writef("    #%X4  ", n)
+$)
+
+
+AND isfun(f) =
+    (f>>10)>=memorylimit |
+        ((f-5)>>10)>=memorylimit -> FALSE,
+    cont(f+1)=instr.entry | cont(f-5)=libword ->
+              (cont( f-4 ) >> 8)=7, FALSE
+
+
+||  AND deletebpt(n) BE
+||   $( LET ba = bpt.addr!n
+||      UNLESS ba=0 DO
+||      $( pbytes(ba,2,bpt.instr!n)
+||         bpt.addr!n := 0
+||      $)
+||   $)
+
+
+AND lexp() = VALOF
+    SWITCHON ch INTO
+    $( CASE 'A': CASE 'G': CASE 'L':
+       CASE 'R': CASE 'V': CASE 'W':
+       CASE 'Y':
+          tch := ch
+          RESULTIS rbexp()
+
+       DEFAULT:
+          error()
+    $)
+
+
+AND rbexp() = VALOF
+ $( rch()
+    RESULTIS bexp() $)
+
+
+AND bexp() = VALOF
+ $( LET t = tch
+    LET n = 0
+    LET r = 10
+    WHILE ch='*S' | ch='+' DO rch()
+    SWITCHON ch INTO
+    $( CASE '-':
+          RESULTIS -rbexp()
+
+       CASE '(':
+          n := exp(rbexp())
+          UNLESS ch=')' DO error()
+          rch()
+          ENDCASE
+
+       CASE '!':
+          RESULTIS cont(rbexp())
+
+       CASE '@':
+          rch()
+          n := adr(lexp())
+          ENDCASE
+
+       CASE 'A': CASE 'G': CASE 'L':
+       CASE 'R': CASE 'V': CASE 'W':
+       CASE 'Y':
+          n := val(lexp())
+          ENDCASE
+
+       CASE '*'':
+          rch()
+          n := lch
+          rch()
+          ENDCASE
+
+       CASE '#':
+          r := 16
+          rch()
+          IF ch='O' DO
+          $( r := 8
+             rch() $)
+       DEFAULT:
+          $( LET d = '0'<=ch<='9' -> ch-'0',
+              r=16 & 'A'<=ch<='F' -> ch-'A'+10,
+                                     VALOF BREAK
+             n := n*r+d
+             rch()
+          $) REPEAT
+    $)
+    tch := t
+    RESULTIS n
+ $)
+
+AND exp(a) = VALOF
+    SWITCHON ch INTO
+    $( CASE '<': a := a<<1; rch();    LOOP
+       CASE '>': a := a>>1; rch();    LOOP
+       CASE '+': a := a  +  rbexp();  LOOP
+       CASE '-': a := a  -  rbexp();  LOOP
+       CASE '**':a := a  *  rbexp();  LOOP
+       CASE '%': a := a  /  rbexp();  LOOP
+       CASE '?': a := a REM rbexp();  LOOP
+       CASE '&': a := a  &  rbexp();  LOOP
+       CASE '|': a := a  |  rbexp();  LOOP
+       CASE '!': a := cont(a+rbexp());LOOP
+       CASE '*S':rch();               LOOP
+       DEFAULT:  RESULTIS a
+    $) REPEAT
+
+
+AND adr(a) = tch='Y' -> a, checkaddr(a+VALOF
+       SWITCHON tch INTO
+       $( CASE 'A': RESULTIS 0
+          CASE 'G': RESULTIS globv
+          CASE 'L': RESULTIS sptr
+          CASE 'R': RESULTIS regs
+          CASE 'V': checkdig(a)
+                    RESULTIS vars
+          CASE 'W': RESULTIS currtcb
+       $) )
+
+
+AND val(a) = tch=0  -> a, remoteread( adr(a) )
+
+
+AND printadd(tch, add) BE
+    writef("*N%X4: %C%U2/ ", adr(add), tch, add)
+
+
+AND print(n) BE SWITCHON style INTO
+$( CASE 'C': writef("%C%C ", n>>8, n)
+             RETURN
+   CASE 'D': writef("%I6 ", n);     RETURN
+   CASE 'U': writef("%U6 ", n);     RETURN
+   CASE 'S': writestring( n, 0 );   RETURN
+   CASE 'X': writef("%X4 ", n);     RETURN
+   CASE 'F':
+   DEFAULT:  writearg(n);           RETURN
+$)
+
+
+
+AND writestring( address, width )  BE
+$(
+    LET buffer  =  VEC 256/bytesperword
+    LET word0   =  remoteread( address )
+    LET length  =  (word0 >> 8) / bytesperword
+
+    FOR  i = 0  TO  length  DO  buffer!i  :=  remoteread( address+i )
+
+    writes( buffer )
+
+    FOR  i = buffer % 0  TO  width-1  DO  wrch( '*S' )
+$)
+
+
+AND checkdig(n) = VALOF
+ $( UNLESS 0<=n<=9 DO error()
+    RESULTIS n $)
+
+
+AND checkaddr(a) = VALOF
+$( IF (a>>10)>=memorylimit DO error()
+   RESULTIS a
+$)
+
+
+AND cont(a) = remoteread( checkaddr(a) )
+
+
+AND selectask(n) BE
+$(
+    LET t       =  remoteread( rootnode+rtn.tasktab )
+    LET tsize   =  remoteread( t )
+
+    UNLESS -1<=n<=tsize DO error()
+    IF n>0 & remoteread( t+n )=0 DO error()
+
+    currtask := n
+    currtcb  := 0
+
+    IF n>0 DO currtcb := remoteread( t+n )
+    IF n<0 DO currtcb := remoteread( rootnode+rtn.crntask )
+
+    globv  :=  remoteread( currtcb+tcb.gbase )
+$)
+
+
+
+AND error() BE
+ $( writes("??*N")
+    UNLESS rdflag DO rch()
+    longjump(standalone->salev,lev, rec)
+ $)
+
+
+AND testbreak() BE UNLESS standalone DO
+    IF testflags(1) DO error()              // ARW
+// RETURN //**************************************************
+
+AND rch() BE
+ $( TEST standalone THEN
+    $( lch := sardch()
+       IF lch=#X7F DO error() // ASCII DEL! ARW
+     $)
+    ELSE
+    $( IF wrflag DO wrch('*E')
+       wrflag := FALSE
+       testbreak()
+       lch := rdch()
+       testflags(1) //************************************* ARW
+    $)
+    ch := capitalch(lch)
+    rdflag := TRUE
+ $)
+
+
+AND wch(c) BE
+ $( c := c&#377
+    TEST standalone THEN
+       sawrch(c)
+    ELSE
+    $( wrflag := TRUE
+       wwrch(c)
+    $)
+ $)
+
+

@@ -1,0 +1,3576 @@
+/*****************************************************************************
+**                  (C) Copyright 1985  Steve Hoskins                       **
+**               University of Cambridge Computer Laboratory                **
+******************************************************************************
+
+      #######     #####   #######   ##        ########  ########  ######   
+      ########   #######  ########  ##        ########  ########  #######  
+      ##    ##  ##        ##    ##  ##             ##   ##        ##    ## 
+      #######   ##        #######   ##          ###     ######    ##    ## 
+      ##    ##  ##        ##        ##         ##       ##        ##    ## 
+      ##    ##  ##        ##        ##        ##        ##        ##    ## 
+      ########   #######  ##        ########  ########  ########  #######  
+      #######     #####   ##        ########  ########  ########  ######   
+
+******************************************************************************
+**      Author:   Steve Hoskins                         January 1985        **
+*****************************************************************************/
+
+//   This program is a reimplementation in BCPL of the ZED editor, designed
+//by Philip Hazel of the Cambridge University Computing Service.
+
+//   Modifications
+//
+// V13 02-Aug-85 NJO  Sources moved to Tripos, but not converted.
+// V14 14-Apr-86 NJO  Conversion to run under Tripos.  All sections joined
+//                    into a single file.  Manifest MAXSTRLENGTH supplied
+//                    as a guessed value.
+// V15 15-Apr-86 NJO  Forceout character introduced (0 on PHX, *E on Tripos).
+//                    !add!thing instead of (!add)!thing found in places.
+// V16 17-Apr-86 NJO  Store management fixed for Tripos - all GETVECed blocks
+//                    chained together and freed at end.  Files closed.
+
+GET "libhdr"
+
+MANIFEST $(
+
+   code.version = 16
+
+   MAXSTRLENGTH = 100    // guessed value!
+
+   forceoutch   = '*E'   // set to zero for some systems (e.g. Phoenix)
+
+   outqsize = 1;  // Size of alternative output queue in words
+   noutput  = 5;     // Default no of lines output when output queue is full
+   combsize = 100;   // Size of command buffer
+   clbsize  = (MAXSTRLENGTH / BYTESPERWORD) + 1
+                     // Size of current line buffer in words
+   lscbsize = 12 + 2 * (MAXSTRLENGTH / BYTESPERWORD)
+              // Size of last string command buffer
+   csebsize = 100  // Size of current search expression buffer
+   numbuff = 4       // Number of text buffers
+   tosource = 0
+   fromsource = -1
+   namesize = 1 + (4 / BYTESPERWORD)
+
+   null = 0  //  Null pointer value
+
+   endmask     = 16  ;
+   newmask     = 4   ;
+   plusmask     = 2;
+   movmask     = 8   ;
+   minusmask   = 1   ;
+   ormask       = 28;
+   newmovmask  = 12;
+   endplusmask  = 18;
+
+   PLUSSYM  = -1;
+   MINUSSYM = -2;
+   ENDSYM  = -3;
+   CURRSYM   = -4;
+   OTHERSYM = -5;
+
+//
+//   The following are for handling data structures
+//
+
+   blocktype = 0 ; blocksize = 1;
+   freefptr = 2  ; freebptr = 3;
+   minblocksize = 8
+   free  = TRUE  ; used  =   FALSE;
+
+   fptr    = 0   ; bptr     = 1;
+   lineno      = 2   ; symb         = 3;
+   controlch    = 4  ; stringb      = 5;
+   minlinesize = 6
+
+   name  = 0;
+   arg1  = 1;
+   arg2  = 2;
+   nextcom = 3;
+
+   gnumber = 0
+   gcount = 1
+   genabled = 2
+   gcom = 3
+   gnext = 4
+
+   gsize = gnext + 1  //  This is the size of the g vector
+
+   pname = 0
+   pbody = 1
+   pnext = 2
+
+   QN = 0
+   QU = 1
+   QW = 2
+   QS = 3
+   QL = 4
+   QE = QL
+   QP = 5
+   QINT = 6
+   QSEP = 7
+   QSTR = 8
+
+   SESEQ = 0
+   SEQS = 1
+   SEAND = 2
+   SENEXT = 3
+
+   //
+   //      Commands are assigned numbers by the following rationales
+   //
+   //   imask  Independent of source commands
+   //   rmask  Closes current line buffer
+   //   vmask  Verifies current line if any previous request made
+   //   cmask  Repeatable commands
+   //   gmask  Opens current line buffer
+   //   smask  Command to be copied into last string command buffer
+   //   emask  Search expression arguement to be copied
+   //
+
+   imask =   64
+   gmask =  128
+   vmask =  256
+   rmask =  512
+   cmask = 1024
+   smask = 2048
+   emask = 4096
+
+   CINT = imask + 1
+   CSTOP = imask + 2
+   CCOMM = imask + 3
+   CHELP = imask + 4
+   CRPT = imask + 15
+   CV = imask + 16
+   CVN = imask + 17
+   CVT = imask + 18
+   CWARN = imask + 19
+   CERRSTOP = imask + 20
+   CFN = imask + 21
+   CSHS = imask + 22
+   IMTEXT = imask + 23
+   IMINB = imask + 24
+   IMBUFF = imask + 25
+   IMCOPY = imask + 26
+   CVC = imask + 27
+   CCG = imask + 28
+   CDG = imask + 29
+   CEG = imask + 30
+   CGA = imask + 31
+   CGB = imask + 32
+   CGE = imask + 33
+   CVG = imask + 35
+   CSHG = imask + 36
+   CCPROC = imask + 37
+   CPROC = imask + 38
+   CSHPROC = imask + 39
+   CMXLL = imask + 40
+   CDUMMY = imask + 41
+   CSHD = imask + 42
+
+   CON = imask + emask + 34
+
+   CQM = 1
+   CFLUSH = 2
+   CUNDO = 3
+   CTO = 4
+   CDBUFF = 5
+   CSHBUFF = 6
+   CTBUFF = 7
+   CFROM = 8
+   CIFEOF = 9
+   CULEOF = 10
+   CELSE = 11
+   CUTEOF = 16
+
+   CELIF = emask + 12
+   CELUL = emask + 13
+   CWH = emask + 14
+   CUT = emask + 15
+
+   CT = rmask + 1
+   CTL = rmask + 2
+   CW = rmask + 3
+
+   CM = rmask + vmask + 1
+   CDREST = rmask + vmask + 3
+   CSA = rmask + vmask + 7
+   CSB = rmask + vmask + 8
+   CEQ = rmask + vmask + 9
+   CR = rmask + vmask  + 10
+
+   CN = rmask + vmask + cmask + 1
+   CP = rmask + vmask + cmask + 2
+   CCL = rmask + vmask + cmask + 3
+   CD = rmask + vmask + cmask + 4
+   CI = rmask + vmask + cmask + 5
+
+   CF = rmask + vmask + cmask + emask + 6
+   CBF = rmask + vmask + cmask + emask + 7
+   CDF = rmask + vmask + cmask + emask + 8
+
+   CIC = rmask + cmask + 1
+   CIS = rmask + cmask + 2
+
+   CIF = rmask + cmask + emask + 3
+   CUL = rmask + cmask + emask + 4
+
+   CDO = cmask + imask + 1
+
+   CA = gmask + cmask + smask + 1
+   CB = gmask + cmask + smask + 2
+   CE = gmask + cmask + smask + 3
+
+   CRLSC = gmask + cmask + 1
+
+   CDFA = gmask + smask + 1
+   CDFB = gmask + smask + 2
+   CDTA = gmask + smask + 3
+   CDTB = gmask + smask + 4
+
+$)
+
+
+GLOBAL $(
+   outputq : FG;      // Pointer to output queue buffer
+   limoutq : FG + 1;  // Pointer to end of same
+   freeptr : FG + 2;  // Pointer to earliest free block in it
+   efreeptr : FG + 3; // Pointer to the last one
+                 //  Above globals are used by the alternative output queue
+
+   lowestl  : FG + 4; // Pointer to the lowest line in the output queue
+   currentl : FG + 5; // Pointer to current line in output queue
+   highestl : FG + 6; // Pointer to the highest one
+   lineinput : FG + 7; // True if any lines have been read from FROM
+   linesinput : FG + 8 // No of lines read from FROM
+
+   storechain : FG + 9 // Chain of all GETVECed blocks for release at end
+
+// spare      : FG + 10
+
+   fromf : FG + 30;   //  These are pointers to I/O streams
+   withf : FG + 31;
+   verf : FG + 32;
+   tof : FG + 33
+
+   withch : FG + 39    // Last character taken from the WITH stream
+   withcol : FG + 40   // Column of current withch
+   clevel : FG + 41    // Current level of commands
+   combuff : FG + 42   // Pointer to command buffer
+   ptrcbuff : FG + 43  // Pointer to limit of used part of it
+   limcbuff : FG + 44  // Pointer to end of it
+
+   currcom : FG + 50   // Pointer to current command group
+   plab1 : FG + 51     // Allows jump to lab1
+   lab1 : FG + 52
+
+   fqst : FG + 80  // These five global variables are arguments used
+   fst : FG + 81   // by procedure match
+   fqs : FG + 82
+   ffch : FG + 83
+   flch : FG + 84
+
+   mxll : FG + 118  // Holds maximum allowed input length of source lines
+   swvg : FG + 119  // Those globals beginning with sw hold the setting
+   swv : FG + 120  // of the given switch
+   swvn : FG + 121
+   swvt : FG + 122
+   swerrstop : FG + 123
+   swwarn : FG + 124
+   swfn : FG + 125
+   swvc : FG + 129
+   interactive : FG + 126  // True if WITH and VER are interactive files
+   verreq1 : FG + 127  // Requests verification before current line is changed
+   verreq2 : FG + 128  // Requests verification on reaching end of current
+                       // line of commands
+
+   csebuff : FG + 141  // Pointer to current search expression buffer
+   cseopen : FG + 144  // True if a current search expression exists
+   lscbuff : FG + 145  // Pointer to the last string command buffer
+   lscopen : FG + 148  // True if a last string command exists
+   currto : FG + 165  // Current TO file
+   currfrom : FG + 166  // Current FROM file
+
+   proclist : FG + 170  // Pointer to list of current procedures
+   glist : FG + 171  // Pointer to list of current global commands
+   endglist : FG + 172  //  Pointer to its end
+
+   cpysp : FG + 180  // Pointer to buffer command seq is being copied into
+   limcpysp : FG + 181 // Pointer to end of it
+   ptrcpysp : FG + 182 // Pointer to first not yet used word in it
+
+   goutdisabled : FG + 198  // if TRUE globals and outputnl are disabled
+   prescomseq : FG + 53   //  Pointer to the currently executing com seq
+
+   clboccupied : FG + 60  // True if current line buffer is occupied
+   clbuff : FG + 61       // Pointer to current line buffer
+
+//
+//   These are global procedures, sorted by section.
+//
+//       Section READCOM
+
+   rdcomseq : FG + 46
+   rdtextin : FG + 140
+   capitalch : FG + 47
+   rdwithch : FG + 48
+
+//        Section WRITE
+
+   wrcomseq : FG + 54
+   wrscom : FG + 55
+   wrse : FG + 56
+
+//       Section MAIN
+
+   obeycomseq : FG + 57
+   execerror : FG + 58
+
+//      Section COPY
+
+   newcse : FG + 149
+   newlsc : FG + 150
+
+   proccpy : FG + 190
+   procshproc : FG + 191
+   proccproc : FG + 192
+   procdo : FG + 193
+   proccg : FG + 194
+   procdeg : FG + 195
+   procshg : FG + 196
+   doglobals  : FG + 197
+
+//       Section OUTPUTQ
+
+   outputnl    : FG + 25
+   initoutputq : FG + 26
+   freespace   : FG + 27
+   getspace    : FG + 28
+   tidy.up.and.stop : FG + 167
+   inputln     : FG + 29
+
+   procdbuff : FG + 160
+   procshbuff : FG + 161
+   proctbuff : FG + 162
+   proctobuff : FG + 163
+   procfrombuff : FG + 164
+
+//        Section LINECOM
+
+   prclno : FG + 11
+   prcltext : FG + 12
+   procn : FG + 13
+   procp : FG + 14
+   procw : FG + 15
+   procm : FG + 16
+   proct : FG + 17
+   proctl : FG + 18
+   procqm : FG + 19
+   procdrest : FG + 21
+   procic : FG + 22
+   procis : FG + 23
+   procd : FG + 24
+   verify : FG + 130
+
+   procim : FG + 155
+   proceq : FG + 156
+
+
+//        Section STRINGCOM
+
+   getcl : FG + 67
+   returncl : FG + 68
+
+   proca : FG + 90
+   procb : FG + 91
+   proce : FG + 92
+   procdfa : FG + 94
+   procdfb : FG + 95
+   procdta : FG + 96
+   procdtb : FG + 97
+   procsa : FG + 98
+   procsb : FG + 99
+   proccl : FG + 100
+   procf : FG + 101
+   procbf : FG + 102
+   procdf : FG + 103
+   findse : FG + 104
+
+
+$)
+
+.
+
+SECTION "BCPLZED"    // formerly MAIN
+
+GET ""
+
+//////////////////////////////////////////////////////////////////////////////
+//                                                                          //
+//   Holds the main program, the execute command sequence procedure and     //
+//  procedures to carry out simple miscellanous commands.                   //
+//                                                                          //
+//////////////////////////////////////////////////////////////////////////////
+
+LET start() BE $(
+   LET v1 = VEC outqsize
+
+   outputq    := v1
+   storechain := null
+   fromf      := 0
+   tof        := 0
+   withf      := 0
+   verf       := 0
+
+   initoutputq()
+   goutdisabled := FALSE
+
+// NJO mod: replace the Phoenix file set-up with one for Tripos
+
+/*
+   fromf := findinput("FROM")
+   IF fromf = 0 THEN $( writes("from file not open") tidy.up.and.stop(8) $)
+   withf := findinput("WITH")
+   IF withf = 0 THEN $( writes("with file not open") tidy.up.and.stop(8) $)
+   verf := findoutput("VER")
+   IF verf = 0 THEN $( writes("ver file not open") tidy.up.and.stop(8) $)
+   tof := findoutput("TO")
+   IF tof = 0 THEN $( writes("to file not open") tidy.up.and.stop(8) $)
+   selectinput(withf)
+   selectoutput(verf)
+
+   interactive := ISINTERACTIVE(withf) & ISINTERACTIVE(verf)
+
+//   writef("FROM is %n *n", fromf)
+//   writef("WITH is %n *n", withf)
+//   writef("VER is %n *n", verf)
+//   writef("TO is %n *n", tof)
+//   writef("FINDTERMINAL1 is %n *n", FINDTERMINAL(1))
+//   writef("FINDTERMINAL0 is %n *n", FINDTERMINAL(0))
+*/
+
+   $( LET argv = VEC 100/bytesperword
+      LET args = "FROM/A,TO/A,WITH/K,VER/K"
+
+      IF rdargs(args, argv, 100/bytesperword) = 0 THEN
+      $( writef("Args unsuitable for string %S*N", args)
+         tidy.up.and.stop(8)
+      $)
+
+      fromf := findinput(argv!0)
+
+      IF fromf = 0 THEN
+      $( writef("Failed to open FROM file %S*N", argv!0)
+         tidy.up.and.stop(8)
+      $)
+
+      tof := findoutput(argv!1)
+
+      IF tof = 0 THEN
+      $( writef("Failed to open TO file %S*N", argv!1)
+         tidy.up.and.stop(8)
+      $)
+
+      IF argv!2 = 0 THEN
+         argv!2 := "**"
+
+      withf := findinput(argv!2)
+
+      IF withf = 0 THEN
+      $( writef("Failed to open WITH file %S*N", argv!2)
+         tidy.up.and.stop(8)
+      $)
+
+      IF argv!3 = 0 THEN
+         argv!3 := "**"
+
+      verf := findoutput(argv!3)
+
+      IF verf = 0 THEN
+      $( writef("Failed to open VER file %S*N", argv!3)
+         tidy.up.and.stop(8)
+      $)
+
+      interactive := compstring(argv!2, "**") = 0
+   $)
+
+   selectinput(withf)
+   selectoutput(verf)
+
+   combuff := getspace(combsize)
+   limcbuff := combuff + combsize
+   verreq1 := FALSE
+   verreq2 := FALSE
+   clevel := 1
+   withcol := 0
+
+   clbuff := getspace(clbsize)
+   clboccupied := FALSE
+
+   csebuff := getspace(csebsize)
+   // writef("csebuff = %N*n", csebuff)
+   cseopen := FALSE
+
+   lscbuff := getspace(lscbsize)
+   // writef("lscbuff = %N*n", lscbuff)
+   lscopen := FALSE
+
+   glist := null
+   endglist := null
+   proclist := null
+   cpysp := null
+   limcpysp := null
+   ptrcpysp := null
+
+   swv := interactive
+   swerrstop := NOT interactive
+   swvc := FALSE
+   swvg := TRUE
+   swvn := TRUE
+   swvt := TRUE
+   swwarn := TRUE
+   swfn := FALSE
+   mxll := MAXSTRLENGTH
+
+//   writes("Initialisation complete*n")
+
+   writef("BCPLZED (%N)*n", code.version)
+
+   plab1 := level()
+   lab1 :
+   prescomseq := currcom
+   $(
+      IF verreq1 | verreq2 THEN verify()
+      IF interactive THEN $( wrch(':'); wrch(forceoutch) $)
+      ptrcbuff := combuff
+      rdwithch()
+      IF withch = ENDSTREAMCH THEN procw()
+      rdcomseq(@currcom)
+      IF swvc DO $(
+         wrcomseq(currcom)
+         wrch('*n')
+      $)
+      obeycomseq(currcom)
+   $) REPEAT
+$)
+LET obeycomseq(ptr) BE $(
+   //
+   //   Obeys pointed to command sequence.
+   //  Prescomseq is used to hold a pointer to the beginning of the
+   //  command sequence to help error diagnosis by procedure execerror.
+   //
+   LET comname = ?
+   LET condition = ?
+   LET oldcomseq = prescomseq
+   prescomseq := ptr
+   WHILE ptr NE null DO $(
+      comname := ptr!name
+      IF (comname & smask) NE 0 THEN $(
+         //
+         //   Copy the command into the last string command buffer.
+         //
+         lscopen := TRUE
+         newlsc(ptr)
+      $)
+      IF (comname & emask) NE 0 THEN $(
+         //
+         //   Copy the search expression argument into
+         //  the current search expression buffer.
+         //
+         newcse(ptr!arg1)
+      $)
+      IF NOT lineinput & ((comname & imask) = 0) DO $(
+         //
+         //   Input the first line of the source
+         //
+         inputln()
+         lineinput := TRUE
+      $)
+      IF (comname & gmask) NE 0 DO $(
+         //
+         //   Open the current line buffer (if not open already)
+         //
+         verreq1 := TRUE
+         IF NOT clboccupied DO getcl()
+      $)
+      IF (comname & rmask) NE 0 DO $(
+         //
+         //   Close the current line buffer (if open)
+         //
+         IF clboccupied DO returncl()
+      $)
+      IF (comname & vmask) NE 0 THEN $(
+         //
+         //   Moving to a new line, test if old line requires verification
+         //  first.
+         //
+         IF verreq1 THEN verify()
+         verreq2 := TRUE
+      $)
+      SWITCHON comname INTO $(
+         CASE CINT :
+            FOR i = 1 TO ptr!arg1 DO obeycomseq(ptr!arg2)
+         ENDCASE
+         CASE CA : proca(ptr!arg1, ptr!arg2)   ENDCASE
+         CASE CB : procb(ptr!arg1, ptr!arg2)   ENDCASE
+         CASE CD : procd(ptr!arg1, ptr!arg2)   ENDCASE
+         CASE CE : proce(ptr!arg1, ptr!arg2)   ENDCASE
+         CASE CF : procf(ptr!arg1)   ENDCASE
+         CASE CI : procm(ptr!arg1); procim(@ptr)  ENDCASE
+         CASE CM : procm(ptr!arg1)   ENDCASE
+         CASE CN : procn()   ENDCASE
+         CASE CP : procp()   ENDCASE
+         CASE CR : procd(ptr!arg1, ptr!arg2); procim(@ptr)  ENDCASE
+         CASE CT : proct(ptr!arg1)   ENDCASE
+         CASE CV : procsw(@swv, ptr!arg1)  ENDCASE
+         CASE CW : procw()   ENDCASE
+         CASE CBF : procbf(ptr!arg1)   ENDCASE
+         CASE CCG : proccg(ptr!arg1)   ENDCASE
+         CASE CCL : proccl()   ENDCASE
+         CASE CDF : procdf(ptr!arg1)   ENDCASE
+         CASE CDG : procdeg(ptr!arg1, FALSE)  ENDCASE
+         CASE CDO : procdo(ptr!arg1)  ENDCASE
+         CASE CEG : procdeg(ptr!arg1, TRUE)  ENDCASE
+         CASE CEQ : proceq(ptr!arg1)  ENDCASE
+         CASE CFN : procsw(@swfn, ptr!arg1)  ENDCASE
+         CASE CGA : proccpy(@ptr, FALSE)   ENDCASE
+         CASE CGB : proccpy(@ptr, FALSE)   ENDCASE
+         CASE CGE : proccpy(@ptr, FALSE)   ENDCASE
+         CASE CIC : procic()   ENDCASE
+         CASE CIF :
+            condition := findse(ptr!arg1)
+            IF condition DO obeycomseq(ptr!arg2)
+         ENDCASE
+         CASE CIS : procis(ptr!arg2)   ENDCASE
+         CASE CON : proccpy(@ptr, FALSE)   ENDCASE
+         CASE CQM : procqm()   ENDCASE
+         CASE CSA : procsa(ptr!arg1)   ENDCASE
+         CASE CSB : procsb(ptr!arg1)   ENDCASE
+         CASE CTL : proctl(ptr!arg1)   ENDCASE
+         CASE CTO : proctobuff(ptr!arg1)   ENDCASE
+         CASE CUL :
+            condition := NOT findse(ptr!arg1)
+            IF condition DO obeycomseq(ptr!arg2)
+         ENDCASE
+         CASE CUT : UNTIL findse(ptr!arg1) DO obeycomseq(ptr!arg2)  ENDCASE
+         CASE CVC : procsw(@swvc, ptr!arg1)  ENDCASE
+         CASE CVG : procsw(@swvg, ptr!arg1)  ENDCASE
+         CASE CVN : procsw(@swvn, ptr!arg1)  ENDCASE
+         CASE CVT : procsw(@swvt, ptr!arg1)  ENDCASE
+         CASE CWH : WHILE findse(ptr!arg1) DO obeycomseq(ptr!arg2)  ENDCASE
+         CASE CDFA : procdfa(ptr!arg1)   ENDCASE
+         CASE CDFB : procdfb(ptr!arg1)   ENDCASE
+         CASE CDTA : procdta(ptr!arg1)   ENDCASE
+         CASE CDTB : procdtb(ptr!arg1)   ENDCASE
+         CASE CRPT : obeycomseq(ptr!arg2) REPEAT  ENDCASE
+         CASE CSHD : procshd()  ENDCASE
+         CASE CSHG : procshg(ptr!arg1)  ENDCASE
+         CASE CSHS : procshs()  ENDCASE
+         CASE CCOMM : proccomm(ptr!arg2)   ENDCASE
+         CASE CCPROC : proccproc(ptr!arg1)   ENDCASE
+         CASE CDBUFF : procdbuff(ptr!arg1)   ENDCASE
+         CASE CDREST : procdrest()   ENDCASE
+         CASE CERRSTOP : procsw(@swerrstop, ptr!arg1)  ENDCASE
+         CASE CELIF :
+            UNLESS condition DO $(
+               condition := findse(ptr!arg1)
+               IF condition DO obeycomseq(ptr!arg2)
+            $)
+         ENDCASE
+         CASE CELSE :
+            UNLESS condition DO obeycomseq(ptr!arg2)
+         ENDCASE
+         CASE CELUL :
+            UNLESS condition DO $(
+               condition := NOT findse(ptr!arg1)
+               IF condition DO obeycomseq(ptr!arg2)
+            $)
+         ENDCASE
+         CASE CFLUSH : outputnl(MAXINT)   ENDCASE
+         CASE CFROM : procfrombuff(ptr!arg1)   ENDCASE
+         CASE CHELP : prochelp()   ENDCASE
+         CASE CIFEOF :
+            condition := ((currentl!symb) & endmask) NE 0
+            IF condition DO obeycomseq(ptr!arg2)
+         ENDCASE
+         CASE CMXLL : procmxll(ptr!arg1)   ENDCASE
+         CASE CPROC : proccpy(@ptr, TRUE)   ENDCASE
+         CASE CRLSC : procrlsc()   ENDCASE
+         CASE CSHBUFF : procshbuff(ptr!arg1)   ENDCASE
+         CASE CSHPROC : procshproc(ptr!arg1)   ENDCASE
+         CASE CSTOP : tidy.up.and.stop(8)   ENDCASE
+         CASE CTBUFF : proctbuff(ptr!arg1)   ENDCASE
+         CASE CULEOF :
+            condition := ((currentl!symb & endmask) = 0)
+            IF condition DO obeycomseq(ptr!arg2)
+         ENDCASE
+         CASE CUNDO : procundo()  ENDCASE
+         CASE CUTEOF : UNTIL (currentl!symb & endmask) NE 0
+               DO obeycomseq(ptr!arg2)  ENDCASE
+         CASE CWARN : procsw(@swwarn, ptr!arg1)  ENDCASE
+         DEFAULT : execerror('u', ptr!name)
+      $)
+      ptr := ptr!nextcom
+   $)
+   prescomseq := oldcomseq
+$)
+
+AND execerror(ch, arg) BE $(
+   //
+   //   Called if an error is found during execution of commands. Prints an
+   //  error message and the current command sequence unless at the outermost
+   //  level and verifies the current line. Abandons the command sequence
+   //  in the command buffer or terminates run according to
+   //  switch ERRSTOP.
+   //
+   writes("****")
+   SWITCHON ch INTO $(
+      CASE 'a' : writef("Inconsistent arguments")  ENDCASE
+      CASE 'b' : writef("Buffer %n is open", arg)  ENDCASE
+      CASE 'c' : writes("Copy procedure failed")  ENDCASE
+      CASE 'd' : writef("Buffer %n is not empty", arg)  ENDCASE
+      CASE 'e' : writes("Maximum string length exceeded")  ENDCASE
+      CASE 'g' : writef("Global %n not found", arg)  ENDCASE
+      CASE 'i' : writes("Illegal attempt to input a new line")  ENDCASE
+      CASE 'l' : writef("Line %n not found", arg)  ENDCASE
+      CASE 'm' : writes("No match")  ENDCASE
+      CASE 'n' : writes("No more previous lines available")  ENDCASE
+      CASE 'o' : writes("Internal error - ZED workspace full")  ENDCASE
+      CASE 'p' : writef("Procedure %s not found", arg)  ENDCASE
+      CASE 'r' : writes("No current search expression")  ENDCASE
+      CASE 's' : writes("Source exhausted")  ENDCASE
+      CASE 't' : writes("Line too long for input")  ENDCASE
+      CASE 'u' : writef("Unrecognised command %n", arg)  ENDCASE
+      CASE 'v' : writef("No last string command")  ENDCASE
+      CASE 'x' : writef("Procedure %s exists already", arg)  ENDCASE
+      DEFAULT : writes("Unidentified error during command execution")
+   $)
+   wrch('*n')
+   UNLESS prescomseq = currcom DO $(
+      writes("While obeying*n")
+      wrcomseq(prescomseq)
+      wrch('*n')
+   $)
+   goutdisabled := FALSE
+   IF lineinput DO procqm()
+   IF swerrstop THEN tidy.up.and.stop(8)
+   longjump(plab1, lab1)
+$)
+
+//
+//   The following procedures carry out various miscellaneous commands
+//
+
+AND procrlsc() BE $(
+   UNLESS lscopen THEN execerror('v')
+   obeycomseq(lscbuff)
+$)
+
+AND proccomm(st) BE $(
+   writes(st)
+   wrch('*n')
+$)
+
+AND procundo() BE $(
+   verreq1 := TRUE
+   clboccupied := FALSE
+$)
+
+AND prochelp() BE $(
+   writes(" Commands available are -*n")
+   writes("N  P  M  T  TL  ?  F  BF*n")
+   writes("I  R  IC  IS  D  DF  DREST*n")
+   writes("A  B  E  DFA  DFB  DTA  DTB  '  UNDO*n")
+   writes("CL  SA  SB*n")
+   writes("STOP  W*n")
+   writes("COMM  FLUSH  HELP  MXLL*n")
+   writes("V  VC  VG  VN  VT  FN  WARN  ERRSTOP*n")
+   writes("IF  UL  ELIF  ELUL  IFEOF  ULEOF*n")
+   writes("WH  UT  UTEOF  RPT*n")
+   writes("TO  FROM  DBUFF  SHBUFF  TBUFF*n")
+   writes("PROC  CPROC  SHPROC  DO*n")
+   writes("GA  GB  GE  ON  CG  DG  EG*n")
+   writes("SHD  SHG  SHS*n")
+   writes(" Allowed string qualifiers are -*n")
+   writes("B  E  N  P  S  W  U  and <integer>*n")
+   writes(" & is allowed as a search expression*n")
+$)
+
+AND procsw(ptrsw, arg) BE $(
+   //
+   //   Sets the switch pointed at by ptrsw
+   //
+   TEST arg = PLUSSYM
+   THEN !ptrsw := TRUE
+   ELSE $(
+      UNLESS arg = MINUSSYM THEN execerror('a')
+      !ptrsw := FALSE
+   $)
+$)
+
+AND procshd() BE $(
+   TEST cseopen
+   THEN wrse(csebuff, FALSE)
+   ELSE writes("No current search expression")
+   wrch('*n')
+   TEST lscopen
+   THEN wrcomseq(lscbuff)
+   ELSE writes("No previous string command")
+   wrch('*n')
+$)
+
+AND procshs() BE $(
+   LET wrtf(sw) BE $(
+      TEST sw THEN writes("+  ") ELSE writes("-  ")
+   $)
+   writes("V"); wrtf(swv)
+   writes("FN"); wrtf(swfn)
+   writes("VC"); wrtf(swvc)
+   writes("VG"); wrtf(swvg)
+   writes("VN"); wrtf(swvn)
+   writes("VT"); wrtf(swvt)
+   writes("ERRSTOP"); wrtf(swerrstop)
+   writes("WARN"); wrtf(swwarn)
+   wrch('*n')
+$)
+
+AND procmxll(length) BE $(
+   IF length > MAXSTRLENGTH THEN $(
+      length := MAXSTRLENGTH
+      IF swwarn THEN writef("Maximum line length set to %n*n", length)
+   $)
+   mxll := length
+$)
+
+.
+
+SECTION  "READCOM"
+
+GET ""
+
+//////////////////////////////////////////////////////////////////////////////
+//                                                                          //
+//   This section contians procedure rdcomseq, which parses a command       //
+//  sequence and creates a data structure representing it, and also the     //
+//  procedures it calls.                                                    //
+//                                                                          //
+//////////////////////////////////////////////////////////////////////////////
+
+LET rdcomseq(add) BE $(
+   //
+   //   Parses a command sequence defined as either  [<separator>] <command>
+   //  <command sequence>  or  [<separator>] <terminator>  . A pointer to the
+   //  result is placed in the location pointed to by add.
+   //
+   LET  str = "    "
+   $(
+      rdswithch()
+      UNTIL withch NE ';' DO $(
+         rdwithch()
+         rdswithch()
+      $)
+      IF withch = '\' THEN UNTIL withch = '*n' DO rdwithch()
+      IF withch = '*n' THEN $(
+         withcol := 0
+         TEST clevel = 1
+         THEN $(
+            !add := null
+            RETURN
+         $)
+         ELSE $(
+            IF interactive THEN $( wrch('+'); wrch(forceoutch) $)
+            rdwithch()
+            IF withch = ENDSTREAMCH THEN parserror('p')
+            LOOP
+         $)
+      $)
+      IF withch = ')' THEN $(
+         IF clevel < 2 THEN parserror('p')
+         !add := null
+         RETURN
+      $)
+      TEST withch = '('
+      THEN $(
+         LET ptr = getcomsp(4)
+         !add := ptr
+         ptr!name := CINT
+         ptr!arg1 := 1
+         rdcomgp(ptr + arg2)
+         add := ptr + nextcom
+      $)
+      ELSE $(
+         rdcname(str)
+         add := rdscom(add, str)
+      $)
+   $) REPEAT
+$)
+
+AND rdscom(add, str) = VALOF $(
+   //
+   //   Parses a simple command defined as  <command name> [<argument 1>
+   //  [<argument 2>]]  . A pointer to it is placed at the location indicated
+   //  by add and the result returned is an address for a pointer to the next
+   //  command. The command name is read from str.
+   //
+   LET ptr = getcomsp(4)
+   !add := ptr
+// writes(str)
+// wrch('*n')
+   SWITCHON str%0 INTO $(
+      CASE 0 :
+         ptr!name := CINT
+         ptr!arg1 := rdwithn()
+         rdwithch()
+         rdcomgp(ptr + arg2)
+      ENDCASE
+      CASE 1 :
+      SWITCHON str%1 INTO $(
+         CASE '?' : ptr!name := CQM  ENDCASE
+         CASE '=' : ptr!name := CEQ; rdint(ptr + arg1)  ENDCASE
+         CASE '*'' : ptr!name := CRLSC   ENDCASE
+         CASE 'A' : ptr!name := CA; rdqstst((ptr + arg1), (ptr + arg2))  ENDCASE
+         CASE 'B' : ptr!name := CB; rdqstst((ptr + arg1), (ptr + arg2))  ENDCASE
+         CASE 'D' : ptr!name := CD rd2lnno(ptr + arg1, ptr + arg2)  ENDCASE
+         CASE 'E' : ptr!name := CE; rdqstst((ptr + arg1), (ptr + arg2))  ENDCASE
+         CASE 'F' : ptr!name := CF; rdse(ptr + arg1)  ENDCASE
+         CASE 'I' : ptr!name := CI; rdlnno(ptr + arg1); rdtext(@ptr)  ENDCASE
+         CASE 'M' : ptr!name := CM; rdlnmno(ptr + arg1)  ENDCASE
+         CASE 'N' : ptr!name := CN  ENDCASE
+         CASE 'P' : ptr!name := CP  ENDCASE
+         CASE 'R' : ptr!name := CR; rd2lnno(ptr + arg1); rdtext(@ptr)  ENDCASE
+         CASE 'T' : ptr!name := CT; rdtnum(ptr + arg1)  ENDCASE
+         CASE 'V' : ptr!name := CV; rdsw(ptr + arg1)  ENDCASE
+         CASE 'W' : ptr!name := CW  ENDCASE
+         CASE '*p' : CASE '*c' : parserror('f')  ENDCASE
+         DEFAULT  : parserror('c')
+      $)
+      ENDCASE
+      CASE 2 :
+      SWITCHON str%1 INTO $(
+         CASE 'B' : TEST str%2 = 'F'
+            THEN $( ptr!name := CBF; rdse(ptr + arg1) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'C' : TEST str%2 = 'G'
+            THEN $( ptr!name := CCG; rdtnum(ptr + arg1) $)
+            ELSE TEST str%2 = 'L'
+            THEN ptr!name := CCL
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'D' : TEST str%2 = 'F'
+            THEN $( ptr!name := CDF; rdse(ptr + arg1) $)
+            ELSE TEST str%2 = 'G'
+            THEN $( ptr!name := CDG; rdtnum(ptr + arg1) $)
+            ELSE TEST str%2 = 'O'
+            THEN $( ptr!name := CDO; rdpname(ptr + arg1, FALSE) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'E' : TEST str%2 = 'G'
+            THEN $( ptr!name := CEG; rdtnum(ptr + arg1)  $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'F' : TEST str%2 = 'N'
+            THEN $( ptr!name := CFN; rdsw(ptr + arg1)  $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'G' : TEST str%2 = 'A'
+            THEN $( ptr!name := CGA; rdqstst(ptr + arg1, ptr + arg2);
+                                                        dummycom(@ptr) $)
+            ELSE TEST str%2 = 'B'
+            THEN $( ptr!name := CGB; rdqstst(ptr + arg1, ptr + arg2);
+                                                        dummycom(@ptr) $)
+            ELSE TEST str%2 = 'E'
+            THEN $( ptr!name := CGE; rdqstst(ptr + arg1, ptr + arg2);
+                                                        dummycom(@ptr) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'I' : TEST str%2 = 'C'
+            THEN ptr!name := CIC
+            ELSE TEST str%2 = 'F'
+            THEN $( ptr!name := CIF; rdse(ptr + arg1); rdthenelse(@ptr) $)
+            ELSE TEST str%2 = 'S'
+            THEN $( ptr!name := CIS; rdst(ptr + arg1, ptr + arg2) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'O' : TEST str%2 = 'N'
+            THEN $( ptr!name := CON; rdse(ptr + arg1); rdcomgp(ptr + arg2);
+                                                            dummycom(@ptr) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'S' :
+            TEST str%2 = 'A'
+            THEN $( ptr!name := CSA; rdqst(ptr + arg1) $)
+            ELSE TEST str%2 = 'B'
+            THEN $( ptr!name := CSB; rdqst(ptr + arg1) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'T' :
+            TEST str%2 = 'L'
+            THEN $( ptr!name := CTL; rdtnum(ptr + arg1) $)
+            ELSE TEST str%2 = 'O'
+            THEN $( ptr!name := CTO; rdbuffno(ptr + arg1) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'U' :
+            TEST str%2 = 'L'
+            THEN $( ptr!name := CUL; rdse(ptr + arg1); rdthenelse(@ptr) $)
+            ELSE TEST str%2 = 'T'
+            THEN $( ptr!name := CUT; rdse(ptr + arg1); rdcomgp(ptr + arg2) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'V' :
+            TEST str%2 = 'C'
+            THEN $( ptr!name := CVC; rdsw(ptr + arg1) $)
+            ELSE TEST str%2 = 'G'
+            THEN $( ptr!name := CVG; rdsw(ptr + arg1) $)
+            ELSE TEST str%2 = 'N'
+            THEN $( ptr!name := CVN; rdsw(ptr + arg1) $)
+            ELSE TEST str%2 = 'T'
+            THEN $( ptr!name := CVT; rdsw(ptr + arg1) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'W' :
+            TEST str%2 = 'H'
+            THEN $( ptr!name := CWH; rdse(ptr + arg1); rdcomgp(ptr + arg2) $)
+            ELSE parserror('c')
+         ENDCASE
+         DEFAULT : parserror('c')
+      $)
+      ENDCASE
+      CASE 3 :
+      SWITCHON str%1 INTO $(
+         CASE 'D' :
+            TEST str%2 = 'F'
+            THEN $(
+               TEST str%3 = 'A'
+               THEN $( ptr!name := CDFA; rdqst(ptr + arg1) $)
+               ELSE TEST str%3 = 'B'
+               THEN $( ptr!name := CDFB; rdqst(ptr + arg1) $)
+               ELSE parserror('c')
+            $)
+            ELSE TEST str%2 = 'T'
+            THEN $(
+               TEST str%3 = 'A'
+               THEN $( ptr!name := CDTA; rdqst(ptr + arg1) $)
+               ELSE TEST str%3 = 'B'
+               THEN $( ptr!name := CDTB; rdqst(ptr + arg1) $)
+               ELSE parserror('c')
+            $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'R' :
+            TEST str%2 = 'P' & str%3 = 'T'
+            THEN $( ptr!name := CRPT; rdcomgp(ptr + arg2) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'S' :
+            TEST str%2 = 'H'
+            THEN TEST str%3 = 'D'
+               THEN ptr!name := CSHD
+               ELSE TEST str%3 = 'G'
+               THEN $( ptr!name := CSHG; rdtnum(ptr + arg1) $)
+               ELSE TEST str%3 = 'S'
+               THEN ptr!name := CSHS
+               ELSE parserror('c')
+            ELSE parserror('c')
+         ENDCASE
+         DEFAULT : parserror('c')
+      $)
+      ENDCASE
+      CASE 4 :
+      SWITCHON str%1 INTO $(
+         CASE 'C' :
+            TEST str%2 = 'O' & str%3 = 'M' & str%4 = 'M'
+            THEN $( ptr!name := CCOMM; rdst(ptr + arg1, ptr + arg2) $)
+            ELSE TEST str%2 = 'P' & str%3 = 'R' & str%4 = 'O'
+            THEN $( ptr!name := CCPROC; rdpname(ptr + arg1, TRUE) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'D' :
+            TEST str%2 = 'B' & str%3 = 'U' & str%4 = 'F'
+            THEN $( ptr!name := CDBUFF; rdbuffno(ptr + arg1)  $)
+            ELSE TEST str%2 = 'R' & str%3 = 'E' & str%4 = 'S'
+            THEN ptr!name := CDREST
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'E' :
+            TEST str%2 = 'R' & str%3 = 'R' & str%4 = 'S'
+            THEN $( ptr!name := CERRSTOP; rdsw(ptr + arg1) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'F' :
+            TEST str%2 = 'L' & str%3 = 'U' & str%4 = 'S'
+            THEN ptr!name := CFLUSH
+            ELSE TEST str%2 = 'R' & str%3 = 'O' & str%4 = 'M'
+            THEN $( ptr!name := CFROM; rdbuffno(ptr + arg1) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'H' :
+            TEST str%2 = 'E' & str%3 = 'L' & str%4 = 'P'
+            THEN ptr!name := CHELP
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'I' :
+            TEST str%2 = 'F' & str%3 = 'E' & str%4 = 'O'
+            THEN $( ptr!name := CIFEOF; rdthenelse(@ptr) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'M' :
+            TEST str%2 = 'X' & str%3 = 'L' & str%4 = 'L'
+            THEN $( ptr!name := CMXLL; rdnum(ptr + arg1) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'P' :
+            TEST str%2 = 'R' & str%3 = 'O' & str%4 = 'C'
+            THEN $( ptr!name := CPROC; rdpname(ptr+arg1, FALSE);
+                                rdcomgp(ptr+arg2); dummycom(@ptr) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'S' :
+            TEST str%2 = 'H' & str%3 = 'B' & str%4 = 'U'
+            THEN  ptr!name := CSHBUFF
+            ELSE TEST str%2 = 'H' & str%3 = 'P' & str%4 = 'R'
+            THEN $( ptr!name := CSHPROC; rdpname(ptr + arg1, TRUE)  $)
+            ELSE TEST str%2 = 'T' & str%3 = 'O' & str%4 = 'P'
+            THEN ptr!name := CSTOP
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'T' :
+            TEST str%2 = 'B' & str%3 = 'U' & str%4 = 'F'
+            THEN $( ptr!name := CTBUFF; rdbuffno(ptr + arg1) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'U' :
+            TEST str%2 = 'L' & str%3 = 'E' & str%4 = 'O'
+            THEN $( ptr!name := CULEOF; rdthenelse(@ptr) $)
+            ELSE TEST str%2 = 'N' & str%3 = 'D' & str%4 = 'O'
+            THEN ptr!name := CUNDO
+            ELSE TEST str%2 = 'T' & str%3 = 'E' & str%4 = 'O'
+            THEN $( ptr!name := CUTEOF; rdcomgp(ptr + arg2) $)
+            ELSE parserror('c')
+         ENDCASE
+         CASE 'W' :
+            TEST str%2 = 'A' & str%3 = 'R' & str%4 = 'N'
+            THEN $( ptr!name := CWARN; RDSW(ptr + arg1) $)
+            ELSE parserror('c')
+         ENDCASE
+         DEFAULT : parserror('c')
+      $)
+      ENDCASE
+      DEFAULT : parserror('c')
+   $)
+   RESULTIS ptr + nextcom
+$)
+
+//
+//   These procedures parse value arguments and place the result
+//  in the given address.
+//
+
+AND rdsw(add) BE $(
+   LET arg = rdvalue()
+   TEST arg = PLUSSYM | arg = MINUSSYM
+   THEN $(
+      rdwithch()
+      !add := arg
+   $)
+   ELSE parserror('a')
+$)
+
+AND rdlnmno(add) BE $(
+   LET arg = rdvalue()
+   IF arg = CURRSYM | arg = OTHERSYM THEN parserror('a')
+   rdwithch()
+   !add := arg
+$)
+
+AND rdlnno(add) BE $(
+   LET arg = rdvalue()
+   IF arg = PLUSSYM | arg = MINUSSYM THEN arg := OTHERSYM
+   UNLESS arg = OTHERSYM THEN rdwithch()
+   !add := arg
+$)
+
+AND rdtnum(add) BE $(
+   LET arg = rdvalue()
+   UNLESS arg > 0 | arg = PLUSSYM THEN arg := OTHERSYM
+   UNLESS arg = OTHERSYM THEN rdwithch()
+   !add := arg
+$)
+
+AND rd2lnno(add1, add2) BE $(
+   !add1 := rdvalue()
+   IF !add1 = PLUSSYM | !add1 = MINUSSYM THEN parserror('i')
+   IF !add1 = OTHERSYM THEN $(
+      !add2 := OTHERSYM
+      RETURN
+   $)
+   rdwithch()
+   !add2 := rdvalue()
+   IF !add2 = PLUSSYM | !add2 = MINUSSYM THEN parserror('i')
+   IF !add2 = OTHERSYM THEN RETURN
+   IF 0 < !add1 & 0 < !add2 < !add1 THEN parserror('i')
+   rdwithch()
+$)
+
+AND rdnum(add) BE $(
+   LET arg = rdvalue()
+   TEST arg < 0
+   THEN arg := OTHERSYM
+   ELSE rdwithch()
+   !add := arg
+$)
+
+AND rdint(add) BE $(
+   LET arg = rdvalue()
+   IF arg < 0 THEN parserror('a')
+   rdwithch()
+   !add := arg
+$)
+
+AND rdbuffno(add) BE $(
+   LET temp = ?
+   rdswithch()
+   TEST '0' <= withch <= '9'
+   THEN $(
+      temp := rdwithn()
+      UNLESS temp <= numbuff THEN parserror('a')
+      rdwithch()
+   $)
+   ELSE temp := 0
+   !add := temp
+$)
+
+AND rdvalue() = VALOF $(
+   //
+   //   Returns a number or +, -, * or . if they are next on the CIS.
+   //
+   LET n = ?
+   rdswithch()
+   TEST '0' <= withch <= '9'
+   THEN $(
+      n:= rdwithn()
+      IF n = 0 THEN parserror('z')
+   $)
+   ELSE SWITCHON withch INTO $(
+      CASE '+' : n := PLUSSYM  ENDCASE
+      CASE '-' : n := MINUSSYM  ENDCASE
+      CASE '.' : n := CURRSYM  ENDCASE
+      CASE '**' : n := ENDSYM  ENDCASE
+      DEFAULT  : n := OTHERSYM;  ENDCASE
+   $)
+   RESULTIS n
+$)
+
+AND rdwithn() = VALOF $(
+   //
+   //   Reads a positive integer.
+   //
+   LET sum = 0
+   $(
+      sum := (sum * 10) + withch - '0'
+      withch := rdch()
+      UNLESS '0' <= withch <= '9' THEN BREAK
+      withcol := withcol + 1
+   $) REPEAT
+   unrdch()
+   IF sum <= 0 THEN parserror('z')
+   RESULTIS sum
+$)
+
+//
+//   These procedures parse names, keeping the first four characters.
+//
+
+AND rdpname(add, nullallowed) BE $(
+   //
+   //   Nullallowed = TRUE implies that the argument is optional.
+   //
+   LET ptr = getcomsp(namesize)
+   !add := ptr
+   rdswithch()
+   withch := capitalch(withch)
+   TEST 'A' <= withch <= 'Z'
+   THEN rdcname(ptr)
+   ELSE TEST nullallowed
+      THEN ptr%0 := 0
+      ELSE parserror('a')
+$)
+
+AND rdcname(str) BE $(
+   //
+   //   Reads a name and places the first four letters into str.
+   //
+   LET i = 1
+   IF '0' <= withch <= '9' THEN $(
+      str%0 := 0
+      RETURN
+   $)
+   str%1 := capitalch(withch)
+   $(
+      rdwithch()
+      withch := capitalch(withch)
+      UNLESS 'A' <= withch <= 'Z' THEN BREAK
+      IF i > 3 THEN LOOP
+      i := i + 1
+      str%i := withch
+   $) REPEAT
+   str%0 := i
+$)
+
+//
+//   These procedures parse string and search expression arguments
+//
+
+AND rdst(add1, add2) BE $(
+   //
+   //   Parses a string, the string separator is placed in add1.
+   //
+   rdswithch()
+   !add1 := withch
+   !add2 := rds()
+   UNLESS withch = '*n' DO rdwithch()
+$)
+
+AND rdqst(add) BE $(
+   //
+   //   Parses a qualified string.
+   //
+   !add := rdqs(FALSE)
+   UNLESS withch = '*n' THEN rdwithch()
+$)
+
+AND rdqstst(add1, add2) BE $(
+   //
+   //   Parses a qualified string followed by an unqualified one.
+   //
+   !add1 := rdqs(FALSE)
+   TEST withch = '*n'
+   THEN $(
+      !add2 := getcomsp(1)
+      (!add2)%0 := 0
+   $)
+   ELSE $(
+      !add2 := rds()
+      UNLESS withch = '*n' DO rdwithch()
+   $)
+$)
+
+AND rdse(add) BE $(
+   //
+   //   Reads a search expression, which is either &, a qualified string or
+   //  a sequence of them enclosed in brackets.
+   //
+   LET ptr = ?
+   rdswithch()
+   TEST withch = '&' | withch ='*n'
+   THEN $(
+      ptr := csebuff
+      UNLESS withch = '*n' DO rdwithch()
+   $)
+   ELSE $(
+      ptr := getcomsp(SENEXT + 1)
+      TEST withch = '('
+      THEN $(
+         ptr!SEQS := null
+         UNLESS withch = '*n' DO rdwithch()
+         rdseseq(ptr + SESEQ)
+         UNLESS withch = ')' THEN parserror('i')
+         rdwithch()
+      $)
+      ELSE $(
+         ptr!SESEQ := null
+         ptr!SEQS := rdqs(TRUE)
+         UNLESS withch = '*n' DO rdwithch()
+      $)
+      ptr!SENEXT := null
+   $)
+   !add := ptr
+$)
+
+AND rdseseq(add) BE $(
+   //
+   //   Reads a sequence of qualified string arguments separated by &
+   //  or | until a closing bracket is reached.
+   //
+   LET find() BE $(
+      //
+      //   Finds the next significant character, ignoring new lines or
+      //  comments.
+      //
+      UNTIL withch NE '\' & withch NE '*n' & withch NE ' ' DO $(
+         rdswithch()
+         IF withch = '\' THEN UNTIL withch = '*n' DO rdwithch()
+         UNLESS withch = '*n' THEN BREAK
+         IF interactive THEN $( wrch('+'); wrch(forceoutch) $)
+         withcol := 0
+         rdwithch()
+      $)
+   $)
+   $(
+      find()
+      IF withch = '&' THEN parserror('i')
+      rdse(add)
+      find()
+      TEST withch = '&'
+      THEN (!add)!SEAND := TRUE
+      ELSE TEST withch = '|'
+         THEN (!add)!SEAND := FALSE
+         ELSE RETURN
+      rdwithch()
+      add := (!add) + SENEXT
+   $) REPEAT
+$)
+
+AND rdqs(nallowed) = VALOF $(
+   //
+   //   Reads a qualified string argument. Nallowed is true implies that
+   //  the N qualifier is permisable.
+   //
+   LET ptr = getcomsp(QSTR + 1)
+   FOR i = QN TO QP DO ptr!i := FALSE
+   ptr!QINT := 0
+   rdswithch()
+   withch := capitalch(withch)
+   WHILE 'A' <= withch <= 'Z' | '0' <= withch <= '9' DO $(
+      SWITCHON withch INTO $(
+         CASE 'N' : IF (NOT nallowed) | ptr!QN THEN parserror('q')
+            ptr!QN := TRUE
+         ENDCASE
+         CASE 'U' : IF ptr!QU THEN parserror('q')
+            ptr!QU := TRUE
+         ENDCASE
+         CASE 'W' : IF ptr!QW THEN parserror('q')
+            ptr!QW := TRUE
+         ENDCASE
+         CASE 'S' : IF ptr!QS THEN parserror('q')
+            ptr!QS := TRUE
+         ENDCASE
+         CASE 'E' : UNLESS ptr!QINT = 0 THEN parserror('q')
+            ptr!QE := TRUE
+            ptr!QINT := -1
+         ENDCASE
+         CASE 'B' : UNLESS ptr!QINT = 0 THEN parserror('q')
+            ptr!QE := FALSE
+            ptr!QINT := -1
+         ENDCASE
+         CASE 'P' : UNLESS ptr!QINT = 0 THEN parserror('q')
+            ptr!QP := TRUE
+            ptr!QINT := -1
+         ENDCASE
+         CASE 'L' : UNLESS (NOT ptr!QL) & ptr!QINT >= 0 THEN parserror('q')
+            IF ptr!QINT = 0 THEN ptr!QINT := 1
+            ptr!QL := TRUE
+         ENDCASE
+         DEFAULT : TEST '0' <= withch <= '9'
+            THEN $(
+               UNLESS 0 <= ptr!QINT <= 1 THEN parserror('q')
+               ptr!QINT := rdwithn()
+            $)
+            ELSE parserror('u')
+         ENDCASE
+      $)
+      rdwithch()
+      rdswithch()
+      withch := capitalch(withch)
+   $)
+   IF ptr!QINT = 0 THEN ptr!QINT := 1
+   ptr!QSEP := withch
+   ptr!QSTR := rds()
+   RESULTIS ptr
+$)
+
+AND rds() = VALOF $(
+   //
+   //   Reads a string argument from the CIS and returns a pointer to it. It is
+   //  stored in the command buffer.
+   //
+   LET v = VEC 256
+   LET sep, size, ptr = withch, 0, ?
+   UNLESS ( sep = '/' | sep = '**' | sep = '+' | sep = '-' | sep = '.' |
+      sep = ',' | sep = ':' | sep = '?' | sep = '!' | sep = '*'' | sep = '"' )
+   THEN parserror('a')
+   rdwithch()
+   $(
+      IF withch = sep | withch = '*n' THEN BREAK
+      IF size = 256 THEN parserror('s')
+      size := size + 1
+      v!size := withch
+      rdwithch()
+   $) REPEAT
+   ptr := getcomsp(namesize)
+   ptr%0 := size
+   FOR i = 1 TO size DO ptr%i := v!i
+   RESULTIS ptr
+$)
+
+//
+//   These procedures parse text arguements.
+//
+
+AND rdtext(add) BE $(
+   //
+   //   Parses material to be inserted by a I or R command.
+   //
+   LET ptr = getcomsp(4)
+   LET st = "    "
+   (!add)!nextcom := ptr
+   !add := ptr
+   rdswithch()
+   IF withch = '\' THEN UNTIL withch = '*n' DO rdwithch()
+   IF withch = '*n'
+   THEN $(
+      TEST clevel = 1
+      THEN ptr!name := IMTEXT
+      ELSE $(
+         LET tempst = VEC (1 + (MAXSTRLENGTH / BYTESPERWORD))
+         LET length, temp = ?, ?
+         LET add2 = ptr + arg1
+         ptr!name := IMINB
+         WHILE rdtextin(tempst) DO $(
+            length := (tempst%0) / BYTESPERWORD + 2
+            temp := getcomsp(length)
+            FOR i = 1 TO length DO temp!i := tempst!(i - 1)
+            !add2 := temp
+            add2 := temp
+         $)
+         !add2 := null
+      $)
+      RETURN
+   $)
+   rdcname(st)
+   IF st%0 = 4 THEN $(
+      IF st%1 = 'B' & st%2 = 'U' & st%3 = 'F' & st%4 = 'F' THEN $(
+         ptr!name := IMBUFF
+         rdbuffno(ptr + arg1)
+         IF ptr!arg1 = 0 THEN parserror('a')
+         RETURN
+      $)
+      IF st%1 = 'C' & st%2 = 'O' & st%3 = 'P' & st%4 = 'Y' THEN $(
+         ptr!name := IMCOPY
+         rdbuffno(ptr + arg1)
+         IF ptr!arg1 = 0 THEN parserror('a')
+         RETURN
+      $)
+   $)
+   parserror('a')
+$)
+
+AND rdtextin(st) = VALOF $(
+   //
+   //   Reads a line of text into the string variable st. Returns true
+   //  unless the line contained exactly "z" or "Z".
+   //
+   LET i, ch = 0, rdch()
+   UNTIL ch = '*n' DO $(
+      IF i = mxll THEN $(
+         unrdch()
+         IF swwarn THEN writes("WARNING - Input line too long*n")
+         BREAK
+      $)
+      i := i + 1
+      st%i := ch
+      ch := rdch()
+   $)
+   st%0 := i
+   TEST st%0 = 1 & (st%1 = 'z' | st%1 = 'Z')
+   THEN RESULTIS FALSE
+   ELSE RESULTIS TRUE
+$)
+
+//
+//    These parse command group arguments
+//
+
+AND rdcomgp(add) BE $(
+   //
+   //   Parses a command group defined as either  <simplecommand>  or
+   //  <bra> <command sequence> <ket>  . A pointer to the result is
+   //  placed in address add.
+   //
+   clevel := clevel + 1
+   IF clevel >= 20 THEN parserror('l')
+   rdswithch()
+   IF withch = '*n' THEN parserror('g')
+   TEST withch = '('
+   THEN $(
+      rdwithch()
+      rdcomseq(add)
+      TEST withch = ')'
+      THEN $(
+         IF clevel < 1 THEN parserror('p')
+         rdwithch()
+      $)
+      ELSE parserror('p')
+   $)
+   ELSE $(
+      LET str, temp = "    ", ?
+      rdcname(str)
+      temp := rdscom(add, str)
+      !temp := null
+      IF (!(add + name - arg2) = CINT) & ((!add)!name & cmask) = 0 THEN
+                             !(add + arg1 - arg2) := 1
+   $)
+   clevel := clevel - 1
+$)
+
+AND rdthenelse(add) BE $(
+   //
+   //   Parses the arguements of an IF type command, ie a THEN command
+   //  group followed by an indeterminate number of ELIF and ELUL command
+   //  groups optionally followed by a ELSE command group.
+   //
+   LET str = "    "
+   LET tempadd = !add + nextcom
+   rdswithch()
+   IF withch = '*n' THEN parserror('g')
+   TEST  withch = '('
+   THEN rdcomgp(!add + arg2)
+   ELSE $(
+      rdcname(str)
+      TEST str%0 = 4 & str%1 = 'T' & str%2 = 'H' & str%3 = 'E' & str%4 = 'N'
+      THEN rdcomgp(!add + arg2)
+      ELSE $(
+         LET temp = ?
+         clevel := clevel + 1
+         temp := rdscom(!add + arg2, str)
+         clevel := clevel - 1
+         !temp := null
+      $)
+   $)
+   rdswithch()
+   UNLESS withch = 'E' | withch = 'e' THEN RETURN
+   rdcname(str)
+   TEST str%0 = 4 & str%1 = 'E' & str%2 = 'L'
+   THEN $(
+      LET ptr = getcomsp(4)
+      !tempadd := ptr
+      !add := ptr
+      TEST str%3 = 'S' & str%4 = 'E'
+      THEN $(
+         ptr!name := CELSE
+         rdcomgp(ptr + arg2)
+      $)
+      ELSE TEST str%3 = 'I' & str%4 = 'F'
+      THEN $(
+         ptr!name := CELIF
+         rdse(ptr + arg1)
+         rdthenelse(add)
+      $)
+      ELSE TEST str%3 = 'U' & str%4 = 'L'
+      THEN $(
+         ptr!name := CELUL
+         rdse(ptr + arg1)
+         rdthenelse(add)
+      $)
+      ELSE parserror('c')
+   $)
+   ELSE $(
+      rdscom(tempadd, str)
+      !add := !tempadd
+   $)
+$)
+
+//
+//    Miscellanous parsing procedures
+//
+
+AND dummycom(add) BE $(
+   LET ptr = getcomsp(4)
+   ptr!name := CDUMMY
+   (!add)!nextcom := ptr
+   !add := ptr
+$)
+
+AND capitalch(ch) =
+  'a' <= ch <= 'z' -> ch + 'A' - 'a',
+   ch
+
+AND rdwithch() BE $(
+   withcol := withcol + 1
+   withch := rdch()
+$)
+
+AND rdswithch() BE $(
+   //
+   //   Finds the next non blank character in the input starting at
+   //  the current character.
+   //
+   UNTIL withch NE ' ' DO $(
+      withcol := withcol + 1
+      withch := rdch()
+   $)
+$)
+
+AND parserror(ch) BE $(
+   //
+   //   Called if a parsing error is found. Flags the error, prints out
+   //  an error message and terminates the run or abandons the current
+   //  line of input and the contents of the current line buffer
+   //  according to switch ERRSTOP.
+   //
+   FOR i = 1 TO (withcol - 1) DO wrch(' ')
+   writes(">*n****")
+   UNLESS withch = ENDSTREAMCH THEN UNTIL withch = '*n' DO withch := rdch()
+   withcol := 0
+   clevel := 1
+   SWITCHON ch INTO $(
+      CASE 'a' : writes("Argument expected")  ENDCASE
+      CASE 'b' : writes("Too much inserted material")  ENDCASE
+      CASE 'c' : writes("Unknown command")  ENDCASE
+      CASE 'f' : writes("Significant control character")  ENDCASE
+      CASE 'g' : writes("Command group expected")  ENDCASE
+      CASE 'i' : writes("Illegal argument")  ENDCASE
+      CASE 'l' : writes("Commands nested too deep")  ENDCASE
+      CASE 'o' : writes("Command buffer overflow, command sequence too long")
+         ENDCASE
+      CASE 'p' : writes("Parenthesis error")  ENDCASE
+      CASE 'q' : writes("Inconsistent or repeated string qualifiers")  ENDCASE
+      CASE 'r' : writes("Command is not repeatable")  ENDCASE
+      CASE 's' : writes("String argument too long")  ENDCASE
+      CASE 'u' : writes("Unknown string qualifier")  ENDCASE
+      CASE 'z' : writes("Zero not allowed")  ENDCASE
+      DEFAULT : writes("Unidentified parsing error")
+   $)
+   wrch('*n')
+   IF swerrstop THEN tidy.up.and.stop(8)
+   longjump(plab1, lab1)
+$)
+
+AND getcomsp(n) = VALOF $(
+   //
+   //   Allocates a n word vector from the command buffer and returns a pointer
+   //  to it. Checks for overflow.
+   //
+   LET temp = ptrcbuff
+   ptrcbuff := ptrcbuff + n
+   IF ptrcbuff >= limcbuff
+   THEN parserror('o')
+   RESULTIS temp
+$)
+
+.
+
+SECTION "WRITE"
+
+GET ""
+
+///////////////////////////////////////////////////////////////////////////////
+//                                                                           //
+//      This section contains procedure wrcomseq, which writes the pointed   //
+//     to command sequence to the current output, and also those procedures  //
+//     which it calls.                                                       //
+//                                                                           //
+///////////////////////////////////////////////////////////////////////////////
+
+LET wrcomseq(ptr) BE $(
+   //
+   //   Prints out the pointed to command sequence to the current output.
+   //
+   IF ptr = null THEN RETURN
+   $(
+      wrscom(@ptr)
+      ptr := ptr!nextcom
+      IF ptr = null THEN RETURN
+      writes("; ")
+   $) REPEAT
+$)
+
+AND wrscom(add) BE $(
+   //
+   //   Writes a single command which a pointer to is held in address add.
+   //  Add is given to the procedure as the command may be of more than one
+   //  command block.
+   //
+   LET ptr = !add
+   SWITCHON ptr!name INTO $(
+      CASE CINT :
+         UNLESS ptr!arg1 = 1 THEN writen(ptr!arg1)
+         wrcomgp(ptr!arg2)
+      ENDCASE
+      CASE CA : writes("A"); wrqstst(ptr!arg1, ptr!arg2)  ENDCASE
+      CASE CB : writes("B"); wrqstst(ptr!arg1, ptr!arg2)  ENDCASE
+      CASE CD : writes("D"); wr2values(ptr!arg1, ptr!arg2)  ENDCASE
+      CASE CE : writes("E"); wrqstst(ptr!arg1, ptr!arg2)  ENDCASE
+      CASE CF : writes("F"); wrse(ptr!arg1, TRUE)  ENDCASE
+      CASE CI : writes("I"); wrvalue(ptr!arg1); wrtext(add)  ENDCASE
+      CASE CM : writes("M"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CN : writes("N") ENDCASE
+      CASE CP : writes("P") ENDCASE
+      CASE CR : writes("R"); wr2values(ptr!arg1, ptr!arg2); wrtext(add)  ENDCASE
+      CASE CT : writes("T"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CV : writes("V"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CW : writes("W") ENDCASE
+      CASE CBF : writes("BF"); wrse(ptr!arg1, TRUE)  ENDCASE
+      CASE CCG : writes("CG"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CCL : writes("CL") ENDCASE
+      CASE CDF : writes("DF"); wrse(ptr!arg1, TRUE)  ENDCASE
+      CASE CDG : writes("DG"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CDO : writes("DO"); wrname(ptr!arg1)  ENDCASE
+      CASE CEG : writes("EG"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CEQ : writes("="); wrvalue(ptr!arg1)  ENDCASE
+      CASE CFN : writes("FN"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CGA : writes("GA"); wrqstst(ptr!arg1, ptr!arg2);
+                                       wrdummy(add)   ENDCASE
+      CASE CGB : writes("GB"); wrqstst(ptr!arg1, ptr!arg2);
+                                       wrdummy(add)   ENDCASE
+      CASE CGE : writes("GE"); wrqstst(ptr!arg1, ptr!arg2);
+                                       wrdummy(add)   ENDCASE
+      CASE CIC : writes("IC") ENDCASE
+      CASE CIF : writes("IF"); wrse(ptr!arg1, TRUE); wrthenelse(add)  ENDCASE
+      CASE CIS : writes("IS"); wrst(ptr!arg1, ptr!arg2) ENDCASE
+      CASE CON : writes("ON"); wrse(ptr!arg1, TRUE); wrcomgp(ptr!arg2);
+                                       wrdummy(add)    ENDCASE
+      CASE CQM : writes("?") ENDCASE
+      CASE CSA : writes("SA"); wrqst(ptr!arg1)  ENDCASE
+      CASE CSB : writes("SB"); wrqst(ptr!arg1)  ENDCASE
+      CASE CTL : writes("TL"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CTO : writes("TO"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CUL : writes("UL"); wrse(ptr!arg1, TRUE); wrthenelse(add)   ENDCASE
+      CASE CUT : writes("UT"); wrse(ptr!arg1, TRUE); wrcomgp(ptr!arg2)   ENDCASE
+      CASE CVC : writes("VC"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CVG : writes("VG"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CVN : writes("VN"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CVT : writes("VT"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CWH : writes("WH"); wrse(ptr!arg1, TRUE); wrcomgp(ptr!arg2)  ENDCASE
+      CASE CDFA : writes("DFA"); wrqst(ptr!arg1)  ENDCASE
+      CASE CDFB : writes("DFB"); wrqst(ptr!arg1)  ENDCASE
+      CASE CDTA : writes("DTA"); wrqst(ptr!arg1)  ENDCASE
+      CASE CDTB : writes("DTB"); wrqst(ptr!arg1)  ENDCASE
+      CASE CRPT : writes("RPT"); wrcomgp(ptr!arg2)  ENDCASE
+      CASE CSHD : writes("SHD")   ENDCASE
+      CASE CSHG : writes("SHG"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CSHS : writes("SHS")  ENDCASE
+      CASE CCOMM : writes("COMM"); wrst(ptr!arg1, ptr!arg2) ENDCASE
+      CASE CCPROC : writes("CPROC"); wrname(ptr!arg1) ENDCASE
+      CASE CDBUFF : writes("DBUFF"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CDREST : writes("DREST") ENDCASE
+      CASE CERRSTOP : writes("ERRSTOP"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CFLUSH : writes("FLUSH") ENDCASE
+      CASE CFROM : writes("FROM"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CHELP : writes("HELP") ENDCASE
+      CASE CIFEOF : writes("IFEOF"); wrthenelse(add)  ENDCASE
+      CASE CMXLL : writes("MXLL"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CPROC : writes("PROC"); wrname(ptr!arg1);
+                       wrcomgp(ptr!arg2); wrdummy(add)   ENDCASE
+      CASE CRLSC : writes("*'")   ENDCASE
+      CASE CSHBUFF : writes("SHBUFF")   ENDCASE
+      CASE CSHPROC : writes("SHPROC"); wrname(ptr!arg1)   ENDCASE
+      CASE CSTOP : writes("STOP") ENDCASE
+      CASE CTBUFF : writes("TBUFF"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CULEOF : writes("ULEOF"); wrthenelse(add)  ENDCASE
+      CASE CUNDO : writes("UNDO") ENDCASE
+      CASE CUTEOF : writes("UTEOF"); wrcomgp(ptr!arg2)  ENDCASE
+      CASE CWARN : writes("WARN"); wrvalue(ptr!arg1)  ENDCASE
+      CASE CDUMMY : writes("DUMMY") ENDCASE
+      DEFAULT :
+         writef("ERROR unrecognised command - %n*n", ptr!name)
+         longjump(plab1, lab1)
+   $)
+$)
+
+AND wrdummy(add) BE $(
+   LET ptr = (!add)!nextcom
+   // writes(" wrdummy called*n")
+   UNLESS ptr = null THEN !add := ptr
+$)
+
+//
+//      The following procedures are called by wrscom and print out the
+//     command arguments they are given -
+//
+//     wrvalue    outputs +, -, ., *, <integer> or <blank>
+//     wr2values       2 of the above
+//     wrname          a name
+//     wrst            a string bracketed by its separator
+//     wrqst           a qualified string
+//     wrqstst         a qualified string followed by a unqualified one
+//     wrse            a search expression
+//     wrcomgp         a command group
+//     wrtext          a text argument
+//     wrthenelse      conditional arguments
+//
+
+AND wrvalue(no) BE $(
+   SWITCHON no INTO $(
+      CASE PLUSSYM : wrch('+') ENDCASE
+      CASE MINUSSYM : wrch('-') ENDCASE
+      CASE CURRSYM : wrch('.') ENDCASE
+      CASE ENDSYM : wrch('**') ENDCASE
+      CASE OTHERSYM : CASE 0 : ENDCASE
+      DEFAULT : writen(no)
+   $)
+$)
+
+AND wr2values(a1, a2) BE $(
+   wrvalue(a1)
+   IF a2 = OTHERSYM THEN RETURN
+   wrch(' ')
+   wrvalue(a2)
+$)
+
+AND wrname(str) BE $(
+   wrch(' ')
+   writes(str)
+$)
+
+AND wrst(sep, str) BE $(
+   wrch(sep)
+   writes(str)
+   wrch(sep)
+$)
+
+AND wrqst(qst) BE $(
+   wrch(' ')
+   IF qst!QN THEN wrch('N')
+   IF qst!QW THEN wrch('W')
+   IF qst!QU THEN wrch('U')
+   IF qst!QS THEN wrch('S')
+   TEST qst!QINT < 0
+   THEN $(
+      TEST qst!QP
+      THEN wrch('P')
+      ELSE TEST qst!QE
+         THEN wrch('E')
+         ELSE wrch('B')
+   $)
+   ELSE $(
+      UNLESS qst!QINT = 1 DO writen(qst!QINT)
+      IF qst!QL THEN wrch('L')
+   $)
+   wrch(qst!QSEP)
+   writes(qst!QSTR)
+   wrch(qst!QSEP)
+$)
+
+AND wrqstst(qst, st) BE $(
+   wrqst(qst)
+   writes(st)
+   wrch(qst!QSEP)
+$)
+
+AND wrse(se, check) BE $(
+   IF check & (se = csebuff) THEN $( writes(" &")  RETURN $)
+   TEST se!SESEQ = null
+   THEN wrqst(se!SEQS)
+   ELSE $(
+      writes(" (")
+      wrse(se!SESEQ, TRUE)
+      writes(" )")
+   $)
+   IF se!SENEXT = null THEN RETURN
+   TEST se!SEAND
+   THEN writes(" &")
+   ELSE writes(" |")
+   wrse(se!SENEXT, TRUE)
+$)
+
+AND wrcomgp(ptr) BE $(
+   writes(" ( ")
+   wrcomseq(ptr)
+   writes(" )")
+$)
+
+AND wrtext(add) BE $(
+   //
+   //   Shifts the pointer held in add on one command block and writes
+   //  out the new command block. Gives an error if the new block does
+   //  not indicate inserted material.
+   //
+   LET ptr = (!add)!nextcom
+   !add := ptr
+   SWITCHON ptr!name INTO $(
+      CASE IMTEXT : ENDCASE
+      CASE IMBUFF : writes(" BUFF"); wrvalue(ptr!arg1)  ENDCASE
+      CASE IMCOPY : writes(" COPY"); wrvalue(ptr!arg1)  ENDCASE
+      CASE IMINB :
+         ptr := ptr!arg1
+         wrch('*n')
+         UNTIL ptr = null DO $(
+            writes(ptr + 1)
+            wrch('*n')
+            ptr := !ptr
+         $)
+         writes("z*n")
+      ENDCASE
+      DEFAULT : writes("ERROR inserted material lost")
+   $)
+$)
+
+AND wrthenelse(add) BE $(
+   //
+   //   Writes out the arguements of an conditional command including any
+   //  associated ELIF or ELUL commands. Moves the pointer in add on as
+   //  required.
+   //
+   LET com = !add
+   writes(" THEN")
+   wrcomgp(com!arg2)
+   com := com!nextcom
+   IF com = null THEN RETURN
+   SWITCHON com!name INTO $(
+      CASE CELSE :
+         writes(" ELSE")
+         wrcomgp(com!arg2)
+         !add := com
+      ENDCASE
+      CASE CELIF :
+         writes(" ELIF")
+         wrse(com!arg1, TRUE)
+         !add := com
+         wrthenelse(add)
+      ENDCASE
+      CASE CELUL :
+         writes(" ELUL")
+         wrse(com!arg1, TRUE)
+         !add := com
+         wrthenelse(add)
+      ENDCASE
+   $)
+$)
+
+.
+
+SECTION "COPY"
+
+GET ""
+
+   /////////////////////////////////////////////////////////////////////
+   //                                                                 //
+   //   This section holds procedures to copy command sequences       //
+   //  and to execute global and procedure commands                   //
+   //                                                                 //
+   /////////////////////////////////////////////////////////////////////
+
+LET proccpy(add, pcommand) BE $(
+   //
+   //   This procedure executes PROC (if pcommand is TRUE) or
+   //  creates new global commands (if FALSE).
+   //
+   LET ptr = !add
+   LET size = ptr!nextcom - ptr
+   !add := ptr!nextcom
+
+   IF pcommand & (findproc(ptr!arg1, FALSE) NE 0) THEN execerror('x', ptr!arg1)
+
+   // writef("Size of space allocated for copying is %n*n", size)
+
+   cpysp := getspace(size + gsize)
+   ptrcpysp := cpysp + gsize
+   limcpysp := ptrcpysp + size
+
+   TEST pcommand
+   THEN $(
+      cpysp!pnext := proclist
+      proclist := cpysp
+      proclist!pname := cpyst(ptr!arg1)
+
+      cpycg(ptr!arg2, proclist + pbody)
+   $)
+   ELSE $(
+      cpysp!gcount := 0
+      cpysp!genabled := TRUE
+      cpysp!gcom := cpyscom(ptr)
+      cpysp!gcom!nextcom := null
+      cpysp!gnext := null
+      TEST glist = null
+      THEN $(
+         cpysp!gnumber := 1
+         glist := cpysp
+         endglist := cpysp
+      $)
+      ELSE $(
+         cpysp!gnumber := endglist!gnumber + 1
+         endglist!gnext := cpysp
+         endglist := cpysp
+      $)
+      IF lineinput THEN doglobals(endglist)
+   $)
+   // writef("Copying to %n*n", cpysp)
+   // FOR i = 0 to 20 DO writef("word %n is %n*n", i, cpysp!i)
+$)
+
+AND newcse(se) BE $(
+   IF se = csebuff THEN $(
+      UNLESS cseopen THEN execerror('r')
+      RETURN
+   $)
+   cseopen := TRUE
+   cpysp := csebuff
+   limcpysp := csebuff + csebsize
+   ptrcpysp := csebuff
+   cpyse(se)
+$)
+
+AND newlsc(com) BE $(
+   cpysp := lscbuff
+   limcpysp := lscbuff + lscbsize
+   ptrcpysp := lscbuff
+   cpyscom(com)
+   cpysp!nextcom := null
+$)
+
+//
+//    These procedures copy a command sequence.
+//
+
+AND cpycg(ptr, add) BE $(
+   UNTIL ptr = null DO $(
+      !add := cpyscom(ptr)
+      ptr := ptr!nextcom
+      add := !add + nextcom
+   $)
+   !add := null
+$)
+
+AND cpyscom(ptr) = VALOF $(
+   LET v = getcpysp(4)
+   v!name := ptr!name
+   SWITCHON ptr!name INTO $(
+      CASE CDO : CASE CCPROC : CASE CPROC : CASE CSHPROC :
+         v!arg1 := cpyst(ptr!arg1)   ENDCASE
+      CASE CA : CASE CB : CASE CE : CASE CGA : CASE CGB : CASE CGE :
+      CASE CSA : CASE CSB : CASE CDFA : CASE CDFB : CASE CDTA : CASE CDTB :
+         v!arg1 := cpyqst(ptr!arg1)  ENDCASE
+      CASE CF : CASE CBF : CASE CDF : CASE CIF : CASE CON : CASE CUL :
+      CASE CUT : CASE CWH : CASE CELIF : CASE CELUL :
+         v!arg1 := cpyse(ptr!arg1)  ENDCASE
+      CASE IMINB :
+         cpytext(ptr!arg1, v + arg1)   ENDCASE
+      DEFAULT :
+         v!arg1 := ptr!arg1
+   $)
+   SWITCHON ptr!name INTO $(
+      CASE CA : CASE CB : CASE CE : CASE CGA : CASE CGB : CASE CGE :
+      CASE CIS : CASE CCOMM :
+         v!arg2 := cpyst(ptr!arg2)   ENDCASE
+      CASE CIF : CASE CON : CASE CUL : CASE CUT : CASE CWH : CASE CRPT :
+      CASE CIFEOF : CASE CPROC : CASE CULEOF : CASE CUTEOF : CASE CELIF :
+      CASE CELSE : CASE CELUL :
+         cpycg(ptr!arg2, v + arg2)   ENDCASE
+      DEFAULT :
+         v!arg2 := ptr!arg2
+   $)
+   RESULTIS v
+$)
+
+AND cpyst(st) = VALOF $(
+   LET wordlength = 1 + ((st%0) / BYTESPERWORD)
+   LET ptr = getcpysp(wordlength)
+   FOR i = 0 TO (wordlength - 1) DO ptr!i := st!i
+   RESULTIS ptr
+$)
+
+AND cpyqst(qst) = VALOF $(
+   LET ptr = getcpysp(1 + QSTR)
+   FOR i = 0 TO QSTR DO ptr!i := qst!i
+   ptr!QSTR := cpyst(qst!QSTR)
+   RESULTIS ptr
+$)
+
+AND cpyse(se) = VALOF $(
+   LET ptr = ?
+   IF se = csebuff THEN RESULTIS csebuff
+   ptr := getcpysp(1 + SENEXT)
+   TEST se!SESEQ = null
+   THEN $(
+      ptr!SESEQ := null
+      ptr!SEQS := cpyqst(se!SEQS)
+   $)
+   ELSE $(
+      ptr!SEQS := null
+      ptr!SESEQ := cpyse(se!SESEQ)
+   $)
+   TEST se!SENEXT = null
+   THEN ptr!SENEXT := null
+   ELSE $(
+      ptr!SEAND := se!SEAND
+      ptr!SENEXT := cpyse(se!SENEXT)
+   $)
+   RESULTIS ptr
+$)
+
+AND cpytext(text, add) BE $(
+   UNTIL text = null DO $(
+      LET wordlength = (text + 1)%0 + 1
+      LET ptr = getcpysp(wordlength)
+      FOR i = 1 TO wordlength - 1 DO ptr!i := text!i
+      !add := ptr
+      add := ptr
+      text := !text
+   $)
+$)
+
+AND getcpysp(size) = VALOF $(
+   LET temp = ptrcpysp
+   // writef("Getcpysp called to allocate %n words*n", size)
+   ptrcpysp := ptrcpysp + size
+   IF ptrcpysp > limcpysp THEN $(
+      IF swwarn THEN writes("WARNING - search expression too long for re-use*n")
+      cseopen := FALSE
+      ptrcpysp := cpysp
+      RESULTIS cpysp
+   $)
+   RESULTIS temp
+$)
+
+
+//
+//    These procedures execute procedure commands
+//
+
+AND procdo(namest) BE $(
+   LET add = findproc(namest, TRUE)
+   //   writes("DO about to execute"); wrcomseq((!add)!pbody);wrch('*n')
+   obeycomseq((!add)!pbody)
+$)
+
+AND procshproc(namest) BE $(
+   LET shproc(ptr) BE $(
+      writef("%s*n     ", ptr!pname)
+      wrcomseq(ptr!pbody)
+      wrch('*n')
+   $)
+   TEST namest%0 = 0
+   THEN $(
+      LET ptr = proclist
+      UNTIL ptr = null DO $(
+         shproc(ptr)
+         ptr := ptr!pnext
+      $)
+   $)
+   ELSE $(
+      LET add = findproc(namest, TRUE)
+      shproc(!add)
+   $)
+$)
+
+AND proccproc(namest) BE $(
+   TEST namest%0 = 0
+   THEN $(
+      LET ptr = proclist
+      UNTIL proclist = null DO $(
+         ptr := proclist!pnext
+         freespace(proclist)
+         proclist := ptr
+      $)
+   $)
+   ELSE $(
+      LET add = findproc(namest, TRUE)
+      LET ptr = (!add)!pnext
+      freespace(!add)
+      !add := ptr
+   $)
+$)
+
+AND findproc(namest, callerror) = VALOF $(
+   LET add = @proclist
+   AND l, st, cond = namest%0, ?, ?
+   //   writef("namest is %s*n", namest)
+   UNTIL !add = null DO $(
+      st := (!add)!pname
+   //      writef("comparing against %s*n", st)
+      cond := TRUE
+      FOR i = 0 TO l DO $(
+         UNLESS st%i = namest%i THEN cond := FALSE
+      $)
+      IF cond THEN RESULTIS add
+      add := !add + pnext
+   $)
+   IF callerror THEN execerror('p', namest)
+   RESULTIS 0
+$)
+
+//
+//    These procedures execute global commands.
+//
+
+AND procdeg(no, enable) BE $(
+   TEST no = OTHERSYM
+   THEN $(
+      LET ptr = glist
+      UNTIL ptr = null DO $(
+         ptr!genabled := enable
+         ptr := ptr!gnext
+      $)
+   $)
+   ELSE TEST no = PLUSSYM
+   THEN UNLESS endglist = null
+                  THEN endglist!genabled := enable
+   ELSE $(
+      LET add = findglobal(no)
+      (!add)!genabled := enable
+   $)
+$)
+
+AND procshg(no) BE $(
+   LET shg(ptr) BE $(
+      LET ch = ?
+      TEST ptr!genabled
+      THEN ch := 'E'
+      ELSE ch := 'D'
+      writef("%I2 %C %I3 ", ptr!gnumber, ch, ptr!gcount)
+      wrcomseq(ptr!gcom)
+      wrch('*n')
+   $)
+
+   TEST no = OTHERSYM
+   THEN $(
+      LET ptr = glist
+      UNTIL ptr = null DO $(
+         shg(ptr)
+         ptr := ptr!gnext
+      $)
+   $)
+   ELSE TEST no = PLUSSYM
+   THEN UNLESS endglist = null DO shg(endglist)
+   ELSE $(
+      LET add = findglobal(no)
+      shg(!add)
+   $)
+$)
+
+AND proccg(no) BE $(
+   TEST no = OTHERSYM
+   THEN $(
+      LET ptr = glist
+      UNTIL glist = null DO $(
+         ptr := glist!gnext
+         freespace(glist)
+         glist := ptr
+      $)
+      endglist := null
+   $)
+   ELSE TEST no = PLUSSYM
+   THEN UNLESS endglist = null DO $(
+      LET ptr = glist
+      IF glist = endglist DO $(
+         freespace(glist)
+         glist := null
+         endglist := null
+         RETURN
+      $)
+      UNTIL ptr!gnext = endglist DO ptr := ptr!gnext
+      freespace(endglist)
+      endglist := ptr
+      endglist!gnext := null
+   $)
+   ELSE $(
+      LET add = findglobal(no)
+      LET nptr = (!add)!gnext
+      freespace(!add)
+      !add := nptr
+      IF nptr = null THEN TEST glist = null
+         THEN endglist := null
+         ELSE endglist := add - pnext
+   $)
+$)
+
+AND findglobal(no) = VALOF $(
+   LET add = @glist
+   UNTIL !add = null DO $(
+      IF (!add)!gnumber = no THEN RESULTIS add
+      add := !add + gnext
+   $)
+   execerror('g', no)
+$)
+
+.
+
+SECTION "OUTPUTQ"
+
+GET ""
+
+//////////////////////////////////////////////////////////////////////////////
+//                                                                          //
+//   Contains procedures to set up a heap, allocate and free space in it,   //
+//  to input new lines and to handle the buffers.                           //
+//                                                                          //
+//////////////////////////////////////////////////////////////////////////////
+
+//
+//    Procedures to input and output lines of the source file
+//
+
+LET outputnl(n) BE $(
+   //
+   //   Sends either the lowest n lines or all lines before the current line in
+   //  the output queue to TO, depending which is least, freeing the blocks
+   //  they were held in.
+   //
+   selectoutput(tof)
+   FOR i = 1 TO n DO $(
+      IF lowestl!currto = currentl | lowestl!currto!fptr = null THEN $(
+         lowestl!currto!bptr := null
+         selectoutput(verf)
+         RETURN
+      $)
+      writes(lowestl!currto + stringb)
+      TEST lowestl!controlch = '*p' | lowestl!controlch = '*c'
+      THEN wrch(lowestl!controlch)
+      ELSE wrch('*n')
+      lowestl!currto := lowestl!currto!fptr
+      freespace(lowestl!currto!bptr)
+   $)
+   lowestl!currto!bptr := null
+   selectoutput(verf)
+$)
+
+LET inputln() BE $(
+   //
+   //   Reads a line from FROM to the end of the output queue and makes it the
+   //  new current line. Requires previous current line to be the last line
+   //  before.
+   //
+   LET b = vec MAXSTRLENGTH
+   LET size, ch, tempptr = 0, ?, ?
+   UNLESS highestl!currfrom = currentl THEN execerror('i')
+   selectinput(fromf)
+   ch := rdch()
+   TEST ch = ENDSTREAMCH
+   THEN $(
+      //
+      //   Create a dummy end of file line
+      //
+      selectinput(withf)
+      tempptr := getspace(minlinesize)
+      tempptr!symb := endmask
+   $)
+   ELSE $(
+      //
+      //   Read the new line
+      //
+      $(
+         IF ch = '*n' | ch = '*p' | ch = '*c' THEN BREAK
+         IF size >= mxll THEN $(
+            unrdch()
+            IF swwarn THEN writes("WARNING - Input line too long*n")
+            BREAK
+         $)
+         size := size + 1
+         b!size := ch
+         ch := rdch()
+      $) REPEAT
+      selectinput(withf)
+      tempptr := getspace((size / BYTESPERWORD) + minlinesize)
+      tempptr!controlch := ch
+      tempptr!symb := 0
+      FOR i = 1 TO size DO (tempptr + stringb)%i :=b!i
+   $)
+   TEST currentl = null
+   THEN lowestl!currto := tempptr
+   //
+   //   The new line is the first one to be input.
+   //
+   ELSE $(
+      currentl! fptr := tempptr
+      UNLESS currto = 0 THEN currentl!symb := currentl!symb | movmask
+   $)
+   linesinput := linesinput + 1
+   tempptr!lineno := linesinput
+   tempptr!fptr := null
+   tempptr!bptr := currentl
+   (tempptr + stringb)%0 := size
+   highestl!currfrom := tempptr
+   currentl := tempptr
+   doglobals(glist)
+$)
+
+//
+//    These procedures handle the text buffers
+//
+
+LET procdbuff(buff) BE $(
+   TEST buff = 0
+   THEN $(
+      UNLESS currto = tosource THEN execerror('b', currto)
+      UNLESS currfrom = fromsource THEN execerror('b', currfrom)
+      FOR i = 1 TO numbuff DO procdbuff(i)
+   $)
+   ELSE $(
+      LET f, f2 = lowestl!buff, ?
+      IF currto = buff | currfrom = buff THEN execerror('b', buff)
+      f2 := f!fptr
+      UNTIL f2 = null DO $(
+         freespace(f)
+         f := f2
+         f2 := f!fptr
+      $)
+      lowestl!buff := f
+      f!bptr := null
+   $)
+$)
+
+AND procshbuff() BE $(
+   FOR buff = 1 TO numbuff DO
+          IF lowestl!buff NE highestl!buff THEN writef("buffer %n*n", buff)
+$)
+
+AND proctbuff(buff) BE $(
+   TEST buff = 0
+   THEN $(
+      UNLESS currto = tosource THEN execerror('b', currto)
+     UNLESS  currfrom = fromsource  THEN execerror('b', currfrom)
+      FOR i = 1 TO numbuff UNLESS lowestl!i = highestl!i DO $(
+         writef(" buffer %n -*n", i)
+         proctbuff(i)
+      $)
+   $)
+   ELSE $(
+      LET f = lowestl!buff
+      IF currto = buff | currfrom = buff THEN execerror('b', buff)
+      UNTIL f!fptr = null DO $(
+         writes(f + stringb)
+         wrch('*n')
+         f := f!fptr
+      $)
+   $)
+$)
+
+AND proctobuff(buff) BE $(
+   //
+   //   Note buff = 0 is equivalent to buff = tosource
+   //
+   LET hptr = currentl!bptr
+   LET e = highestl!currto
+   LET p = highestl!buff!bptr
+   // IF (currentl!symb & endmask) NE 0 THEN execerror('s')
+   IF buff = currfrom THEN execerror('b', buff)
+   IF swwarn & (currto=buff) THEN writes("WARNING - Buffer selected already*n")
+   currentl!bptr := p
+   TEST p = null
+   THEN lowestl!buff := currentl
+   ELSE p!fptr := currentl
+   e!bptr := hptr
+   TEST hptr = null
+   THEN lowestl!currto := e
+   ELSE hptr!fptr := e
+   currto := buff
+$)
+
+AND procfrombuff(buff) BE $(
+   LET hptr = currentl!fptr
+   LET b = ?
+   IF buff = 0 THEN buff := fromsource
+   b := lowestl!buff
+   IF (currentl!symb & endmask) NE 0 THEN execerror('s')
+   IF currto = buff THEN execerror('b', buff)
+   IF swwarn & (currfrom=buff) THEN
+                writes("WARNING - Buffer selected already*n")
+   currentl!fptr := b
+   lowestl!buff := null
+   TEST b = null
+   THEN highestl!buff := currentl
+   ELSE b!bptr := currentl
+   lowestl!currfrom := hptr
+   TEST hptr = null
+   THEN lowestl!currfrom := null
+   ELSE hptr!bptr := null
+   currfrom := buff
+$)
+AND initoutputq() BE $(
+   //
+   //   Sets up the output queue .
+   //   The commented out sections in this and the two following procedures
+   //  execute the alternative heap storage method.
+   //
+   //    limoutq := outputq + outqsize
+   //    freeptr := outputq
+   //    efreeptr := outputq
+   //    freeptr!blocktype := free
+   //    freeptr!blocksize := outqsize
+   //    freeptr!freefptr := null
+   //    freeptr!freebptr := null
+   linesinput := 0
+   currentl := null
+   lowestl := getspace(numbuff + 1) + 1
+   highestl := getspace(numbuff + 1) + 1
+   FOR i = tosource TO numbuff DO $(
+      //
+      //   Note tosource is equal to zero.
+      //
+      LET ptr = getspace(minlinesize)
+      ptr!symb := endmask + newmask
+      (ptr + stringb)%0 := 0
+      ptr!fptr := null
+      ptr!bptr := null
+      lowestl!i := ptr
+      highestl!i := ptr
+   $)
+   lowestl!fromsource := null
+   highestl!fromsource := null
+   lowestl!tosource := null
+   currto := tosource
+   currfrom := fromsource
+   lineinput := FALSE
+$)
+
+
+//
+//    Procedures to get and return heap space
+//
+
+LET freespace(ptr) BE $(
+   //
+   //   Frees the used block in the output queue heap pointed at by ptr.
+   //
+   //    LET nextblock, nextfreeb, prevfreeb = ?, ?, ?
+   //    ptr := ptr - 2
+   //    nextblock := ptr + ptr!blocksize
+   //    TEST nextblock >= limoutq
+   //    THEN nextfreeb := null
+   //    ELSE TEST nextblock!blocktype = free
+   //       THEN $(
+   //          ptr!blocksize := ptr!blocksize + nextblock!blocksize
+   //          //
+   //          //   The next block has been combined with the new free one.
+   //          //
+   //          nextfreeb := nextblock!freefptr
+   //          TEST nextfreeb = null
+   //          THEN efreeptr := nextblock!freebptr
+   //          ELSE nextfreeb!freebptr := nextblock!freebptr
+   //       $)
+   //       ELSE $(
+   //          nextfreeb := freeptr
+   //          UNTIL (nextfreeb > ptr) | (nextfreeb = null) DO
+   //             nextfreeb := nextfreeb!freefptr
+   //       $)
+   //    //
+   //    //   The next free block hes been found and a pointer to it placed in
+   //    //  nextfreeb. If it was adjacent to the new block they have been
+   //    //  joined and the free block after found.
+   //    //
+   //    TEST nextfreeb = null
+   //    THEN $(
+   //       prevfreeb := efreeptr
+   //       efreeptr := ptr
+   //    $)
+   //    ELSE prevfreeb := nextfreeb!freebptr
+   //    //
+   //    //   The previous free block has been found
+   //    //
+   //    TEST prevfreeb = null
+   //    THEN freeptr := ptr
+   //    ELSE IF prevfreeb!blocksize + prevfreeb = ptr DO $(
+   //       prevfreeb!blocksize := prevfreeb!blocksize + ptr!blocksize
+   //       prevfreeb!freefptr := nextfreeb
+   //       IF nextfreeb = null THEN efreeptr := prevfreeb
+   //       //
+   //       //   If the previous free block was adjacent to the new one then
+   //       //  they have been combined.
+   //       //
+   //       RETURN
+   //    $)
+   //    ptr!blocktype := free
+   //    ptr!freebptr := prevfreeb
+   //    ptr!freefptr := nextfreeb
+   //    UNLESS nextfreeb = null DO nextfreeb!freebptr := ptr
+   //    UNLESS prevfreeb = null DO prevfreeb!freefptr := ptr
+
+// NJO mod:  unlink the block from the storechain before FREEVECing
+
+   ptr := ptr - 1    // the real base of the GETVECed block
+
+   $( LET block = storechain
+      LET prev  = @storechain
+
+      UNTIL block = ptr DO
+      $( IF block = null THEN
+         $( LET out = output()
+            selectoutput(verf)
+            writef("Arrgh!  Block at %N not found on storechain*N", ptr)
+            selectoutput(out)
+            RETURN
+         $)
+
+         prev  := block
+         block := !block
+      $)
+
+      !prev := !block
+   $)
+
+   freevec(ptr)
+$)
+
+LET getspace(size) = VALOF $(
+   //
+   //   Allocates a block of size words in the
+   //  output queue heap and returns a pointer to it. If a block cannot be
+   //  found outputnl(noutput) is called, noutput being a manifest constant.
+   //
+   LET tempptr, s = freeptr, ?
+   //    size := size + 2
+   //    IF size < minblocksize THEN size := minblocksize
+   $(
+   //       tempptr := freeptr
+   //       UNTIL tempptr = null DO $(
+   //          s := tempptr!blocksize
+   //          IF s >= size THEN $(
+   //             TEST s >= size + minblocksize
+   //             THEN $(
+   //                //
+   //                //   Allocate part of the block currently pointed at.
+   //                //
+   //                LET newptr = tempptr + s - size
+   //                tempptr!blocksize := s - size
+   //                newptr!blocktype := used
+   //                newptr!blocksize := size
+   //                RESULTIS newptr
+   //             $)
+   //             ELSE $(
+   //                //
+   //                //   Allocate all of the block pointed at.
+   //                //
+   //                LET f, b = tempptr!freefptr, tempptr!freebptr
+   //                TEST f = null
+   //                THEN efreeptr := b
+   //                ELSE f!freebptr := b
+   //                TEST b = null
+   //                THEN freeptr := f
+   //                ELSE b!freefptr := f
+   //                tempptr!blocktype := used
+   //                RESULTIS tempptr
+   //             $)
+   //          $)
+   //          tempptr := tempptr!freefptr
+   //       $)
+
+      tempptr := getvec(size+1)   // 1 extra for storechain link
+      IF tempptr ~= 0 THEN
+      $( // NJO mod:  OK we've got a block - link it into storechain
+         !tempptr   := storechain
+         storechain := tempptr
+
+         RESULTIS tempptr+1
+      $)
+      //
+      //   A large enough block cannot be found
+      //
+      IF goutdisabled | lowestl!currto = currentl |
+            lowestl!currto!fptr = null THEN execerror('o')
+      outputnl(noutput)
+   $) REPEAT
+$)
+
+LET tidy.up.and.stop(rc) BE
+
+// NJO mod:  replacement for STOP which frees any blocks remaining on
+// the store chain then exits normally via STOP.
+
+$( UNTIL storechain = null DO
+   $( LET next = !storechain
+      freevec(storechain)
+      storechain := next
+   $)
+
+   IF fromf ~= 0 THEN
+   $( selectinput(fromf)
+      endread()
+   $)
+
+   IF tof ~= 0 THEN
+   $( selectoutput(tof)
+      endwrite()
+   $)
+
+   IF withf ~= 0 THEN
+   $( selectinput(withf)
+      endread()
+   $)
+
+   IF verf ~= 0 THEN
+   $( selectoutput(verf)
+      endwrite()
+   $)
+
+   stop(rc)
+$)
+
+.
+
+SECTION "LINECOM"
+
+GET ""
+
+//////////////////////////////////////////////////////////////////////////////
+//                                                                          //
+//   Contains procedures to carry out commands dealing with whole lines ie  //
+//  to insert or delete whole lines or to move around the source.           //
+//  Also some miscellaneous procedures to execute commands.                 //
+//                                                                          //
+//////////////////////////////////////////////////////////////////////////////
+
+//
+//    Move procedures
+//
+
+LET next() BE $(
+   //
+   //   Makes the next line the current one, assumes that there already is
+   //  a next line.
+   //
+   UNLESS currto = 0 THEN currentl!symb := currentl!symb | movmask
+   currentl := currentl!fptr
+   doglobals(glist)
+$)
+
+AND previous() BE $(
+   //
+   //   Makes previous line the current one, assumes that there is a
+   //  previous one.
+   //
+   UNLESS currfrom = -1 THEN currentl!symb := currentl!symb | movmask
+   currentl := currentl!bptr
+$)
+
+AND procn() BE $(
+   TEST currentl!fptr = null
+   THEN TEST (currentl!symb & endmask) = 0
+      THEN inputln()
+      ELSE execerror('s')
+   ELSE next()
+$)
+
+AND procp() BE $(
+   TEST currentl!bptr = null
+   THEN execerror('n')
+   ELSE previous()
+$)
+
+AND procm(arg) BE $(
+   SWITCHON arg INTO $(
+      CASE PLUSSYM : UNTIL currentl!fptr = null DO next() ENDCASE
+      CASE MINUSSYM : UNTIL currentl!bptr=null DO previous() ENDCASE
+      CASE ENDSYM :
+         UNTIL currentl!fptr = null DO next()
+         WHILE (currentl!symb & endmask) = 0 DO inputln()
+      ENDCASE
+      CASE CURRSYM : CASE OTHERSYM : ENDCASE
+      DEFAULT :
+         TEST arg < currentl!lineno
+         THEN procp() REPEATWHILE
+                (arg < currentl!lineno) | ((currentl!symb & newmovmask) NE 0)
+       ELSE WHILE (arg > currentl!lineno) | ((currentl!symb & newmovmask) NE 0)
+               DO procn()
+         UNLESS arg = currentl!lineno THEN execerror('l',arg)
+   $)
+$)
+
+//
+//    Display   procedures
+//
+
+AND prclno() BE $(
+   //
+   //   Sends a copy of the current line no to the current output.
+   //
+   TEST (currentl!symb & ormask) = 0
+   THEN writef("%N.", currentl!lineno)
+   ELSE $(
+      TEST (currentl!symb & newmask) NE 0
+      THEN TEST (currentl!symb & endmask) NE 0
+         THEN writef(" ?**")
+         ELSE writef("****.", currentl!lineno)
+      ELSE TEST (currentl!symb & endmask) NE 0
+         THEN writef("%N**", currentl!lineno)
+         ELSE writef("(%N)", currentl!lineno)
+   $)
+   wrch('*n')
+$)
+
+AND prcltext() BE $(
+   //
+   //   Sends a copy of the current line text to the current output.
+   //
+   TEST clboccupied
+   THEN writes(clbuff)
+   ELSE writes(currentl + stringb)
+   wrch('*n')
+$)
+
+AND prcl() BE $(
+   //
+   //   Sends a copy of the current line to the current output,
+   //  including the line number and any other relevant information.
+   //
+   TEST (currentl!symb & ormask) = 0
+   THEN writef("%I6", currentl!lineno)
+   ELSE $(
+      TEST (currentl!symb & newmask) NE 0
+      THEN TEST (currentl!symb & endmask) NE 0
+         THEN writes("?**")
+         ELSE writef("  ********", currentl!lineno)
+      ELSE TEST (currentl!symb & endmask) NE 0
+         THEN writef("%N**", currentl!lineno)
+         ELSE writef("(%I4)", currentl!lineno)
+   $)
+   TEST (currentl!symb & minusmask) = 0
+   THEN wrch(' ')
+   ELSE wrch('-')
+   TEST (currentl!symb & plusmask) = 0
+   THEN wrch(' ')
+   ELSE wrch('+')
+   writes(currentl + stringb)
+   wrch('*n')
+$)
+
+AND proct(arg) BE $(
+   verreq1 := FALSE
+   verreq2 := FALSE
+   IF arg = PLUSSYM THEN $(
+      prcltext()
+      IF currentl!fptr = null THEN RETURN
+      next()
+   $) REPEAT
+   IF arg = OTHERSYM THEN arg := MAXINT
+   UNLESS (currentl!symb & endmask) = 0 THEN $(
+      verreq2 := TRUE
+      RETURN
+   $)
+   prcltext()
+   FOR i = 2 TO arg DO $(
+      procn()
+      UNLESS (currentl!symb & endmask) = 0 THEN $(
+         verreq2 := TRUE
+         RETURN
+      $)
+      prcltext()
+   $)
+$)
+
+AND proctl(arg) BE $(
+   verreq1 := FALSE
+   verreq2 := FALSE
+   IF arg = PLUSSYM THEN $(
+      prcl()
+      IF currentl!fptr = null THEN RETURN
+      next()
+   $) REPEAT
+   IF arg = OTHERSYM THEN arg := MAXINT
+   prcl()
+   FOR i = 2 TO arg DO $(
+      UNLESS (currentl!symb & endmask) = 0 THEN BREAK
+      procn()
+      prcl()
+   $)
+$)
+
+AND verify() BE $(
+   //
+   //   Verifies the current line according to the switches VN and VT
+   //
+   IF swv THEN $(
+      IF swvn THEN prclno()
+      IF swvt THEN prcltext()
+   $)
+   verreq1 := FALSE
+   verreq2 := FALSE
+$)
+
+//
+//    Deletion   procedures
+//
+
+AND procdrest() BE $(
+   LET f, nf = currentl!fptr, ?
+   UNTIL f = null DO $(
+      nf := f!fptr
+      freespace(f)
+      f := nf
+   $)
+   (currentl + stringb)%0 := 0
+   currentl!fptr := null
+   currentl!symb := endmask + newmask
+$)
+
+AND procd(l1, l2) BE $(
+   LET ptr1, ptr2, hptr = ?, ?, ?
+   IF l2 = CURRSYM THEN ptr2 := currentl
+   TEST l1 = OTHERSYM
+   THEN $(
+      ptr1 := currentl
+      ptr2 := currentl
+   $)
+   ELSE $(
+      procm(l1)
+      ptr1 := currentl
+      //
+      //   Line l1 has been found and made the current line.
+      //
+      goutdisabled := TRUE
+      SWITCHON l2 INTO $(
+         CASE OTHERSYM :  ENDCASE
+         CASE CURRSYM :
+            UNTIL currentl = ptr2 DO $(
+               IF currentl!fptr = null THEN execerror('a')
+               next()
+            $)
+         ENDCASE
+         CASE ENDSYM :
+            UNTIL currentl!fptr = null DO next()
+            WHILE (currentl!symb & endmask) = 0 DO inputln()
+         ENDCASE
+         DEFAULT :
+            WHILE (l2 > currentl!lineno) | ((currentl!symb & newmovmask) NE 0)
+               DO procn()
+            UNLESS l2 = currentl!lineno THEN execerror('l', l2)
+         ENDCASE
+      $)
+      goutdisabled := FALSE
+      ptr2 := currentl
+      //
+      //   Line l2 has been found and made the current line.
+      //
+   $)
+   hptr := ptr1!bptr
+   UNTIL ptr1 = ptr2 DO $(
+      ptr1 := ptr1!fptr
+      freespace(ptr1!bptr)
+   $)
+   //
+   //   Lines l1 to one less than l2 have been deleted
+   //
+   IF (ptr2!symb & endmask) = 0 THEN $(
+      procn()
+      freespace(ptr2)
+   $)
+   //
+   //   Unless line 2 was the dummy end of file line it has been deleted
+   //
+   TEST hptr = null
+   THEN lowestl!currto := currentl
+   ELSE hptr!fptr := currentl
+   currentl!bptr := hptr
+   currentl!symb := currentl!symb | minusmask
+$)
+
+//
+//    Insertion  procedures
+//
+
+AND procis(str) BE $(
+   LET hptr, size = currentl!bptr, str%0
+   LET ptr = getspace(minlinesize + (size / BYTESPERWORD))
+   ptr!bptr := hptr
+   ptr!fptr := currentl
+   currentl!bptr := ptr
+   TEST hptr = null
+      THEN lowestl!currto := ptr
+      ELSE hptr!fptr := ptr
+   ptr!lineno := currentl!lineno
+   ptr!symb := newmask
+   ptr!controlch := '*n'
+   (ptr + stringb)%0 := size
+   FOR i = 1 TO size DO (ptr + stringb)%i := str%i
+$)
+
+AND procic() BE $(
+   UNLESS (currentl!symb & endmask) = 0 THEN execerror('s')
+   TEST clboccupied
+   THEN procis(clbuff)
+   ELSE procis(currentl + stringb)
+$)
+
+AND procim(add) BE $(
+   //
+   //   Inserts the appropriate type of inserted material before the
+   //  current line and moves the pointer held in address add on one
+   //  control block.
+   //
+   LET ptr = (!add)!nextcom
+   LET tempst = VEC (1 + (MAXSTRLENGTH / BYTESPERWORD))
+   LET buff, hptr, ptr1, ptr2 = ?, ?, ?, ?
+   !add := ptr
+   SWITCHON ptr!name INTO $(
+      CASE IMTEXT :
+         WHILE rdtextin(tempst) DO procis(tempst)
+      ENDCASE
+      CASE IMINB :
+         ptr := ptr!arg1
+         UNTIL ptr = null DO $(
+            procis(ptr + 1)
+            ptr := !ptr
+         $)
+      ENDCASE
+      CASE IMBUFF :
+         buff := ptr!arg1
+         hptr, ptr1, ptr2 := currentl!bptr, lowestl!buff, highestl!buff!bptr
+         IF buff = currto | buff = currfrom THEN execerror('b', buff)
+         IF ptr2 = null THEN $(
+            IF swwarn THEN writef("WARNING - Buffer %n empty*n", buff)
+            RETURN
+         $)
+         ptr2!fptr := currentl
+         ptr1!bptr := hptr
+         lowestl!buff := highestl!buff
+         highestl!buff!bptr := null
+         currentl!bptr := ptr2
+         TEST hptr = null
+         THEN lowestl!currto := ptr1
+         ELSE hptr!fptr := ptr1
+      ENDCASE
+      CASE IMCOPY :
+         buff := ptr!arg1
+         ptr1 := lowestl!buff
+         IF buff = currto | buff = currfrom THEN execerror('b', buff)
+         IF ptr1!fptr = null THEN $(
+            IF swwarn THEN writef("WARNING - Buffer %n empty*n", buff)
+            RETURN
+         $)
+         $(
+            procis(ptr1 + stringb)
+            ptr1 := ptr1!fptr
+         $) REPEATUNTIL ptr1!fptr = null
+      ENDCASE
+   $)
+$)
+
+//
+//    Line joining procedure
+//
+
+AND proccl() BE $(
+   LET temp, s2, s3, f, p, s3length = ?, ?, ?, ?, ?, ?
+   LET s1 = currentl + stringb
+   LET s1length = s1%0
+   verreq1 := TRUE
+   procn()
+   IF (currentl!symb & endmask) NE 0 THEN execerror('s')
+   f := currentl!fptr
+   s2 := currentl + stringb
+   currentl := currentl!bptr
+   p := currentl!bptr
+   s3length := s1length + s2%0
+   IF s3length > mxll THEN execerror('e')
+   temp := getspace(minlinesize + (s3length)/BYTESPERWORD)
+   temp!lineno := currentl!lineno
+   temp!symb := currentl!symb | plusmask
+   s3 := temp + stringb
+   FOR i = 1 TO s1length DO s3%i := s1%i
+   FOR j = 1 TO s2%0 DO s3%(s1length + j) := s2%j
+   s3%0 := s3length
+   temp!bptr := p
+   TEST p = null
+   THEN lowestl!currto := temp
+   ELSE p!fptr := temp
+   temp!fptr := f
+   TEST f = null
+   THEN highestl!currfrom := temp
+   ELSE f!bptr := temp
+   freespace(currentl!fptr)
+   freespace(currentl)
+   currentl := temp
+$)
+
+//
+//     Miscellaneous command procedures
+//
+
+AND proceq(n) BE $(
+   LET ptr = currentl
+   UNLESS currfrom = fromsource THEN execerror('b', currfrom)
+   $(
+      ptr!lineno := n
+      ptr!symb := ptr!symb & endplusmask
+      ptr := ptr!fptr
+      IF ptr = null THEN BREAK
+      n := n + 1
+   $) REPEAT
+   linesinput := n
+$)
+
+AND procw() BE $(
+   UNLESS currto = tosource THEN execerror('b', currto)
+   UNLESS currfrom = fromsource THEN execerror('b', currfrom)
+   IF swwarn DO
+      FOR i = 1 TO numbuff DO IF lowestl!i NE highestl!i THEN $(
+         IF interactive THEN execerror('d', i)
+         writef("WARNING - buffer %n not empty*n", i)
+      $)
+   UNTIL currentl!fptr = null DO next()
+   WHILE (currentl!symb & endmask) = 0 DO inputln()
+   UNTIL lowestl!currto = currentl DO outputnl(MAXINT)
+   tidy.up.and.stop(0)   // NJO mod: was FINISH
+$)
+
+AND procqm() BE $(
+   //
+   //   Carries out editing command "?".
+   //
+   prclno()
+   prcltext()
+   verreq1 := FALSE
+   verreq2 := FALSE
+$)
+
+.
+
+SECTION "STRINGCOM"
+
+GET ""
+
+//////////////////////////////////////////////////////////////////////////////
+//                                                                          //
+//   Contains procedures to carry out string handling commands and the      //
+//  procedures they call in particular procedure findmatch which tries      //
+//  to find a qualified string in a string.                                 //
+//                                                                          //
+//////////////////////////////////////////////////////////////////////////////
+
+//
+//    Current line buffer procedures
+//
+
+LET getcl() BE $(
+   //
+   //   Copies current line from the output queue to the current line buffer.
+   //
+   LET str = currentl + stringb
+   IF ((currentl!symb) & endmask) NE 0 THEN execerror('s')
+   FOR i = 0 TO ((str%0) / BYTESPERWORD) DO clbuff!i := str!i
+   clboccupied := TRUE
+$)
+
+AND returncl() BE $(
+   //
+   //   Copies current line from current line buffer to the output queue.
+   //
+   LET str = ?
+   LET wordsize = (clbuff%0)/BYTESPERWORD
+   IF clbuff%0 > mxll THEN execerror('t')
+   IF (((currentl + stringb)%0) / BYTESPERWORD) < wordsize THEN $(
+      LET newlptr = getspace(wordsize + minlinesize)
+      LET f, b = currentl!fptr, currentl!bptr
+      newlptr!fptr := f
+      newlptr!bptr := b
+      TEST f = null
+      THEN highestl!currfrom := newlptr
+      ELSE f!bptr := newlptr
+      TEST b = null THEN
+      lowestl!currto := newlptr
+      ELSE b!fptr := newlptr
+      newlptr!lineno := currentl!lineno
+      newlptr!symb := currentl!symb
+      newlptr!controlch := currentl!controlch
+      freespace(currentl)
+      currentl := newlptr
+   $)
+   str := currentl + stringb
+   FOR i = 0 TO wordsize DO str!i := clbuff!i
+   currentl!symb := currentl!symb | plusmask
+   clboccupied := FALSE
+$)
+
+AND shuffle(chno, displacement) BE $(
+   //
+   //   Shuffles all characters after chno in the current line buffer
+   //  outwards by displacement places (-ve displacement allowed).
+   //  Alters the length accordingly.
+   //
+   LET temp = clbuff%0 + displacement
+   IF temp > MAXSTRLENGTH THEN execerror('e')
+   TEST displacement > 0
+   THEN FOR i = clbuff%0 TO chno+1 BY -1 DO clbuff%(displacement+i) := clbuff%i
+   ELSE FOR i = chno + 1 TO clbuff%0 DO clbuff%(displacement + i) := clbuff%i
+   clbuff%0 := temp
+$)
+//
+//   Matching a qualified string
+//
+
+AND findmatch(qst, st, ptrwanted, lwindow) = VALOF $(
+   //
+   //   Tries to find the qualified string qst in string st. If succesful
+   //  it returns the number of the character in st just previous to the
+   //  match. Otherwise it calls error if ptrwanted is TRUE or returns
+   //  -1.
+   //
+   LET n = qst!QINT
+   LET s1 = VEC (1 + MAXSTRLENGTH/BYTESPERWORD)
+   LET s2 = VEC (1 + MAXSTRLENGTH/BYTESPERWORD)
+   fqst := qst
+   fst := st
+   fqs := qst!QSTR
+   ffch := lwindow
+   flch := st%0
+   IF fqst!QU THEN $(
+      FOR i = 0 TO fqs%0 DO s1%i := capitalch(fqs%i)
+      fqs := s1
+      FOR j = 0 TO fst%0 DO s2%j := capitalch(fst%j)
+      fst := s2
+   $)
+   IF fqst!QS THEN $(
+      $(
+         IF ffch >= flch THEN TEST ptrwanted
+            THEN execerror('m')
+            ELSE RESULTIS -1
+         ffch := ffch + 1
+      $) REPEATUNTIL fst%ffch NE ' '
+      ffch := ffch - 1
+      UNTIL fst%flch NE ' ' DO flch := flch - 1
+   $)
+   TEST n < 1
+   THEN $(
+      //
+      //   One of the qualifiers B, E or P is set.
+      //
+      LET temp = flch - fqs%0
+      UNLESS temp < ffch TEST fqst!QE
+         THEN IF match(temp) THEN RESULTIS temp
+         ELSE
+            IF match(ffch) & ((NOT fqst!QP) | temp = ffch) THEN RESULTIS ffch
+   $)
+   ELSE TEST fqst!QL
+      THEN FOR i = (flch - fqs%0) TO ffch BY -1 DO IF match(i) THEN $(
+               n := n - 1
+               IF n = 0 THEN RESULTIS i
+      $)
+      ELSE FOR i = ffch TO (flch - fqs%0) DO IF match(i) THEN $(
+               n := n - 1
+               IF n = 0 THEN RESULTIS i
+      $)
+   IF ptrwanted THEN execerror('m')
+   RESULTIS -1
+$)
+
+AND match(i) = VALOF $(
+   //
+   //   Tests if string fqs matches string fs starting from the i + 1 th
+   //  character in fs. Also checks fqs is a word if that qualifier has
+   //  been specified.
+   //
+   FOR j = 1 TO fqs%0 DO UNLESS fqs%j = fst%(i + j) THEN RESULTIS FALSE
+   IF fqst!QW THEN $(
+      LET temp = i + fqs%0 + 1
+      IF temp <= flch & ( 'a' <= fst%temp <= 'z' | 'A' <= fst%temp <= 'Z' |
+            '0' <= fst%temp <= '9' ) THEN RESULTIS FALSE
+      IF i > ffch & ( 'a' <= fst%i <= 'z' | 'A' <= fst%i <= 'Z' |
+            '0' <= fst%i <= '9' ) THEN RESULTIS FALSE
+   $)
+   RESULTIS TRUE
+$)
+
+//
+//    String operations
+//
+
+AND procdfa(qst) BE $(
+   LET n = findmatch(qst, clbuff, TRUE, 0)
+   clbuff%0 := n + (qst!QSTR)%0
+$)
+
+AND procdfb(qst) BE $(
+   LET n = findmatch(qst, clbuff, TRUE, 0)
+   clbuff%0 := n
+$)
+
+AND procdta(qst) BE $(
+   LET n = findmatch(qst, clbuff, TRUE, 0)
+   n := n + (qst!QSTR)%0
+   shuffle(n, -n)
+$)
+
+AND procdtb(qst) BE $(
+   LET n = findmatch(qst, clbuff, TRUE, 0)
+   shuffle(n, -n)
+$)
+
+AND proca(qst, st) BE $(
+   LET n = findmatch(qst, clbuff, TRUE, 0)
+   n := n + (qst!QSTR)%0
+   shuffle(n, st%0)
+   FOR i = 1 TO st%0 DO clbuff%(n + i) := st%i
+$)
+
+AND procb(qst, st) BE $(
+   LET n = findmatch(qst, clbuff, TRUE, 0)
+   shuffle(n, st%0)
+   FOR i = 1 TO st%0 DO clbuff%(n + i) := st%i
+$)
+
+AND proce(qst, st) BE $(
+   LET n = findmatch(qst, clbuff, TRUE, 0)
+   LET displacement = st%0 - (qst!QSTR)%0
+   UNLESS displacement = 0 DO shuffle(n + (qst!QSTR)%0, displacement)
+   FOR i = 1 TO st%0 DO clbuff%(n + i) := st%i
+$)
+
+AND doglobals(ptr) BE $(
+   UNLESS goutdisabled | (currentl!symb & endmask) NE 0 DO $(
+      UNTIL ptr = null DO $(
+         IF ptr!genabled THEN $(
+            LET com = ptr!gcom
+            TEST com!name = CON
+            THEN $(
+               IF findse(com!arg1) THEN $(
+                  obeycomseq(com!arg2)
+                  ptr!gcount := ptr!gcount + 1
+               $)
+            $)
+            ELSE $(
+
+LET qst = com!arg1
+LET st = com!arg2
+LET displacement = ?
+LET n = ?
+TEST clboccupied
+THEN n := findmatch(qst, clbuff, FALSE, 0)
+ELSE n := findmatch(qst, currentl + stringb, FALSE, 0)
+IF n NE -1 DO $(
+   UNLESS clboccupied DO getcl()
+   verreq1 := TRUE
+   $(
+      SWITCHON com!name INTO $(
+         CASE CGA :
+         n := n + (qst!QSTR)%0
+         shuffle(n, st%0)
+         FOR i = 1 TO st%0 DO clbuff%(n + i) := st%i
+         ENDCASE
+
+         CASE CGB :
+         shuffle(n, st%0)
+         FOR i = 1 TO st%0 DO clbuff%(n + i) := st%i
+         n := n + (qst!QSTR)%0
+         ENDCASE
+
+         CASE CGE :
+         displacement := st%0 - (qst!QSTR)%0
+         UNLESS displacement = 0 DO shuffle(n + (qst!QSTR)%0, displacement)
+         FOR i = 1 TO st%0 DO clbuff%(n + i) := st%i
+         ENDCASE
+
+         DEFAULT :  writes("ERROR bad global*n")
+      $)
+      n := n + st%0
+      IF qst!QSTR%0 = 0 THEN n := n + 1
+      ptr!gcount := ptr!gcount + 1
+      n := findmatch(qst, clbuff, FALSE, n)
+   $) REPEATUNTIL (n = -1) | ((qst!QINT) < 1)
+$)
+
+            $)
+         $)
+         ptr := ptr!gnext
+      $)
+      IF clboccupied DO returncl()
+      UNLESS swvg DO verreq1 := FALSE
+   $)
+$)
+
+//
+//     Line splitting
+//
+
+AND procsa(qst) BE $(
+   IF (currentl!symb & endmask) NE 0 THEN execerror('s')
+   split(findmatch(qst, currentl + stringb, TRUE, 0) + (qst!QSTR)%0)
+$)
+
+AND procsb(qst) BE $(
+   IF (currentl!symb & endmask) NE 0 THEN execerror('s')
+   split(findmatch(qst, currentl + stringb, TRUE, 0))
+$)
+
+AND split(n) BE $(
+   //
+   //   Breaks the current line into two lines, splitting after the nth
+   //  character.
+   //
+   LET cst, f = currentl + stringb, currentl!fptr
+   LET size = cst%0 - n
+   LET temp = getspace(minlinesize + size / BYTESPERWORD)
+   LET tst = temp + stringb
+   temp!lineno := currentl!lineno
+   temp!symb := movmask
+   tst%0 := size
+   cst%0 := n
+   verify()
+   verreq1 := TRUE
+   FOR i = 1 TO size DO tst%i := cst%(n + i)
+   temp!bptr := currentl
+   currentl!fptr := temp
+   temp!fptr := f
+   TEST f = null
+   THEN highestl!currfrom := temp
+   ELSE f!bptr := temp
+   currentl := temp
+$)
+
+//
+//    Search expressions
+//
+
+AND procf(se) BE $(
+   IF swfn DO procn()
+   UNTIL findse(se) DO procn()
+$)
+
+AND procbf(se) BE $(
+   IF swfn DO procp()
+   UNTIL findse(se) DO procp()
+$)
+
+AND procdf(se) BE $(
+   LET hptr,f = currentl!bptr, ?
+   goutdisabled := TRUE
+   UNLESS findse(se) & NOT swfn DO $(
+      IF (currentl!symb & endmask) NE 0 THEN BREAK
+      f := currentl!fptr
+      freespace(currentl)
+      TEST f = null
+      THEN $(
+         currentl := hptr
+         highestl!currfrom := hptr
+         inputln()
+      $)
+      ELSE currentl := f
+   $) REPEATUNTIL findse(se)
+   currentl!bptr := hptr
+   TEST hptr = null
+   THEN lowestl!currto := currentl
+   ELSE hptr!fptr := currentl
+   currentl!symb := currentl!symb | minusmask
+   goutdisabled := FALSE
+   doglobals()
+   IF (currentl!symb & endmask) NE 0 THEN execerror('s')
+$)
+
+AND findse(se) = VALOF $(
+   //
+   //   Tests if the search expression se matches the current line.
+   //  Returns FALSE if the current line is the eof one.
+   //
+   LET st = ?
+   LET findnzse(se, st) = VALOF $(
+      $(
+         LET temp = ?
+         TEST se!SESEQ = null
+         THEN $(
+            temp := findmatch(se!SEQS, st, FALSE, 0)
+            TEST (se!SEQS)!QN
+            THEN TEST temp = -1
+               THEN temp := TRUE
+               ELSE temp := FALSE
+            ELSE TEST temp = -1
+               THEN temp := FALSE
+               ELSE temp := TRUE
+         $)
+         ELSE temp := findnzse(se!SESEQ, st)
+         IF se!SENEXT = null THEN RESULTIS temp
+         TEST se!SEAND
+         THEN UNLESS temp RESULTIS FALSE
+         ELSE IF temp THEN RESULTIS TRUE
+         se := se!SENEXT
+      $) REPEAT
+   $)
+
+   TEST clboccupied
+   THEN st := clbuff
+   ELSE st := currentl + stringb
+   IF (currentl!symb & endmask) NE 0 THEN RESULTIS FALSE
+   RESULTIS findnzse(se, st)
+$)
+
+

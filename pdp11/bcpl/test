@@ -1,0 +1,243 @@
+GET "libhdr"
+GET "ringhdr"
+GET "bcpl.ssplib"
+GET "bcpl.string-to-number"
+
+LET open(service.name, txbuff, txwords, rxbuff, rxwords, nsvec,
+                                                 func, station, port) = VALOF
+
+// Do an OPEN transaction to the named service.
+//
+// SERVICE.NAME is a string giving the name of the service to be accessed.
+// It may be zero instead, in which case the machine address and port of
+// the service should be supplied in STATION and PORT, and the function
+// code in FUNC.
+//
+// The data part of the basic block to be transmitted is in TXBUFF, with the
+// SSP arguments starting at (ring word) offset 3.  TXBUFF is TXWORDS ring
+// words long in total.
+//
+// RXBUFF is a buffer for the data part of the reply basic block.
+// It is RXWORDS ring words long.
+//
+// NSVEC is a vector of upperbound NSV.UPB in which the results of the
+// nameserver lookup of SERVICE.NAME are returned. If a value of zero
+// is passed for NSVEC, then a local vector will be used.
+//
+// FUNC is used as the function code iff the service is one with
+// no specified function code.
+//
+// Result: TRUE if transaction successful; size of reply block
+//                                                (in dibytes) in RESULT2.
+//         FALSE otherwise (error code in RESULT2).
+
+$(  LET flags      = ?
+    LET timeout    = ssp.short.timeout
+    LET rhtaskid   = rootnode ! rtn.info ! rtninfo.ring ! ri.rhtaskid
+    LET rx.size    = 0
+
+    IF rhtaskid = 0 THEN
+    $( result2 := 400
+       RESULTIS FALSE
+    $)
+
+    // If a service name string was supplied, then look up that string
+    // in the name server to get the station, port and function code.
+    // If SERVICE.NAME was zero, then use the values supplied in
+    // STATION, PORT and FUNC.
+
+    IF service.name \= 0 THEN
+    $( LET my.nsvec   = VEC nsv.upb
+
+       IF nsvec = 0 THEN
+          nsvec := my.nsvec
+
+       UNLESS general.lookup(gl.normal, service.name, nsvec, 0) GOTO fail
+
+       station := nsvec ! nsv.machine.id
+       port    := nsvec ! nsv.port
+       flags   := nsvec ! nsv.flags
+
+       IF (flags & nsv.flags.pmask) \= nsv.flags.bsp THEN   // not OPEN
+       $( result2 := 422
+          GOTO fail
+       $)
+
+       IF (flags & nsv.flags.slow) \= 0 THEN                // Slow machine
+          timeout := ssp.long.timeout
+
+       // If the flags say "no function code" then use the one
+       // supplied in FUNC
+
+       IF (flags & nsv.flags.nofunc) = 0 THEN
+          func := nsvec ! nsv.func
+    $)
+
+    $( LET rx.pkt     = VEC rhpkt.lifetime
+       LET reply.port = sendpkt(notinuse, rhtaskid, act.findfreeport)
+
+       rx.pkt ! pkt.link        := notinuse // Fill in & send off rx packet
+       rx.pkt ! pkt.id          := rhtaskid
+       rx.pkt ! pkt.type        := act.rx.bb
+       rx.pkt ! rhpkt.lifetime  := timeout
+       rx.pkt ! rhpkt.buff      := rxbuff
+       rx.pkt ! rhpkt.size      := rxwords
+       rx.pkt ! rhpkt.port      := reply.port
+       rx.pkt ! rhpkt.station   := station
+
+       qpkt(rx.pkt)
+
+       put2bytes(txbuff, bb.ssp.type,      code.open)
+       put2bytes(txbuff, bb.ssp.replyport, reply.port)
+       put2bytes(txbuff, bb.ssp.func,      func)
+
+       $( LET tx.status = sendpkt(notinuse, rhtaskid, act.tx, ?, ?,
+                                              txbuff, txwords, station, port)
+
+          IF tx.status = txst.accepted THEN  // wait for reply
+          $( pktwait(rhtaskid, rx.pkt)
+             rx.size := pkt.res1 ! rx.pkt
+          $)
+
+          sendpkt(notinuse, rhtaskid, act.releaseport, ?, ?, reply.port)
+
+          IF tx.status ~= txst.accepted THEN
+          $( result2 := tx.status
+             GOTO fail
+          $)
+       $)
+    $)
+
+    IF rx.size = 0 THEN               // reply timed out
+    $( result2 := 409
+       GOTO fail
+    $)
+
+    result2 := get2bytes(rxbuff, bb.ssp.rc)   // get host's RC
+
+    IF result2 \= 0 THEN              // non-zero RC
+    $( rx.size := 0
+       GOTO fail
+    $)
+
+fail:                                 // fall through here on success too!
+
+    TEST rx.size = 0
+
+    DO RESULTIS FALSE        // failed - code in result2
+
+    OR
+    $( result2 := rx.size    // success - pass length in result2
+
+       RESULTIS TRUE
+    $)
+$)
+
+
+LET start() BE
+$(  LET rhtaskid = rootnode!rtn.info!rtninfo.ring!ri.rhtaskid
+    LET txbuff = VEC 64/bytesperword
+    LET rxbuff = VEC 1600/bytesperword
+    LET nsvec = VEC nsv.upb
+    LET opts, filter = 0, 0
+    LET myaddr = VEC 2
+    LET addr = VEC 2
+    LET myport, hisport = ?, ?
+
+    MANIFEST $( argv.upb = 63 $)
+    LET argv = VEC argv.upb
+
+    LET rdargs.string = "OPTS/K,FILTER/K,ADDR/K,ECHO/S"
+    LET arg.opts, arg.filter, arg.addr, arg.echo = ?, ?, ?, ?
+
+    IF rdargs(rdargs.string, argv, argv.upb) = 0 THEN
+        moan("bad arguments from rdargs string '%S'*N", rdargs.string)
+
+    arg.opts := argv!0
+    arg.filter := argv!1
+    arg.addr := argv!2
+    arg.echo := argv!3
+
+    IF arg.opts ~= 0 THEN
+    $(  TEST string.to.number(arg.opts)
+        THEN opts := result2
+        ELSE moan("OPTS argument '%S' is not a valid number*N", arg.opts)
+    $)
+
+    IF arg.filter ~= 0 THEN
+    $(  TEST string.to.number(arg.filter)
+        THEN filter := result2
+        ELSE moan("FILTER argument '%S' is not a valid number*N", arg.filter)
+    $)
+
+    TEST arg.addr = 0 THEN
+        FOR i = 0 TO 5 DO addr%i := #XFF
+    ELSE TEST arg.addr%0 ~= 12 THEN
+        moan("ADDR argument is invalid")
+    ELSE
+    $(  LET val(ch) = '0' <= ch <= '9' -> ch - '0',
+                      'A' <= ch <= 'F' -> ch - 'A' + 10,
+                      'a' <= ch <= 'f' -> ch - 'a' + 10,
+                        moan("ADDR argument is invalid")
+        FOR i = 0 TO 5 DO addr%(i NEQV 1) := (val(arg.addr%(i*2+1)) << 4) |
+                                              val(arg.addr%(i*2+2))
+    $)
+
+    txbuff%%3 := opts
+    txbuff%%4 := filter
+
+    TEST open("ethernet.bridge", txbuff, 5, rxbuff, 64, nsvec) THEN
+    $(  FOR i = 0 TO result2-1 DO writef("%X4 ", rxbuff%%i)
+        newline()
+    $)
+    ELSE
+        moan("failed: rc=%X4*N", result2)
+
+    myport := txbuff%%1
+    hisport := rxbuff%%1
+
+    FOR i = 0 TO 5 DO myaddr%i := rxbuff%(i+8)
+
+TEST arg.echo THEN
+$(
+
+    UNTIL testflags(1) DO
+    $(  LET len = sendpkt(notinuse, rhtaskid, act.rx.bb, ?, ?, rxbuff, 800,
+                          nsvec!nsv.machine.id, myport, tickspersecond)
+        IF len = 0 THEN LOOP
+        FOR a = 0 TO 2 DO
+        $(  LET temp = rxbuff%%(a+1)
+            rxbuff%%(a+1) := rxbuff%%(a+4)
+            rxbuff%%(a+4) := temp
+        $)
+        FOR a = 0 TO 5 DO
+        $(  LET temp = rxbuff%%(a+11)
+            rxbuff%%(a+11) := rxbuff%%(a+17)
+            rxbuff%%(a+17) := temp
+        $)
+        rxbuff%%23 := 2 << 8
+        rxbuff%%8 := -1
+        sendpkt(notinuse, rhtaskid, act.tx, ?, ?, rxbuff, len,
+                nsvec!nsv.machine.id, hisport)
+    $)
+$)
+ELSE
+$(
+    txbuff%%0 := 64
+    FOR i = 0 TO 5 DO txbuff%(i+2) := addr%i
+    FOR i = 0 TO 5 DO txbuff%(i+8) := myaddr%i
+    txbuff%%7 := 17
+
+    sendpkt(notinuse, rhtaskid, act.tx, ?, ?, txbuff, 33, nsvec!nsv.machine.id,
+                hisport)
+$)
+
+$)
+
+
+AND moan(f, a, b, c, d, e) BE
+$(  writef(f, a, b, c, d, e)
+    stop(16)
+$)
+
+

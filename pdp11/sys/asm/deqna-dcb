@@ -1,0 +1,21 @@
+; Device control block for DEQNA (Ethernet interface for Qbus)
+
+;       .WORD        0  ; Link to driver
+        .WORD        0  ; Device ID
+        .WORD        0  ; Work queue
+        .WORD        0  ; Start routine
+        .WORD        0  ; Stop routine
+        JSR     R2,@(PC)+
+        .WORD        0  ; Interrupt routine
+        .WORD      310  ; Interrupt vector
+        .WORD   174440  ; Control and status reg
+        .WORD        0  ; Internal queues...
+        .WORD        0  ;
+        .WORD        0  ;
+        .WORD        0  ;
+        .WORD        0  ; Count of device resets
+        .WORD        0  ; Last device status written
+
+        .END
+
+

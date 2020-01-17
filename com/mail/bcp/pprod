@@ -1,0 +1,126 @@
+/***********************************************************************
+**             (C) Copyright 1980  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+
+            #######   #######   #######    ######   ######
+            ########  ########  ########  ########  #######
+            ##    ##  ##    ##  ##    ##  ##    ##  ##    ##
+            ########  #######   ########  ##    ##  ##    ##
+            #######   ##        #######   ##    ##  ##    ##
+            ##  ##    ##        ##  ##    ##    ##  ##    ##
+            ##   ##   ##        ##   ##   ########  #######
+            ##    ##  ##        ##    ##   ######   ######
+
+************************************************************************
+**    Author:   Brian Knight                       February 1980      **
+***********************************************************************/
+
+
+// Program to send a basic block to a particular station, and report
+// on whether or not it was received.
+//
+// [The basic block can be set up to include a BSP CLOSE or REPLUG
+// command, or a special bit pattern which some machines will recognise
+// as a signal to reboot - these are not normally useful!].
+
+// Modified 17.9.82 by NJO to use get/put2bytes to set up its ring block.
+
+SECTION "RPROD"
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "BCPL.SSPLIB"
+
+LET start() BE
+    $(
+    let rhtaskid = rootnode!rtn.info!rtninfo.ring!ri.rhtaskid
+    LET nsvec = VEC 3
+    LET r = ?
+    LET argv = VEC 80
+    LET destination = ?
+    LET block = VEC (6*2)/bytesperword
+    LET port = 0
+    LET destname = ?
+
+    IF rdargs("mc/a,port,close/s,boot/s,reset/s,replug/s,tomc/k,toport/k,rxbs/k,txbs/k,fn/k", argv, 80) = 0
+    THEN $( writes("Bad args*n"); stop(20) $)
+
+    IF RHTASKID = 0
+    THEN
+      $(
+      WRITES("Ring handler not loaded*n")
+      RESULT2 := 400
+      STOP(20)
+      $)
+
+    //Fill in the block with default values
+
+    put2bytes(block, 0, #X1234)    //Value agreed by MAJ and JJG!!
+
+    FOR i = 1 TO 6 DO
+       put2bytes(block, i, 0)
+
+    destname := argv!0
+    IF argv!1 \= 0 THEN port := stringval(argv!1)
+    IF argv!2 \= 0 THEN put2bytes(block, 0,  #X6600) // BSP CLOSE
+    IF argv!3 \= 0 THEN put2bytes(block, 0,  #X9AAA) // Magic boot pattern
+    IF argv!4 \= 0 THEN put2bytes(block, 0,  #X6300) // BSP RESET
+    IF argv!10\= 0
+    $(  put2bytes(block, 0,  #X6C00)                    // SSP OPEN
+        put2bytes(block, 1,  0)                         // Reply port
+        put2bytes(block, 2,  stringval(argv!10))        // Fn
+    $)
+
+
+    IF argv!5 \= 0
+    THEN
+      $( // REPLUG specified
+      IF argv!6=0 | argv!7=0 | argv!8=0 | argv!9=0
+      THEN $( writes("REPLUG argument missing*n"); stop(20) $)
+
+      put2bytes(block, 0, #X6900) // BSP REPLUG
+      put2bytes(block, 1, stringval(argv!6)) // New machine id
+      put2bytes(block, 2, stringval(argv!7)) // New tx port
+      put2bytes(block, 3, stringval(argv!8)) // New rx blocksize
+      put2bytes(block, 6, stringval(argv!9)) // New tx blocksize
+      $)
+
+    TEST lookup.name(destname, nsvec)
+    THEN destination := nsvec!0
+    ELSE $( fault(result2); stop(20) $)
+
+    r := sendpkt(notinuse,RHTASKID,act.tx,
+            0,0,block,5,destination,port)
+
+      writes(r = txst.ignored -> "Ignored",
+             r = txst.accepted-> "Accepted",
+             r = txst.bad.dest-> "Bad destination address",
+             r = txst.unsel.in.blk -> "Destination went*
+                           * unselected during a basic*
+                           * block",
+             r = txst.unsel.hdr -> "Unselected",
+             r = txst.busy -> "Timeout - destination busy",
+                              "Ring error")
+      newline()
+    $)
+
+
+AND stringval(s) = VALOF
+    $(  || converts a string to a number
+    LET val = 0
+
+    FOR j = 1 TO s%0
+    DO
+        $(
+        UNLESS '0' <= s%j <= '9'
+        THEN $( writef("Invalid char *'%C*' in number*N", s%j)
+                stop(20)
+             $)
+        val := val*10 + s%j - '0'
+        $)
+
+    RESULTIS val
+    $)
+
+

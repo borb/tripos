@@ -1,0 +1,1331 @@
+/*****************************************************************************\
+*                        Olivetti Research Laboratory                         *
+*******************************************************************************
+
+
+                ########  ########  #      #  ########   ######  
+                ########  ########  ##    ##  ########  ######## 
+                   ##        ##      ##  ##      ##     ##    ## 
+                   ##        ##       ####       ##     ##    ## 
+                   ##        ##        ##        ##     ##    ## 
+                   ##        ##        ##        ##     ##    ## 
+                   ##        ##        ##     ########  ######## 
+                   ##        ##        ##     ########   ######  
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   08/05/87             *
+\*****************************************************************************/
+
+
+
+SECTION "TTYIO"
+
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "FILEHDR"
+GET "BCPL.ASSIGNLIB"
+
+
+
+GLOBAL
+$(
+    device.in                       :  ug + 0
+    device.out                      :  ug + 1
+    idle                            :  ug + 2
+    loc.pkt                         :  ug + 3
+    readbuffer                      :  ug + 4
+    readbuffere                     :  ug + 5
+    readbufferp                     :  ug + 6
+    rem.pkt                         :  ug + 7
+    storage.chunksize               :  ug + 8
+    storage.high                    :  ug + 9
+    storage.low                     :  ug + 10
+    storage.root                    :  ug + 11
+$)
+
+
+
+MANIFEST
+$(
+    io.reset                        =  1
+    io.idle                         =  2
+
+    io.tx.req                       =  3
+    io.tx.ack                       =  4
+    io.tx.nack                      =  5
+    
+    io.rx.req                       =  6
+    io.rx.ack                       =  7
+    io.rx.nack                      =  8
+    
+    io.data.req                     =  9
+    io.data.eof                     =  10
+    io.data.ack                     =  11
+    io.data.nack                    =  12
+
+    io.fname.ack                    =  13
+    io.fname.nack                   =  14
+
+    io.timeout                      =  256
+
+    timeout.fname.length            =  tickspersecond * 10
+    timeout.fname.data              =  tickspersecond * 5
+    timeout.fname.csum              =  tickspersecond * 5
+    timeout.fname.ack               =  tickspersecond * 30
+    timeout.req.ack                 =  tickspersecond * 30
+    timeout.eof.ack                 =  tickspersecond * 30
+    timeout.data.req                =  tickspersecond * 60
+    timeout.data.length             =  tickspersecond * 10
+    timeout.data.data               =  tickspersecond * 5
+    timeout.data.csum               =  tickspersecond * 5
+    timeout.data.ack                =  tickspersecond * 30
+
+    delay.idle                      =  tickspersecond
+
+    threshold.timeouts              =  5
+
+    co.stacksize                    =  500
+
+    maxblockbytes                   =  255
+    maxblockwords                   =  maxblockbytes/bytesperword
+
+    rxpackets                       =  maxblockbytes + 3
+
+    wordsperbuffer                  =  500
+    bytesperbuffer                  =  wordsperbuffer * bytesperword
+
+    action.readwords                =  'R'
+    action.writewords               =  'W'
+
+    NIL                             =  -1
+$)
+
+
+
+LET start()  BE
+$(
+//  The main routine of the TTYIO device.  This device resides on two machines
+//  connected to each other via a serial line.  Files can be transferred in
+//  both directions, and the transaction can be initiated by either end.
+
+    LET loc.co  =  0
+    LET rem.co  =  0
+
+    device.in   :=  devicetask( "ttyin:" )
+    device.out  :=  devicetask( "ttyout:" )
+
+    IF  device.in = 0  |  device.out = 0  THEN
+    $(
+        //  One or both of the devices does not exist, so we cannot do a lot
+        //  about this!
+        
+        message( "TTY devices not mounted" )
+        
+        stop( 20 )
+    $)
+
+    //  We have found the devices, so we should set up the coroutines
+    //  which will handle everything but the asynchronous tty I/O.
+
+    loc.co  :=  createco( local, co.stacksize )
+    rem.co  :=  createco( remote, co.stacksize )
+
+    IF  loc.co = 0  |  rem.co = 0  THEN  abort( error.getvecfailure )
+
+    //  Otherwise, we have the devices and the coroutine, so it is safe to 
+    //  continue working.
+
+    make.task.assignment( "ttyio", taskid )
+    
+    message( "Handler task %N started", taskid )
+
+    initstore( 500 )
+
+    readbuffer   :=  getchunk( wordsperbuffer )
+    readbufferp  :=  0
+    readbuffere  :=  0
+
+    FOR  i = 1  TO  rxpackets  DO
+    $(
+        LET pkt  =  getstore( pkt.arg1 )
+        
+        pkt!pkt.link  :=  notinuse
+        pkt!pkt.id    :=  device.in
+
+        qpkt( pkt )
+    $)
+    
+    //  The initialisation has now finished, so we can set up the coroutine
+    //  environment, and dive in.
+    
+    pktwait  :=  copktwait
+    idle     :=  TRUE
+
+    loc.pkt  :=  callco( loc.co )
+    rem.pkt  :=  callco( rem.co )
+
+    $(  //  The main repeat loop.  Wait for a packet to come from the outside
+        //  world, and then act on it.  Packets from the TTY device itself are
+        //  handled asynchronously here.
+        
+        LET pkt  =  taskwait()
+        
+        //  Is this the packet that the local coroutine was waiting for.  If it
+        //  is, then we should call the coroutine.
+
+        TEST  pkt = loc.pkt  THEN  loc.pkt  :=  callco( loc.co, pkt )
+        ELSE
+        
+        //  Is this the packet that the remote coroutine was waiting for.  If 
+        //  it is, then we should call the coroutine.
+
+        TEST  pkt = rem.pkt  THEN  rem.pkt  :=  callco( rem.co, pkt )
+        ELSE
+        
+        //  Is this one of the TTY packets.  If it is, then we should add the
+        //  character contained within it to the circular buffer.
+        
+        TEST  pkt!pkt.id = device.in  THEN  handletty( pkt )
+        ELSE
+        
+        //  This is an unexpected packet, so we should look to see whether the
+        //  local coroutine is available to accept it.
+        
+        TEST  loc.pkt = NIL  THEN  loc.pkt  :=  callco( loc.co, pkt )
+        ELSE
+        
+        //  Can't handle it, so return it with a flea in its ear!
+        
+        returnpkt( pkt, 0, error.objectinuse )
+    $)
+    REPEAT  //  For a month of Sundays ...
+$)
+
+
+
+AND maskbyte( word )  =  (word & #XFF)
+
+
+
+AND handletty( pkt )  BE
+$(
+//  Add this character to circular buffer.
+
+    readbuffer % readbuffere  :=  maskbyte( pkt!pkt.res1 )
+    readbuffere               :=  (readbuffere + 1)  REM  bytesperbuffer
+
+    qpkt( pkt )
+$)
+
+
+
+AND ttywrch( ch )  BE  sendpkt( notinuse, device.out, 0, 0, 0, maskbyte( ch ) )
+
+
+
+AND ttyrdch( seconds )  =  VALOF
+$(
+//  Wait for the requisite number of seconds for something to appear down
+//  the serial line.
+
+    UNLESS  readbufferp = readbuffere  DO
+    $(
+        LET ch  =  readbuffer % readbufferp
+        
+        readbufferp  :=  (readbufferp + 1)  REM  bytesperbuffer
+            
+        RESULTIS  ch
+    $)
+        
+    //  No character, so wait a while and try again.  If we have reached
+    //  the end of our timeout, then we should return.
+        
+    IF  seconds = 0  THEN  RESULTIS  io.timeout
+        
+    delay( 1 )
+    
+    seconds  :=  seconds - 1
+$)
+REPEAT
+
+
+
+AND local()  BE
+$(
+//  Coroutine to handle local events.  We wait until a packet arrives, and then
+//  handle it when it does.
+
+    LET pkt  =  cowait( NIL )
+
+    SWITCHON  pkt!pkt.type  INTO
+    $(
+        CASE act.findinput   :  
+        CASE act.findoutput  :  //  Make sure that we are idle, and if we are,
+                                //  handle the operation.
+                                
+                                TEST  idle
+                                    THEN  do.findstream( pkt )
+                                    ELSE  returnpkt( pkt, 0, error.objectinuse )
+                                ENDCASE
+
+        DEFAULT              :  returnpkt( pkt, 0, error.actionnotknown )
+    $)
+$)
+REPEAT
+
+
+
+AND remote()  BE
+$(
+//  Coroutine to handle the remote aspect of the file transfer.  We perform the
+//  idle handshake, and listen for commands from the remote machine.
+
+    LET command  =  0
+
+    //  Before we do anything, wait for the stream to become idle.  Once this
+    //  has happened, we can start the idle handshake.
+
+    UNTIL  idle  DO  delay( delay.idle )
+
+    //  The stream is idle, so we should start the handshaking, and wait for
+    //  a command from the other end.
+
+    WHILE  idle  DO
+    $(
+        //  Wait for a command from the other end.  We break out of the idle
+        //  loop if we receive a command from the other end, or the local
+        //  half of the handler becomes active.
+        
+        command  :=  ttyrdch( 0 )    //  Synchronous read
+        
+        //  Look at the command we have been given.  If we have been asked to
+        //  perform something, then we should start doing it now.
+        
+        IF  command = io.timeout  THEN
+        $(
+            //  We have timed out.  Send an "idle" command to the other
+            //  end, so hopefully it will respond to us.
+
+            ttywrch( io.idle )
+
+            delay( delay.idle )
+                
+            LOOP
+        $)
+
+        //  This is a real command.  Unless is is the other end telling us
+        //  that it is idle, we should break out of the loop.
+        
+        UNLESS  command = io.idle  DO  BREAK
+    $)
+
+    //  We drop through here when one of two things has happened.  These 
+    //  are:
+    //
+    //    a)  The stream has been grabbed by the local machine
+    //    b)  the stream is wanted by the remote machine
+    //
+    //  There is a possibility that both things have happened, and we should
+    //  extract this case immediately.
+    
+    UNLESS  idle  |  command = io.idle  |  command = io.timeout  DO
+    $(
+        //  There has been a clash.  Send back the relevant NACK to the
+        //  request we have been sent, and then wait for the line to become
+        //  idle again.
+        
+        TEST  command = io.rx.req  THEN  ttywrch( io.rx.nack )  
+        ELSE
+
+        TEST  command = io.tx.req  THEN  ttywrch( io.tx.nack )  
+        ELSE
+
+            //  Oh dear.  Something is really screwed up here.  Say that there
+            //  has been a protocol error and reset the stream.
+       
+            protocolerror( command )
+
+        //  Whatever else has happened, we should go back to the start of the
+        //  loop, since we can do nothing useful here.
+        
+        LOOP
+    $)
+
+    //  When we drop through here, we know that it is either the local
+    //  machine which has claimed the stream, or it is us which have claimed
+    //  it.
+    
+    IF  idle  THEN
+
+        //  The stream was idle, so we should claim it.  Look at the command
+        //  we have been given to make sure that it is one of the ones we
+        //  are expecting.
+        
+        TEST  command = io.rx.req  |  command = io.tx.req  THEN
+        
+            //  This is one of the valid commands we are expecting at this
+            //  point.
+            
+            handleremote( command )
+
+        ELSE
+
+            //  Oh dear.  We have been given a command which is meaningless,
+            //  so we should complain about this.
+            
+            protocolerror( command )
+$)
+REPEAT
+
+
+
+AND protocolerror( data )  BE
+$(
+//  Print out a message saying that there has been a protocol error, and then
+//  reset the input buffer.
+
+    message( "Protocol error  (data %N)", data )
+
+    resetinput()
+$)
+
+
+
+AND timeout( reason )  BE
+
+//  Print out a message saying that there has been a time out.
+
+    message( "Timed out %S", reason )
+
+
+
+AND checksumerror( reason )  BE
+
+//  Print out a message saying that there has been a checksum error.
+
+    message( "Checksum error %S", reason )
+
+
+
+AND resetinput()  BE
+
+//  Reset the input buffer so that any characters therein are flushed.
+
+    readbufferp  :=  readbuffere
+
+
+
+AND handleremote( command )  BE
+$(
+//  The remote machine has asked to receive a file.  We should claim the
+//  stream interlock, and then start the protocol going.
+
+    LET filename    =  VEC 256/bytesperword
+    LET filestream  =  0
+    LET length      =  0
+    LET reply       =  0
+    LET csum        =  0
+    
+    LET rxcommand   =  command = io.rx.req
+    
+    LET ack         =  rxcommand  ->  io.rx.ack,  io.tx.ack
+    LET open        =  rxcommand  ->  findinput,  findoutput
+
+    //  Note that if the other end has sent us a reception request, then we
+    //  must actually perform a transmission!
+
+    LET handle      =  rxcommand  ->  remote.tx,  remote.rx
+
+    idle  :=  FALSE
+
+    //  Acknowledge the command, and then wait for the filename to come
+    //  to us.
+
+    ttywrch( ack )
+    
+    length  :=  ttyrdch( timeout.fname.length )
+    
+    IF  length = io.timeout  THEN  GOTO  failed
+    
+    //  Having received the length of the filename, we should read the rest
+    //  of the characters into a buffer.
+    
+    FOR  i = 1  TO  length  DO
+    $(
+        LET ch  =  ttyrdch( timeout.fname.data )
+        
+        IF  ch = io.timeout  THEN  GOTO  failed
+        
+        filename % i  :=  ch
+        csum          :=  csum + ch
+    $)
+
+    //  Having received the filename, we should wait for the checksum to make
+    //  sure that we have received it properly.
+    
+    reply  :=  ttyrdch( timeout.fname.csum )
+    
+    IF  reply = io.timeout  THEN
+    $(
+        //  Timeout while waiting for the checksum to arrive.
+
+        timeout( "waiting for FNAME CSUM" )
+        
+        GOTO  failed
+    $)
+        
+    UNLESS  reply = maskbyte( csum )  DO
+    $(
+        //  The checksum arrived, but was incorrect.
+        
+        checksumerror( "in FNAME" )
+        
+        GOTO  failed
+    $)
+
+    //  If we reach this point, then we have received the file name characters.
+    //  Even though we have received the file name, we still have to open the
+    //  file, and this may fail.
+
+    filename % 0  :=  length
+    filestream    :=  open( filename )
+    
+    IF  filestream = 0  THEN
+    $(
+        //  We have failed to open the file, so send a negative acknowledgement
+        //  to the other machine.
+        
+        ttywrch( io.fname.nack )
+        
+        GOTO  failed
+    $)
+
+    //  If we come here, then we have received the file name, and we have
+    //  opened the file successfully.  We should give the happy news to the
+    //  other machine.
+
+    ttywrch( io.fname.ack )
+
+    //  Having done that, we can consider the stream to have been set up
+    //  successfully.  All that remains is to handle the operation!
+
+    handle( filename, filestream )
+
+    //  Error recovery point.  We come here if we failed to set the stream
+    //  up.  Close the file if it had been opened, and then return.
+
+failed:
+
+    UNLESS  filestream = 0  DO  endstream( filestream )
+
+    idle  :=  TRUE
+$)
+
+
+
+AND remote.tx( name, stream )  BE
+$(
+//  Send a file to the other machine.
+
+    LET sysin  =  input()
+    LET reply  =  0
+
+    message( "Transmission of *"%S*" started", name )
+
+    $(  //  Repeat loop to read characters from the file, and send them
+        //  down the serial line.
+
+        LET buffer  =  VEC maxblockbytes/bytesperword
+
+        LET length  =  0
+        LET ch      =  0
+        
+        selectinput( stream )
+        
+        UNTIL  length = maxblockbytes  DO
+        $(
+            ch  :=  rdch()
+            
+            IF  ch = endstreamch  THEN  BREAK
+
+            buffer % length  :=  ch
+            length           :=  length + 1
+        $)
+        
+        selectinput( sysin )
+        
+        //  If we have hit end of file, then we should break out of this loop
+        //  and tell the other machine.
+        
+        IF  length = 0  &  ch = endstreamch  THEN  BREAK
+
+        //  Otherwise we have a buffer which must be sent to the remote 
+        //  machine.  
+
+        UNLESS  tty.writeblock( buffer, length )  DO  RETURN
+    $)
+    REPEAT
+    
+    //  When we drop through here, we have sent the whole file, so we should
+    //  send the "eof" marker.
+
+    UNLESS  tty.endoffile()  DO  RETURN
+
+    //  Otherwise, it all seems to have worked, so we should print out a
+    //  message for the user.
+    
+    message( "Transmission of *"%S*" finished", name )
+$)
+
+
+
+AND remote.rx( name, stream )  BE
+$(
+//  Receive a file from the other machine.
+
+    LET sysout  =  output()
+
+    message( "Reception of *"%S*" started", name )
+
+    $(  //  Repeat loop to read characters from the serial line and send them
+        //  to the file.
+
+        LET buffer   =  VEC maxblockbytes/bytesperword
+        LET length   =  0
+        
+        //  Read a block of data from the other end.
+
+        UNLESS  tty.readblock( buffer, @length )  DO  RETURN
+        
+        //  The end of file signal is a successful operation with zero data
+        //  characters.
+        
+        IF  length = 0  THEN  BREAK
+        
+        //  Otherwise we have to write this data to the file stream, and then
+        //  go back for more.
+
+        selectoutput( stream )
+
+        FOR  i = 0  TO  length-1  DO  wrch( buffer % i )
+
+        selectoutput( sysout )
+    $)
+    REPEAT
+    
+    //  All seems to have worked, so we should print out a message for the 
+    //  user.
+    
+    message( "Reception of *"%S*" finished", name )
+$)
+
+
+
+AND do.findstream( pkt )  BE
+$(
+//  We have been asked to send or receive a file.  We should claim the idle
+//  interlock, and then attempt to open a connection to the other machine.
+
+    LET buffer      =  VEC maxblockbytes/bytesperword
+
+    LET type        =  pkt!pkt.type
+    LET scb         =  pkt!pkt.arg1
+    LET name        =  pkt!pkt.arg3
+
+    LET end         =  name % 0
+    LET pos         =  splitprefix( name )
+
+    LET reply      =  0
+    LET csum       =  0
+    LET rxcommand  =  type = act.findinput
+
+    LET req        =  rxcommand  ->  io.rx.req,      io.tx.req
+    LET ack        =  rxcommand  ->  io.rx.ack,      io.tx.ack
+    LET nack       =  rxcommand  ->  io.rx.nack,     io.tx.nack
+    LET handle     =  rxcommand  ->  local.rx,       local.tx
+    LET scbend     =  rxcommand  ->  0,              maxblockbytes
+    LET replenish  =  rxcommand  ->  tty.replenish,  0
+    LET deplete    =  rxcommand  ->  0,              tty.deplete
+    LET close      =  rxcommand  ->  tty.endread,    tty.endwrite
+    
+    //  Set the idle flag so that we will not accept any incoming calls while
+    //  the operation is happening.
+
+    idle  :=  FALSE
+    
+    resetinput()
+
+    ttywrch( req )
+    
+    reply  :=  ttyrdch( timeout.req.ack )
+    
+    //  If we have had a timeout or a NACK here, then we should return the 
+    //  open packet to the user.
+    
+    UNLESS  reply = ack  DO
+    $(
+        TEST  reply = io.timeout  
+            THEN  timeout( "waiting for REQ ACK" )
+            ELSE  UNLESS  reply = nack  DO  protocolerror( reply )
+        
+        returnpkt( pkt, 0, error.objectnotfound )
+        
+        GOTO  failed
+    $)
+
+    //  We have been given an acknowledgement, so we should send the file name
+    //  to the other end.
+    
+    ttywrch( end-pos )
+    
+    FOR  i = pos+1  TO  end  DO  
+    $(
+        LET ch  =  name % i
+        
+        ttywrch( ch )
+        
+        csum  :=  csum + ch
+    $)
+    
+    //  Now, write the filename checksum.
+    
+    ttywrch( maskbyte( csum ) )
+    
+    //  Now wait for the other end to tell us whether the filename was
+    //  acceptable.
+    
+    reply  :=  ttyrdch( timeout.fname.ack )
+    
+    //  If the file was not acceptable to the other end, then we should reply 
+    //  to the user now.
+            
+    UNLESS  reply = io.fname.ack  DO
+    $(
+        TEST  reply = io.timeout  
+            THEN  timeout( "waiting for FNAME ACK" )
+            ELSE  UNLESS  reply = io.fname.nack  DO  protocolerror( reply )
+        
+        returnpkt( pkt, 0, error.objectnotfound )
+        
+        GOTO  failed
+    $)
+
+    //  If we come here, then the file name has been accepted by the other
+    //  end, so we should start the transfer going.
+
+    scb!scb.type   :=  taskid
+    scb!scb.buf    :=  buffer
+    scb!scb.pos    :=  0
+    scb!scb.end    :=  scbend
+    scb!scb.func1  :=  replenish
+    scb!scb.func2  :=  deplete
+    scb!scb.func3  :=  close
+    scb!scb.arg1   :=  scb
+    
+    //  Having done that, it is safe to return the packet, and then start the
+    //  operation going.
+
+    returnpkt( pkt, scb, 0 )
+    
+    UNLESS  handle()  DO  message( "Transfer failed" )
+
+    //  Error recovery point.
+
+failed:
+
+    idle  :=  TRUE
+$)
+
+
+
+AND splitprefix( name )  =  VALOF
+$(
+//  Return the position of the first ":" in a name.
+
+    FOR  i = 1  TO  name % 0  DO
+        IF  name % i = ':'  THEN
+            RESULTIS  i
+
+    RESULTIS  0
+$)
+
+
+
+AND tty.replenish( scb )  =
+    sendpkt( notinuse, scb!scb.type, action.read, 0, 0, scb )
+
+
+
+AND tty.deplete( scb )  =
+    sendpkt( notinuse, scb!scb.type, action.write, 0, 0, scb )
+
+
+
+AND tty.endread( scb )  =
+    sendpkt( notinuse, scb!scb.type, action.closeinput, 0, 0, scb )
+
+
+
+AND tty.endwrite( scb )  =
+    sendpkt( notinuse, scb!scb.type, action.closeoutput, 0, 0, scb )
+
+
+
+AND local.rx()  =  VALOF
+$(
+//  We are receiving a file from the other machine, so we should wait for
+//  the user to send us further commands.
+
+    LET success  =  TRUE
+
+    $(  //  Repeat loop to wait for packets from the user, and handle then
+        //  when they arrive.
+
+        LET pkt  =  cowait( NIL )
+
+        SWITCHON  pkt!pkt.type  INTO
+        $(
+            CASE action.read        :  success  :=  do.read( pkt, success )
+                                       ENDCASE
+
+            CASE action.readwords   :  success  :=  do.readwords( pkt, success )
+                                       ENDCASE
+
+            CASE action.closeinput  :  success  :=  do.closeinput( pkt, success )
+                                       BREAK
+
+            CASE act.findinput      :  
+            CASE act.findoutput     :  returnpkt( pkt, 0, error.objectinuse )
+                                       ENDCASE
+
+            DEFAULT                 :  returnpkt( pkt, 0, error.actionnotknown )
+        $)
+    $)
+    REPEAT
+
+    RESULTIS  success
+$)
+
+
+
+AND local.tx()  =  VALOF
+$(
+//  We are transmitting a file to the other machine, so we should wait for
+//  the user to send us further commands.
+
+    LET success  =  TRUE
+
+    $(  //  Repeat loop to wait for packets from the user, and handle then
+        //  when they arrive.
+
+        LET pkt  =  cowait( NIL )
+
+        SWITCHON  pkt!pkt.type  INTO
+        $(
+            CASE action.write       :  success  :=  do.write( pkt, success )
+                                       ENDCASE
+
+            CASE action.writewords  :  success  :=  do.writewords( pkt, success )
+                                       ENDCASE
+
+            CASE action.closeoutput :  success  :=  do.closeoutput( pkt, success )
+                                       BREAK
+
+            CASE act.findinput      :  
+            CASE act.findoutput     :  returnpkt( pkt, 0, error.objectinuse )
+                                       ENDCASE
+
+            DEFAULT                 :  returnpkt( pkt, 0, error.actionnotknown )
+        $)
+    $)
+    REPEAT
+
+    RESULTIS  success
+$)
+
+
+
+AND do.read( pkt, success )  =  VALOF
+$(
+//  Since this is easy to do, we may as well support this operation, since
+//  it is silly not to!
+
+    TEST  success  THEN
+    $(
+        //  We have had success up to now, so we should attempt to build on
+        //  that!
+        
+        LET scb  =  pkt!pkt.arg1
+
+        success  :=  tty.readblock( scb!scb.buf, scb+scb.end )
+        
+        //  On error or end of file, the length field is set to zero.  We stop
+        //  the user reading as soon as possible.
+
+        returnpkt( pkt, (scb!scb.end > 0), 0 )
+    $)
+    ELSE  returnpkt( pkt, FALSE, 0 )
+
+    RESULTIS  success
+$)
+
+
+
+AND do.readwords( pkt, success )  =  VALOF
+$(
+//  Attempt to read some data into the SCB held in the packet.  If we have had
+//  a failure before, then we return "end of file".
+
+    TEST  success  THEN
+    $(
+        //  We have had success up to now, so we should attempt to build on
+        //  that!
+        
+        LET scb     =  pkt!pkt.arg1
+        LET buffer  =  pkt!pkt.arg2
+        LET length  =  pkt!pkt.arg3
+        
+        LET words   =  0
+        
+        UNTIL  words = length  DO
+        $(
+            LET bytes  =  0
+        
+            success  :=  tty.readblock( buffer, @bytes )
+            
+            //  If that failed, there is no point in going any further, since
+            //  we cannot read any more.
+            
+            IF  bytes = 0  |  NOT success  THEN  BREAK
+            
+            //  Having read a block, we increment the word count and go round
+            //  the loop again.
+            
+            words   :=  words   +  (bytes + bytesperword - 1)/bytesperword
+            buffer  :=  buffer  +  (bytes + bytesperword - 1)/bytesperword
+        $)
+        
+        //  On error or end of file, the length field is set to zero.  We stop
+        //  the user reading as soon as possible.
+
+        returnpkt( pkt, ((words = length)  ->  words, -words), 0 )
+    $)
+    ELSE  returnpkt( pkt, 0, 0 )
+
+    RESULTIS  success
+$)
+
+
+
+AND do.closeinput( pkt, success )  =  VALOF
+$(
+//  Close the input stream given.
+
+    returnpkt( pkt, TRUE, 0 )
+
+    RESULTIS  success
+$)
+
+
+
+AND do.write( pkt, success )  =  VALOF
+$(
+//  Attempt to write some data from the SCB held in the packet.  If we have had
+//  a failure before, then we return immediately.
+
+    IF  success  THEN
+    $(
+        //  We have had success up to now, so we should attempt to build on
+        //  that!
+        
+        LET scb  =  pkt!pkt.arg1
+
+        success  :=  tty.writeblock( scb!scb.buf, scb!scb.pos )
+    $)
+
+    returnpkt( pkt, TRUE, 0 )
+
+    RESULTIS  success
+$)
+
+
+
+AND do.writewords( pkt, success )  =  VALOF
+$(
+//  Write a bunch of words to the other machine.  In practice, we simply
+//  split this into groups of blocks.
+
+    IF  success  THEN
+    $(
+        //  We have had success up to now, so we should attempt to build on
+        //  that!
+        
+        LET scb     =  pkt!pkt.arg1
+        LET buffer  =  pkt!pkt.arg2
+        LET length  =  pkt!pkt.arg3
+        
+        UNTIL  length = 0  DO
+        $(
+            LET words  =  length > maxblockwords  ->  maxblockwords,  length
+            LET bytes  =  words * bytesperword
+
+            success  :=  tty.writeblock( buffer, bytes )
+            
+            //  If that failed, then there is no point in continuing, since
+            //  we will not be able to write any more.
+            
+            UNLESS  success  DO  BREAK
+            
+            //  Otherwise, adjust the count and buffer pointer, and go round
+            //  for more.
+            
+            length  :=  length - words
+            buffer  :=  buffer + words
+        $)
+    $)
+
+    returnpkt( pkt, TRUE, 0 )
+
+    RESULTIS  success
+$)
+
+
+
+AND do.closeoutput( pkt, success )  =  VALOF
+$(
+//  Close the output stream given.  Flush the output buffer, and then send
+//  the end of file command.
+
+    LET scb  =  pkt!pkt.arg1
+
+    IF  success  THEN
+        success  :=  tty.writeblock( scb!scb.buf, scb!scb.pos )
+
+    IF  success  THEN
+        success  :=  tty.endoffile()
+
+    returnpkt( pkt, TRUE, 0 )
+
+    RESULTIS  success
+$)
+
+
+
+AND tty.readblock( buffer, lv.length )  =  VALOF
+$(
+//  Read a data block from the other machine, returning a boolean saying
+//  whether the operation was a success.
+
+    LET length   =  0
+    LET csum     =  0
+        
+    LET command  =  ttyrdch( timeout.data.req )
+        
+    //  If we have timed out, then we should stop now, since the other
+    //  side seems to have finished sending to us.
+        
+    IF  command = io.timeout  THEN
+    $(
+        timeout( "waiting for DATA REQ" )
+        
+        GOTO  failed
+    $)
+        
+    //  Look to see whether this is the end of the file, and if it is,
+    //  break out of the data loop.
+        
+    IF  command = io.data.eof  THEN
+    $(
+        //  We have been send an end of file condition, so send the 
+        //  acknowledgement and return the "eof" condition.
+        
+        ttywrch( io.data.ack )
+        
+        !lv.length  :=  0
+        
+        RESULTIS  TRUE
+    $)
+
+    //  Otherwise, it should be a data command.  If it isn't, then this
+    //  is some sort of protocol error which must be squashed now!
+        
+    UNLESS  command = io.data.req  DO
+    $(
+        protocolerror( command )
+            
+        GOTO  failed
+    $)
+        
+    //  If we drop through here, then this is a piece of data.  Read the
+    //  length, followed by the data itself.
+        
+    length  :=  ttyrdch( timeout.data.length )
+        
+    IF  length = io.timeout  THEN
+    $(
+        //  Oh dear - we seem to have timed out!
+            
+        timeout( "waiting for DATA LENGTH" )
+            
+        GOTO  failed
+    $)
+        
+    //  Otherwise, we should read the characters into the buffer, working
+    //  out the checksum as we go.
+        
+    FOR  i = 0  TO  length-1  DO
+    $(
+        LET ch  =  ttyrdch( timeout.data.data )
+            
+        //  Check that we actually received some data, and complain if
+        //  we didn't.
+
+        IF  ch = io.timeout  THEN
+        $(
+            //  Timeout here chaps!
+               
+            timeout( "waiting for DATA" )
+                
+            message( "Length is %N, timeout on character %N", length, i )
+                
+            GOTO  failed
+        $)
+            
+        //  We did receive some data, so we should add it to the buffer
+        //  and go back for some more.
+            
+        buffer % i  :=  ch
+        csum        :=  csum + ch
+    $)
+        
+    //  Having read the data, we should read the checksum from the
+    //  other end.  If this fails to match, then we stop the operation
+    //  now.
+        
+    command  :=  ttyrdch( timeout.data.csum )
+        
+    IF  command = io.timeout  THEN
+    $(
+        //  Timeout on the checksum value.
+
+        timeout( "waiting for DATA CSUM" )
+            
+        GOTO  failed
+    $)
+        
+    //  We received a checksum from the other end, but did it match?
+        
+    UNLESS  command = maskbyte( csum )  DO
+    $(
+        //  The checksum does not match, so we cannot accept this
+        //  block.  Send back a "nack" so that the other end can
+        //  detect this.
+            
+        checksumerror( "in DATA" )
+            
+        ttywrch( io.data.nack )
+            
+        GOTO  failed
+    $)
+        
+    //  If we drop through here, then we have received the data correctly,
+    //  so we should send an "ack".
+        
+    ttywrch( io.data.ack )
+
+    //  If we have failed to read any data from the other end, then we should
+    //  loop again, to give us a chance of getting some.
+
+    IF  length = 0  THEN  LOOP
+
+    //  Otherwise, update the length, and return telling the user that the
+    //  block has been received successfully.
+
+    !lv.length  :=  length
+    
+    RESULTIS  TRUE
+
+    //  Error recovery point.
+
+failed:
+
+    !lv.length  :=  0
+    
+    RESULTIS  FALSE
+$)
+REPEAT
+
+
+
+AND tty.writeblock( buffer, length )  =  VALOF
+$(
+//  Send a data block to the other machine.  We return a boolean saying
+//  whether the operation has succeeded.
+
+    LET csum   =  0
+    LET reply  =  0
+
+    ttywrch( io.data.req )
+    ttywrch( length )
+        
+    FOR  i = 0  TO  length-1  DO
+    $(
+        LET ch  =  maskbyte( buffer % i )
+
+        csum  :=  csum + ch
+            
+        ttywrch( ch )
+    $)
+        
+    ttywrch( maskbyte( csum ) )
+        
+    //  Having sent the data, we should await the acknowledgement saying
+    //  that the block has got through successfully.
+        
+    reply  :=  ttyrdch( timeout.data.ack )
+        
+    UNLESS  reply = io.data.ack  DO
+    $(
+        //  Transfer failed for some reason.  This could either be a
+        //  protocol error, or a timeout.
+            
+        TEST  reply = io.timeout  
+            THEN  timeout( "waiting for DATA ACK" )
+            ELSE  protocolerror( reply )
+            
+        RESULTIS  FALSE
+    $)
+
+    //  Otherwise, we appear to have succeeded, so we should tell the
+    //  user.  This should make him happy!
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND tty.endoffile()  =  VALOF
+$(
+//  Send an "end of file" marker to the other end.  Return a boolean saying
+//  whether it worked or not.
+
+    LET reply  =  0
+
+    ttywrch( io.data.eof )
+    
+    reply  :=  ttyrdch( timeout.eof.ack )
+    
+    UNLESS  reply = io.data.ack  DO
+    $(
+        //  Oh dear - pipped at the post.  We have failed to receive the
+        //  acknowledgement, so we should stop.
+            
+        TEST  reply = io.timeout  
+            THEN  timeout( "waiting for EOF ACK" )
+            ELSE  protocolerror( reply )
+            
+        RESULTIS  FALSE
+    $)
+    
+    //  We have succeeded!
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND copktwait( id, pkt )  =  cowait( pkt )
+
+
+
+AND message( format, arg1, arg2 )  BE
+$(
+//  Print out a tagged message.
+
+    writes( "****** TTYIO: " )
+    writef( format, arg1, arg2 )
+    newline()
+$)
+
+
+
+AND initstore( chunksize )  BE
+$(
+//  Initialise the storage package, defining the size of chunks which will
+//  be grabbed from the standard storage manager.
+
+    storage.chunksize  :=  chunksize
+    storage.root       :=  NIL
+    storage.high       :=  0
+    storage.low        :=  0
+$)
+
+
+
+AND getstore( upb )  =  VALOF
+$(
+//  Analagous to "getvec"  -  allocate a vector whose word upperbound
+//  is "upb" from the heap.  If there is not enough room in the current
+//  chunk, then allocate a new chunk.
+
+    LET size   =  upb + 1
+    LET chunk  =  0
+
+    IF  size > storage.chunksize  THEN  abort( error.getvecfailure )
+
+    IF  (storage.high - storage.low)  <  size  THEN
+    $(
+        //  Not enough room left in the current chunk, so allocate a
+        //  new chunk, and try again.
+
+        LET newchunk  =  getchunk( storage.chunksize )
+
+        storage.low   :=  newchunk
+        storage.high  :=  storage.low + storage.chunksize + 1
+    $)
+
+    chunk        :=  storage.low
+    storage.low  :=  storage.low + size
+
+    RESULTIS  chunk
+$)
+
+
+
+AND getchunk( size )  =  VALOF
+$(
+//  Get a chunk of the size given, and add it to the chain of chunks which
+//  have already been obtained.
+
+    LET newchunk  =  getvec( size + 1 )
+
+    IF  newchunk = 0  THEN  abort( error.getvecfailure )
+
+    newchunk!0    :=  storage.root
+    storage.root  :=  newchunk
+
+    RESULTIS  newchunk + 1
+$)
+
+
+
+AND uninitstore()  BE
+$(
+//  Free all the storage in use by the storage package.  The base of the
+//  storage chain is pointed to by "storage.root".
+
+    UNTIL  storage.root = NIL  DO
+    $(
+        LET next  =  storage.root!0
+
+        freevec( storage.root )
+
+        storage.root  :=  next
+    $)
+$)
+
+

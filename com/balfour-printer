@@ -1,0 +1,855 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+      #######     ####    ##        ########   ######   ##    ##  #######  
+      ########   ######   ##        ########  ########  ##    ##  ######## 
+      ##    ##  ##    ##  ##        ##        ##    ##  ##    ##  ##    ## 
+      #######   ########  ##        ######    ##    ##  ##    ##  ######## 
+      ##    ##  ##    ##  ##        ##        ##    ##  ##    ##  #######  
+      ##    ##  ##    ##  ##        ##        ##    ##  ##    ##  ##  ##   
+      ########  ##    ##  ########  ##        ########  ########  ##   ##  
+      #######   ##    ##  ########  ##         ######    ######   ##    ## 
+
+      #######   #######   ########  ##    ##  ########  ########  #######  
+      ########  ########  ########  ###   ##  ########  ########  ######## 
+      ##    ##  ##    ##     ##     ####  ##     ##     ##        ##    ## 
+      #######   ########     ##     ## ## ##     ##     ######    ######## 
+      ##        #######      ##     ##  ####     ##     ##        #######  
+      ##        ##  ##       ##     ##  ####     ##     ##        ##  ##   
+      ##        ##   ##   ########  ##   ###     ##     ########  ##   ##  
+      ##        ##    ##  ########  ##    ##     ##     ########  ##    ## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   30/09/85             *
+\*****************************************************************************/
+
+
+
+SECTION "PRINTER"
+
+
+
+GET "LIBHDR"
+GET "RINGHDR"
+GET "MANHDR"
+GET "IOHDR"
+GET "UIDHDR"
+GET "BCPL.SSPLIB"
+GET "BCPL.TSPARM"
+GET "BCPL.CR82LIB"
+
+
+
+GLOBAL
+$(
+    asyncreplies         :  ug + 0
+    logging              :  ug + 1
+    logstream            :  ug + 2
+    pos.char             :  ug + 3
+    pos.line             :  ug + 4
+    rhtaskid             :  ug + 5
+    sysin                :  ug + 6
+    sysout               :  ug + 7
+$)
+
+
+
+MANIFEST
+$(
+    type.connect         =  ts.parm.msgtype.connect
+    type.accept          =  ts.parm.msgtype.accept
+    type.disconnect      =  ts.parm.msgtype.disconnect
+    type.authentication  =  ts.parm.msgtype.auth
+
+    arg.called           =  1
+    arg.calling          =  2
+    arg.quality          =  3
+    arg.explanation      =  4
+
+    open.error           =  0
+    open.cr82            =  1
+    open.tsbsp           =  2
+    open.bsp             =  3
+
+    rbuffsize            =  256
+
+    //  The following Manifests define the physical dimensions of the printer
+    //  page, and the options for the shape of the banner printer at the
+    //  header of each new document.  Their meanings are:
+    //
+    //      charsperline    The number of characters on a line, in other
+    //                      words, the printer page width.
+    //
+    //      linesperpage    The number of lines on a page, in other words,
+    //                      the printer page length.
+    //
+    //      spacespertab    Character position count when expanding tabs into
+    //                      spaces.  Tab positions are multiples of this 
+    //                      number.
+    //
+    //      starlines       The number of lines of stars to be written above
+    //                      and below the banner message.
+    //
+    //      blanklines      The number of blank lines to leave between the
+    //                      bottom of the header and the start of the text.
+    //
+    //      starcount       The number of stars at the left and right of the
+    //                      banner message lines.
+
+    charsperline         =  132
+    linesperpage         =  60
+    spacespertab         =  8
+
+    starlines            =  3
+    blanklines           =  2
+    starcount            =  15
+
+    fc.balfourprint      =  1
+    fc.balfourprint.raw  =  2
+
+    rxbuffersize         =  1024
+
+    printer.station      =  #XFF
+    printer.port         =  42
+    printer.timeout      =  tickspersecond
+    
+    main.stacksize       =  1000
+
+    error.busy           =  #XBFE0    //  Printer busy with ring document
+    error.badopen        =  #XC009    //  Service does not exist (?)
+    error.badfunc        =  #XC002    //  Unknown function
+    error.badparms       =  #XC005    //  Invalid parameters
+    error.dead           =  #XBFE2    //  Printer offline (?)
+$)
+
+
+
+LET start( initpkt )  BE
+$(
+//  Main routine of the printer driver.  Called either as a program or as a
+//  resident task.  The purpose is to wait for requests coming from the
+//  outside world, and then either reject them or start the printing operation
+//  going.
+
+    LET rxpkt      =  getvec( rhpkt.lifetime )
+    LET rxbuffer   =  getvec( rxbuffersize/ringwordsperword )
+
+    LET mainco     =  0
+    LET mainpkt    =  0
+    LET oldwait    =  0
+    LET iscommand  =  initpkt = 0
+
+    IF  rxpkt = 0  |  rxbuffer = 0  THEN  abort( error.getvecfailure )
+
+    UNLESS  iscommand  DO
+    $(
+        //  We are started up as a real task, and so we should set up the
+        //  real I/O streams, and return the initialisation packet.
+        
+        initio()
+        
+        selectinput( findinput( "**" ) )
+        selectoutput( findoutput( "**" ) )
+        
+        returnpkt( initpkt, TRUE, 0 )
+    $)
+
+    sysin         :=  input()
+    sysout        :=  output()
+
+    logging       :=  TRUE
+    logstream     :=  findoutput( "**" )
+
+    rhtaskid      :=  rootnode!rtn.info!rtninfo.ring!ri.rhtaskid
+    asyncreplies  :=  0
+    
+    message( "Printer driver task %N starting", taskid )
+    
+    //  Having set up the I/O streams, we should create the main coroutine,
+    //  and then set up the reception request.
+
+    mainco        :=  createco( main, main.stacksize )
+    
+    IF  main = 0  THEN  abort( error.getvecfailure )
+
+    //  Now, initialise the printer values by putting the printer to the
+    //  top of a new page.
+    
+    IF  printerdead()  THEN
+    $(
+        message( "Printer is not responding" )
+        
+        WHILE  printerdead()  DO  delay( tickspersecond )
+        
+        message( "Printer now responding" )
+    $)
+
+    printch( '*C' )    //  New line
+    printch( '*P' )    //  New page
+    
+    pos.char  :=  0
+    pos.line  :=  0
+
+    printermessage( "Printer driver started" )
+    
+    //  We are now in a state when we can start the infinite loop to wait for
+    //  requests coming from outside.
+    
+    rxpkt!pkt.link        :=  notinuse
+    rxpkt!pkt.id          :=  rhtaskid
+    rxpkt!pkt.type        :=  act.rx.bb
+    rxpkt!pkt.res1        :=  0
+    rxpkt!pkt.res2        :=  0
+    rxpkt!rhpkt.buff      :=  rxbuffer
+    rxpkt!rhpkt.size      :=  rxbuffersize
+    rxpkt!rhpkt.station   :=  printer.station
+    rxpkt!rhpkt.port      :=  printer.port
+    rxpkt!rhpkt.lifetime  :=  printer.timeout
+
+    qpkt( rxpkt )
+
+    oldwait  :=  pktwait
+    pktwait  :=  copktwait
+    
+    $(  //  Repeat loop to wait for packets to arrive, and then handle them
+        //  when they do.
+        
+        LET pkt  =  taskwait()
+        
+        TEST  pkt = mainpkt  THEN
+
+            //  This is the packet which was expected by the main coroutine,
+            //  and so we should pass it on without further ado.
+            
+            mainpkt  :=  callco( mainco, pkt )
+            
+        ELSE
+        
+        TEST  pkt = rxpkt  THEN
+        $(
+            //  This is the reception request coming back.  We should look
+            //  to see whether a timeout has gone off.  If not, then we should
+            //  either fire up the main coroutine or reject this packet out
+            //  of hand.
+            
+            TEST  pkt!pkt.res1 = 0  THEN
+
+                //  This is a timeout, so we should look to see whether this
+                //  is the time to stop.
+                
+                IF  mainpkt = 0  &  asyncreplies = 0  THEN
+                
+                    //  We have no commitments outside this world, and so
+                    //  we can check the "break d" flag, which might be
+                    //  telling us to stop.
+                    
+                    IF  testflags( #B0100 )  THEN
+                    
+                        //  This is the end of the road chaps.  We should break
+                        //  from this loop, and let the outer level deal
+                        //  with the closing down.
+                        
+                        BREAK
+            ELSE
+
+                //  Look at see whether the main coroutine is in use or not,
+                //  and if it is, then moan immediately.  Otherwise, we should
+                //  pass on the request to the next level.
+                
+                TEST  mainpkt = 0  THEN  mainpkt  :=  callco( mainco, pkt )
+                ELSE
+                
+                    //  More difficult, since we have to send a reply to this
+                    //  request, and we cannot use the synchronous "sendpkt".
+                    
+                    asyncreply( pkt, error.busy )
+                    
+            //  Having reached this stage, we should resubmit the reception
+            //  request, and go round the loop one more time.
+            
+            qpkt( pkt )
+        $)
+        
+        ELSE
+        $(
+            //  Not the coroutine packet or the reception packet.  This must
+            //  mean that this is an asynchronous reply coming back from the
+            //  ring handler, and because of this, we should free the packet.
+            
+            IF  asyncreplies = 0  THEN  abort( 9999 )  //  Hmmm!
+
+            freepkt( pkt )
+
+            asyncreplies  :=  asyncreplies - 1
+        $)
+    $)
+    REPEAT  //  Until requested not to
+
+    //  When we drop out of that loop, we should delete the main coroutine, and
+    //  then close down as best we can.
+    
+    pktwait  :=  oldwait
+
+    deleteco( mainco )
+    
+    freevec( rxpkt )
+    freevec( rxbuffer )
+
+    message( "Printer driver task %N stopping", taskid )
+
+    endstream( logstream )
+    
+    UNLESS  iscommand  DO
+    $(
+        endstream( sysin )
+        endstream( sysout )
+        
+        endtask( tcb!tcb.seglist!3 )
+    $)
+$)
+        
+
+
+AND main( pkt )  =  VALOF
+$(
+//  The main coroutine of the printer driver.  We are called when a ring
+//  reception succeeds, and a block is available for decoding.
+
+    LET called    =  VEC rbuffsize/bytesperword
+    LET tsbuff    =  VEC rbuffsize/bytesperword
+    LET bufdesc   =  VEC ts.parm.bufdesc.order
+
+    LET buff      =  copybuffer( pkt!rhpkt.buff )
+
+    LET size      =  pkt!pkt.res1
+    LET source    =  pkt!pkt.res2
+
+    LET type      =  get2bytes( buff, bb.ssp.type )
+    LET func      =  get2bytes( buff, bb.ssp.func )
+
+    LET bs.in     =  0
+    LET bs.out    =  0
+    LET opentype  =  0
+    LET dummy     =  0
+    LET ok        =  TRUE
+
+    IF  func \= fc.balfourprint  &  func \= fc.balfourprint.raw  THEN
+    $(    
+        //  Not one of the function codes which we recognise, and so we should
+        //  reject this request.
+        
+        asyncreply( pkt, error.badfunc )
+        
+        freevec( buff )
+        
+        RESULTIS  0
+    $)
+
+    //  If we reach this point in the proceedings, then all has worked, and
+    //  so we should start decoding the options.
+        
+    bufdesc!ts.parm.bufdesc.buffer    :=  buff
+    bufdesc!ts.parm.bufdesc.start     :=  0
+    bufdesc!ts.parm.bufdesc.lastused  :=  size*bytesperringword
+    bufdesc!ts.parm.bufdesc.upb       :=  size*bytesperringword
+    bufdesc!ts.parm.bufdesc.order     :=  FALSE
+        
+    //  We read the BSP parameters into dummy variables, since this will
+    //  set up the TS PARM descriptor properly for us.
+
+    opentype  :=  bsp.read.bsp.parms( bufdesc, @dummy, @dummy, @dummy, @dummy )
+        
+    TEST  opentype = open.error  THEN
+    $(
+        //  Not open of the "open" types of reqest which we are expecting,
+        //  so out on its ear.
+        
+        asyncreply( pkt, error.badopen )
+        
+        freevec( buff )
+        
+        RESULTIS  0
+    $)
+    ELSE
+    
+    TEST  opentype = open.cr82  |  opentype = open.tsbsp  THEN
+    $(
+        //  This is a new style "transport service" open, and so we should
+        //  call the "tsparm" library to decode the arguments for us.
+        
+        ok  :=  ok  &  ts.parm.read( bufdesc, type.connect, arg.called,      called, rbuffsize )
+        ok  :=  ok  &  ts.parm.read( bufdesc, type.connect, arg.calling,     tsbuff, rbuffsize )
+        ok  :=  ok  &  ts.parm.read( bufdesc, type.connect, arg.quality,     tsbuff, rbuffsize )
+        ok  :=  ok  &  ts.parm.read( bufdesc, type.connect, arg.explanation, tsbuff, rbuffsize )
+    $)
+    ELSE
+    
+    TEST  opentype = open.bsp  THEN
+    $(
+        //  This is an old Cambridge "BSP" type open request, and so we must
+        //  do the decoding ourselves.
+        
+        LET pos     =  bufdesc!ts.parm.bufdesc.start
+        LET length  =  byteget( buff, pos )
+        
+        TEST  length > rbuffsize  THEN
+
+            //  Oh dear - the parameter string is too long for us to cope
+            //  with, and so we should just set the "ok" flag to FALSE.
+            
+            ok  :=  FALSE
+            
+        ELSE
+        $(
+            //  More like it.  We have the parameter for the asking, and so
+            //  it is simply a matter of copying it from one buffer to
+            //  another.
+            
+            FOR  i = 0  TO  length  DO  called % i  :=  byteget( buff, pos + i )
+        
+            ok  :=  TRUE
+        $)
+    $)
+    ELSE
+    $(
+        //  More worrying, since this is an internal error, and a bad return
+        //  code from the TSPARM library.
+        
+        message( "Unexpected RC=%N from the TSPARM library!", opentype )
+        
+        ok  :=  FALSE
+    $)
+
+    //  If, and only if all that succeeded, will the flag "ok" still be
+    //  true.  If all has gone well, then we should continue with the
+    //  next stage.
+        
+    UNLESS  ok  DO
+    $(
+        //  We have failed to decode the transport service parameters,
+        //  and so we should complain about this.
+            
+        asyncreply( pkt, error.badparms )
+        
+        freevec( buff )
+        
+        RESULTIS  0
+    $)
+
+    //  We are almost there now, but there is still the obstacle that the
+    //  printer may be switched off, off line, or generally dead.  We should
+    //  check for that here.
+    
+    IF  printerdead()  THEN
+    $(
+        asyncreply( pkt, error.dead )
+        
+        freevec( buff )
+        
+        RESULTIS  0
+    $)
+
+    //  Decoding successful, so we should make the connection and
+    //  read the file from the byte stream.
+
+    bufdesc!ts.parm.bufdesc.start  :=  0
+
+    IF  bsp.openack( bufdesc, source, "OK", @bs.in, @bs.out )  THEN
+    $(
+        //  We have successfully sent the OPENACK, and so we can now start
+        //  drooling data from the byte stream.  The title for the document,
+        //  if any, is given as the "called" address.
+        
+        selectinput( bs.in )
+
+        SWITCHON  func  INTO
+        $(
+            CASE fc.balfourprint     :  print( called )     ;  ENDCASE
+            CASE fc.balfourprint.raw :  rawprint( called )  ;  ENDCASE
+                    
+            DEFAULT                  :  abort( 9999 )
+        $)
+
+        //  The end of the print operation, and so we should close the
+        //  byte stream.
+        
+        endread()
+        
+        selectinput( sysin )
+    $)
+
+    //  When we finally drop out of that lot, we return zero, so that the
+    //  outer level cause the print server to stop.
+
+    RESULTIS  0
+$)
+
+
+
+AND copybuffer( buffer )  =  VALOF
+$(
+//  Copy a ring buffer from static to heap storage.  This is just so that the
+//  library routine "bsp.openack" can work properly!
+
+    LET buff  =  getvec( rxbuffersize/ringwordsperword )
+
+    IF  buff = 0  THEN  abort( error.getvecfailure )
+
+    FOR  i = 0  TO  rxbuffersize-1  DO  put2bytes( buff, i, get2bytes( buffer, i ) )
+
+    RESULTIS  buff
+$)
+
+
+
+AND print( banner )  BE
+$(
+//  This is a formatted print document, and so we should print a header, and
+//  format the document as we print it.
+
+    LET ch      =  rdch()
+    LET string  =  checkbanner( banner )
+
+    printheader( string )
+
+    message( "(%S) started", string )
+
+    UNTIL  ch = endstreamch  DO
+    $(
+        //  Copy set of characters from the byte stream onto the printer.
+        
+        IF  checkbreak( string )  THEN  BREAK
+        
+        FOR  i = 1  TO  1024  DO
+        $(
+            writech( ch )
+            
+            ch  :=  rdch()
+            
+            IF  ch = endstreamch  THEN  BREAK
+        $)
+    $)
+    
+    writech( '*P' )
+
+    message( "(%S) finished", string )
+$)
+
+
+
+AND printheader( banner )  BE
+$(
+//  Write a header out, so that the people know who this document belongs to.
+
+    FOR  i = 1  TO  starlines   DO  starline()
+
+    stringline( starcount, "" )
+    stringline( starcount, banner )
+    stringline( starcount, "" )
+
+    FOR  i = 1  TO  starlines   DO  starline()
+    FOR  i = 1  TO  blanklines  DO  blankline()
+$)
+
+
+
+AND starline()  BE
+$(
+//  Write a line full of stars.
+
+    FOR  i = 1  TO  charsperline  DO  writech( '**' )
+
+    writech( '*N' )
+$)
+
+
+
+AND blankline()  BE  writech( '*N' )
+
+
+
+AND stringline( stars, string )  BE
+$(
+//  Write a substituted string on a line.  We truncate the banner to a
+//  maximum length, so that we can guarantee to have a space between the
+//  header and the banner message.
+
+    LET maximum  =  charsperline - stars*2 - 2
+    LET length   =  string % 0
+    LET before   =  0
+    LET after    =  0
+    
+    IF  length > maximum  THEN  length  :=  maximum
+
+    before  :=  (maximum - length)/2
+    after   :=  (maximum - length - before)
+
+    FOR  i = 1  TO  stars    DO  writech( '**' )
+    FOR  i = 1  TO  before+1 DO  writech( '*S' )
+    FOR  i = 1  TO  length   DO  writech( string % i )
+    FOR  i = 1  TO  after+1  DO  writech( '*S' )
+    FOR  i = 1  TO  stars    DO  writech( '**' )
+    
+    writech( '*N' )
+$)
+
+
+
+AND printermessage( string )  BE
+$(
+//  Write a banner out to the printer with a message on it.
+
+    blankline()
+    blankline()
+
+    starline()
+    stringline( 1, string )
+    starline()
+    
+    writech( '*P' )
+$)
+
+
+    
+AND rawprint( banner )  BE
+$(
+//  Rawprint.  This is the easy function to provide, since all it does is to
+//  copy the input to the output.
+
+    LET ch      =  rdch()
+    LET string  =  checkbanner( banner )
+
+    message( "(%S) started", string )
+
+    UNTIL  ch = endstreamch  DO
+    $(
+        //  Copy set of characters from the byte stream onto the printer.
+        
+        IF  checkbreak( string )  THEN  BREAK
+        
+        FOR  i = 1  TO  1024  DO
+        $(
+            printch( ch )
+            
+            ch  :=  rdch()
+            
+            IF  ch = endstreamch  THEN  BREAK
+        $)
+    $)
+    
+    //  We must always force a newpage here, so pretend we have written 
+    //  something, and then call "writech" to reset all counters for us.
+
+    pos.char  :=  1
+    
+    writech( '*P' )
+
+    message( "(%S) finished", string )
+$)
+
+
+
+AND checkbreak( banner )  =  VALOF
+$(
+//  Check to see whether the task has been broken, or there is a break in the
+//  byte stream.
+
+    IF  testflags( #B1000 )  THEN  message( "(%S) printing", banner )
+
+    IF  testflags( #B0001 )  THEN
+    $(
+        message( "(%S) aborted", banner )
+        
+        printermessage( "Document aborted manually" )
+        
+        RESULTIS  TRUE
+    $)
+
+    IF  bsp.test.reset( cis )  THEN
+    $(
+        message( "(%S) BSP error", banner )
+        
+        printermessage( "Byte stream timed out or broken" )
+        
+        RESULTIS  TRUE
+    $)
+
+    RESULTIS  FALSE
+$)
+
+
+
+AND checkbanner( banner )  =  banner % 0 = 0  ->  "unnamed document", banner
+        
+        
+
+AND writech( ch )  BE
+$(
+//  Version of "printch" which takes note of where on the page we currently
+//  are.  This means that we can expand tabs, and print newpage characters
+//  when necessary.  Unprintable characters are filtered out here.
+
+    TEST  ch = '*T'  THEN
+    $(
+        //  We should print at least one space, taking us up to the next
+        //  character position.
+        
+        LET pos  =  pos.char
+        
+        $(  //  Repeat loop to write out the characters.  We use "writech"
+            //  rather than "printch" so that wrapping is handled properly.
+        
+            writech( '*S' )
+            
+            pos  :=  pos + 1
+        $)
+        REPEATUNTIL  (pos REM spacespertab) = 0
+    $)
+    ELSE
+    
+    TEST  ch = '*N'  THEN
+    $(
+        //  Newline character.  This means print out a carriage return and
+        //  a line feed.  This may mean moving onto a new page.
+        
+        printch( '*C' )
+        
+        pos.char  :=  0
+        pos.line  :=  (pos.line + 1)  REM  linesperpage
+        
+        printch( pos.line = 0  ->  '*P', '*N' )
+    $)
+    ELSE
+    
+    TEST  ch = '*C'  THEN
+    $(
+        //  Carriage return character.  Reset the "position on line" pointer.
+        
+        printch( '*C' )
+        
+        pos.char  :=  0
+    $)
+    ELSE
+    
+    TEST  ch = '*P'  THEN
+    $(
+        //  Newpage character.  We should print it out, and reset the character
+        //  pointers appropriately.  We optimise out multiple page throws ...
+        
+        UNLESS  pos.char = 0  &  pos.line = 0  DO
+        $(
+            printch( '*C' )
+            printch( '*P' )
+            
+            pos.char  :=  0
+            pos.line  :=  0
+        $)
+    $)
+    
+    ELSE
+    $(
+        //  A bog standard character, which we should write out to the 
+        //  page.  We should check to see whether we have overflowed the
+        //  line, and if so, then we should print a newline character first.
+        
+        IF  pos.char = charsperline  THEN  writech( '*N' )
+        
+        printch( c( ch ) )
+        
+        pos.char  :=  pos.char + 1
+    $)
+$)
+        
+        
+        
+AND c( char )  =      //  N.B.  ASCII specific!
+
+    ( "???????????????????????????????? !*"#$%&'()**+,-./0123456789:;<=>?*
+      *@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~?"
+    ) % ((char & #X7F) + 1)
+
+
+
+AND asyncreply( pkt, error )  BE
+$(
+//  Start an asynchronous reply going, and increment the reply count.
+
+    LET txpkt   =  getpkt( error )
+    LET txbuff  =  result2
+    
+    txpkt!pkt.link       :=  notinuse
+    txpkt!pkt.id         :=  rhtaskid
+    txpkt!pkt.type       :=  act.tx
+    txpkt!pkt.res1       :=  0
+    txpkt!pkt.res2       :=  0
+    txpkt!rhpkt.buff     :=  txbuff
+    txpkt!rhpkt.size     :=  bb.ssp.args
+    txpkt!rhpkt.station  :=  pkt!pkt.res2
+    txpkt!rhpkt.port     :=  get2bytes( pkt!rhpkt.buff, bb.ssp.replyport )
+    
+    asyncreplies         :=  asyncreplies + 1
+
+    qpkt( txpkt )
+$)
+
+
+
+AND getpkt( code )  =  VALOF
+$(
+//  Return a single piece of store which is both a packet and a transmission
+//  buffer for the packet.
+
+    LET txpkt   =  getvec( rhpkt.lifetime + 1 + bb.ssp.args/ringwordsperword )
+    LET txbuff  =  txpkt + rhpkt.lifetime + 1
+    
+    IF  txpkt = 0  THEN  abort( error.getvecfailure )
+    
+    put2bytes( txbuff, bb.ssp.type, code.openack )
+    put2bytes( txbuff, bb.ssp.replyport, 0 )
+    put2bytes( txbuff, bb.ssp.rc, code )
+
+    result2  :=  txbuff
+
+    RESULTIS  txpkt
+$)
+
+
+
+AND freepkt( pkt )  BE  freevec( pkt )
+
+
+
+AND copktwait( id, pkt )  =  cowait( pkt )
+    
+
+
+AND message( format, arg1, arg2 )  BE  IF  logging  THEN
+$(
+//  Write out a logging message.
+
+    LET o  =  output()
+    
+    selectoutput( logstream )
+    
+    writes( "****** " )
+    writef( format, arg1, arg2 )
+    newline()
+    
+    selectoutput( o )
+$)
+
+
+
+//*****************************************************************************
+//*                 The printer driver routines themselves                    *
+//*****************************************************************************
+
+
+
+AND printch( ch )  BE  wrch( ch )       //  Needs updating!
+AND printerdead()  =  FALSE             //  Needs updating!
+
+

@@ -1,0 +1,403 @@
+SECTION "SENDER"
+
+GET "header"
+GET "clihdr"
+
+//*****************************************************************************
+//                   MAIL SERVER SEND DEMON MAIN LOOP                        //
+//*****************************************************************************
+
+MANIFEST
+$(      ssp.uid                 = uid2  //uid?  PUID of SSP file **** OPEN ****
+        send.index.ring.words   = 1000
+$)
+
+LET sdemon() BE
+$(
+    LET send.index      = VEC file.desc.size
+    LET text.file       = VEC file.desc.size
+    LET ssp.file        = VEC file.desc.size
+    LET given.header.file= VEC file.desc.size
+    LET address         = VEC 4
+    LET ssp.cache       = ?
+    LET res             = ?
+    LET index.cache     = ?
+    LET wto.file(string, a,b,c,d,e,f) BE
+    $(  MANIFEST $( full.bytes=80 $)
+        LET base        = "send "
+        LET full        = VEC full.bytes/BYTESPERWORD
+        LET p           = base%0
+        LET s.len       = string%0 > (full.bytes - p) -> full.bytes-p, string%0
+        FOR i = 1 TO p          DO full%i       := base  %i
+        FOR i = 1 TO s.len      DO full%(p+i)   := string%i
+        full%0  := p + s.len
+        wto.mc("file", full, a,b,c,d,e,f)
+    $)
+    LET current.slot    = ?
+
+    Zap.file(send.index)
+    Zap.file(text.file)
+    Zap.file(ssp.file)
+    Zap.file(given.header.file)
+
+
+    ms.interlocked.file         := 0
+    ms.perm.vec.chain           := 0
+    ms.temp.vec.chain           := 0
+    ssp.cache                   := get.perm.vec(300/rwpw)
+    index.cache                 := get.perm.vec(send.index.ring.words/rwpw)
+    send.index ! cache.address  := index.cache
+    send.index ! cache.size     := send.index.ring.words/rwpw
+
+    full.trace          := FALSE
+    timing              := FALSE
+    breaks.allowed      := TRUE
+    trusted             := FALSE
+
+    client.puid         := get.perm.vec(4)
+    client.name         := get.perm.vec(50)
+
+    // If initialisation code is linked in then use it!!
+
+    rhtaskid            := rootnode!rtn.info!rtninfo.ring!ri.rhtaskid
+    lookup.name("PS.MAP", address)
+    map.station := address!0
+    map.port    := address!2
+    map.func    := address!3
+
+    client.index        := perm.file()
+    master.index        := perm.file()
+    header.file         := perm.file()
+    send.file           := perm.file()
+    expanded.groups.file:= perm.file()
+    recipients.puids.file:= perm.file()
+    md                  := perm.file()
+    new.umid            := get.perm.vec(umid.size)
+
+//<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    client.md           := perm.file()  // HERE ...
+    client.group.directory:= perm.file()        // HERE ...
+    client.group.directory:= perm.file()        // HERE ...
+    public.group.directory:= perm.file()        // HERE ...
+
+    client.md!cache.address             := get.perm.vec(600/rwpw)
+    client.md!cache.size                := 600
+
+    client.group.directory!cache.address:= get.perm.vec(300/rwpw)
+    client.group.directory!cache.size   := 300
+    public.group.directory!cache.address:= get.perm.vec(300/rwpw)
+    public.group.directory!cache.size   := 300
+//>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    um                  := perm.file()
+    um!cache.address    := get.perm.vec(4000/rwpw)
+    um!cache.size       := 4000
+
+    root                := perm.file()
+    root!(uid+0)        := #X800d
+    root!(uid+1)        := #x2a6e
+    root!(uid+2)        := #xd59f
+    root!(uid+3)        := #x79b9
+
+    IF validroutine(@ms.checker) THEN ms.checker()
+
+    dynamic     := TRUE
+    UNLESS fs.find(-1)
+    $(  wto.file("Fs.find failed")
+    $)
+
+    ms.fs.fail.level    := level()
+    ms.user.break.level := level()
+    // Route any tracing ouput to a file.
+    route.output.to.file()
+    IF trace THEN post.report(80*24)
+
+    retrieve.entry(root, root.user.map, um)
+    retrieve.entry(root, root.master.index, master.index)
+
+    read.cache(um, 0)
+
+    get.temp.files()
+
+    ssp.file!cache.address      := ssp.cache
+    ssp.file!cache.size         := 300
+
+    FOR pack = 1 TO 1
+    $(Each.pack
+        current.slot            := -2
+
+        wto.file("Start pack %N", Pack)
+
+        send.index!start.of.block := -1         // Nothing there !!!
+        retrieve.entry(root, root.send.index, send.index)
+        UNTIL current.slot >= 100
+        $(Each.slot
+            LET sender          = ?
+            LET offset          = ?
+            LET ms.interlock2   = 0
+
+            current.slot:= current.slot + 2     // Well it's a start ...
+
+            offset      := address.offset(send.index, current.slot*4, 8)
+
+            TEST index.cache %% offset = 0
+            THEN WRITEF("%I3 and %I3 empty*N", current.slot, current.slot+1)
+            ELSE
+            $(Each.full.slot
+                LET to.param            = 0
+                LET cc.param            = 0
+                LET bcc.param           = 0
+                LET subject.param       = 0
+                LET immediate.param     = 0
+                LET replyto.param       = 0
+                LET forward             = 0
+                LET bits                = 0
+                LET tripos.header       = 0
+                LET CAP.header          = 0
+                LET forward.id          = 0
+                LET inreply             = 0
+                LET via.name            = 0
+                LET grain.size          = 2
+                LET param               = ?
+                LET arg                 = ?
+                LET cache.disp          = ?
+                LET addr                = ?
+
+//              copy.uid(index.cache, offset    ,  ssp.file + uid, 0)
+//              Do a RETRIEVE just in case other demon has deleted it .....
+                retrieve.entry(send.index, current.slot, ssp.file)
+                IF (ssp.file+uid) %% 0 = 0
+                $(  WTO.file("Slot %N still in cache, but processed", current.slot)
+                    Writef  ("Slot %N still in cache, but processed", current.slot)
+                    LOOP
+                $)
+                copy.uid(index.cache, offset + 4, text.file + uid, 0)
+
+                open.file(ssp.file)     // HENCE SSP.UID = UID2 ****************
+                ms.interlock2           := ms.interlocked.file
+                ms.interlocked.file     := 0
+
+                read.cache(ssp.file, 0)                 // The Whole thing .....
+                $(      LET valid = FALSE
+                        FOR i = 0 TO 10 UNLESS ssp.cache%%i = #XFFFF
+                        $(      valid := TRUE; BREAK $)
+                        UNLESS valid
+                        $(      WRITEF("Slot %N is all -1s*N", current.slot)
+                                GOTO Check.Stop
+                        $)
+                $)
+
+                sender  := ssp.cache %% 10
+                // Copy datestamp into Unique Message ID
+                FOR j=0 TO 2 DO new.umid%%j := ssp.cache%%j
+
+                FOR j=11 TO 50
+                $(Each.param
+                    param       := (ssp.cache%%j) >> 8
+                    arg         := (ssp.cache%%j) & 255
+                    cache.disp  := arg * (grain.size/2) - 1
+                    addr        := ssp.cache + cache.disp
+
+                    WRITEF("j=%I2, param=%I2, arg=%I2, cache.disp=%I2, grain=%I2*N",
+                            j   , param   , arg   , cache.disp   , grain.size)
+                    IF (param > send.max.type)
+                    $(  WRITEF  ("****** Invalid param %I2 > %I2 *******N", param,
+                                                send.max.type)
+                        wto.file("**** Invalid param %N(>%N) in %N ****",
+                                        param, send.max.type, current.slot)
+//                      GOTO Check.stop
+                    $)
+
+                    SWITCHON param INTO
+                $(SW
+                  CASE #XFF:
+                        // How about a write failure ??
+                        IF ssp.cache%%j = #XFFFF        GOTO Check.Stop
+                  DEFAULT:
+                        WRITEF  ("**** Invalid param %N *****N", param)
+                        wto.file("**** Invalid param %N in %N ****",
+                                                param, current.slot);   ENDCASE
+
+                    CASE 0:                     // Last parameter
+                        BREAK
+
+                    CASE send.to:               // "To" parameter
+                        to.param := addr;                               ENDCASE
+
+                    CASE send.subject:          // Subject parameter
+                        subject.param := addr;                          ENDCASE
+
+                    CASE send.cc:               // Carbon copies parameter
+                        cc.param := addr;                               ENDCASE
+
+                    CASE send.bcc:              // Blind carbon copies parameter
+                        bcc.param := addr;                              ENDCASE
+
+                    CASE send.immediate:        // Immediate data parameter
+                        immediate.param := addr;                        ENDCASE
+
+                    CASE send.replyto:          // Who should get reply ...
+                        replyto.param := addr;                          ENDCASE
+
+                    CASE send.grainsize:        // ...
+                        grain.size      := arg;                         ENDCASE
+
+                    CASE send.forward:
+                        forward         := ssp.cache %% cache.disp;     ENDCASE
+
+                    CASE send.bits:
+                        bits            := ssp.cache %% cache.disp;     ENDCASE
+
+                    CASE send.tripos.header:    // PUID is supplied for
+                        tripos.header := cache.disp;                    ENDCASE
+
+                    CASE send.cap.header:
+                        cap.header := cache.disp;                       ENDCASE
+
+                    CASE send.forward.id:
+                        forward.id := addr;                             ENDCASE
+
+                    CASE send.inreply:
+                        inreply := addr;                                ENDCASE
+
+                    CASE send.ignore:                                   ENDCASE
+                    CASE send.version:
+                        UNLESS arg = current.send.version
+                        $(      WRITEF  ("Version %n instead of %n in %N*N",
+                                        arg, current.send.version, current.slot)
+                                wto.file("V%n(%n)@%N",
+                                        arg, current.send.version, current.slot)
+                        $)                                              ENDCASE
+                    CASE send.via:
+                                via.name := addr;                       ENDCASE
+                    $)SW
+                $)Each.param
+
+                // If the PUID is zero then this is an "annonymous" message and the
+                // source station number will have been inserted by the Z80 server.
+                IF tripos.header | cap.header
+                $(
+                        writef  ("Tripos header, cap header=%N, %N*N",
+                                                tripos.header, cap.header)
+                        wto.file("Tripos header, cap header=%N, %N",
+                                                tripos.header, cap.header)
+                        current.slot:= current.slot + 2 // They have provided it
+                        copy.uid(ssp.cache, tripos.header, given.header.file + uid, 0)
+                $)
+
+                copy.uid(ssp.cache, 7, client.puid, 0)
+                client.name%0 := 0
+                TEST ( (client.puid!0 = 0) -> VALOF
+                        $(      Let station     = (sender >> 8) & 255
+                                Let sender      = "Postman"
+                                UNLESS station = 0 RESULTIS
+                                            reverse.lookup(station, client.name)=
+                                                                convert.ok
+                                FOR i = 0 TO sender%0 DO client.name%i := sender%i
+                                RESULTIS TRUE
+                        $) ,
+                            (convert..puid.to.name(client.puid,0, client.name)=
+                                                                convert.ok)
+                     )
+                $(WORTH.ATTEMPTING
+WRITEF("Offsets: to %N, cc %N, bcc %N, subj %N, reply %N, forward %N, bits %X4*N",
+                            to.param, cc.param, bcc.param,
+                            subject.param, replyto.param, forward, bits)
+wto.file("f[%s]t[%S]c[%S]b[%S]s[%S]r[%S]",
+                            client.name,
+                            to.param            =0 -> "", to.param,
+                            cc.param            =0 -> "", cc.param,
+                            bcc.param           =0 -> "", bcc.param,
+                            subject.param       =0 -> "", subject.param,
+                            replyto.param       =0 -> "", replyto.param)
+wto.file("i[%s]f%n,b%X4,V%s",
+                            inreply             =0 -> "", inreply,
+                            forward,
+                            bits,
+                            via.name            =0 -> "", via.name)
+WRITEF("Text: from '%s', to '%S', cc '%S', bcc '%S', reply '%S',*N*
+*subj '%S', inreplyto '%s', via '%s' [client '%s']*N",
+                            client.name,
+                            to.param            =0 -> "<unset>", to.param,
+                            cc.param            =0 -> "<unset>", cc.param,
+                            bcc.param           =0 -> "<unset>", bcc.param,
+                            replyto.param       =0 -> "<unset>", replyto.param,
+                            subject.param       =0 -> "<unset>", subject.param,
+                            inreply             =0 -> "<unset>", inreply,
+                            via.name            =0 -> "<unset>", via.name,
+                            client.name         =0 -> "<unset>", client.name)
+
+                     IF trace THEN flush.cache(report.file)
+
+                     IF new.send(
+                            compare.uid(ssp.file+ssp.uid, 0,
+                                        text.file+uid,    0)-> 0, Text.file,
+                            False,
+                            to.param, cc.param, bcc.param,
+                            subject.param, immediate.param,     0,
+                            replyto.param, forward,
+                            bits,
+                            (tripos.header | cap.header) -> given.header.file, 0,
+                            forward.id,
+                            inreply,
+                            via.name,
+                                -1)
+                    $(
+WRITEF("Sent OK*N"); flush.cache(report.file)
+                        delete(send.index, current.slot)
+                        delete(send.index, current.slot+1)
+                        IF tripos.header | cap.header
+                        $(      delete(send.index, current.slot-2)
+                                delete(send.index, current.slot-1)
+                        $)
+                        wto.file("Sent OK")
+                    $)
+                $)WORTH.ATTEMPTING
+                ELSE
+                $(WORTH.ATTEMPTING
+                        writef("Convert Puid failed*N")
+                        wto.file("Convert puid to name failed")
+                $)WORTH.ATTEMPTING
+                flush.cache(report.file)
+
+            $)Each.full.slot
+            GOTO completed.OK
+
+ms.fs.fail.link:
+            wto.file("FS FAILURE %X4 on slot %N", fs.rc, current.slot)
+            writes("abandoned - ")
+            fs.explain(fs.rc)
+            report.subject := "SENDER: File server failure"
+            GOTO check.stop             // Boggle ... Tidyup causes problems !!
+
+Completed.OK:
+            little.tidyup()
+Check.stop:
+            UNLESS ms.interlock2 = 0
+            $(  ms.interlocked.file     := ms.interlock2
+                ms.interlock2           := 0
+                wto.file("Release interlock slot %N", current.slot)
+                close.file(ms.interlocked.file)
+            $)
+
+            // Check if rm time is nearly expired.
+            IF stop.time <= rootnode!rtn.mins
+            $(  report.subject := "SENDER:  Ran out of time"
+                trace := TRUE
+                writef("*N*NTripos time %n at slot %N, Stop time %n*N",
+                                rootnode!rtn.mins, current.slot, stop.time)
+                GOTO end
+            $)
+        $)Each.slot                     // End of loop for each index slot
+    $)Each.pack
+
+end:
+    IF report.subject = 0 THEN report.subject := "SENDER: Ended OK"
+    wto.file("'%S', S %N, %N/%N min",
+                                report.subject,
+                                current.slot,
+                                rootnode!rtn.mins, stop.time)
+    IF trace post.report(0)
+    tidyup()
+$)
+
+

@@ -1,0 +1,1078 @@
+//****************************************************************************
+//*                                                                          *
+//*        M68KASM  -  Assembler for the MC68000 family  -  Section 5        *
+//*                                                                          *
+//*                       Special Instruction Handling                       *
+//*                                  Part 3                                  *
+//*                                                                          *
+//****************************************************************************
+//*     I. D. Wilson    -    Last Modified    -    IDW    -    18/11/86      *
+//****************************************************************************
+
+
+
+SECTION "M5"
+
+
+
+GET "LIBHDR"
+GET "M68KHDR"
+
+
+
+LET instr33()  BE
+$(
+//  The FSAVE and FRESTORE instructions.  These are the same except for
+//  three bits in the middle of the word, and the effective addresses allowed.
+//  The "source.ea" field distiguishes the two.  The possible arguments are:
+//
+//      FSAVE     <ea>          (0)
+//      FRESTORE  <ea>          (1)
+
+    LET fsave  =  source.ea = 0
+
+    LET mode   =  fsave  ->  (am.Ar.pd+am.contr.alt), (am.Ar.pi+am.contr)
+    LET bits   =  fsave  ->  #B100, #B101
+
+    checkinstrsize()
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    IF  (op.ea & mode) = 0  THEN  complain( 7 )
+
+    codeword( fp.mask         |
+              (fp.id  <<  9)  |
+              (bits   <<  6)  |
+              (eafield())     )
+
+    genea()
+$)
+
+
+
+AND instr34()  BE
+$(
+//  The FBcc and FDBcc instructions.  Which one it is depends on the
+//  number of arguments expected.  The conditional predicate is in
+//  "source.ea".
+
+    LET ofwd  =  forwardreftype
+    LET olev  =  recoverlevel
+    let olab  =  recoverlabel
+
+    checkinstrsize()
+    nextsymb()
+
+    IF  nargs = 2  THEN
+    $(
+        //  The FDBcc case.  Read the data register.
+
+        effective.address()
+        checkfor( s.comma, 10 )
+
+        UNLESS  op.ea = am.Dr  DO  complain( 14 )
+
+        swapoperands()
+    $)
+
+    recoverlevel    :=  level()
+    recoverlabel    :=  label
+
+    forwardreftype  :=  s.abs32
+
+    effective.address()
+
+label:
+    recoverlevel    :=  olev
+    recoverlabel    :=  olab
+
+    forwardreftype  :=  ofwd
+
+    IF  error.found  THEN  longjump( recoverlevel, recoverlabel )
+
+    checkfor( s.none, 12 )
+
+    //  We cannot allow external references, since we need a displacement
+    //  here.
+
+    IF  externalref  THEN  complain( 152 )
+
+    TEST  op.ea = am.PC.disp  THEN
+        UNLESS  locmode = s.rel  DO
+            complain( 18 )
+
+    ELSE
+
+    TEST  (op.ea = am.abs16  |  op.ea = am.abs32)  THEN
+        IF  pass2  THEN
+            UNLESS  locmode = s.abs  DO
+                complain( 17 )
+
+    ELSE  complain( 16 )
+
+    //  It is now time to generate the code.  The first case deals with
+    //  FBcc.W and DBcc.  The second case is purely FBcc.L.
+
+    TEST  instr.size = ts.word  |  instr.size = ts.none  THEN
+    $(
+        //  Word branch - the offset must be within a 16 bit displacement
+        //  of the current location.
+
+        LET offset  =  exp - (location + 2)
+
+        IF  pass2  &  NOT (-32768 <= offset <= +32767)  THEN  complain( 21 )
+
+        TEST  nargs = 1  THEN
+
+            codeword( fp.mask         |
+                      (fp.id  <<  9)  |
+                      (1      <<  7)  |
+                      (source.ea)     )
+
+        ELSE
+        $(
+            codeword( fp.mask         |
+                      (fp.id  <<  9)  |
+                      (1      <<  6)  |
+                      (1      <<  3)  |
+                      (op1.exp)       )
+
+            codeword( source.ea       )
+        $)
+
+        codeword( offset & #XFFFF )
+    $)
+    ELSE
+
+    TEST  instr.size = ts.long  THEN
+    $(
+        //  Long branch.  This is a 32 bit displacement, so everywhere is in
+        //  range.
+
+        LET offset  =  exp - (location + 2)
+
+        codeword( fp.mask         |
+                  (fp.id  <<  9)  |
+                  (1      <<  7)  |
+                  (1      <<  6)  |
+                  (source.ea)     )
+
+        codeword( offset >> 16    )
+        codeword( offset & #XFFFF )
+    $)
+
+    ELSE  complain( 6 )
+$)
+
+
+
+AND instr35()  BE
+$(
+//  The FNOP instruction.   No arguments.  No sweat!!
+
+    checkinstrsize()
+
+    codeword( fp.mask         |
+              (fp.id  <<  9)  |
+              (1      <<  7)  )
+
+    codeword( 0 )
+$)
+
+
+
+AND instr36()  BE
+$(
+//  The FMOVECR instruction.  The possible arguments are:
+//
+//    a)  FMOVECR.X  #ccc,FPn
+
+    IF  instr.size = ts.none       THEN  complain( 226 )
+    IF  instr.size \= ts.extended  THEN  complain( 6 )
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    IF  (op.ea & am.imm) = 0  THEN  complain( 27 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    UNLESS  op.ea = am.FPr  DO  complain( 225 )
+
+    IF  pass1  &  NOT 0 <= op1.exp <= #X7F  DO  complain( 233 )
+
+    codeword( fp.mask         |
+              (fp.id  <<  9)  )
+
+    codeword( (1      <<  14)  |
+              (1      <<  12)  |
+              (1      <<  11)  |
+              (1      <<  10)  |
+              (exp    <<  7)   |
+              (op1.exp & #X7F) )
+$)
+
+
+
+AND instr37()  BE
+$(
+//  The FTRAPcc instructions.  The condition predicate is available as
+//  "source.ea".  The possible arguments are:
+//
+//    a)  FTRAPcc
+//    b)  FTRAPcc.W   #code
+//    c)  FTRAPcc.L   #code
+
+    LET opmode  =  0
+
+    checkinstrsize()
+
+    opmode  :=  instr.size = ts.word  ->  #B010,
+                instr.size = ts.long  ->  #B011,
+                instr.size = ts.none  ->  #B100,
+                                          complain( 0 )
+
+    UNLESS  instr.size = ts.none  DO
+    $(
+        //  A size has been given, so we are expecting some sort of
+        //  immediate operand.
+
+        nextsymb()
+
+        effective.address()
+        checkfor( s.none, 12 )
+
+        IF  (op.ea & am.imm) = 0  THEN  complain( 25 )
+    $)
+
+    IF  pass2  &  instr.size = ts.word  &  NOT wordsized( exp )  THEN
+        warning( 175 )
+
+    codeword( fp.mask         |
+              (fp.id  <<  9)  |
+              (1      <<  6)  |
+              (1      <<  5)  |
+              (1      <<  4)  |
+              (1      <<  3)  |
+              (opmode)        )
+
+    codeword( source.ea       )
+
+    IF  instr.size  = ts.long  THEN  codeword( exp >> 16 )
+    IF  instr.size \= ts.none  THEN  codeword( exp & #XFFFF )
+$)
+
+
+
+AND instr38()  BE
+$(
+//  The FScc set of instructions.  The conditional predicate is available
+//  as "source.ea".
+
+    checkinstrsize()
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    IF  (op.ea & am.data.alt) = 0  THEN  complain( 7 )
+
+    codeword( fp.mask         |
+              (fp.id  <<  9)  |
+              (1      <<  6)  |
+              (eafield())     )
+
+    codeword( source.ea       )
+
+    genea()
+$)
+
+
+
+AND readbitfield()  =  VALOF
+$(
+//  Read a bit field of the form:
+//
+//    {<offset>:<width>}
+//
+//  Where each item can be an absolute expression or a data register.  The
+//  possible ranges are:
+//
+//      offset:    0-31
+//      width:     1-32
+
+    LET offset  =  0
+    LET d.o     =  0
+    LET width   =  0
+    LET d.w     =  0
+
+    checkfor( s.cbra, 212 )
+
+    effective.address()
+    checkfor( s.colon, 213 )
+
+    TEST  op.ea = am.Dr                          THEN  d.o  :=  1  ELSE
+    TEST  op.ea = am.abs16  |  op.ea = am.abs32  THEN  d.o  :=  0  ELSE
+
+        complain( 215 )
+
+    offset  :=  exp
+
+    effective.address()
+    checkfor( s.cket, 214 )
+
+    TEST  op.ea = am.Dr                          THEN  d.w  :=  1  ELSE
+    TEST  op.ea = am.abs16  |  op.ea = am.abs32  THEN  d.w  :=  0  ELSE
+
+        complain( 216 )
+
+    width  :=  exp
+
+    //  Check the numeric values of the offset and width fields, and complain
+    //  if they are no good.
+
+    IF  pass2  THEN
+    $(
+        IF  d.o = 0  &  NOT (0 <= offset <= 31)  THEN  complain( 217 )
+        IF  d.w = 0  &  NOT (1 <= width  <= 32)  THEN  complain( 218 )
+    $)
+
+    RESULTIS  ((d.o                 <<  11)   |
+               ((offset & #B11111)  <<  6)    |
+               (d.w                 <<  5)    |
+               ((width  & #B11111))           )
+$)
+
+
+
+AND checkinstrsize()  BE
+$(
+//  Look at the instruction size, and complain if it is not one of the bona
+//  fide "B", "W" or "L" codes.
+
+    SWITCHON  instr.size  INTO
+    $(
+        CASE ts.none     :
+        CASE ts.byte     :
+        CASE ts.word     :
+        CASE ts.long     :  ENDCASE
+
+        CASE ts.short    :  complain( 86 )
+        CASE ts.double   :  complain( 220 )
+        CASE ts.extended :  complain( 221 )
+        CASE ts.packed   :  complain( 222 )
+
+        DEFAULT          :  complain( 0 )
+    $)
+$)
+
+
+
+AND genmove()  BE
+$(
+//  Generate code for a general MOVE instruction.
+//  This can take quite a few forms,  viz:
+//
+//      a)    <ea>,<ea>               all,data alt        BWL
+//      b)    <ea>,CCR                data                .W.
+//      c)    <ea>,SR                 data                .W.
+//      d)    SR,<ea>                 data alt            .W.
+//      e)    USP,Ar                                      ..L
+//      f)    Ar,USP                                      ..L
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    //  The   ...,CCR  and  ...,SR  can be picked out easily.
+
+    IF  op.ea = am.special  THEN
+    $(
+        LET size  =  exp = s.SR  ->  ts.word,
+                     exp = s.CCR ->  ts.byte,
+                                           -1
+
+        UNLESS  size = -1  DO
+        $(
+            TEST  (op1.ea & am.data) = 0  THEN  complain( 13 )
+            ELSE
+            $(
+                UNLESS  instr.size = ts.none  DO
+                        UNLESS  instr.size = ts.word  DO  complain( 28 )
+
+                swapoperands()
+
+                codeword(  #X44C0                              |
+                           (sizefield( size ) << 9)            |
+                           (eafield())                         )
+                genea()
+
+                RETURN
+            $)
+        $)
+    $)
+
+    //  Next, the move FROM SR instruction.
+
+    IF  op1.ea = am.special  THEN
+    $(
+        IF  op1.exp = s.SR  THEN
+        $(
+            UNLESS  instr.size = ts.word | instr.size = ts.none  DO  complain( 34 )
+
+            TEST  (op.ea & am.data.alt) = 0  THEN  complain( 23 )
+            ELSE
+            $(
+                codeword(  #X40C0                            |
+                           (eafield() )                      )
+                genea()
+
+                RETURN
+            $)
+        $)
+    $)
+
+    //  Now the Ar,USP and USP,Ar instructions.
+
+    IF    (op1.ea = am.special & op1.exp = s.USP) |
+          (op.ea  = am.special & exp     = s.USP)    THEN
+    $(
+        LET dr  =  op1.ea = am.special  ->  1, 0
+
+        UNLESS  instr.size = ts.long  |  instr.size = ts.none  DO  complain( 35 )
+
+        IF  op.ea  =  am.special  THEN  swapoperands()
+
+        TEST  op.ea = am.Ar  THEN
+              codeword(  #X4E60                               |
+                         (dr  <<  3)                          |
+                         (exp)                                )
+
+        ELSE  complain( dr = 1  ->  30, 36 )
+
+        RETURN
+    $)
+
+    //  This leaves  the good old MOVE <ea>,<ea> instruction!
+
+    TEST  (op1.ea & am.all) = 0      THEN  complain( 8 )                ELSE
+    TEST  (op.ea & am.alt) = 0       THEN  complain( 99 )               ELSE
+
+          generalmove()
+$)
+
+
+
+AND genmovea()  BE
+$(
+//  Move address into address register
+//  First, read in the operands:
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    TEST  (op1.ea & am.all) = 0     THEN  complain( 8 )                ELSE
+    TEST  (op.ea \= am.Ar)          THEN  complain( 30 )               ELSE
+
+          generalmove()
+$)
+
+
+
+AND generalmove()  BE
+$(
+    LET operand1  =  0
+    LET operand2  =  0
+
+    swapoperands()
+
+    operand2  :=  eafield()
+
+    swapoperands()
+
+    operand1  :=  eafield()
+    operand1  :=  ((operand1 << 3) | (operand1 >> 3))  &  #X3F
+
+    codeword(  #X0000                                   |
+               (movesize( instr.size )  <<  12)         |
+               (operand1  <<  6)                        |
+               (operand2)                               )
+
+    swapoperands()
+    genea()
+
+    swapoperands()
+    genea()
+$)
+
+
+
+AND movesize( size )  =  VALOF
+$(
+    SWITCHON  size  INTO
+    $(
+        CASE ts.byte     :  RESULTIS  #B01
+        CASE ts.word     :  RESULTIS  #B11
+        CASE ts.long     :  RESULTIS  #B10
+        CASE ts.none     :  RESULTIS  movesize( ts.default )
+
+        DEFAULT          :  complain( 37 )
+    $)
+$)
+
+
+
+AND genmovem()  BE
+$(
+//  Generate code for the MOVEM instruction.
+
+    LET dr     =  0
+    LET sz     =  0
+    LET rbits  =  0
+
+    nextsymb()
+
+    TEST  symb = s.Ar  |  symb = s.Dr  |  symb = s.reg  THEN
+    $(
+        LET bits  =  readregisters()
+        LET type  =  result2
+
+        UNLESS  type = s.reg  DO  complain( 233 )
+
+        checkfor( s.comma, 10 )
+
+        effective.address()
+        checkfor( s.none, 12 )
+
+        TEST  (op.ea & am.contr.alt) \= 0  THEN  rbits  :=  bits    ELSE
+        TEST  (op.ea & am.Ar.pd) \= 0      THEN  rbits  :=  reverse( bits, 16 )
+
+              ELSE  complain( 9 )
+
+        dr  :=  0
+    $)
+    ELSE
+    $(
+        LET bits  =  0
+        LET type  =  0
+
+        effective.address()
+        checkfor( s.comma, 10 )
+
+        bits  :=  readregisters()
+        type  :=  result2
+
+        UNLESS  type = s.reg  DO  complain( 233 )
+
+        checkfor( s.none, 12 )
+
+        TEST  (op.ea & am.contr)  \=  0         THEN  rbits  :=  bits  ELSE
+        TEST  (op.ea & am.Ar.pi)  \=  0         THEN  rbits  :=  bits  ELSE
+
+              complain( 8 )
+
+        dr  :=  1
+    $)
+
+    sz  :=  instr.size  =  ts.long   ->  1,
+            instr.size  =  ts.word   ->  0,
+            instr.size  =  ts.none   ->  0,
+                                         complain( 38 )
+
+    codeword(  #X4880                                                  |
+               (dr  <<  10)                                            |
+               (sz  <<  6)                                             |
+               (eafield() )                                            )
+
+    codeword(  rbits  &  #XFFFF )
+
+    genea()
+$)
+
+
+
+AND reverse( bits, count )  =  VALOF
+$(
+    LET newbits  =  0
+
+    FOR  i = 1  TO  count  DO
+    $(
+        newbits  :=  (newbits << 1)  +  (bits & 1)
+        bits     :=  bits >> 1
+    $)
+
+    RESULTIS newbits
+$)
+
+
+
+AND evalm( ptr )  =  VALOF
+$(
+    LET ptr0    =  ptr!p.ptr0
+    LET ptr1    =  ptr!p.ptr1
+    LET ptr2    =  ptr!p.ptr2
+
+    LET r1      =  0
+    LET r2      =  0
+    LET rtype1  =  0
+    LET rtype2  =  0
+    LET rnum1   =  0
+    LET rnum2   =  0
+
+    SWITCHON  ptr0  INTO
+    $(
+        CASE s.Ar     : //  Address register.  This is partof a normal
+                        //  register mask.
+
+                        result2  :=  s.reg
+
+                        RESULTIS  #B0000000100000000  <<  ptr1
+
+
+        CASE s.Dr     : //  Data register.  Like the address register,
+                        //  this is part of a normal register mask.
+
+                        result2  :=  s.reg
+
+                        RESULTIS  #B0000000000000001  <<  ptr1
+
+
+        CASE s.FPr    : //  Floating point register.  This can only be
+                        //  part of a floating point register mask.
+
+                        result2  :=  s.FPgreg
+
+                        RESULTIS  #B10000000  >>  ptr1
+
+
+        CASE s.FPIAR  :
+        CASE s.FPSR   :
+        CASE s.FPCR   : //  Floating point control registers.  There are
+                        //  only three of these, so handle them individually.
+
+                        result2  :=  s.FPcreg
+
+                        RESULTIS  ptr0 = s.FPIAR  ->  #B001,
+                                  ptr0 = s.FPSR   ->  #B010,
+                               /* ptr0 = s.FPCR */    #B100
+
+
+        CASE s.slash  : //  Two registers separated by a slash.  Read the
+                        //  two registers, making sure that they are the
+                        //  same type.
+
+                        r1      :=  evalm( ptr1 )
+                        rtype1  :=  result2
+
+                        r2      :=  evalm( ptr2 )
+                        rtype2  :=  result2
+
+                        UNLESS  rtype1 = rtype2  DO
+                            complain( 234 )
+
+                        RESULTIS  r1  |  r2
+
+
+        CASE s.hyphen : //  A register range, separated by a hyphen.  This
+                        //  is not allowed if the register type is the
+                        //  floating point control register.
+
+                        r1      :=  evalm( ptr1 )
+                        rtype1  :=  result2
+
+                        r2      :=  evalm( ptr2 )
+                        rtype2  :=  result2
+
+                        UNLESS  rtype1 = rtype2  DO
+                            complain( 234 )
+
+                        IF  rtype1 = s.FPcreg  THEN
+                            complain( 235 )
+
+                        //  We know that the registers are of the same
+                        //  basic type, but are they both Dr, Ar or FPr?
+
+                        rtype1   :=  ptr1!p.ptr0
+                        rnum1    :=  ptr1!p.ptr1
+
+                        rtype2   :=  ptr2!p.ptr0
+                        rnum2    :=  ptr2!p.ptr1
+
+                        IF  rtype1 = rtype2  THEN
+                        $(
+                            //  The types match, so construct the mask
+                            //  from the register range.
+
+                            LET result  =  0
+
+                            IF  rnum2 < rnum1  THEN
+                            $(
+                                LET t  =  r1
+
+                                r1  :=  r2
+                                r2  :=  t
+                            $)
+
+                            result  :=  r1
+
+                            UNTIL  r1 = r2  DO
+                            $(
+                                //  We have to be careful here, since FPr
+                                //  register masks are the opposite way round
+                                //  to there Dr and Ar equivalents.
+
+                                TEST  rtype1 = s.FPr
+                                    THEN  r1  :=  r1 >> 1
+                                    ELSE  r1  :=  r1 << 1
+
+                                result  :=  result | r1
+                            $)
+
+                            RESULTIS  result
+                        $)
+
+                        //  If we drop through here, then we have been asked
+                        //  to make a mask out of different register types.
+
+                        complain( 39 )
+
+
+        DEFAULT       : complain( 0 )
+    $)
+$)
+
+
+
+AND readregisters()  =  VALOF
+$(
+//  Read either a single REG type symbol, or a list of registers separated
+//  by "-" or "/".
+
+    TEST  symb = s.reg  |  symb = s.FPgreg  |  symb = s.FPcreg  THEN
+    $(
+        //  The current symbol has exactly the right shape, and so we should
+        //  remember its value, and read the next symbol.  Check here for
+        //  a forward reference (which is illegal).
+
+        LET bits  =  symbtype!st.value
+
+        result2  :=  symb
+
+        IF  (symbtype!st.flags & stb.setnow) = 0  THEN  complain( 183 )
+
+        readsymb()
+
+        RESULTIS  bits
+    $)
+    ELSE
+
+    //  Not a special symbol, so we should read the register mask now, and
+    //  return the corresponding bit pattern.
+
+    RESULTIS  evalm( readmult() )
+$)
+
+
+
+AND readmult()  =  VALOF
+$(
+    LET result  =  readreg()
+
+    $(  //  Repeat loop to read a list of registers separated by either
+        //  hyphens or slashes.
+
+        TEST  symb = s.over  THEN
+        $(
+            readsymb()
+
+            RESULTIS  block3( s.slash, result, readmult() )
+        $)
+        ELSE
+
+        TEST  symb = s.minus  THEN
+        $(
+            readsymb()
+
+            result  :=  block3( s.hyphen, result, readreg() )
+
+            IF  symb = s.over  THEN  LOOP
+
+            RESULTIS  result
+
+        $)
+
+        ELSE  RESULTIS  result
+    $)
+    REPEAT
+$)
+
+
+
+AND readreg()  =  VALOF
+$(
+//  Read a register definition.  Since we are not going through the normal
+//  evaluation channels, we should check to see that we are not using a
+//  register which was defined using a forward reference.
+
+    TEST  symb = s.Ar     |  symb = s.Dr    |  symb = s.FPr   |
+          symb = s.FPIAR  |  symb = s.FPSR  |  symb = s.FPCR  THEN
+    $(
+        IF  (symbtype!st.flags & stb.setnow) = 0  THEN  complain( 148 )
+
+        TEST  tagsize.given  \=  ts.none  THEN  complain( 40 )
+        ELSE
+        $(
+            LET result  =  block3( symb, regnum, 0 )
+
+            readsymb()
+
+            RESULTIS  result
+        $)
+    $)
+    ELSE  complain( 41 )
+
+    RESULTIS  0
+$)
+
+
+
+AND genmovep()  BE
+$(
+//  The possible address modes allowed are:
+//
+//    d(Ay),Dx
+//    Dx,d(Ay)
+
+    LET dr  =  0
+    LET sz  =  0
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    TEST  op1.ea = am.Dr  THEN
+
+          TEST  op.ea = am.Ar.disp  THEN
+          $(
+              dr  :=  1
+
+              swapoperands()
+          $)
+          ELSE  complain( 42 )
+
+    ELSE
+
+    TEST  op1.ea \= am.Ar.disp      THEN   complain( 43 )            ELSE
+    TEST  op.ea  \= am.Dr           THEN   complain( 22 )            ELSE
+
+          dr  :=  0
+
+    sz  :=  instr.size  =  ts.long        ->  1,
+            instr.size  =  ts.word        ->  0,
+            instr.size  =  ts.none        ->  0,
+                                              complain( 44 )
+
+    codeword(  #X0108                          |
+               (exp   <<  9)                   |
+               (dr    <<  7)                   |
+               (sz    <<  6)                   |
+               (op1.registers!p.rnumber)       )
+
+    codeword( op1.exp & #XFFFF )
+$)
+
+
+
+AND genmoveq()  BE
+$(
+//  The Ubiquitous MOVEQ instruction.
+//  The possible operands are:
+//
+//    #imm,Dr
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    IF  (op.ea & am.imm) = 0  THEN  complain( 27 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    UNLESS  op.ea = am.Dr  DO  complain( 22 )
+
+    UNLESS  -128 <= op1.exp <= +127  DO  complain( 45 )
+
+    codeword(  #X7000                                   |
+               (exp  <<  9)                             |
+               (op1.exp  &  #XFF)                       )
+$)
+
+
+
+AND genmovec()  BE
+$(
+//  The possible address modes allowed are:
+//
+//    CR,Rx
+//    Rx,CR
+//
+//  The register "Rx" can be any address or data register.  The control
+//  register CR can be one of:
+//
+//    DFC    SFC    CACR   CAAR
+//    VBR    MSP    ISP    USP
+
+    LET dr  =  0
+    LET ad  =  0
+    LET sr  =  0
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    TEST  op.ea = am.special  THEN
+
+          TEST  op1.ea = am.Ar  |  op1.ea = am.Dr  THEN
+          $(
+              dr  :=  1
+
+              swapoperands()
+          $)
+          ELSE  complain( 190 )
+
+    ELSE
+
+    TEST  op1.ea \= am.special               THEN  complain( 191 )  ELSE
+    TEST  op.ea \= am.Dr  &  op.ea \= am.Ar  THEN  complain( 192 )  ELSE
+
+          dr  :=  0
+
+    ad  :=  op.ea = am.Ar  ->  1,  0
+    sr  :=  specialregister( op1.exp )
+
+    codeword(  instr.mask      |
+               dr              )
+
+    codeword( (ad   <<  15)    |
+              (exp  <<  12)    |
+              (sr)             )
+$)
+
+
+
+AND specialregister( r )  =  VALOF
+$(
+//  Return the 12 bit code corresponding to the special register "r".
+
+    SWITCHON  r  INTO
+    $(
+        CASE s.SFC  :  RESULTIS  #X000
+        CASE s.DFC  :  RESULTIS  #X001
+        CASE s.CACR :  RESULTIS  #X002
+        CASE s.CAAR :  RESULTIS  #X802
+        CASE s.VBR  :  RESULTIS  #X801
+        CASE s.MSP  :  RESULTIS  #X803
+        CASE s.ISP  :  RESULTIS  #X804
+        CASE s.USP  :  RESULTIS  #X800
+
+        CASE s.SR   :
+        CASE s.CCR  :
+        CASE s.PC   :  complain( 195 )
+
+        DEFAULT     :  complain( 0 )
+    $)
+$)
+
+
+
+AND genmoves()  BE
+$(
+//  The possible address modes allowed are:
+//
+//    Rx,<ea>
+//    <ea>,Rx
+
+    LET dr  =  0
+    LET sz  =  0
+    LET ad  =  0
+
+    nextsymb()
+
+    effective.address()
+    checkfor( s.comma, 10 )
+
+    swapoperands()
+
+    effective.address()
+    checkfor( s.none, 12 )
+
+    TEST  op1.ea = am.Ar  |  op1.ea = am.Dr  THEN
+
+          TEST  (op.ea & am.mem.alt) \= 0
+              THEN  dr  :=  1
+              ELSE  complain( 194 )
+
+    ELSE
+
+    TEST  (op1.ea & am.mem.alt) = 0          THEN   complain( 193 )  ELSE
+    TEST  op.ea \= am.Ar  &  op.ea \= am.Dr  THEN   complain( 192 )  ELSE
+
+          swapoperands()
+
+    ad  :=  op1.ea = am.Ar  ->  1,  0
+
+    sz  :=  instr.size  =  ts.long   ->  #B10,
+            instr.size  =  ts.word   ->  #B01,
+            instr.size  =  ts.byte   ->  #B00,
+            instr.size  =  ts.none   ->  #B01,
+                                         complain( 6 )
+
+    codeword( instr.mask         |
+              (sz  <<  6)        |
+              (eafield())        )
+
+    codeword( (ad       <<  15)  |
+              (op1.exp  <<  12)  )
+
+    genea()
+$)
+
+

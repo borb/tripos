@@ -1,0 +1,987 @@
+/*****************************************************************************\
+*                           Systems Research Group                            *
+*******************************************************************************
+
+
+      #######   #######   ########  ##         ######     ####    ######   
+      ########  ########  ########  ##        ########   ######   #######  
+      ##    ##  ##    ##  ##        ##        ##    ##  ##    ##  ##    ## 
+      #######   ########  ######    ##        ##    ##  ########  ##    ## 
+      ##        #######   ##        ##        ##    ##  ##    ##  ##    ## 
+      ##        ##  ##    ##        ##        ##    ##  ##    ##  ##    ## 
+      ##        ##   ##   ########  ########  ########  ##    ##  #######  
+      ##        ##    ##  ########  ########   ######   ##    ##  ######
+
+      ##    ##    ####    ##    ##  ######    ##        ########  #######  
+      ##    ##   ######   ###   ##  #######   ##        ########  ######## 
+      ##    ##  ##    ##  ####  ##  ##    ##  ##        ##        ##    ## 
+      ########  ########  ## ## ##  ##    ##  ##        ######    ######## 
+      ##    ##  ##    ##  ##  ####  ##    ##  ##        ##        #######  
+      ##    ##  ##    ##  ##  ####  ##    ##  ##        ##        ##  ##   
+      ##    ##  ##    ##  ##   ###  #######   ########  ########  ##   ##  
+      ##    ##  ##    ##  ##    ##  ######    ########  ########  ##    ## 
+
+
+*******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   03/01/85             *
+\*****************************************************************************/
+
+
+
+SECTION "PRELOAD-HANDLER"
+
+
+GET "LIBHDR"
+GET "IOHDR"
+GET "MANHDR"
+GET "bcpl.preloadhdr"
+
+
+GLOBAL
+$(
+    pktlist       :  ug + 0
+    seglist       :  ug + 1
+    monitoring    :  ug + 2
+$)
+
+
+MANIFEST
+$(
+    co.count      =  10
+    co.stacksize  =  350
+
+    se.link       =  0
+    se.segment    =  1
+    se.segname    =  2
+    se.usecount   =  3
+    se.unloading  =  4
+    se.reentrant  =  5
+    se.checksum   =  6
+
+    se.size       =  7
+
+    NIL           =  0
+
+    notloaded     =  -1
+$)
+
+
+
+LET start( initpkt )  BE
+$(
+//  Main routine of the PRELOAD pseudo device.  This device handles the
+//  loading and unloading of code within a Tripos machine.  All calls
+//  to "loadseg" and "unloadseg" are sent to this task, which maintains
+//  a table of loaded code and use counts.  Loaded code is identified
+//  by its name.
+
+    LET coroutines   =  VEC co.count
+    LET packets      =  VEC co.count
+    LET inputs       =  VEC co.count
+    LET outputs      =  VEC co.count
+    LET currentdirs  =  VEC co.count
+
+    initio()
+    returnpkt( initpkt, TRUE, 0 )
+
+    seglist     :=  NIL
+    pktlist     :=  NIL
+    
+    monitoring  :=  FALSE
+    pktwait     :=  copktwait
+
+    //  Create the coroutines which will handle the parallel requests.
+    //  If we can't create them, there is no point in continuing.
+
+    FOR  i = 1  TO  co.count  DO
+    $(
+        LET coroutine  =  createco( handleseg, co.stacksize )
+        
+        IF  coroutine = 0  THEN  abort( error.getvecfailure )
+        
+        coroutines!i   :=  coroutine
+        packets!i      :=  callco( coroutine )
+        
+        inputs!i       :=  0
+        outputs!i      :=  0
+        currentdirs!i  :=  currentdir
+    $)
+    
+    $(  //  Main repeat loop.  Wait for requests from the outside world,
+        //  and service them when they arrive.  
+
+        LET pkt    =  taskwait()
+        LET type   =  pkt!pkt.type
+        LET found  =  FALSE
+        
+        //  First, check to see if this is an "action.die", and if so, see
+        //  if we can commit suicide.
+        
+        IF  type = action.die  THEN
+        $(
+            //  For this to be valid, then the following things must be true:
+            //
+            //      a)  No coroutines must be in use
+            //      b)  None of the loaded segments must be in use
+            
+            FOR  i = 1  TO  co.count  DO
+                UNLESS  packets!i = NIL  DO
+                $(
+                    //  This coroutine is active, and so we cannot die.
+                    
+                    returnpkt( pkt, FALSE, error.objectinuse )
+                    
+                    found  :=  TRUE
+                    
+                    BREAK
+                $)
+
+            //  If we drop out of there, and the "found" flag is still false,
+            //  then we may be on to a good thing.  Otherwise no joy.
+            
+            IF  found  THEN  LOOP
+            
+            UNLESS  segmentsfree( seglist )  DO
+            $(
+                //  Not all of the segments are free, so we must return
+                //  with an error condition.
+                
+                returnpkt( pkt, FALSE, error.objectinuse )
+                
+                found  :=  TRUE
+            $)
+            
+            //  If the "found" flag is still false, then we are ok.  We can
+            //  free the segment list and delete the coroutines.
+            
+            IF  found  THEN  LOOP
+            
+            //  Otherwise, this is one small step for a program, one large
+            //  leap for mankind (etc)
+            
+            pktwait  :=  waitpktwait
+            
+            FOR  i = 1  TO  co.count  DO  
+            $(
+                LET coroutine  =  coroutines!i
+                
+                endstream( callco( coroutine, NIL ) )
+
+                deleteco( coroutine )
+            $)
+            
+            UNTIL  seglist = NIL  DO  removesegentry( seglist )
+            
+            returnpkt( pkt, TRUE, 0 )
+            
+            BREAK
+        $)
+
+        //  Otherwise, we assume it is a bog standard packet, and we deal
+        //  with it in the normal way.
+        
+        FOR  i = 1  TO  co.count  DO
+            IF  pkt = packets!i  THEN
+            $(
+                //  We have found a responsible coroutine for this packet.  
+                //  Call the coroutine, and look at its response.
+                
+                selectinput( inputs!i )
+                selectoutput( outputs!i )
+                
+                currentdir  :=  currentdirs!i
+                
+                found       :=  TRUE
+                pkt         :=  callco( coroutines!i, pkt )
+                
+                //  It is possible that the coroutine has now finished, so we
+                //  should look to see if there are other items in the queue
+                //  to be dealt with.
+                
+                WHILE  pkt = NIL  &  pktlist \= NIL  DO
+
+                    //  The coroutine has finished, but we have queued requests
+                    //  Requests which should be handled.
+
+                    pkt  :=  callco( coroutines!i, dequeuepkt() )
+
+                //  After all that, we should put in the packet list the
+                //  packet for which this coroutine is waiting.
+                
+                packets!i      :=  pkt
+                
+                inputs!i       :=  input()
+                outputs!i      :=  output()
+                currentdirs!i  :=  currentdir
+                
+                BREAK
+            $)
+
+        //  When we drop through there, this packet may or may not have been
+        //  dealt with.  If it has, then fine, and we can loop.  If not,
+        //  then first look to see if the task is easy, and if not, use a
+        //  coroutine to do the job.
+        
+        IF  found  THEN  LOOP
+
+        SWITCHON  type  INTO
+        $(
+            CASE act.load             :  //  Involves a LOADSEG, su must be
+                                         //  done by coroutine.
+                                         
+                                         ENDCASE
+
+
+            CASE act.unload           :  //  No problem.  Can be done now.
+
+                                         do.unload( pkt )
+                                         LOOP
+
+
+            CASE act.loadseg          :  //  May involve terminal I/O, so
+                                         //  should be done by coroutine.
+                                         
+                                         ENDCASE
+
+
+            CASE act.unloadseg        :  //  May involve terminal I/O, so
+                                         //  should be done by coroutine
+                                         
+                                         ENDCASE
+
+
+            CASE act.list             :  //  Can safely be done synchronously.
+            
+                                         do.list( pkt )
+                                         LOOP
+
+
+            CASE act.monitor          :  //  Can safely be done synchronously
+            
+                                         do.monitor( pkt )
+                                         LOOP
+
+
+            CASE action.deleteobject  :  //  Same as "unload" really.
+            
+                                         do.delete( pkt )
+                                         LOOP
+
+
+            CASE action.aliasobject   :
+            CASE action.renameobject  :
+            
+            DEFAULT                   :  ENDCASE
+        $)
+
+        //  If we drop through here, then there is nothing for it but to find
+        //  a coroutine to do the job for us.
+        
+        FOR  i = 1  TO  co.count  DO
+            IF  packets!i = NIL  THEN
+            $(
+                //  This is a free coroutine, and hence we should call it
+                //  with the packet, thus starting the transaction.
+                
+                selectinput( inputs!i )
+                selectoutput( outputs!i )
+
+                currentdir     :=  currentdirs!i
+
+                found          :=  TRUE
+                packets!i      :=  callco( coroutines!i, pkt )
+                
+                inputs!i       :=  input()
+                outputs!i      :=  output()
+                currentdirs!i  :=  currentdir
+                
+                BREAK
+            $)
+
+        IF  found  THEN  LOOP
+
+        //  If we drop through here, then there is no coroutine to handle
+        //  this packet, and so we must enqueue it.
+        
+        enqueuepkt( pkt )
+    $)
+    REPEAT
+
+    //  When we drop out of that loop, nothing else for it but to die...
+
+    deletetask( taskid )
+$)
+
+
+
+AND segmentsfree( segentry )  =  VALOF
+$(
+//  Return TRUE iff all the segment entries on the list are not in use,
+//  and so can be freed.
+
+    UNTIL  segentry = NIL  DO
+    $(
+        UNLESS  segentry!se.usecount = 0  DO  RESULTIS  FALSE
+        
+        segentry  :=  segentry!se.link
+    $)
+
+    RESULTIS  TRUE
+$)
+
+
+
+AND handleseg()  =  VALOF
+$(
+//  Coroutine to handle the preloading of segments.  
+
+    LET out  =  findoutput( "**" )
+    
+    selectoutput( out )
+
+    $(  //  Main repeat loop, waiting for packets, and then deciding what
+        //  to do with them.
+
+        LET pkt   =  cowait( NIL )
+
+        IF  pkt = NIL  THEN  RESULTIS  out
+
+        SWITCHON  pkt!pkt.type  INTO
+        $(
+            CASE act.load       :  do.load( pkt )          ;  ENDCASE
+            CASE act.loadseg    :  do.loadseg( pkt )       ;  ENDCASE
+            CASE act.unloadseg  :  do.unloadseg( pkt )     ;  ENDCASE
+            
+            DEFAULT             :  returnpkt( pkt, FALSE, error.actionnotknown )
+        $)
+    $)
+    REPEAT
+$)
+
+
+
+AND do.load( pkt )  BE
+$(
+//  Preload a module into memory, ready for use later.  The arguments given
+//  to us are:
+//
+//      a)  Name of file to be loaded
+//      b)  Name it should have for future LOADSEGs
+
+    LET filedir    =  pkt!pkt.arg1
+    LET filename   =  pkt!pkt.arg2
+    LET segname    =  pkt!pkt.arg3
+    LET reentrant  =  pkt!pkt.arg4
+    LET segentry   =  lookupsegname( segname )
+    LET segment    =  0
+    LET olddir     =  currentdir
+
+    //  If the segment is already loaded, or loading, then there is no point
+    //  in us loading it.
+    
+    UNLESS  segentry = NIL  DO
+    $(
+        //  Ok.  There is an entry for this file.  Look to see if the code is
+        //  loaded, and if so, whether it is in use.  If possible, we
+        //  throw the old copy away, and load a new one.
+
+        TEST  segentry!se.segment = notloaded  |  segentry!se.usecount > 0  THEN
+        $(
+            //  This is either in the process of being loaded, or is
+            //  in use by somebody.  Either way, we cannot reload it.
+
+            returnpkt( pkt, FALSE, error.objectexists )
+         
+            RETURN
+        $)
+        ELSE  
+        
+            //  No problem.  The code is not in use, and so we should be
+            //  able to unload this version, and reload it.
+        
+            removesegentry( segentry )
+    $)
+
+    filename    :=  copystring( filename )
+    segname     :=  copystring( segname )
+    currentdir  :=  copydir( filedir )
+
+    //  We are now in a position to attempt to generate a new segment entry,
+    //  and load the segment into memory.  We can now tell the user that we
+    //  have done the task (even though we haven't) since we should get some
+    //  useful parallelism this way.
+    
+    returnpkt( pkt, TRUE, 0 )
+    
+    //  Now, get the new segment entry, and do our stuff.
+    
+    segentry               :=  newsegentry()
+    
+    segentry!se.link       :=  seglist
+    segentry!se.segment    :=  notloaded
+    segentry!se.segname    :=  copystring( segname )
+    segentry!se.usecount   :=  0
+    segentry!se.unloading  :=  FALSE
+    segentry!se.reentrant  :=  reentrant
+    segentry!se.checksum   :=  0 
+    
+    seglist                :=  segentry
+
+    //  Now, actually load the segment.  If all succeeds, then all we do is
+    //  add this segment into the list.  Otherwise, we should delete the
+    //  segment entry.
+    
+    segment  :=  sys.loadseg( filename )
+
+    freeobj( currentdir )
+    
+    currentdir  :=  olddir
+
+    //  Now look to see if the load succeeded.  If it did, all well and good,
+    //  since we have already told the caller that it did!  If not, then we
+    //  have lied to him, and we deserve a quick spot of the sackcloth and
+    //  ashes.
+    
+    TEST  segment = 0  THEN
+    $(
+        //  We have failed to load the code into memory, and so there is
+        //  no point in adding a segment entry.
+
+        removesegentry( segentry )
+        
+        message( "Failed to load *"%S*"  RC=%N", filename, result2 )
+    $)
+    ELSE
+    $(
+        //  All has succeeded, and so we should update the segment entry with
+        //  the loaded segment, and return to the caller.
+        
+        segentry!se.checksum  :=  checksum( segment )
+        segentry!se.segment   :=  segment
+    $)
+
+    //  It is actually possible that this module has been marked to be unloaded
+    //  while it is actually being loaded.  Handle this properly!
+    
+    IF  segentry!se.unloading  &  segentry!se.usecount = 0  THEN
+    
+        //  What a waste of time loading this in the first place.  We now have
+        //  to unload it again!
+        
+        removesegentry( segentry )
+
+    //  Get rid of the string copies we took.
+
+    freevec( filename )
+    freevec( segname )
+$)
+
+
+
+AND do.unload( pkt )  BE  
+
+    //  The name of the segment to be unloaded is specified directly.  No
+    //  tedious munging around is necessary.
+    
+    deletesegment( pkt, pkt!pkt.arg1 )
+
+
+
+AND do.delete( pkt )  BE
+$(
+//  Here, the name will come preceeded by "preload:" or some such nonesense
+//  We should strip off this first, before passing the name on to the next
+//  level.
+
+    LET work    =  VEC 256/bytesperword
+    LET name    =  pkt!pkt.arg2
+    LET length  =  name % 0
+    LET pos     =  splitname( work, ':', name, 1 )
+    
+    FOR  i = pos  TO  length  DO
+         work % (i - pos + 1)  :=  name % i
+         
+    work % 0  :=  length - pos + 1
+    
+    deletesegment( pkt, work )
+$)
+
+
+
+AND deletesegment( pkt, segname )  BE
+$(
+//  Unload code which has previously been loaded.  The code itself may
+//  actually be in use, so we had better check the use count first.
+
+    LET segentry  =  lookupsegname( segname )
+    
+    IF  segentry = NIL  THEN
+    $(
+        //  This segment didn't exist anyway, so we cannot unload it.  Send
+        //  the packet back with a rhubarb.
+        
+        returnpkt( pkt, FALSE, error.objectnotfound )
+        
+        RETURN
+    $)
+    
+    //  Otherwise, we should do one of two things.  If the use count is
+    //  zero, then we can delete this entry forthwith.  Otherwise, we just
+    //  set the "unloading" flag, and wait until the code is finished with.
+
+    TEST  segentry!se.usecount = 0  &  segentry!se.segment \= notloaded  THEN
+    $(
+        //  Cooer.  We can unload the code immediately.
+        
+        removesegentry( segentry )
+        
+        returnpkt( pkt, TRUE, 0 )
+    $)
+    ELSE
+    $(
+        //  The use count is not zero, so this code is in use.  This being
+        //  the case, we should just set the "unloading" flag.
+        
+        segentry!se.unloading  :=  TRUE
+        
+        returnpkt( pkt, FALSE, error.objectinuse )
+    $)
+$)
+
+
+
+AND do.loadseg( pkt )  BE
+$(
+//  Load a segment into memory.  We should look in the segment list to see
+//  if it is already there, and if it is, return that value.  If not, we
+//  should take the "currentdir" and "name" of the segment, and attempt
+//  to load it from disc.
+
+    LET directory  =  pkt!pkt.arg1
+    LET filename   =  pkt!pkt.arg2
+    LET segentry   =  lookupsegname( filename )
+
+    UNTIL  segentry = NIL  DO
+    $(
+        //  There is an entry, but has it actually been loaded yet?
+        
+        UNLESS  segentry!se.segment = notloaded  DO  BREAK
+
+        //  Oh dear.  Not actually loaded yet, so delay a while, and try
+        //  again later.
+            
+        delay( tickspersecond/10 )
+            
+        segentry  :=  lookupsegname( filename )
+    $)
+
+    TEST  segentry = NIL  THEN
+    $(
+        //  This segment is not in the segment list, so attempt to load 
+        //  it from disc.
+        
+        LET olddir   =  currentdir
+        LET segment  =  0
+
+        IF  monitoring  THEN  message( "loadseg( *"%S*" )  [disc]", filename )
+
+        currentdir  :=  directory
+        segment     :=  sys.loadseg( filename )
+        currentdir  :=  olddir
+        
+        returnpkt( pkt, segment, result2 )
+    $)
+    ELSE  
+    $(
+        //  Cooer.  This module is loaded.  Check for reentrancy, if all is
+        //  ok, continue.
+        
+        TEST  segentry!se.reentrant  |  segentry!se.usecount = 0  THEN
+        $(
+            //  We are ok.  The module is either marked reentrant, or is
+            //  not actually in use at the moment.
+
+            IF  monitoring  THEN  message( "loadseg( *"%S*" )  [preloaded]", filename )
+
+            segentry!se.usecount  :=  segentry!se.usecount + 1
+
+            returnpkt( pkt, segentry!se.segment, 0 )
+        $)
+        ELSE
+        $(
+            //  Not available as preloaded code, so we should load another
+            //  copy of it.
+
+            LET olddir   =  currentdir
+            LET segment  =  0
+
+            IF  monitoring  THEN  message( "loadseg( *"%S*" )  [disc]", filename )
+
+            currentdir  :=  directory
+            segment     :=  sys.loadseg( filename )
+            currentdir  :=  olddir
+        
+            returnpkt( pkt, segment, result2 )
+        $)
+    $)
+$)
+
+
+
+AND do.unloadseg( pkt )  BE
+$(
+//  Unload a segment.  What we do here depends on whether the code is
+//  in the segment list or not.  If it is, then we just decrement the
+//  use count, checking for the "unloading" case.  Otherwise, we really
+//  do have to unload the code from memory.
+
+    LET segment   =  pkt!pkt.arg1
+    LET segentry  =  lookupsegment( segment )
+    
+    TEST  segentry = NIL  THEN
+
+        //  There is no segment entry for this segment, and so we should
+        //  unload the code from memory.
+        
+        sys.unloadseg( segment )
+        
+    ELSE
+    $(
+        //  We have an entry.  Decrement the use count, and see if this
+        //  causes us to have to unload the code.
+        
+        segentry!se.usecount  :=  segentry!se.usecount - 1
+
+        //  Now, if the module is marked reentrant, we should re-checksum
+        //  it to make sure that it hasn't changed.
+        
+        IF  segentry!se.reentrant  &  segentry!se.checksum \= checksum( segentry!se.segment )  DO
+        $(
+            //  Naughty!  Segment has been altered.  Mark it is being non
+            //  reentrant.
+            
+            message( "*"%S*" corrupted  -  unloading", segentry!se.segname )
+                     
+            segentry!se.unloading  :=  TRUE
+        $)
+        
+        IF  segentry!se.usecount = 0  &  segentry!se.unloading  THEN
+
+            //  These are the conditions for the code to be unloaded.  Do
+            //  just that, and the sooner the better!
+
+            removesegentry( segentry )
+    $)
+
+    //  Whatever else, after all that we must return the packet back to the
+    //  caller.
+
+    returnpkt( pkt, TRUE, 0 )
+$)
+
+
+
+AND do.list( pkt )  =  VALOF
+$(
+//  Return a copy of the names of the segments loaded, along with their
+//  loading address and sizes.
+
+    LET list   =  NIL
+    LET count  =  0
+    LET se     =  seglist
+        
+    UNTIL  se = NIL  DO
+    $(
+        LET len  =  newlistentry()
+        LET seg  =  se!se.segment
+        
+        len!le.link     :=  list
+        len!le.name     :=  copystring( se!se.segname )
+        len!le.address  :=  seg = notloaded  ->  0, seg
+        len!le.length   :=  seg = notloaded  ->  0, findlength( se!se.segment )
+        
+        count           :=  count + 1
+        list            :=  len
+        se              :=  se!se.link
+    $)
+
+    returnpkt( pkt, count, list )
+$)
+
+
+
+AND do.monitor( pkt )  BE
+$(
+//  Change the state of the monitoring flag.
+
+    monitoring  :=  pkt!pkt.arg1
+
+    returnpkt( pkt, TRUE, 0 )
+$)
+
+
+
+AND lookupsegname( name )  =  VALOF
+$(
+//  Search the segment list for a segment of this name.  If we find it,
+//  then return a pointer to the segment entry.
+
+    LET se  =  seglist
+    
+    UNTIL  se = NIL  DO
+    $(
+        IF  compstring( name, se!se.segname ) = 0  THEN  BREAK
+        
+        se  :=  se!se.link
+    $)
+
+    RESULTIS  se
+$)
+        
+
+
+AND lookupsegment( segment )  =  VALOF
+$(
+//  Search the segment list for a segment of this address.  If we find it,
+//  then return a pointer to the segment entry.
+
+    LET se  =  seglist
+    
+    UNTIL  se = NIL  DO
+    $(
+        IF  se!se.segment = segment  THEN  BREAK
+        
+        se  :=  se!se.link
+    $)
+
+    RESULTIS  se
+$)
+
+
+
+AND removesegentry( segentry )  BE
+$(
+//  Search the segment list for this segment entry, and remove it
+//  from the chain.
+
+    LET ptr  =  @seglist
+
+    UNTIL  ptr!se.link = segentry  DO  ptr  :=  ptr!se.link
+
+    ptr!se.link  :=  segentry!se.link
+
+    UNLESS  segentry!se.segment = notloaded  DO
+        sys.unloadseg( segentry!se.segment )
+        
+    freevec( segentry!se.segname )
+    freevec( segentry )
+$)
+
+
+
+AND newsegentry()  =  VALOF
+$(
+//  Get storage for a new segment entry.
+
+    LET segentry  =  getvec( se.size )
+    
+    IF  segentry = 0  THEN  abort( error.getvecfailure )
+
+    RESULTIS  segentry
+$)
+
+
+
+AND newlistentry()  =  VALOF
+$(
+//  Get storage for a new list entry.
+
+    LET listentry  =  getvec( le.size )
+    
+    IF  listentry = 0  THEN  abort( error.getvecfailure )
+
+    RESULTIS  listentry
+$)
+
+
+
+AND copystring( string )  =  VALOF
+$(
+//  Return a copy of the string "string" in heap storage.
+
+    LET length  =  string % 0
+    LET buffer  =  getvec( length/bytesperword )
+
+    IF  buffer = 0  THEN  abort( error.getvecfailure )
+
+    FOR  i = 0  TO  length  DO  buffer % i  :=  string % i
+
+    RESULTIS  buffer
+$)
+
+
+
+AND findlength( segment )  =  VALOF
+$(
+    LET length  =  0
+
+    UNTIL  segment = 0  DO
+    $(
+        length   :=  length + segment!1
+        segment  :=  segment!0
+    $)
+
+    RESULTIS  length
+$)
+
+
+
+AND checksum( segment )  =  VALOF
+$(
+    LET csum  =  0
+
+    UNTIL  segment = 0  DO
+    $(
+        FOR  i = 0  TO  segment!1  DO  csum  :=  csum + segment!i
+        
+        segment  :=  segment!0
+    $)
+
+    RESULTIS  csum
+$)
+
+
+
+AND copktwait( id, pkt )  =  cowait( pkt )
+
+
+
+AND waitpktwait( id, pkt )  =  VALOF
+$(
+    LET npkt  =  taskwait()
+
+    IF  npkt = pkt  THEN  RESULTIS  pkt
+
+    returnpkt( npkt, FALSE, error.actionnotknown )
+$)
+REPEAT
+
+
+
+AND enqueuepkt( pkt )  BE
+$(
+//  Add a packet onto our own internal packet queue.
+
+    LET ptr  =  @pktlist
+
+    UNTIL  ptr!pkt.link = NIL  DO  ptr  :=  ptr!pkt.link
+
+    ptr!pkt.link  :=  pkt
+    pkt!pkt.link  :=  NIL
+$)
+
+
+
+AND dequeuepkt()  =  VALOF
+$(
+//  Dequeue a packet from our own internal queue.
+
+    LET pkt  =  pktlist
+    
+    pktlist       :=  pkt!pkt.link
+    pkt!pkt.link  :=  notinuse
+    
+    RESULTIS  pkt
+$)
+
+
+
+AND message( format, arg1, arg2 )  BE
+$(
+    writes( "****** PRELOAD: " )
+    writef( format, arg1, arg2 )
+    newline()
+$)
+
+
+
+//**************************************************************************
+//*              System versions of LOADSEG and UNLOADSEG                  *
+//**************************************************************************
+
+
+
+AND sys.loadseg (file) = VALOF
+$( LET dummy    = testflags(1) // Clear break flag so we don't fail if it was set earlier
+   LET list     = 0
+   LET liste    = @list
+   LET oldinput = input()
+   LET newinput = findinput(file)
+
+   IF newinput=0 RESULTIS 0
+   selectinput(newinput)
+
+   $( LET base  = 0
+      LET limit = -1
+
+      $( LET type = 0
+
+         IF readwords(@type, 1)=0 THEN
+            TEST [limit=-1] & [list\=0] THEN GOTO ok ELSE GOTO err121
+
+         IF testflags(1) THEN $( result2 := 190; GOTO err $)
+
+         SWITCHON type INTO
+         $( CASE t.hunk :
+            CASE t.reloc:
+            $( LET space = ?
+               LET n     = ?
+               readwords (@n, 1)
+               space := getvec (n)
+               IF space=0 GOTO err
+               readwords (space+1, n)
+
+               TEST type = t.hunk
+                    THEN $( space!0 := 0
+                            !liste  := space
+                            liste   := space
+                            limit   := n
+                            base    := space+1
+                         $)
+                    ELSE // t.reloc
+                         $( FOR i=1 TO n DO
+                            $( LET a = space!i
+                               LET b = a/mcaddrinc
+                               UNLESS 0<=b<=limit DO $( freevec (space)
+                                                        GOTO err121
+                                                     $)
+                               base!b := base!b+base*mcaddrinc
+                            $)
+                            freevec (space)
+                         $)
+               LOOP
+            $)
+
+            CASE t.end: BREAK
+         $)
+         GOTO err121
+
+      $) REPEAT
+   $) REPEAT
+
+err121: result2 := 121
+err   : unloadseg (list)
+        list    := 0
+ok    : endread ()
+        selectinput (oldinput)
+        RESULTIS list
+$)
+
+
+
+AND sys.unloadseg(seg) BE UNTIL seg=0 DO $( LET s = !seg
+                                            freevec (seg)
+                                            seg := s
+                                         $)
+
+

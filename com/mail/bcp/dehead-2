@@ -1,0 +1,176 @@
+LET ms.Send ( reply ) = VALOF
+$(  MANIFEST
+    $(  Mode.none       = 1
+        Mode.file       = 2
+        Mode.stream     = 3
+
+        A.item          = 0
+        A.stream        = 1
+        A.cc            = 2
+        A.bcc           = 3
+        A.subj          = 4
+        A.none          = 5
+        A.file          = 6
+        A.err           = 6
+        A.ins           = 7
+        A.dang          = 8
+    $)
+    // Get the parameters for the call of the real "send" routine.
+
+    LET argv    = get.temp.vec(10 + 40/BYTESPERWORD + 255/BYTESPERWORD)
+    LET subj    = 0
+    LET forward = 1
+    LET reply.id= 0
+    LET text.file       = VEC file.desc.size
+    LET header.file     = VEC file.desc.size
+    LET rdargs.string   = selected < 0 ->
+                "Item/a,/k,CC/k,BCC/k,ABOUT=SUBJECT/K,none/s",
+                "Item,/k,CC/k,BCC/k,ABOUT=SUBJECT/K,none/s",
+    LET mode    = Mode.stream
+    ms.fs.fail.level, ms.fs.fail.link   := level(), local.fs.fail.link
+
+    IF rdargs(rdargs.string,argv,80) = 0
+    $( writef("Bad args for %S*N", rdargs.string); RESULTIS FALSE $)
+
+    IF argv!A.none THEN mode := mode.none       // No file wanted !
+
+
+    UNLESS reply=FALSE
+    $(  Let Number      = argv!0
+        LET mail.item   = ?
+
+        UNLESS reply=TRUE               // REPLY PB ==> REPLY current,PB
+        $(      get.item.number(number, TRUE)
+                UNLESS RESULT2
+                DO argv!A.stream, number := argv!0, 0
+        $)
+
+        Number := get.item.number(number=0 -> "", number, FALSE)
+        UNLESS RESULT2  RESULTIS FALSE
+
+        mail.item       :=  mail.list + ml.element.size * Number
+
+        TEST reply=TRUE
+        $(reply
+            argv!A.item := mail.item + ml.sender
+
+        $(  LET v = VEC 80/BYTESPERWORD
+            LET match   = "Reply-to"
+
+            TEST find.key(mail.item + ml.header.puid, 0, match, V, 80)
+            $(  LET len         = v%0
+                LET base        = match%0 + 1
+                LET recip       = ?
+                WHILE len < base | v%base=' ' | v%base=':' DO base := base+1
+                base    := base-1
+                len     := len-base
+                recip   := get.temp.vec(len/BYTESPERWORD)
+                recip%0 := len
+
+                FOR i = 1 TO len DO recip%i := v%(base+i)
+                argv!A.item := recip
+            $)
+            ELSE match := "Reply-to" <>
+            IF find.key(mail.item + ml.header.puid, 0, match, V, 80)
+            $(  LET len         = v%0
+                LET base        = match%0 + 1
+                LET recip       = ?
+                WHILE len < base | v%base=' ' | v%base=':' DO base := base+1
+                base    := base-1
+                len     := len-base
+                recip   := get.temp.vec(len/BYTESPERWORD)
+                recip%0 := len
+
+                FOR i = 1 TO len DO recip%i := v%(base+i)
+                argv!A.item := recip
+           $)
+
+            match := "Message-Id"
+            IF find.key(mail.item + ml.header.puid, 0, match, V, 80)
+            $(  LET len         = v%0
+                LET base        = match%0 + 1
+
+                WHILE len < base | v%base=' ' | v%base=':' DO base := base+1
+                base    := base-1
+                len     := len-base
+                reply.id        := get.temp.vec(len/BYTESPERWORD)
+                reply.id%0      := len
+
+                FOR i = 1 TO len DO reply.id%i := v%(base+i)
+           $)
+        $)
+
+        IF argv!A.subj = 0
+        $(  LET reply   = mail.item + ml.subject
+            LET base    = ?
+            LET len     = reply%0
+            LET match   = TRUE
+            LET re      = "Re: "
+
+            IF subj=0 THEN subj := get.temp.vec(255/BYTESPERWORD)
+            argv!A.subj := subj
+            FOR I = 1 TO re%0
+            $(  subj%i := re%i
+                UNLESS compch(re%i, reply%i)=0 MATCH := FALSE
+            $)
+            base        := MATCH -> 0, re%0
+
+            IF len+base > 255 THEN len := 255-base
+            FOR I = 1 TO len DO subj%(i+base) := reply%i
+            subj%0      := len+base
+        $)
+    $)reply
+        ELSE    // Forward !!
+        $(
+                argv!A.item     := argv!A.stream
+                argv!A.stream   := 0
+                zap.file(header.file)
+                header.file!cache.address := get.temp.vec(60/rwpw)
+                header.file!cache.size  := 60
+                header.file!next.read   := 50
+                copy.uid(mail.item+ml.header.puid,0,header.file+uid, 0) // Header !!
+
+                zap.file(text.file)
+                copy.uid(mail.item+ml.message.puid,0, text.file+uid, 0)
+
+                IF text.file!uid = 0
+                $(      WRITEF("No text to forward!*N")
+                        RESULTIS FALSE
+                $)
+                mode := mode.file
+                forward := (argv!A.dang) -> -3, (argv!A.err) -> 0,
+                                                (argv!A.ins) -> -2, 1// selected
+        $)
+    $)
+
+    TEST forward = -3
+    pp.z80send(0,
+                0, client.puid,
+                argv!A.item, argv!A.subj,
+                text.file, 0,
+                0,
+                argv!A.cc, argv!A.bcc,
+                mode,
+                0       /* Reply to     */,
+                argv!A.err -> 0, -2     /* forward      */,
+                0       /* bits         */,
+                0       /* inreply      */,
+                header.file,
+                0       /* Cap.header   */,
+                -1)
+        <> RESULTIS FALSE
+    ELSE
+    $(  LET res = new.send(dynamic -> text.file, argv!A.stream, TRUE,
+                                        argv!A.item, argv!A.cc, argv!A.bcc,
+                                        argv!A.subj, 0, mode, 0,forward,4,
+                                        header.file,
+                                        0,      // Free !! ?? !!
+                                        reply.id,
+                                        -1)
+        RESULTIS res = TRUE
+    $)
+
+local.fs.fail.link: WRITES(" --  Main loop re-entered  --*N"); RESULTIS FALSE
+$)
+
+

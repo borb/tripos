@@ -1,0 +1,127 @@
+/***********************************************************************
+**             (C) Copyright 1979  TRIPOS Research Group              **
+**            University of Cambridge Computer Laboratory             **
+************************************************************************
+*                                                                      *
+*                     #######   ##    ##  ##    ##                     *
+*                     ########  ##    ##  ###   ##                     *
+*                     ##    ##  ##    ##  ####  ##                     *
+*                     ########  ##    ##  ## ## ##                     *
+*                     #######   ##    ##  ##  ####                     *
+*                     ##  ##    ##    ##  ##  ####                     *
+*                     ##   ##   ########  ##   ###                     *
+*                     ##    ##   ######   ##    ##                     *
+*                                                                      *
+************************************************************************
+**                                                                    **
+***********************************************************************/
+
+
+// Modifications:
+// 13 Jan 84 by BJK: CLI.INIT now GLOBINs the two library segments before
+//                   returning, in case one defines START.
+
+SECTION "RUN"
+
+GET "LIBHDR"
+GET "CLIHDR"
+GET "IOHDR"
+
+
+LET start() BE
+ $( LET command = VEC 255/bytesperword
+    LET l,cvec,svec = 0,?,?
+    LET ch = rdch()
+    LET task = 0
+    LET failed = FALSE
+
+    UNTIL ch = endstreamch DO
+    $( IF l>=255 DO
+       $( failed := TRUE
+          BREAK
+       $)
+       command%l := ch
+       l := l+1
+       IF ch='*N' | ch='*E' BREAK
+       ch := rdch()
+    $)
+    IF failed GOTO err
+
+
+    cvec := getvec((l-1)/bytesperword+1+scb.upb)
+    IF cvec=0 GOTO err
+
+    svec := cvec+scb.upb+1
+    FOR j = 0 TO (l-1)/bytesperword DO
+      svec!j := command!j
+
+    FOR i = 500 TO 1 BY -1 DO
+    $( task := createtask(tcb!tcb.seglist,
+                    tcb!tcb.stsiz, i)
+       UNLESS task=0 BREAK
+    $)
+
+    IF task=0 DO
+    $( freevec(cvec)
+       GOTO err
+    $)
+
+    cvec!scb.link := 0
+    cvec!scb.id   := id.inscb
+    cvec!scb.type := 0
+    cvec!scb.buf  := svec
+    cvec!scb.pos  := 0
+    cvec!scb.end  := l
+    cvec!scb.func1 := 0
+    cvec!scb.func3 := 0
+
+    cli.module!(cli.module!1) := globsize
+    rootnode!rtn.tasktab!task!tcb.seglist!3 := cli.module
+
+    sendpkt(-1, task, 0, 0, 0,
+                copydir(currentdir),
+                consoletask,
+                cvec,
+                copydir(cli.commanddir),
+                cli.defaultstack,
+                cli.prompt)
+
+    RETURN
+
+err:writes("RUN failed*N")
+    stop(20)
+ $)
+
+
+LET cli.init(parm.pkt) = VALOF
+ $( initio()
+    currentdir := parm.pkt!pkt.arg1
+    consoletask := parm.pkt!pkt.arg2
+    selectinput(parm.pkt!pkt.arg3)
+    selectoutput(findoutput("**"))
+
+    cli.background := TRUE
+    cli.standardinput := input()
+    cli.currentinput := cli.standardinput
+    cli.standardoutput := output()
+    cli.currentoutput  := cli.standardoutput
+    cli.commanddir := parm.pkt!pkt.arg4
+    returncode := 0
+    cli.returncode := 0
+    cli.faillevel  := cli.initialfaillevel
+    cli.result2 := 0
+    cli.commandfile%0 := 0
+    cli.defaultstack := parm.pkt!pkt.arg5
+    cli.module := 0
+    FOR i = 0 TO parm.pkt!pkt.arg6 % 0 DO
+      cli.prompt%i := parm.pkt!pkt.arg6 % i
+
+    tcb!tcb.seglist!3 := 0
+    start := cli.undefglobval
+    globin(tcb!tcb.seglist!1)   // In case library segments define START
+    globin(tcb!tcb.seglist!2)
+    result2 := parm.pkt
+    RESULTIS qpkt
+ $)
+
+

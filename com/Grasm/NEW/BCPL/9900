@@ -1,0 +1,1061 @@
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*************************************************************************
+*  (C) Copyright 1982  Systems Research Group, University of Cambridge  *
+*************************************************************************
+*                                                                       *
+*                   9 9 0 0    A S S E M B L E R                        *
+*                                                                       *
+*************************************************************************
+**  C  Gray  Girling      COMPUTER LAB,  CAMBRIDGE           06.07.82  **
+*************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*/
+
+
+
+
+
+
+
+//  LOG OF CHANGES:
+//  ===============
+//
+//  Log entry is <date> <general assembler version no.> <initials> <change>
+//
+//  07.08.82  3.054  CGG   First installed
+//  14.08.82  3.054  CGG   Word addressing in error - converted to bytes
+//                         Dest,Source formats corrected to Source,Dest
+//  18.07.82  3.054  CGG   CDC mnemonic removed replaced with COC !
+//                         CKON mnemonic code corrected
+//                         FMT3 bug fixed - register info generated now
+//                         Table for Version 3.054: LSI4 added
+//                         Program sectioned
+//  29.07.82  3.065  CGG   MSBYTEFIRST set correctly for CLINK 2.16
+//                         Some MNEMONICS changed to TI's names
+//  06.08.82  3.054  RLS   FMT8 displacement relative to next word not
+//                         the current Program Counter
+
+
+
+SECTION "TMS9900"
+
+
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+/*<LYNX
+GET "libhdr"
+GET "asmhdr"
+/*LYNX>*/
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+
+/*<CAP:
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+
+
+/*<IBM:
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+
+
+
+
+
+
+
+
+MANIFEST
+$(  nop.code.msb = #X10    // JMP 0
+    nop.code.lsb = #X00
+    b.reg = #X80
+    // Registers:
+    reg.mask = #X0F
+    r0    = b.reg  |  0
+    r1    = b.reg  |  1
+    r2    = b.reg  |  2
+    r3    = b.reg  |  3
+    r4    = b.reg  |  4
+    r5    = b.reg  |  5
+    r6    = b.reg  |  6
+    r7    = b.reg  |  7
+    r8    = b.reg  |  8
+    r9    = b.reg  |  9
+    r10   = b.reg  | 10
+    r11   = b.reg  | 11
+    r12   = b.reg  | 12
+    r13   = b.reg  | 13
+    r14   = b.reg  | 14
+    r15   = b.reg  | 15
+    r.bad = -1
+    // New symbol types:
+    type.reg     = type. + 1
+    // Error messages
+    e.badreg     = e.e+1
+    e.badindex   = e.e+2
+    e.nodirauto  = e.e+3
+    e.brange     = e.e+4
+    e.badalign   = e.e+5
+$)
+
+
+
+
+GLOBAL
+$(  // field descriptions:
+    f.td      : ag         // destination T descriptor
+    f.d       : ag+1       // destination T descriptor (in a 16 word)
+    f.dl      : ag+2       // destination T descriptor - lower part in MSB
+    f.dspecl  : ag+3       // f.td and f.d - lower part in MSB
+    f.ts      : ag+4       // source T descriptor
+    f.s       : ag+5       // source
+    f.sspec   : ag+6       // f.s and f.ts together
+    f.c       : ag+7       // shift count (in format 9)
+    fmt1      : ag+8       // Parsing procedures:
+    fmt2      : ag+9
+    fmt3      : ag+10
+    fmt4      : ag+11
+    fmt5      : ag+12
+    fmt6      : ag+13
+    fmt7      : ag+14
+    fmt8      : ag+15
+    fmt9      : ag+16
+    fmt10     : ag+17
+    fmt11     : ag+18
+    fmt12     : ag+19
+    fmt13     : ag+20
+    fmt14     : ag+21
+    fmt15     : ag+22
+    dtaproc   : ag+23
+    regproc   : ag+24
+    evenproc  : ag+25
+    unlproc   : ag+26
+$)
+
+
+
+
+
+
+
+//
+//                     Error  messages
+//
+
+
+
+
+
+
+LET errormess(rc) = VALOF
+SWITCHON rc INTO
+$(  CASE e.badreg:    RESULTIS "register expected"
+    CASE e.badindex:  RESULTIS "R0 is illegal as an index"
+    CASE e.nodirauto: RESULTIS "only INDIRECT auto increment allowed"
+    CASE e.brange:    RESULTIS "displacement is out of range"
+    CASE e.badalign:  RESULTIS "displacement is not word aligned"
+    DEFAULT:          RESULTIS "(MOAN) unknown error code given"
+$)
+
+
+
+
+
+
+
+
+//
+//                    Register  Discriptions
+//
+
+
+
+
+
+
+LET initsyms() BE
+$(  reg.put("R0",r0)
+    reg.put("R1",r1)
+    reg.put("R2",r2)
+    reg.put("R3",r3)
+    reg.put("R4",r4)
+    reg.put("R5",r5)
+    reg.put("R6",r6)
+    reg.put("R7",r7)
+    reg.put("R8",r8)
+    reg.put("R9",r9)
+    reg.put("R10",r10)
+    reg.put("R11",r11)
+    reg.put("R12",r12)
+    reg.put("R13",r13)
+    reg.put("R14",r14)
+    reg.put("R15",r15)
+    reg.put("WR0",r0)
+    reg.put("WR1",r1)
+    reg.put("WR2",r2)
+    reg.put("WR3",r3)
+    reg.put("WR4",r4)
+    reg.put("WR5",r5)
+    reg.put("WR6",r6)
+    reg.put("WR7",r7)
+    reg.put("WR8",r8)
+    reg.put("WR9",r9)
+    reg.put("WR10",r10)
+    reg.put("WR11",r11)
+    reg.put("WR12",r12)
+    reg.put("WR13",r13)
+    reg.put("WR14",r14)
+    reg.put("WR15",r15)
+$)
+
+
+
+
+
+//
+//                      New  Symbol  Types
+//
+
+
+
+
+
+LET printtype(type, val) BE
+TEST type \= type.reg THEN writes(" ????????? ") ELSE
+$(  writes("reg     ")
+    TEST val>15 THEN writes("R??") ELSE
+    $(  IF val<10 THEN wrch('*S')
+        writef("R%N", val)
+    $)
+$)
+
+
+
+
+
+
+//
+//                     Pre-declared  Fields
+//
+
+
+
+
+
+
+
+/*
+
+
+     15  14  13  12  11  10   9   8   7   6   5   4   3   2   1   0
+
+    +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+    |                       |      f.d      |        f.sspec        |
+    +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+
+
+
+      7   6   5   4   3   2   1   0      7   6   5   4   3   2   1   0
+
+    +---+---+---+---+---+---+---+---+  +---+---+---+---+---+---+---+---+
+    |               | f.td  | f.dl  |  |       | f.ts  |      f.s      |
+    +---+---+---+---+---+---+---+---+  +---+---+---+---+---+---+---+---+
+
+
+                                       +---+---+---+---+---+---+---+---+
+                                       |      f.c      |               |
+                                       +---+---+---+---+---+---+---+---+
+
+
+*/
+
+
+
+
+LET put16bitpart(n, first.byte.field) BE
+$(  putwordf((n & #XFF00) >> 8, first.byte.field)
+    putword(n & #XFF)
+$)
+
+
+
+
+
+
+//
+//                         Parsing  Functions
+//
+
+
+
+
+
+
+
+LET read.reg() = VALOF
+$(  LET r = r.bad
+    IF item.type = i.iden THEN
+    $(  LET val = looktype(type.reg, item.info)
+        // LOOKTYPE sets the global IDEN.VALID to TRUE if the symbol is
+        // defined and is not a forward reference
+        TEST iden.valid THEN
+        $(  r := val
+            getitem()
+        $) ELSE
+        $(  r := getreg(item.info)
+            TEST (r&b.reg)\=0 THEN
+            $(  getitem()
+                r := r & reg.mask
+            $) ELSE r:=r.bad
+        $)
+    $)
+    RESULTIS r
+$)
+
+
+
+
+LET read.reg.mode(spec, reg.field, t.field, lv.instruction) = VALOF
+$(  // Parses one of the following:
+    //       <register>             - register
+    //       *<register>            - register indirect
+    //       *<register>+           - register indirect auto increment
+    //       @<address>             - symbolic
+    //       @<address>(<register>) - indexed
+    // Returns TRUE if the mode was one of the latter two, including,
+    // in that case, a description of the address in the specification
+    // vector SPEC.
+    // On exit the assembled instruction will be placed in the word pointed
+    // to by LV.INSTRUCTION
+    LET ans = scan(i.immed)
+    TEST ans THEN
+    $(  // symbolic or indexed
+        !lv.instruction := putf(#X02, t.field, !lv.instruction)
+        label.expression(spec)
+        IF scan(i.lbkt) THEN
+        $(  // indexed
+            LET reg = read.reg()
+            TEST reg=r.bad THEN error(e.badreg) ELSE
+            TEST reg=0 THEN error(e.badindex) ELSE
+            !lv.instruction := putf(reg, reg.field, !lv.instruction)
+            UNLESS scan(i.rbkt) THEN error(e.expected, ')')
+        $)
+    $) ELSE
+    $(  LET indirect = scan(i.mult)
+        LET reg = read.reg()
+        LET auto = scan(i.plus)
+        TEST reg=r.bad THEN error(e.badreg) ELSE
+        TEST auto & \indirect THEN error(e.nodirauto) ELSE
+        $(  !lv.instruction := putf(reg, reg.field, !lv.instruction)
+            IF indirect THEN
+            !lv.instruction := putf((auto->#X03,#X01), t.field, !lv.instruction)
+        $)
+    $)
+    RESULTIS ans
+$)
+
+
+
+
+
+
+//
+//                     Mnemonic   Format  Routines
+//
+
+
+
+
+
+
+
+LET fmt1(lab) BE
+$(  // <register mode address>,<register mode address>
+    LET source.spec = VEC spec.size
+    LET destination.spec = VEC spec.size
+    LET source.word = ?
+    LET destination.word = ?
+    LET instruction = 0
+    get.and.declare(lab)
+    source.word := read.reg.mode(source.spec, f.s, f.ts, @instruction)
+    scan(i.comma)
+    //  TEST \scan(i.comma) THEN error(e.expected, ',') ELSE
+    destination.word := read.reg.mode(destination.spec, f.d, f.td, @instruction)
+    put16bitpart(instruction, f.dspecl)
+    IF source.word THEN putlabelspec(source.spec)
+    IF destination.word THEN putlabelspec(destination.spec)
+$)
+
+
+
+AND fmt2(lab) BE
+$(  // <register mode address>,<register>
+    LET reg = ?
+    LET source.spec = VEC spec.size
+    LET instruction = 0
+    LET word.found = ?
+    get.and.declare(lab)
+    word.found :=  read.reg.mode(source.spec, f.s, f.ts, @instruction)
+    scan(i.comma)
+    // TEST \scan(i.comma) THEN error(e.expected, ',') ELSE
+    reg := read.reg()
+    TEST reg=r.bad THEN error(e.badreg) ELSE
+    $(  instruction := putf(reg, f.d, instruction)
+        put16bitpart(instruction, f.dl)
+        IF word.found THEN putlabelspec(source.spec)
+    $)
+$)
+
+
+
+AND fmt3(lab) BE
+$(  // <register mode address>
+    LET source.spec = VEC spec.size
+    LET word.found = ?
+    LET instruction = 0
+    get.and.declare(lab)
+    word.found := read.reg.mode(source.spec, f.s, f.ts, @instruction)
+    putwordf(instruction, f.sspec)
+    IF word.found THEN putlabelspec(source.spec)
+$)
+
+
+
+AND fmt4(lab) BE fmt6(lab)
+
+
+AND fmt5(lab) BE fmt3(lab)
+
+
+
+AND fmt6(lab) BE
+$(  // <register mode address>,<4 bit expression>
+    LET source.spec = VEC spec.size
+    LET word.found = ?
+    LET instruction = 0
+    get.and.declare(lab)
+    word.found :=  read.reg.mode(source.spec, f.s, f.ts, @instruction)
+    scan(i.comma)
+    // TEST \scan(i.comma) THEN error(e.expected, ',') ELSE
+    instruction := putf(expression(), f.d, instruction)
+    put16bitpart(instruction, f.dl)
+    IF word.found THEN putlabelspec(source.spec)
+$)
+
+
+
+AND fmt7(lab) BE
+$(  // CRU displacement
+    // <8 bit expression>
+    get.and.declare(lab)
+    putword(expression())
+$)
+
+
+
+AND fmt8(lab) BE
+$(  // Word displacement from PC
+    // <pc relative displacement in bytes>
+    LET displacement = ?
+    get.and.declare(lab)
+    displacement := pcrel.expression() - 2
+    IF (displacement & 1)\=0 THEN warn(e.badalign)
+    UNLESS -128<=(displacement/2)<=127 THEN warn(e.brange)
+    putword(displacement/2)
+$)
+
+
+
+
+LET fmt9(lab) BE
+$(  // <register>,<4 bit expression>
+    LET reg = ?
+    get.and.declare(lab)
+    reg := read.reg()
+    TEST reg=r.bad THEN error(e.badreg) ELSE
+    putword(reg)
+    scan(i.comma)
+    // TEST \scan(i.comma) THEN error(e.expected, ',') ELSE
+    putwordf(expression(), f.c)
+$)
+
+
+
+
+LET fmt10(lab) BE
+$(  // <register>,<address>
+    LET reg = ?
+    LET spec = VEC spec.size
+    get.and.declare(lab)
+    reg := read.reg()
+    TEST reg=r.bad THEN error(e.badreg) ELSE
+    putwordf(reg, f.s)
+    scan(i.comma)
+    // TEST \scan(i.comma) THEN error(e.expected, ',')
+    putlabelspec(label.expression(spec))
+$)
+
+
+
+LET fmt11(lab) BE
+$(  // <address>
+    LET spec = VEC spec.size
+    get.and.declare(lab)
+    putlabelspec(label.expression(spec))
+$)
+
+
+
+LET fmt12(lab) BE
+$(  // <register>
+    LET reg = ?
+    get.and.declare(lab)
+    reg := read.reg()
+    TEST reg=r.bad THEN error(e.badreg) ELSE
+    putwordf(reg, f.s)
+$)
+
+
+
+LET fmt13(lab) BE get.and.declare(lab)
+
+
+
+LET fmt14(lab) BE get.and.declare(lab)
+
+
+
+LET fmt15(lab) BE get.and.declare(lab)
+
+
+
+
+LET dtaproc(lab) BE
+$(  // <address>,<address>, ... <address>
+    LET spec = VEC spec.size
+    // align onto an even byte boundary:
+    IF (pc&1)=1 THEN
+    $(  pc:=pc+1
+        startpc := pc
+    $)
+    get.and.declare(lab)
+    putlabelspec(label.expression(spec)) REPEATUNTIL \scan(i.comma)
+$)
+
+
+
+LET regproc(lab) BE
+$(  // <register>
+    LET reg = ?
+    getitem()
+    reg := read.reg()
+    TEST reg=r.bad THEN error(e.badreg) ELSE
+    putlab(lab, reg, type.reg)
+$)
+
+
+
+
+LET evenproc(lab) BE
+$(  // alligns on 2*n byte boundary relative to begining of section
+    // (i.e. will fail if linked in at an odd byte!)
+    LET n=2
+    get.and.declare(lab)
+    IF is.expression() THEN n:=expression()*2
+    TEST dontknow THEN error(e.forward) ELSE
+    IF (pc/n)*n \= pc THEN
+    $(  pc := (pc/n+1)*n
+        // this stops the old program counter being printed in the listing
+        // since this might be rather confusing to a reader:
+        startpc := pc
+    $)
+$)
+
+
+
+
+LET unlproc(lab) BE
+$(  // decrement the LIST variable by 1
+    get.and.declare(lab)
+    list := list-1
+$)
+
+
+
+
+
+
+
+.
+
+
+SECTION "TMS9900a"
+
+
+
+//*<TRIPOS:
+GET "libhdr"
+GET "GRASM:asmhdr"
+/*TRIPOS>*/
+
+
+
+/*<LYNX
+GET "libhdr"
+GET "asmhdr"
+/*LYNX>*/
+
+
+
+/*<RSX
+GET "libhdr"
+GET "asmhdr"
+/*RSX>*/
+
+
+
+/*<CAP:
+GET ".**.l.bcpl.libhdr"
+GET ".**.cgg.asmhdr"
+/*CAP>*/
+
+
+
+/*<IBM:
+GET "LIBHDR"
+GET "ASMHDR"
+/*IBM>*/
+
+
+
+
+
+
+
+
+
+MANIFEST
+$(  nop.code.msb = #X10    // JMP 0
+    nop.code.lsb = #X00
+    b.reg = #X80
+    // Registers:
+    reg.mask = #X0F
+    r0    = b.reg  |  0
+    r1    = b.reg  |  1
+    r2    = b.reg  |  2
+    r3    = b.reg  |  3
+    r4    = b.reg  |  4
+    r5    = b.reg  |  5
+    r6    = b.reg  |  6
+    r7    = b.reg  |  7
+    r8    = b.reg  |  8
+    r9    = b.reg  |  9
+    r10   = b.reg  | 10
+    r11   = b.reg  | 11
+    r12   = b.reg  | 12
+    r13   = b.reg  | 13
+    r14   = b.reg  | 14
+    r15   = b.reg  | 15
+    r.bad = -1
+    // New symbol types:
+    type.reg     = type. + 1
+    // Error messages
+    e.badreg     = e.e+1
+    e.badindex   = e.e+2
+    e.nodirauto  = e.e+3
+    e.brange     = e.e+4
+    e.badalign   = e.e+5
+$)
+
+
+
+
+GLOBAL
+$(  // field descriptions:
+    f.td      : ag         // destination T descriptor
+    f.d       : ag+1       // destination T descriptor (in a 16 word)
+    f.dl      : ag+2       // destination T descriptor - lower part in MSB
+    f.dspecl  : ag+3       // f.td and f.d - lower part in MSB
+    f.ts      : ag+4       // source T descriptor
+    f.s       : ag+5       // source
+    f.sspec   : ag+6       // f.s and f.ts together
+    f.c       : ag+7       // shift count (in format 9)
+    fmt1      : ag+8       // Parsing procedures:
+    fmt2      : ag+9
+    fmt3      : ag+10
+    fmt4      : ag+11
+    fmt5      : ag+12
+    fmt6      : ag+13
+    fmt7      : ag+14
+    fmt8      : ag+15
+    fmt9      : ag+16
+    fmt10     : ag+17
+    fmt11     : ag+18
+    fmt12     : ag+19
+    fmt13     : ag+20
+    fmt14     : ag+21
+    fmt15     : ag+22
+    dtaproc   : ag+23
+    regproc   : ag+24
+    evenproc  : ag+25
+    unlproc   : ag+26
+$)
+
+
+
+
+
+
+
+
+
+
+
+//
+//                        Initialisation
+//
+
+
+
+
+
+
+LET startasm(version) = (version/1000)\=3 -> "version 3.065 19-Jul-82", VALOF
+$(  name:="9900"
+    comntcheck:=TRUE
+    mscharfirst := TRUE  // byte ordering defined for strings
+    msbytefirst := TRUE  // byte ordering for addresses
+    i.here := i.dollar
+    f.td    := newf(10,2)
+    f.d     := newf(6,4)
+    f.dl    := newf(0,2)
+    f.dspecl:= newf(0,4)
+    f.ts    := newf(4,2)
+    f.s     := newf(0,4)
+    f.sspec := newf(0,6)
+    f.c     := newf(4,4)
+    binbufwidth := 6    // big enough for fmt1 with two labels
+    // tell Code.gen byte to use for undefined locations
+    code.gen(cd.undef, 0)      // (MID instruction)
+    RESULTIS 0
+$)
+
+
+
+
+//*<STANDINIT
+LET initcodes() BE
+$(  code.put("TEXT",dataproc,0)
+    code.put("BYTE",dataproc,0)
+    code.put("DATA",dtaproc,0)
+    code.put("EQU",equproc,0)
+    code.put("SET", setproc, 0)
+    code.put("REF", refproc, 0)
+    code.put("WREF", wrefproc, 0)
+    code.put("NEEDS", needsproc, 0)
+    code.put("DEF", defproc, 0)
+    code.put("PRAG", pragproc, 0)
+    code.put("INLINE", textproc, 0)
+    code.put("TITL", titlproc, 0)
+    code.put("ORG", orgproc, 0)
+    code.put("AORG", orgproc, 0)
+    // don't put in RORG - let the assembler fault it
+    code.put("BSS", storeproc, 0)
+    // BES coming soon ?
+    code.put("ASECT", absproc, 0)
+    code.put("RSECT", relproc, 0)
+    code.put("GET", getproc, 0)
+    code.put("LIST", listproc, 0)
+    code.put("UNL", unlproc, 0)
+    code.put("END", endproc, 0)
+    code.put("PAGE", ejectproc, 0)
+    code.put("SPACE", spaceproc, 0)
+    code.put("REG", regproc, 0)
+    code.put("EVEN", evenproc, 0)
+    code.put("A"   , fmt1 , 1, #XA0)
+    code.put("AB"  , fmt1 , 1, #XB0)
+    code.put("C"   , fmt1 , 1, #X80)
+    code.put("CB"  , fmt1 , 1, #X90)
+    code.put("S"   , fmt1 , 1, #X60)
+    code.put("SB"  , fmt1 , 1, #X70)
+    code.put("SOC" , fmt1 , 1, #XE0)
+    code.put("SOCB", fmt1 , 1, #XF0)
+    code.put("SZC" , fmt1 , 1, #X40)
+    code.put("SZCB", fmt1 , 1, #X50)
+    code.put("MOV" , fmt1 , 1, #XC0)
+    code.put("MOVB", fmt1 , 1, #XD0)
+    code.put("COC" , fmt2 , 1, #X20)
+    code.put("CZC" , fmt2 , 1, #X24)
+    code.put("XOR" , fmt2 , 1, #X28)
+    code.put("MPY" , fmt2 , 1, #X38)
+    code.put("DIV" , fmt2 , 1, #X3C)
+    code.put("MPYS", fmt3 , 2, #X01, #XC0)
+    code.put("DIVS", fmt3 , 2, #X01, #X80)
+    code.put("XOP" , fmt4 , 1, #X2C)
+    code.put("B"   , fmt5 , 2, #X04, #X40)
+    code.put("BL"  , fmt5 , 2, #X06, #X80)
+    code.put("BLWP", fmt5 , 2, #X04, #X00)
+    code.put("CLR" , fmt5 , 2, #X04, #XC0)
+    code.put("SETO", fmt5 , 2, #X07, #X00)
+    code.put("INV" , fmt5 , 2, #X05, #X40)
+    code.put("NEG" , fmt5 , 2, #X05, #X00)
+    code.put("ABS" , fmt5 , 2, #X07, #X40)
+    code.put("SWPB", fmt5 , 2, #X06, #XC0)
+    code.put("INC" , fmt5 , 2, #X05, #X80)
+    code.put("INCT", fmt5 , 2, #X05, #XC0)
+    code.put("DEC" , fmt5 , 2, #X06, #X00)
+    code.put("DECT", fmt5 , 2, #X06, #X40)
+    code.put("X"   , fmt5 , 2, #X04, #X80)
+    code.put("LDCR", fmt6 , 1, #X30)
+    code.put("STCR", fmt6 , 1, #X34)
+    code.put("SBO" , fmt7 , 1, #X1D)
+    code.put("SBZ" , fmt7 , 1, #X1E)
+    code.put("TB"  , fmt7 , 1, #X1F)
+    code.put("JEQ" , fmt8 , 1, #X13)
+    code.put("JGT" , fmt8 , 1, #X15)
+    code.put("JH"  , fmt8 , 1, #X1B)
+    code.put("JHE" , fmt8 , 1, #X14)
+    code.put("JL"  , fmt8 , 1, #X1A)
+    code.put("JLE" , fmt8 , 1, #X12)
+    code.put("JLT" , fmt8 , 1, #X11)
+    code.put("JMP" , fmt8 , 1, #X10)
+    code.put("JNC" , fmt8 , 1, #X17)
+    code.put("JNE" , fmt8 , 1, #X16)
+    code.put("JNO" , fmt8 , 1, #X19)
+    code.put("JOC" , fmt8 , 1, #X18)
+    code.put("JOP" , fmt8 , 1, #X1C)
+    code.put("SLA" , fmt9 , 1, #X0A)
+    code.put("SRA" , fmt9 , 1, #X08)
+    code.put("SRC" , fmt9 , 1, #X0B)
+    code.put("SRL" , fmt9 , 1, #X09)
+    code.put("AI"  , fmt10, 2, #X02, #X20)
+    code.put("ANDI", fmt10, 2, #X02, #X40)
+    code.put("CI"  , fmt10, 2, #X02, #X80)
+    code.put("LI"  , fmt10, 2, #X02, #X00)
+    code.put("ORI" , fmt10, 2, #X02, #X60)
+    code.put("LWPI", fmt11, 2, #X02, #XE0)
+    code.put("LIMI", fmt11, 2, #X03, #X00)
+    code.put("STST", fmt12, 2, #X02, #XC0)
+    code.put("LST" , fmt12, 2, #X00, #X80)
+    code.put("STWP", fmt12, 2, #X02, #XA0)
+    code.put("LWP" , fmt12, 2, #X00, #X90)
+    code.put("RTWP", fmt13, 2, #X03, #X80)
+    code.put("IDLE", fmt14, 2, #X03, #X40)
+    code.put("RSET", fmt14, 2, #X03, #X60)
+    code.put("CKOF", fmt14, 2, #X03, #XC0)
+    code.put("CKON", fmt14, 2, #X03, #XA0)
+    code.put("LREX", fmt14, 2, #X03, #XE0)
+    code.put("MID" , fmt15, 2, #X00, #X00)
+    code.put("NOP" , fmt15, 2, nop.code.msb, nop.code.lsb)
+    code.put("RT"  , fmt15, 2, #X04, #X5B)   // equivalent to B *R11
+$)
+/*STANDINIT>*/
+
+
+
+
+
+
+
+/*<LSI4INIT    For Version 3.054:
+GLOBAL  $(  start : 1;  codes : 252;  initcodes : 278  $)
+
+LET initcodes() BE
+$(  // table for the 9900 assembler:
+    // this table must be regenerated if the globals change
+    LET tab = TABLE
+    #X0338, #X00DD, #X0000, #X0018, #X000A, #X0338, #X0000, #X03F2, #X00DD,
+    #X0000, #X0011, #X00B9, #X03F2, #X0007, #X03F4, #X00DD, #X0000, #X002D,
+    #X0050, #X03F4, #X000E, #X033B, #X014D, #X0000, #X0026, #X001F, #X033B,
+    #X0015, #X03E5, #X014D, #X0000, #X007A, #X0073, #X03E5, #X001C, #X033D,
+    #X00DF, #X0000, #X0034, #X009D, #X033D, #X0023, #X03F7, #X00E0, #X0000,
+    #XFFFF, #XFFFF, #X03F7, #X002A, #X033F, #X00E0, #X0000, #X0042, #X003B,
+    #X033F, #X0031, #X0378, #X00E2, #X0000, #X0088, #X0049, #X0378, #X0038,
+    #X0341, #X00E3, #X0000, #X0131, #X005E, #X0341, #X003F, #X038B, #X00E4,
+    #X0000, #X0057, #X008F, #X038B, #X0046, #X03FA, #X00E1, #X0000, #XFFFF,
+    #X01C7, #X03FA, #X004D, #X038E, #X00E5, #X0000, #XFFFF, #X006C, #X038E,
+    #X0054, #X0349, #X00E6, #X0000, #X0065, #X0081, #X0349, #X005B, #X034C,
+    #X00DE, #X0000, #XFFFF, #XFFFF, #X034C, #X0062, #X0391, #X00EB, #X0000,
+    #X00A4, #X019A, #X0391, #X0069, #X03EF, #X00EC, #X0000, #XFFFF, #XFFFF,
+    #X03EF, #X0070, #X03E8, #X00EC, #X0000, #XFFFF, #X0141, #X03E8, #X0077,
+    #X034F, #X00E9, #X0000, #X0101, #X00AB, #X034F, #X007E, #X037A, #X00EA,
+    #X0000, #X00E1, #X00B2, #X037A, #X0085, #X039C, #X00E7, #X0000, #X0096,
+    #XFFFF, #X039C, #X008C, #X039E, #X00EF, #X0000, #X0111, #X0191, #X039E,
+    #X0093, #X03E3, #X00E8, #X0000, #XFFFF, #XFFFF, #X03E3, #X009A, #X0393,
+    #X00EE, #X0000, #XFFFF, #X02B6, #X0393, #X00A1, #X0365, #X00ED, #X0000,
+    #X0279, #X00F1, #X0365, #X00A8, #X0389, #X014E, #X0000, #XFFFF, #XFFFF,
+    #X0389, #X00AF, #X0401, #X014F, #X0000, #X00D1, #X00C1, #X0401, #X00B6,
+    #X041E, #X013E, #X0001, #X00A0, #X00C9, #XFFFF, #X041E, #X00BD, #X041F,
+    #X013E, #X0001, #X00B0, #X01A3, #XFFFF, #X041F, #X00C5, #X0404, #X013E,
+    #X0001, #X0080, #X00D9, #X0164, #X0404, #X00CD, #X0405, #X013E, #X0001,
+    #X0090, #X0121, #XFFFF, #X0405, #X00D5, #X037C, #X013E, #X0001, #X0060,
+    #X00E9, #X02F5, #X037C, #X00DD, #X037D, #X013E, #X0001, #X0070, #X01F1,
+    #XFFFF, #X037D, #X00E5, #X036E, #X013E, #X0001, #X00E0, #X00F9, #X0188,
+    #X036E, #X00ED, #X0370, #X013E, #X0001, #X00F0, #XFFFF, #XFFFF, #X0370,
+    #X00F5, #X0352, #X013E, #X0001, #X0040, #X0109, #X01AC, #X0352, #X00FD,
+    #X0354, #X013E, #X0001, #X0050, #X0201, #XFFFF, #X0354, #X0105, #X03A1,
+    #X013E, #X0001, #X00C0, #X0119, #X02BF, #X03A1, #X010D, #X03A3, #X013E,
+    #X0001, #X00D0, #X0139, #XFFFF, #X03A3, #X0115, #X0407, #X013F, #X0001,
+    #X0020, #X0129, #X017F, #X0407, #X011D, #X0409, #X013F, #X0001, #X0024,
+    #XFFFF, #XFFFF, #X0409, #X0125, #X0344, #X013F, #X0001, #X0028, #XFFFF,
+    #X015B, #X0344, #X012D, #X03A6, #X013F, #X0001, #X0038, #X014A, #XFFFF,
+    #X03A6, #X0135, #X03EA, #X013F, #X0001, #X003C, #X0153, #XFFFF, #X03EA,
+    #X013D, #X03A8, #X0140, #X0002, #X0001, #X00C0, #XFFFF, #XFFFF, #X03A8,
+    #X0145, #X03EC, #X0140, #X0002, #X0001, #X0080, #XFFFF, #XFFFF, #X03EC,
+    #X014E, #X0346, #X0141, #X0001, #X002C, #XFFFF, #X01D9, #X0346, #X0157,
+    #X0415, #X0142, #X0002, #X0004, #X0040, #X016D, #X029B, #X0415, #X015F,
+    #X0416, #X0142, #X0002, #X0006, #X0080, #X0176, #XFFFF, #X0416, #X0168,
+    #X0418, #X0142, #X0002, #X0004, #X0000, #XFFFF, #XFFFF, #X0418, #X0171,
+    #X040B, #X0142, #X0002, #X0004, #X00C0, #XFFFF, #X02A4, #X040B, #X017A,
+    #X0373, #X0142, #X0002, #X0007, #X0000, #X0271, #XFFFF, #X0373, #X0183,
+    #X03B7, #X0142, #X0002, #X0005, #X0040, #X01E1, #X01B5, #X03B7, #X018C,
+    #X0398, #X0142, #X0002, #X0005, #X0000, #X0334, #XFFFF, #X0398, #X0195,
+    #X0421, #X0142, #X0002, #X0007, #X0040, #X0292, #XFFFF, #X0421, #X019E,
+    #X0359, #X0142, #X0002, #X0006, #X00C0, #XFFFF, #X01E9, #X0359, #X01A7,
+    #X03DB, #X0142, #X0002, #X0005, #X0080, #X01BE, #X02FE, #X03DB, #X01B0,
+    #X03DD, #X0142, #X0002, #X0005, #X00C0, #XFFFF, #XFFFF, #X03DD, #X01B9,
+    #X03FC, #X0142, #X0002, #X0006, #X0000, #X01D0, #XFFFF, #X03FC, #X01C2,
+    #X03FE, #X0142, #X0002, #X0006, #X0040, #XFFFF, #XFFFF, #X03FE, #X01CB,
+    #X0348, #X0142, #X0002, #X0004, #X0080, #XFFFF, #XFFFF, #X0348, #X01D4,
+    #X03B9, #X0143, #X0001, #X0030, #X02AD, #X0209, #X03B9, #X01DD, #X035C,
+    #X0143, #X0001, #X0034, #X02D1, #XFFFF, #X035C, #X01E5, #X037F, #X0144,
+    #X0001, #X001D, #X01F9, #XFFFF, #X037F, #X01ED, #X0381, #X0144, #X0001,
+    #X001E, #XFFFF, #XFFFF, #X0381, #X01F5, #X0357, #X0144, #X0001, #X001F,
+    #XFFFF, #XFFFF, #X0357, #X01FD, #X03C1, #X0145, #X0001, #X0013, #X0211,
+    #XFFFF, #X03C1, #X0205, #X03C3, #X0145, #X0001, #X0015, #X0219, #XFFFF,
+    #X03C3, #X020D, #X03C5, #X0145, #X0001, #X001B, #X0221, #XFFFF, #X03C5,
+    #X0215, #X03C7, #X0145, #X0001, #X0014, #X0229, #XFFFF, #X03C7, #X021D,
+    #X03C9, #X0145, #X0001, #X001A, #X0231, #XFFFF, #X03C9, #X0225, #X03CB,
+    #X0145, #X0001, #X0012, #X0239, #XFFFF, #X03CB, #X022D, #X03CD, #X0145,
+    #X0001, #X0011, #X0241, #XFFFF, #X03CD, #X0235, #X03CF, #X0145, #X0001,
+    #X0010, #X0249, #XFFFF, #X03CF, #X023D, #X03D1, #X0145, #X0001, #X0017,
+    #X0251, #XFFFF, #X03D1, #X0245, #X03D3, #X0145, #X0001, #X0016, #X0259,
+    #XFFFF, #X03D3, #X024D, #X03D5, #X0145, #X0001, #X0019, #X0261, #XFFFF,
+    #X03D5, #X0255, #X03D7, #X0145, #X0001, #X0018, #X0269, #XFFFF, #X03D7,
+    #X025D, #X03D9, #X0145, #X0001, #X001C, #XFFFF, #XFFFF, #X03D9, #X0265,
+    #X0376, #X0146, #X0001, #X000A, #XFFFF, #XFFFF, #X0376, #X026D, #X0368,
+    #X0146, #X0001, #X0008, #X0281, #XFFFF, #X0368, #X0275, #X036A, #X0146,
+    #X0001, #X000B, #X0289, #XFFFF, #X036A, #X027D, #X036C, #X0146, #X0001,
+    #X0009, #XFFFF, #XFFFF, #X036C, #X0285, #X0423, #X0147, #X0002, #X0002,
+    #X0020, #XFFFF, #XFFFF, #X0423, #X028D, #X041B, #X0147, #X0002, #X0002,
+    #X0040, #XFFFF, #XFFFF, #X041B, #X0296, #X040D, #X0147, #X0002, #X0002,
+    #X0080, #X0310, #XFFFF, #X040D, #X029F, #X03BC, #X0147, #X0002, #X0002,
+    #X0000, #X02C8, #XFFFF, #X03BC, #X02A8, #X0396, #X0147, #X0002, #X0002,
+    #X0060, #XFFFF, #XFFFF, #X0396, #X02B1, #X03AB, #X0148, #X0002, #X0002,
+    #X00E0, #X032B, #X02DA, #X03AB, #X02BA, #X03BE, #X0148, #X0002, #X0003,
+    #X0000, #XFFFF, #XFFFF, #X03BE, #X02C3, #X035F, #X0149, #X0002, #X0002,
+    #X00C0, #X02E3, #XFFFF, #X035F, #X02CC, #X03B0, #X0149, #X0002, #X0000,
+    #X0080, #X02EC, #X0322, #X03B0, #X02D5, #X0362, #X0149, #X0002, #X0002,
+    #X00A0, #XFFFF, #XFFFF, #X0362, #X02DE, #X03B2, #X0149, #X0002, #X0000,
+    #X0090, #XFFFF, #XFFFF, #X03B2, #X02E7, #X0383, #X014A, #X0002, #X0003,
+    #X0080, #XFFFF, #X0307, #X0383, #X02F0, #X03E0, #X014B, #X0002, #X0003,
+    #X0040, #XFFFF, #XFFFF, #X03E0, #X02F9, #X0386, #X014B, #X0002, #X0003,
+    #X0060, #XFFFF, #XFFFF, #X0386, #X0302, #X040F, #X014B, #X0002, #X0003,
+    #X00C0, #X0319, #XFFFF, #X040F, #X030B, #X0412, #X014B, #X0002, #X0003,
+    #X00A0, #XFFFF, #XFFFF, #X0412, #X0314, #X03B4, #X014B, #X0002, #X0003,
+    #X00E0, #XFFFF, #XFFFF, #X03B4, #X031D, #X03AE, #X014C, #X0002, #X0000,
+    #X0000, #XFFFF, #XFFFF, #X03AE, #X0326, #X039A, #X014C, #X0002, #X0010,
+    #X0000, #XFFFF, #XFFFF, #X039A, #X032F, #X0444, #X4546, #X4D00, #X0244,
+    #X5700, #X0345, #X5155, #X0353, #X4554, #X0457, #X5245, #X4600, #X0358,
+    #X4F52, #X0358, #X4F50, #X0158, #X0454, #X4558, #X5400, #X0554, #X4954,
+    #X4C45, #X0453, #X5441, #X5400, #X0353, #X5A43, #X0453, #X5A43, #X4200,
+    #X0254, #X4200, #X0453, #X5750, #X4200, #X0453, #X5443, #X5200, #X0453,
+    #X5453, #X5400, #X0453, #X5457, #X5000, #X0553, #X5041, #X4345, #X0353,
+    #X5241, #X0353, #X5243, #X0353, #X524C, #X0353, #X4F43, #X0453, #X4F43,
+    #X4200, #X0453, #X4554, #X4F00, #X0353, #X4C41, #X0352, #X4546, #X0352,
+    #X454C, #X0153, #X0253, #X4200, #X0353, #X424F, #X0353, #X425A, #X0452,
+    #X5457, #X5000, #X0452, #X5345, #X5400, #X0352, #X4547, #X054E, #X4545,
+    #X4453, #X0450, #X5241, #X4700, #X034F, #X5247, #X0450, #X4147, #X4500,
+    #X034F, #X5249, #X034E, #X4547, #X034E, #X4F50, #X0347, #X4554, #X044C,
+    #X4953, #X5400, #X034D, #X4F56, #X044D, #X4F56, #X4200, #X034D, #X5059,
+    #X044D, #X5059, #X5300, #X044C, #X5750, #X4900, #X034D, #X4944, #X034C,
+    #X5354, #X034C, #X5750, #X044C, #X5245, #X5800, #X0349, #X4E56, #X044C,
+    #X4443, #X5200, #X024C, #X4900, #X044C, #X494D, #X4900, #X034A, #X4551,
+    #X034A, #X4754, #X024A, #X4800, #X034A, #X4845, #X024A, #X4C00, #X034A,
+    #X4C45, #X034A, #X4C54, #X034A, #X4D50, #X034A, #X4E43, #X034A, #X4E45,
+    #X034A, #X4E4F, #X034A, #X4F43, #X034A, #X4F50, #X0349, #X4E43, #X0449,
+    #X4E43, #X5400, #X0449, #X444C, #X4500, #X0345, #X4E44, #X0444, #X4546,
+    #X5700, #X0244, #X5300, #X0344, #X4956, #X0444, #X4956, #X5300, #X0444,
+    #X4546, #X5300, #X0244, #X4200, #X0444, #X4546, #X4200, #X0444, #X4546,
+    #X4C00, #X0344, #X4546, #X0344, #X4543, #X0444, #X4543, #X5400, #X0541,
+    #X4C49, #X474E, #X0143, #X0243, #X4200, #X0343, #X4F43, #X0343, #X5A43,
+    #X0343, #X4C52, #X0243, #X4900, #X0443, #X4B4F, #X4600, #X0443, #X4B4F,
+    #X4E00, #X0142, #X0242, #X4C00, #X0442, #X4C57, #X5000, #X0441, #X4E44,
+    #X4900, #X0141, #X0241, #X4200, #X0341, #X4253, #X0241, #X4900
+    LET tab.start = 3
+    LET locate(lv.tree, at) BE
+    TEST !lv.tree<0 THEN !lv.tree:=0 ELSE
+    $(  MANIFEST
+        $(  c.size = 0; c.str  = 0; c.fn   = 1; c.opstr= 2
+            t.left = 0; t.right= 1; t.str  = 2; t.val  = 3
+            t.size = 4
+        $)
+        LET tree = !lv.tree+at
+        LET val = tree!t.val+at
+        val!c.fn := (@start-1)!(val!c.fn)
+        val!c.str := val!c.str+at
+        !lv.tree := !lv.tree+at
+        tree!t.str := val!c.str
+        tree!t.val := val
+        locate(tree+t.left, at)
+        locate(tree+t.right, at)
+    $)
+    locate(@tab.start, tab)
+    codes := tab.start
+$)
+/*LSI4INIT>*/
+
+

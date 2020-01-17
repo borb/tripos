@@ -1,0 +1,266 @@
+/****************************************************************************\
+*                          Systems Research Group                            *
+******************************************************************************
+
+
+      ######   #      #   ######   ##        ########  ##    ##  ##    ##
+     ########  ##    ##  ########  ##        ########  ###   ##  ##   ##
+     ##         ##  ##   ##        ##           ##     ####  ##  ##  ##
+     #######     ####    #######   ##           ##     ## ## ##  ####
+           ##     ##           ##  ##           ##     ##  ####  ## ##
+           ##     ##           ##  ##           ##     ##  ####  ##  ##
+     ########     ##     ########  ########  ########  ##   ###  ##   ##
+      ######      ##      ######   ########  ########  ##    ##  ##    ##
+
+          ##    ##  ########    ####    ######    ########  #######
+          ##    ##  ########   ######   #######   ########  ########
+          ##    ##  ##        ##    ##  ##    ##  ##        ##    ##
+          ########  ######    ########  ##    ##  ######    ########
+          ##    ##  ##        ##    ##  ##    ##  ##        #######
+          ##    ##  ##        ##    ##  ##    ##  ##        ##  ##
+          ##    ##  ########  ##    ##  #######   ########  ##   ##
+          ##    ##  ########  ##    ##  ######    ########  ##    ##
+
+
+******************************************************************************
+*   I. D. Wilson           Last Modified   -   IDW   -   21/04/86            *
+\****************************************************************************/
+
+
+
+$<TRIPOS  GET "IOHDR"    $>TRIPOS
+$<TRIPOS  GET "CLIHDR"   $>TRIPOS
+
+
+
+GLOBAL
+$(
+    a.devtab              :  ug + 0
+    a.tasktab             :  ug + 1
+    abs.address           :  ug + 2
+    abs.hunk              :  ug + 3
+    abs.length            :  ug + 4
+    activetask            :  ug + 5
+    addr.devtab           :  ug + 6
+    addr.tasktab          :  ug + 7
+    ch                    :  ug + 8
+    commandlist           :  ug + 9
+    compare               :  ug + 10
+    currenthunk           :  ug + 11
+    definecommands        :  ug + 12
+    defineflags           :  ug + 13
+    definetagtable        :  ug + 14
+    devicelist            :  ug + 15
+    error                 :  ug + 16
+    errorlabel            :  ug + 17
+    errorlevel            :  ug + 18
+    f.absmax              :  ug + 19
+    f.absmin              :  ug + 20
+    f.devtab              :  ug + 21
+    f.info                :  ug + 22
+    f.mcaddrinc           :  ug + 23
+    f.mcrelocinc          :  ug + 24
+    f.memorysize          :  ug + 25
+    f.rootnode            :  ug + 26
+    f.storemax            :  ug + 27
+    f.storemin            :  ug + 28
+    f.tasktab             :  ug + 29
+    f.tcbsize             :  ug + 30
+    filename              :  ug + 31
+    getstore              :  ug + 32
+    linenumber            :  ug + 33
+    linkfile              :  ug + 34
+    linkstream            :  ug + 35
+    mapstream             :  ug + 36
+    message               :  ug + 37
+    p.absmax              :  ug + 38
+    p.absmin              :  ug + 39
+    p.devtab              :  ug + 40
+    p.mcaddrinc           :  ug + 41
+    p.mcrelocinc          :  ug + 42
+    p.memorysize          :  ug + 43
+    p.rootnode            :  ug + 44
+    p.storemax            :  ug + 45
+    p.storemin            :  ug + 46
+    p.tasktab             :  ug + 47
+    p.tcbsize             :  ug + 48
+    panic                 :  ug + 49
+    parsefile             :  ug + 50
+    permsegments          :  ug + 51
+    segmentlists          :  ug + 52
+    storage.chunksize     :  ug + 53
+    storage.high          :  ug + 54
+    storage.low           :  ug + 55
+    storage.root          :  ug + 56
+    storehwm              :  ug + 57
+    sysin                 :  ug + 58
+    sysout                :  ug + 59
+    tagtable              :  ug + 60
+    tasklist              :  ug + 61
+    tempsegments          :  ug + 62
+    w.rootnode            :  ug + 63
+    w.tasktab             :  ug + 64
+    warning               :  ug + 65
+    writemap              :  ug + 66
+    writesys              :  ug + 67
+$)
+
+
+
+MANIFEST
+$(
+    tagtablesize          =  128
+
+    a.from                =  0
+    a.to                  =  1
+    a.map                 =  2
+
+    c.unknown             =  0
+    c.include             =  1
+    c.absmin              =  2
+    c.absmax              =  3
+    c.storemin            =  4
+    c.storemax            =  5
+    c.memorysize          =  6
+    c.tcbsize             =  7
+    c.rootnode            =  8
+    c.mcaddrinc           =  9
+    c.mcrelocinc          =  10
+    c.tasktab             =  11
+    c.devtab              =  12
+    c.info                =  13
+    c.seg                 =  14
+    c.star.seg            =  15
+    c.driver              =  16
+    c.dcb                 =  17
+    c.task                =  18
+    c.star.task           =  19
+    c.dev                 =  20
+
+    cl.link               =  0
+    cl.name               =  1
+    cl.type               =  2
+    cl.size               =  2
+
+    fb.name               =  0
+    fb.defined            =  1
+    fb.value              =  2
+    fb.size               =  2
+
+    type.driver           =  0
+    type.dcb              =  1
+    type.seglist          =  2
+
+    sl.size               =  32
+    st.size               =  32
+
+    task.link             =  0
+    task.id               =  1
+    task.stack            =  2
+    task.priority         =  3
+    task.segtable         =  4
+    task.active           =  5
+    task.size             =  5
+
+    seg.link              =  0
+    seg.name              =  1
+    seg.seglist           =  2
+    seg.type              =  3
+    seg.owner             =  4
+    seg.addr              =  5
+    seg.size              =  5
+
+    segs.link             =  0
+    segs.name             =  1
+    segs.list             =  2
+    segs.type             =  3
+    segs.addr             =  4
+    segs.size             =  4
+
+    device.link           =  0
+    device.id             =  1
+    device.dcb            =  2
+    device.driver         =  3
+    device.size           =  3
+
+    he.link               =  0
+    he.name               =  1
+    he.size               =  2
+
+    hunk.link             =  0
+    hunk.addr             =  1
+    hunk.high             =  2
+    hunk.size             =  2
+
+    list.size             =  64
+
+    i.type                =  0
+    i.value               =  1
+    i.addr                =  2
+    i.size                =  2
+
+    s.string              =  0
+    s.list                =  1
+    s.number              =  2
+    s.tag                 =  3
+    s.seglist             =  4
+
+    secword               =  12345
+    libword               =  23456
+
+    section.length        =  0
+    section.secword       =  1
+    section.name          =  2
+    section.namelength    =  17
+    section.minlength     =  section.name + section.namelength/bytesperword + 1
+
+    NIL                   =  -1
+
+$<PANOS
+    //  Object module constants taken from Tripos IOHDR
+
+    t.hunk                =  1000
+    t.reloc               =  1001
+    t.end                 =  1002
+    t.abshunk             =  1003
+    t.absreloc            =  1004
+
+    //  Task control block constants taken from Tripos LIBHDR
+
+    tcb.link              =  0
+    tcb.taskid            =  1
+    tcb.pri               =  2
+    tcb.wkq               =  3
+    tcb.state             =  4
+    tcb.flags             =  5
+    tcb.stsiz             =  6
+    tcb.seglist           =  7
+    tcb.gbase             =  8
+    tcb.sbase             =  9
+
+    //  State bit constants taken from Tripos LIBHDR
+
+    state.pkt             =  1
+    state.hold            =  2
+    state.wait            =  4
+    state.int             =  8
+    state.dead            =  12
+
+    //  Rootnode address constants taken from Tripos LIBHDR
+
+    rtn.tasktab           =  0
+    rtn.devtab            =  1
+    rtn.tcblist           =  2
+    rtn.crntask           =  3
+    rtn.blklist           =  4
+    rtn.debtask           =  5
+    rtn.days              =  6
+    rtn.mins              =  7
+    rtn.ticks             =  8
+    rtn.clwkq             =  9
+    rtn.memsize           =  10
+    rtn.info              =  11
+$>PANOS
+$)
+
+

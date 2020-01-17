@@ -1,0 +1,498 @@
+SECTION "ZED2"
+
+GET "HDR"
+
+LET edit(n) BE
+ $( LET counting = FALSE
+    LET count, countp = 0, 0
+    LET qual = ?
+
+    // Prompt first time in
+    wrch(':'); wrch('*E')
+
+editlab:
+    IF n=0 DO
+    $( editlevel := level()
+       readcommline()
+    $)
+    counting := FALSE
+
+    // repeat loop to get commands
+    $( LET e, s, c, p, q = 0, 0, 0, 0, 0
+
+       IF testflags(1) DO error(err.brk)
+       nextcomm()
+       quiet := NOT verifying
+       deleting, repeating := FALSE, FALSE
+
+ sw:   sw.comm := comm
+       SWITCHON comm INTO
+
+       $( DEFAULT:
+             error(err.uc, comm)
+
+          CASE '0':CASE '1':CASE '2':CASE '3':CASE '4':
+          CASE '5':CASE '6':CASE '7':CASE '8':CASE '9':
+             count := commreadn()
+             IF count=0 & zerolevel=0 DO
+                zerolevel := editlevel
+             countp := commpoint
+             counting := TRUE
+          CASE '*S': CASE ';':
+             LOOP
+
+          CASE '[':CASE '(':
+             edit(n+1)
+             ENDCASE
+
+          CASE ']':CASE ')':
+             UNLESS n>0 DO error(err.bra)
+             RETURN
+
+          // end of file or Q -> drop back one level
+          CASE endstreamch: CASE 'Q':
+             UNLESS cfsp=0 DO
+             $( revertcom()
+                RETURN
+             $)
+          // Drop to here if primary stream
+          CASE 'W' :
+             nextcomm()
+             UNLESS comm='*N' | comm=endstreamch DO
+                error(err.qw,sw.comm)
+             move(maxint)
+             closestreams()
+             windup()
+             UNTIL cfsp=0 DO revertcom()
+             longjump(quitlevel, quitlab)
+
+          CASE '\':
+             UNTIL comm='*N'|comm=';' DO commrdch()
+          CASE '*N':
+    nl:      UNLESS n=0 DO error(err.bra)
+             IF isinteractive(edits) DO
+                TEST quiet | unchanged THEN
+                   writes(":*E")
+                ELSE
+                   ver(sw.comm, '*E')
+             GOTO editlab
+
+          CASE '?':CASE '!':
+             nextcomm()
+             IF comm='*N' & isinteractive(edits) DO
+             $( quiet, unchanged := FALSE, FALSE
+                GOTO nl
+             $)
+             uncommrdch()
+             ver(sw.comm, '*N')
+             ENDCASE
+
+          CASE '>':
+             incrementp()
+             ENDCASE
+
+          CASE '<':
+             // Decrement pointer
+             IF pointer = 0 ENDCASE
+             pointer := pointer - 1
+             unchanged := FALSE
+             ENDCASE
+
+          CASE '#':
+             IF incrementp() DO
+             $( linev!pointer := -1
+                condensed := FALSE
+                nosubs := FALSE
+             $)
+             ENDCASE
+
+          CASE '_':
+             IF incrementp() DO
+             $( linev!pointer := '*S'
+                nosubs := FALSE
+             $)
+             ENDCASE
+
+          CASE '%':
+             IF incrementp() DO
+             $( LET a = linev+pointer
+                LET value = !a
+                IF 'a'<=value<='z' DO
+                $( !a := value+'A'-'a'
+                   nosubs := FALSE $)
+             $)
+             ENDCASE
+
+          CASE '$':
+             IF incrementp() DO
+             $( LET a = linev+pointer
+                LET value = !a
+                IF 'A'<=value<='Z' DO
+                $( !a := value-'A'+'a'
+                   nosubs := FALSE $)
+             $)
+             ENDCASE
+
+          CASE 'V':
+             verifying := readplusminus()
+             ENDCASE
+
+          CASE 'Z':
+          $( LET n = z.match!0
+              getstring( z.match, FALSE )
+             IF z.match!0=0 DO
+             $( z.match!0 := n
+                error(err.cntx, 'Z')
+             $)
+             ENDCASE $)
+
+          CASE '=':
+             renumber(numarg(FALSE,FALSE))
+             ENDCASE
+
+          CASE 'N':
+             nextline()
+             ENDCASE
+
+          CASE 'M':
+             commrdch()
+             TEST comm = '+' THEN
+               until currentline!l.next=0 DO nextline()
+             ELSE TEST comm = '-' THEN
+               until currentline!l.prev=0 DO prevline()
+             ELSE
+             $( uncommrdch()
+                move(numarg(FALSE,FALSE))
+             $)
+             ENDCASE
+
+          CASE 'I':
+             quiet := TRUE
+             move(numarg(FALSE,TRUE,current))
+             insert()
+             ENDCASE
+
+          CASE 'T':
+             commrdch()
+             c := comm
+             SWITCHON comm INTO
+             $( CASE 'R':
+                   trailing := readplusminus()
+                   ENDCASE
+                 CASE 'O': // Switch output
+                   changeout()
+                   ENDCASE
+
+
+                CASE 'P':
+                   UNTIL currentline!l.prev=0 DO
+                      prevline()
+                CASE 'N':
+                   e := maxplines
+                   GOTO tlab
+
+                DEFAULT:
+                   checkvalidchar()
+                CASE 'L':
+                   e :=  numarg(TRUE,TRUE,maxint)
+            tlab: quiet := TRUE
+                   FOR i = 1 TO e DO
+                   $(  UNLESS linel=0 &
+                        exhausted DO
+                        $(  IF c='L' DO
+                                TEST current=-1 THEN writes("  ******  ")
+                                ELSE writef("%I5  ", current)
+                            verline('?')
+                        $)
+                        IF exhausted BREAK
+                        nextline()
+                    $)
+                    unchanged := FALSE
+                    ENDCASE
+                $)
+                ENDCASE
+
+            CASE 'H':
+                ceiling := numarg(FALSE, FALSE)
+                ENDCASE
+
+            CASE 'C':
+                commrdch()
+                SWITCHON comm INTO
+                $(    DEFAULT:
+                          uncommrdch()
+                          changecom()
+                          edit(0)
+                          ENDCASE
+                    CASE 'L':
+                        getstring( svec, FALSE ) // Get unqualified
+                        subst( linel, linel, svec ) // at end of line
+                        compress()
+                        concatenate()
+                        ENDCASE
+
+                    CASE 'G': alterglobal( g.cancel ); ENDCASE
+
+                    CASE 'F':
+                        closefile()
+                        ENDCASE
+                $)
+                ENDCASE
+
+            CASE 'S':
+                commrdch()
+                SWITCHON comm INTO
+                $(
+                    DEFAULT: error(err.udc, 'S', comm)
+
+                    CASE 'A': CASE 'B':
+                         c := comm = 'A' // TRUE is split after
+                        qual := getstring(svec, TRUE)
+                        compress()
+                        e := index(linev, pointer, linel, svec, qual)
+                        IF e < 0 DO error(err.nom)
+                        IF c DO e := e+svec!0
+                        split(e)
+                        ENDCASE
+
+                    CASE 'H':
+                        commrdch()
+                        SWITCHON comm INTO
+                        $( DEFAULT: error( err.udc)
+                           CASE 'D': // Show data
+                           WRITES("*' cmd: ")
+                           TEST str.comm = c.nc THEN
+                              writes("unset")
+                           ELSE
+                           $( p := str.comm >> 8
+                              UNLESS p=0 wrch(p)
+                              wrch(str.comm); wrch('*S')
+                              showdata( str.qual,str.match)
+                              showdata( 'O', str.repl )
+                           $)
+                           WRITES("*NSearch string: ")
+                           TEST f.qual=c.nc THEN writes("unset")
+                           ELSE showdata( f.qual,f.match)
+                           WRITES("*NInput terminator: ")
+                           showdata( 'O', z.match)
+                           newline()
+                           ENDCASE
+                      CASE 'G': // Show globals
+                           FOR i=1 TO globcount DO
+                           $( LET t = g.type!i
+               writef("%I2 %C %I3 G%C ",i,t<0->'D',' ',g.count!i,ABS t)
+                              showdata( g.qual!i, g.match!i)
+                              showdata( 'O', g.repl!i )
+                              newline()
+                           $)
+                      $)
+                      ENDCASE
+
+             CASE 'T':  // STOP command; check in full
+                commrdch();unless comm='O' error(err.udc )
+                commrdch();unless comm='P' error(err.udc )
+                closestreams()
+                UNTIL cfsp=0 DO revertcom()
+                // could set rc here
+                longjump( quitlevel, quitlab )
+
+             $)
+             ENDCASE
+
+          CASE 'P':
+             commrdch()
+    psw:     SWITCHON comm INTO
+             $( DEFAULT:
+                   uncommrdch()
+                   prevline()
+                   ENDCASE
+
+                CASE 'A': CASE 'B': // Point to ( after or before )
+                   c := comm
+                   qual := getstring( svec, TRUE )
+                   compress()
+                   e := index(linev, pointer, linel, svec, qual)
+                   IF e<0 DO error(err.nom)
+                   pointer := c='A' -> e+svec!0, e
+                   nosubs := FALSE
+                   ENDCASE
+
+                 CASE 'R': // Pointer reset
+                   condense()
+                   UNLESS pointer=0 DO unchanged := FALSE
+                   pointer := 0
+                   ENDCASE
+             $)
+             ENDCASE
+
+          CASE 'B':  // BF or B possible
+           commrdch()
+           IF comm = 'F' THEN
+           $( p := prevline
+              GOTO fsw
+           $)
+            GOTO abesw
+
+          CASE 'E':  // Exchange or Enable Global
+            IF commrdch() = 'G' THEN
+            $( alterglobal( g.enable )
+               ENDCASE
+            $)
+            GOTO abesw
+
+          CASE 'A':
+             commrdch()
+  abesw:     c := FALSE
+             TEST comm = 'P' // EP or AP or BP
+             THEN c:= TRUE // Flag if P found
+             ELSE uncommrdch()
+             abe.args(sw.comm)
+             compress()
+             p := index(linev, pointer,linel, str.match, str.qual)
+             IF p<0 DO error(err.nom)
+             // Increment pointer if reqrd
+             IF C THEN
+             $( pointer := p+str.repl!0 // Always add P+length replacement
+                UNLESS str.comm='E' pointer := pointer+str.match!0
+             $)
+             q := p+str.match!0
+             IF str.comm='B' DO q := p
+             IF str.comm='A' DO p := q
+             subst(p, q, str.repl)
+             ENDCASE
+
+          CASE 'F':
+             IF commrdch()='R' THEN
+             $( // FROM command
+                UNLESS commrdch()='O' & commrdch()='M' THEN
+                  error( err.udc)
+                changein()
+                ENDCASE
+             $)
+             // Find command
+             uncommrdch()
+             p := nextline // p is nextline or prevline; set to prev for BF
+fsw:         lf.arg(comm)
+             compress()
+             $(    IF index(linev, pointer,
+                            linel, f.match, f.qual) >=0 BREAK
+                   p()
+             $) REPEAT
+
+             ENDCASE
+
+          CASE 'G':
+             readglobal()
+             ENDCASE
+
+          CASE 'D':
+             commrdch()
+             SWITCHON comm INTO
+             $( CASE 'F':
+                   // Could be DFA or DFB
+                   s := FALSE // In case next test is true
+                   commrdch()
+                   IF comm = 'A' | comm = 'B' GOTO dtsw
+                   uncommrdch() // Its not!
+                   deleting, quiet := TRUE, TRUE
+                   p := nextline
+                   GOTO fsw
+
+                CASE 'T':
+                   s := TRUE // Flags if DT
+                   commrdch()
+                   UNLESS comm = 'A' | comm = 'B' THEN
+                        error( err.udc )
+          dtsw:    c := comm
+                   qual := getstring( svec, TRUE )
+                   compress()
+                   e := index(linev, pointer,linel, svec, qual )
+                   IF e<0 DO error(err.nom)
+                   IF c = 'A' DO e := e + svec!0
+                   UNLESS e=pointer DO
+                   $( TEST s THEN // Delete TO
+                      $( FOR i = 1 TO linel-e DO
+                            linev!(pointer+i) := linev!(e+i)
+                         linel := pointer+linel-e
+                      $)
+                      ELSE // DF case
+                         linel := e
+                      nosubs := FALSE
+                   $)
+                   ENDCASE
+
+                CASE 'G':
+                    // Disable global
+                    alterglobal( g.disable )
+                   ENDCASE
+
+                DEFAULT:
+                   checkvalidchar()
+                   GOTO drlab
+             $)
+             ENDCASE
+
+    drlab:
+          CASE 'R':
+            // Replace or Rewind
+            IF commrdch() = 'E' THEN
+            $( // Rewind
+               UNLESS commrdch()='W' & commrdch()='I' THEN
+                 error( err.udc )
+               // flush rest of line without comment
+               WHILE 'A' <= comm <= 'Z' commrdch()
+               uncommrdch()
+               move( maxint )
+               closestreams()
+               rewind()
+               openstreams()
+               ENDCASE
+            $)
+            // Replace
+            checkvalidchar()
+          $( LET a1 = numarg(FALSE,TRUE,current)
+             LET a2 = numarg(FALSE,TRUE,a1)
+             IF sw.comm='R' DO quiet := TRUE
+             move(a1)
+             deleting, quiet := TRUE, TRUE
+             move(a2)
+             TEST exhausted THEN
+             $( linel, pointer := 0, 0
+                unchanged := FALSE
+                cch := endstreamch
+             $)
+             ELSE
+                nextline()
+             IF sw.comm='R' DO insert()
+             ENDCASE $)
+
+          CASE '"':
+             nextline()
+          CASE '*'':
+             repeating := TRUE
+             comm := str.comm
+             GOTO sw
+
+          // Unknown command
+          CASE c.nc:
+             error(err.rep)
+       $)
+
+       UNLESS nosubs DO unchanged := FALSE
+
+       IF counting DO
+       $( UNLESS count=0 DO
+          $( count := count-1
+             IF count=0 DO
+             $( counting := FALSE
+                LOOP
+             $)
+          $)
+          commpoint := countp
+       $)
+
+    $) REPEAT
+ $)
+
+
+

@@ -1,0 +1,63 @@
+SECTION "MAPFREE"
+
+
+
+GET "LIBHDR"
+
+
+
+MANIFEST
+$(
+    rtn.freeblk      =  20
+
+    f.size           =  0
+    f.link           =  1
+    
+    b.free           =  1
+
+    buffersize       =  100
+$)
+
+
+
+LET start()  BE
+$(
+//  Program to map the free blocks, and calculate how much free store there
+//  is.
+
+    LET argv       =  VEC 20
+    LET addresses  =  VEC buffersize
+    LET lengths    =  VEC buffersize
+
+    LET blocks     =  0
+    LET total      =  0
+    LET freeblk    =  rootnode!rtn.freeblk  >>  2
+    
+    rdargs( "No arguments needed", argv, 20 )
+
+    UNTIL  freeblk = 0  DO
+    $(
+        IF  blocks > buffersize  THEN  BREAK
+        
+        addresses!blocks  :=  freeblk
+        lengths!blocks    :=  freeblk!f.size  -  b.free
+        freeblk           :=  freeblk!f.link  >>  2
+        blocks            :=  blocks + 1
+    $)
+
+    writes( "Map of free store:*N*N" )
+
+    FOR  i = 0  TO  blocks-1  DO
+    $(
+        LET address  =  addresses!i
+        LET length   =  lengths!i
+
+        writef( "%I6:  %I6 words*N", address, length )
+        
+        total  :=  total + length
+    $)
+
+    writef( "*NTotal:   %I6 words*N", total )
+$)
+
+
